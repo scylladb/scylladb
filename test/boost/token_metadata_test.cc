@@ -22,10 +22,7 @@ namespace {
     }
 
     endpoint_dc_rack get_dc_rack(host_id) {
-        return {
-            .dc = "unk-dc",
-            .rack = "unk-rack"
-        };
+        return endpoint_dc_rack("unk-dc", "unk-rack");
     }
 
     mutable_token_metadata_ptr create_token_metadata(host_id this_host_id) {

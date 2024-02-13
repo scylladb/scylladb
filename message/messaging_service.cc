@@ -302,7 +302,8 @@ sstring messaging_service::client_metrics_domain(unsigned idx, inet_address addr
     if (_token_metadata) {
         const auto& topo = _token_metadata->get()->get_topology();
         if (topo.has_endpoint(addr)) {
-            ret += ":" + topo.get_datacenter(addr);
+            ret += ":";
+            ret += topo.get_datacenter(addr).str();
         }
     }
     return ret;

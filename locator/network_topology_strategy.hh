@@ -27,12 +27,12 @@ public:
         return _rep_factor;
     }
 
-    size_t get_replication_factor(const sstring& dc) const {
+    size_t get_replication_factor(const locator::dc_name& dc) const {
         auto dc_factor = _dc_rep_factor.find(dc);
         return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second;
     }
 
-    const std::vector<sstring>& get_datacenters() const {
+    const std::vector<locator::dc_name>& get_datacenters() const {
         return _datacenteres;
     }
 
@@ -57,9 +57,9 @@ protected:
 
 private:
     // map: data centers -> replication factor
-    std::unordered_map<sstring, size_t> _dc_rep_factor;
+    std::unordered_map<locator::dc_name, size_t> _dc_rep_factor;
 
-    std::vector<sstring> _datacenteres;
+    std::vector<locator::dc_name> _datacenteres;
     size_t _rep_factor;
 };
 } // namespace locator

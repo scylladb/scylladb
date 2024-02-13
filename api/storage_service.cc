@@ -1112,7 +1112,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::rebuild.set(r, [&ss](std::unique_ptr<http::request> req) {
         auto source_dc = req->get_query_param("source_dc");
         apilog.info("rebuild: source_dc={}", source_dc);
-        return ss.local().rebuild(std::move(source_dc)).then([] {
+        return ss.local().rebuild(locator::dc_name(std::move(source_dc))).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });

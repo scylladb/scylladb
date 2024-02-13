@@ -129,13 +129,13 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     BOOST_REQUIRE_EQUAL(topo.find_node(ep1), nullptr);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep2), node);
 
-    auto dc_rack1 = endpoint_dc_rack{"DC1", "RACK1"};
+    auto dc_rack1 = endpoint_dc_rack{locator::dc_name("DC1"), locator::rack_name("RACK1")};
     node = topo.update_node(mutable_node, std::nullopt, std::nullopt, dc_rack1, std::nullopt);
     mutable_node = const_cast<locator::node*>(node);
     BOOST_REQUIRE(topo.get_location(id1) == dc_rack1);
     BOOST_REQUIRE(topo.get_location(ep1) == dc_rack1);
 
-    auto dc_rack2 = endpoint_dc_rack{"DC2", "RACK2"};
+    auto dc_rack2 = endpoint_dc_rack{locator::dc_name("DC2"), locator::rack_name("RACK2")};
     node = topo.update_node(mutable_node, std::nullopt, std::nullopt, dc_rack2, std::nullopt);
     mutable_node = const_cast<locator::node*>(node);
     BOOST_REQUIRE(topo.get_location(id1) == dc_rack2);
@@ -146,7 +146,7 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     mutable_node = const_cast<locator::node*>(node);
     BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::being_decommissioned);
 
-    auto dc_rack3 = endpoint_dc_rack{"DC3", "RACK3"};
+    auto dc_rack3 = endpoint_dc_rack{locator::dc_name("DC3"), locator::rack_name("RACK3")};
     // Note: engage state option, but keep node::state value the same
     // to reproduce #13502
     node = topo.update_node(mutable_node, std::nullopt, ep3, dc_rack3, locator::node::state::being_decommissioned);
@@ -205,22 +205,16 @@ SEASTAR_THREAD_TEST_CASE(test_add_or_update_by_host_id) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
-    using dc_endpoints_t = std::unordered_map<sstring, std::unordered_set<inet_address>>;
-    using dc_racks_t = std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>;
-    using dcs_t = std::unordered_set<sstring>;
+    using dc_endpoints_t = std::unordered_map<locator::dc_name, std::unordered_set<inet_address>>;
+    using dc_racks_t = std::unordered_map<locator::dc_name, std::unordered_map<locator::rack_name, std::unordered_set<inet_address>>>;
+    using dcs_t = std::unordered_set<locator::dc_name>;
 
     const auto id1 = host_id::create_random_id();
     const auto ep1 = gms::inet_address("127.0.0.1");
     const auto id2 = host_id::create_random_id();
     const auto ep2 = gms::inet_address("127.0.0.2");
-    const auto dc_rack1 = endpoint_dc_rack {
-        .dc = "dc1",
-        .rack = "rack1"
-    };
-    const auto dc_rack2 = endpoint_dc_rack {
-        .dc = "dc1",
-        .rack = "rack2"
-    };
+    const auto dc_rack1 = endpoint_dc_rack(locator::dc_name("dc1"), locator::rack_name("rack1"));
+    const auto dc_rack2 = endpoint_dc_rack(locator::dc_name("dc1"), locator::rack_name("rack2"));
 
     topology::config cfg = {
         .this_endpoint = ep1,
@@ -232,14 +226,18 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
     topo.add_node(id1, ep1, dc_rack1, node::state::normal);
     topo.add_node(id2, ep2, dc_rack2, node::state::normal);
 
-    BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{{"dc1", {ep1, ep2}}}));
-    BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{{"dc1", {{"rack1", {ep1}}, {"rack2", {ep2}}}}}));
-    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{"dc1"}));
+    locator::dc_name dc1_name("dc1");
+    locator::rack_name rack1_name("rack1");
+    locator::rack_name rack2_name("rack2");
+
+    BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{{dc1_name, {ep1, ep2}}}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{{dc1_name, {{rack1_name, {ep1}}, {rack2_name, {ep2}}}}}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{dc1_name}));
 
     topo.remove_endpoint(id2);
-    BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{{"dc1", {ep1}}}));
-    BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{{"dc1", {{"rack1", {ep1}}}}}));
-    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{"dc1"}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{{dc1_name, {ep1}}}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{{dc1_name, {{rack1_name, {ep1}}}}}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{dc1_name}));
 
     topo.remove_endpoint(id1);
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{}));

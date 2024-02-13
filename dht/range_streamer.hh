@@ -66,10 +66,10 @@ public:
      */
     class single_datacenter_filter : public i_source_filter {
     private:
-        sstring _source_dc;
+        locator::dc_name _source_dc;
     public:
-        single_datacenter_filter(const sstring& source_dc)
-            : _source_dc(source_dc) {
+        single_datacenter_filter(locator::dc_name source_dc)
+            : _source_dc(std::move(source_dc)) {
         }
         virtual bool should_include(const locator::topology& topo, inet_address endpoint) override {
             return topo.get_datacenter(endpoint) == _source_dc;

@@ -20,10 +20,10 @@ namespace locator {
 
 static logging::logger tlogger("topology");
 
-thread_local const endpoint_dc_rack endpoint_dc_rack::default_location = {
-    .dc = locator::production_snitch_base::default_dc,
-    .rack = locator::production_snitch_base::default_rack,
-};
+thread_local const endpoint_dc_rack endpoint_dc_rack::default_location(
+    locator::production_snitch_base::default_dc,
+    locator::production_snitch_base::default_rack
+);
 
 node::node(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, shard_id shard_count, this_node is_this_node, node::idx_type idx)
     : _topology(topology)
@@ -231,10 +231,10 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
         }
     }
     if (opt_dr) {
-        if (opt_dr->dc.empty() || opt_dr->dc == production_snitch_base::default_dc) {
+        if (opt_dr->dc.empty() || opt_dr->dc == endpoint_dc_rack::default_location.dc) {
             opt_dr->dc = node->dc_rack().dc;
         }
-        if (opt_dr->rack.empty() || opt_dr->rack == production_snitch_base::default_rack) {
+        if (opt_dr->rack.empty() || opt_dr->rack == endpoint_dc_rack::default_location.rack) {
             opt_dr->rack = node->dc_rack().rack;
         }
         if (*opt_dr != node->dc_rack()) {
@@ -560,8 +560,8 @@ namespace std {
 
 std::ostream& operator<<(std::ostream& out, const locator::topology& t) {
     out << "{this_endpoint: " << t._cfg.this_endpoint
-        << ", dc: " << t._cfg.local_dc_rack.dc
-        << ", rack: " << t._cfg.local_dc_rack.rack
+        << ", dc: " << t._cfg.local_dc_rack.dc.str()
+        << ", rack: " << t._cfg.local_dc_rack.rack.str()
         << ", nodes:\n";
     for (auto&& node : t._nodes) {
         out << "  " << locator::topology::debug_format(&*node) << "\n";

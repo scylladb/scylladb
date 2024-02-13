@@ -221,7 +221,7 @@ repair_neighbors::repair_neighbors(std::vector<gms::inet_address> nodes, std::ve
 static std::vector<gms::inet_address> get_neighbors(
         const locator::effective_replication_map& erm,
         const sstring& ksname, query::range<dht::token> range,
-        const std::vector<sstring>& data_centers,
+        const std::vector<locator::dc_name>& data_centers,
         const std::vector<sstring>& hosts,
         const std::unordered_set<gms::inet_address>& ignore_nodes, bool small_table_optimization = false) {
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
@@ -236,10 +236,10 @@ static std::vector<gms::inet_address> get_neighbors(
     if (!data_centers.empty()) {
         auto dc_endpoints_map = erm.get_token_metadata().get_topology().get_datacenter_endpoints();
         std::unordered_set<gms::inet_address> dc_endpoints;
-        for (const sstring& dc : data_centers) {
+        for (const auto& dc : data_centers) {
             auto it = dc_endpoints_map.find(dc);
             if (it == dc_endpoints_map.end()) {
-                std::vector<sstring> dcs;
+                std::vector<locator::dc_name> dcs;
                 for (const auto& e : dc_endpoints_map) {
                     dcs.push_back(e.first);
                 }
@@ -343,7 +343,7 @@ static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(
         const locator::effective_replication_map& erm,
         const sstring& ksname,
         const dht::token_range_vector& ranges,
-        const std::vector<sstring>& data_centers,
+        const std::vector<locator::dc_name>& data_centers,
         const std::vector<sstring>& hosts,
         const std::unordered_set<gms::inet_address>& ignore_nodes) {
 
@@ -552,7 +552,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
         const dht::token_range_vector& ranges_,
         std::vector<table_id> table_ids_,
         repair_uniq_id parent_id_,
-        const std::vector<sstring>& data_centers_,
+        const std::vector<locator::dc_name>& data_centers_,
         const std::vector<sstring>& hosts_,
         const std::unordered_set<gms::inet_address>& ignore_nodes_,
         streaming::stream_reason reason_,
@@ -1165,7 +1165,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
         // when "primary_range" option is on, neither data_centers nor hosts
         // may be set, except data_centers may contain only local DC (-local)
         if (options.data_centers.size() == 1 &&
-            options.data_centers[0] == topology.get_datacenter()) {
+            options.data_centers[0] == topology.get_datacenter().str()) {
             // get_primary_ranges_within_dc() is similar to get_primary_ranges(),
             // but instead of each range being assigned just one primary owner
             // across the entire cluster, here each range is assigned a primary
@@ -1475,7 +1475,7 @@ future<> repair::data_sync_repair_task_impl::run() {
         }
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, germs, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
-                auto data_centers = std::vector<sstring>();
+                auto data_centers = std::vector<locator::dc_name>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
                 bool hints_batchlog_flushed = false;
@@ -1920,7 +1920,7 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
     });
 }
 
-future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::unordered_set<gms::inet_address> ignore_nodes) {
+future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, locator::dc_name source_dc, streaming::stream_reason reason, std::unordered_set<gms::inet_address> ignore_nodes) {
     assert(this_shard_id() == 0);
     return seastar::async([this, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes)] () mutable {
         auto& db = get_db().local();
@@ -2005,7 +2005,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
     });
 }
 
-future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc) {
+future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, locator::dc_name source_dc) {
     assert(this_shard_id() == 0);
     auto op = sstring("rebuild_with_repair");
     if (source_dc.empty()) {
@@ -2149,7 +2149,7 @@ future<> repair::tablet_repair_task_impl::run() {
                 dht::token_range_vector ranges = {m.range};
                 std::vector<table_id> table_ids = {m.tid};
 
-                auto data_centers = std::vector<sstring>();
+                auto data_centers = std::vector<locator::dc_name>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
                 bool hints_batchlog_flushed = false;

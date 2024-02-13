@@ -22,6 +22,7 @@
 #include "utils/UUID.hh"
 #include "service/session.hh"
 #include "mutation/canonical_mutation.hh"
+#include "locator/types.hh"
 
 namespace service {
 
@@ -79,8 +80,8 @@ struct ring_slice {
 
 struct replica_state {
     node_state state;
-    seastar::sstring datacenter;
-    seastar::sstring rack;
+    locator::dc_name datacenter;
+    locator::rack_name rack;
     seastar::sstring release_version;
     std::optional<ring_slice> ring; // if engaged contain the set of tokens the node owns together with their state
     size_t shard_count;

@@ -20,6 +20,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/distributed.hh>
 #include "log.hh"
+#include "locator/types.hh"
 
 namespace gms {
 
@@ -60,18 +61,15 @@ public:
     /**
      * returns a String representing the rack local node belongs to
      */
-    virtual sstring get_rack() const = 0;
+    virtual rack_name get_rack() const = 0;
 
     /**
      * returns a String representing the datacenter local node belongs to
      */
-    virtual sstring get_datacenter() const = 0;
+    virtual dc_name get_datacenter() const = 0;
 
     locator::endpoint_dc_rack get_location() const {
-        return locator::endpoint_dc_rack{
-            .dc = get_datacenter(),
-            .rack = get_rack(),
-        };
+        return locator::endpoint_dc_rack(get_datacenter(), get_rack());
     }
 
     virtual std::optional<inet_address> get_public_address() const noexcept { return std::nullopt; }
@@ -107,7 +105,11 @@ public:
     }
 
     // noop by default
-    virtual void set_my_dc_and_rack(const sstring& new_dc, const sstring& enw_rack) {};
+    virtual void set_my_dc_and_rack(const dc_name& new_dc, const rack_name& enw_rack) {};
+    virtual void set_my_dc_and_rack(sstring new_dc, sstring new_rack) {
+        return set_my_dc_and_rack(dc_name(std::move(new_dc)), rack_name(std::move(new_rack)));
+    }
+
     virtual void set_prefer_local(bool prefer_local) {};
     virtual void set_local_private_addr(const sstring& addr_str) {};
 
@@ -287,15 +289,15 @@ public:
 
     //
     // Sons have to implement:
-    // virtual sstring get_rack()        = 0;
-    // virtual sstring get_datacenter()  = 0;
+    // virtual locator::rack_name get_rack()        = 0;
+    // virtual locator::dc_name get_datacenter()  = 0;
     //
 
     virtual gms::application_state_map get_app_states() const override;
 
 protected:
-    sstring _my_dc;
-    sstring _my_rack;
+    locator::dc_name _my_dc;
+    locator::rack_name _my_rack;
     snitch_config _cfg;
 };
 

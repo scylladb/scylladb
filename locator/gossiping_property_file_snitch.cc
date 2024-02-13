@@ -110,8 +110,8 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
 
 gms::application_state_map gossiping_property_file_snitch::get_app_states() const {
     gms::application_state_map ret = {
-        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
-        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},
+        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc.str())},
+        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack.str())},
     };
     if (_listen_address.has_value()) {
         sstring ip = format("{}", *_listen_address);
@@ -147,16 +147,16 @@ future<> gossiping_property_file_snitch::read_property_file() {
 future<> gossiping_property_file_snitch::reload_configuration() {
     // "prefer_local" is FALSE by default
     bool new_prefer_local = false;
-    sstring new_dc;
-    sstring new_rack;
+    locator::dc_name new_dc;
+    locator::rack_name new_rack;
 
     // Rack and Data Center have to be defined in the properties file!
     if (!_prop_values.contains(dc_property_key) || !_prop_values.contains(rack_property_key)) {
         throw_incomplete_file();
     }
 
-    new_dc   = _prop_values[dc_property_key];
-    new_rack = _prop_values[rack_property_key];
+    new_dc   = locator::dc_name(_prop_values[dc_property_key]);
+    new_rack = locator::rack_name(_prop_values[rack_property_key]);
 
     if (_prop_values.contains(prefer_local_property_key)) {
         if (_prop_values[prefer_local_property_key] == "false") {

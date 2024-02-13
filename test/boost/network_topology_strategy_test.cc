@@ -85,7 +85,7 @@ void strategy_sanity_check(
     size_t total_rf = 0;
     for (auto& val : options) {
         size_t rf = std::stol(val.second);
-        BOOST_CHECK(nts_ptr->get_replication_factor(val.first) == rf);
+        BOOST_CHECK(nts_ptr->get_replication_factor(dc_name(val.first)) == rf);
 
         total_rf += rf;
     }
@@ -118,9 +118,9 @@ void endpoints_check(
     BOOST_CHECK(endpoints.size() == ep_set.size());
 
     // Check the per-DC RF
-    std::unordered_map<sstring, size_t> dc_rf;
+    std::unordered_map<dc_name, size_t> dc_rf;
     for (auto ep : endpoints) {
-        sstring dc = topo.get_location(ep).dc;
+        const auto& dc = topo.get_location(ep).dc;
 
         auto rf = dc_rf.find(dc);
         if (rf == dc_rf.end()) {
@@ -471,16 +471,16 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
 /**
  * static impl of "old" network topology strategy endpoint calculation.
  */
-static size_t get_replication_factor(const sstring& dc,
-                const std::unordered_map<sstring, size_t>& datacenters) noexcept {
+static size_t get_replication_factor(const dc_name& dc,
+                const std::unordered_map<dc_name, size_t>& datacenters) noexcept {
     auto dc_factor = datacenters.find(dc);
     return (dc_factor == datacenters.end()) ? 0 : dc_factor->second;
 }
 
-static bool has_sufficient_replicas(const sstring& dc,
-                const std::unordered_map<sstring, std::unordered_set<host_id>>& dc_replicas,
-                const std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
-                const std::unordered_map<sstring, size_t>& datacenters) noexcept {
+static bool has_sufficient_replicas(const dc_name& dc,
+                const std::unordered_map<dc_name, std::unordered_set<host_id>>& dc_replicas,
+                const std::unordered_map<dc_name, std::unordered_set<inet_address>>& all_endpoints,
+                const std::unordered_map<dc_name, size_t>& datacenters) noexcept {
     auto dc_replicas_it = dc_replicas.find(dc);
     if (dc_replicas_it == dc_replicas.end()) {
         BOOST_TEST_FAIL(format("has_sufficient_replicas: dc {} not found in dc_replicas: {}", dc, dc_replicas));
@@ -496,9 +496,9 @@ static bool has_sufficient_replicas(const sstring& dc,
 }
 
 static bool has_sufficient_replicas(
-                const std::unordered_map<sstring, std::unordered_set<host_id>>& dc_replicas,
-                const std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
-                const std::unordered_map<sstring, size_t>& datacenters) noexcept {
+                const std::unordered_map<dc_name, std::unordered_set<host_id>>& dc_replicas,
+                const std::unordered_map<dc_name, std::unordered_set<inet_address>>& all_endpoints,
+                const std::unordered_map<dc_name, size_t>& datacenters) noexcept {
 
     for (auto& dc : datacenters | boost::adaptors::map_keys) {
         if (!has_sufficient_replicas(dc, dc_replicas, all_endpoints,
@@ -513,7 +513,7 @@ static bool has_sufficient_replicas(
 static locator::host_id_set calculate_natural_endpoints(
                 const token& search_token, const token_metadata& tm,
                 const locator::topology& topo,
-                const std::unordered_map<sstring, size_t>& datacenters) {
+                const std::unordered_map<dc_name, size_t>& datacenters) {
     //
     // We want to preserve insertion order so that the first added endpoint
     // becomes primary.
@@ -521,15 +521,15 @@ static locator::host_id_set calculate_natural_endpoints(
     locator::host_id_set replicas;
 
     // replicas we have found in each DC
-    std::unordered_map<sstring, std::unordered_set<host_id>> dc_replicas;
+    std::unordered_map<dc_name, std::unordered_set<host_id>> dc_replicas;
     // tracks the racks we have already placed replicas in
-    std::unordered_map<sstring, std::unordered_set<sstring>> seen_racks;
+    std::unordered_map<dc_name, std::unordered_set<rack_name>> seen_racks;
     //
     // tracks the endpoints that we skipped over while looking for unique racks
     // when we relax the rack uniqueness we can append this to the current
     // result so we don't have to wind back the iterator
     //
-    std::unordered_map<sstring, locator::host_id_set>
+    std::unordered_map<locator::dc_name, locator::host_id_set>
         skipped_dc_endpoints;
 
     //
@@ -549,15 +549,15 @@ static locator::host_id_set calculate_natural_endpoints(
     // all endpoints in each DC, so we can check when we have exhausted all
     // the members of a DC
     //
-    const std::unordered_map<sstring,
+    const std::unordered_map<dc_name,
                        std::unordered_set<inet_address>>
         all_endpoints = tp.get_datacenter_endpoints();
     //
     // all racks in a DC so we can check when we have exhausted all racks in a
     // DC
     //
-    const std::unordered_map<sstring,
-                       std::unordered_map<sstring,
+    const std::unordered_map<dc_name,
+                       std::unordered_map<rack_name,
                                           std::unordered_set<inet_address>>>
         racks = tp.get_datacenter_racks();
 
@@ -571,7 +571,7 @@ static locator::host_id_set calculate_natural_endpoints(
         }
 
         host_id ep = *tm.get_endpoint(next);
-        sstring dc = topo.get_location(ep).dc;
+        const auto& dc = topo.get_location(ep).dc;
 
         auto& seen_racks_dc_set = seen_racks[dc];
         auto& racks_dc_map = racks.at(dc);
@@ -592,7 +592,7 @@ static locator::host_id_set calculate_natural_endpoints(
             dc_replicas_dc_set.insert(ep);
             replicas.push_back(ep);
         } else {
-            sstring rack = topo.get_location(ep).rack;
+            const auto& rack = topo.get_location(ep).rack;
             // is this a new rack? - we prefer to replicate on different racks
             if (seen_racks_dc_set.contains(rack)) {
                 skipped_dc_endpoints_set.push_back(ep);
@@ -622,7 +622,7 @@ static locator::host_id_set calculate_natural_endpoints(
 }
 
 // Called in a seastar thread.
-static void test_equivalence(const shared_token_metadata& stm, const locator::topology& topo, const std::unordered_map<sstring, size_t>& datacenters) {
+static void test_equivalence(const shared_token_metadata& stm, const locator::topology& topo, const std::unordered_map<dc_name, size_t>& datacenters) {
     class my_network_topology_strategy : public network_topology_strategy {
     public:
         using network_topology_strategy::network_topology_strategy;
@@ -633,8 +633,8 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
                     boost::copy_range<std::map<sstring, sstring>>(
                                     datacenters
                                                     | boost::adaptors::transformed(
-                                                                    [](const std::pair<sstring, size_t>& p) {
-                                                                        return std::make_pair(p.first, to_sstring(p.second));
+                                                                    [](const std::pair<dc_name, size_t>& p) {
+                                                                        return std::make_pair(p.first.str(), to_sstring(p.second));
                                                                     })), std::nullopt));
 
     const token_metadata& tm = *stm.get();
@@ -655,11 +655,11 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
 }
 
 
-void generate_topology(topology& topo, const std::unordered_map<sstring, size_t> datacenters, const std::vector<host_id>& nodes) {
+void generate_topology(topology& topo, const std::unordered_map<dc_name, size_t> datacenters, const std::vector<host_id>& nodes) {
     auto& e1 = seastar::testing::local_random_engine;
 
-    std::unordered_map<sstring, size_t> racks_per_dc;
-    std::vector<std::reference_wrapper<const sstring>> dcs;
+    std::unordered_map<dc_name, size_t> racks_per_dc;
+    std::vector<std::reference_wrapper<const dc_name>> dcs;
 
     dcs.reserve(datacenters.size() * 4);
 
@@ -677,10 +677,10 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
 
     unsigned i = 0;
     for (auto& node : nodes) {
-        const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
+        const auto& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo.add_node(node, inet_address((127u << 24) | ++i), {dc, to_sstring(r)}, locator::node::state::normal);
+        topo.add_node(node, inet_address((127u << 24) | ++i), {dc, rack_name(to_sstring(r))}, locator::node::state::normal);
     }
 }
 
@@ -694,12 +694,12 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     constexpr size_t VNODES = 64;
     constexpr size_t RUNS = 10;
 
-    std::unordered_map<sstring, size_t> datacenters = {
-                    { "rf1", 1 },
-                    { "rf3", 3 },
-                    { "rf5_1", 5 },
-                    { "rf5_2", 5 },
-                    { "rf5_3", 5 },
+    std::unordered_map<dc_name, size_t> datacenters = {
+                    { dc_name("rf1"), 1 },
+                    { dc_name("rf3"), 3 },
+                    { dc_name("rf5_1"), 5 },
+                    { dc_name("rf5_2"), 5 },
+                    { dc_name("rf5_3"), 5 },
     };
     std::vector<host_id> nodes;
     nodes.reserve(NODES);
@@ -803,10 +803,10 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
 
     constexpr size_t NODES = 10;
 
-    std::unordered_map<sstring, size_t> datacenters = {
-                    { "rf1", 1 },
-                    { "rf2", 2 },
-                    { "rf3", 3 },
+    std::unordered_map<dc_name, size_t> datacenters = {
+                    { dc_name("rf1"), 1 },
+                    { dc_name("rf2"), 2 },
+                    { dc_name("rf3"), 3 },
     };
     std::vector<host_id> nodes;
     nodes.reserve(NODES);

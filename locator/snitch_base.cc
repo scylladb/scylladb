@@ -16,8 +16,8 @@ namespace locator {
 
 gms::application_state_map snitch_base::get_app_states() const {
     return {
-        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
-        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},
+        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc.str())},
+        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack.str())},
     };
 }
 

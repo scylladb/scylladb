@@ -1441,8 +1441,8 @@ future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_
                             cql3::query_processor::CQL_VERSION,
                             ::cassandra::thrift_version,
                             to_sstring(unsigned(cql_serialization_format::latest().protocol_version())),
-                            location.dc,
-                            location.rack,
+                            location.dc.str(),
+                            location.rack.str(),
                             sstring(cfg.partitioner()),
                             broadcast_rpc_address,
                             broadcast_address,
@@ -2816,7 +2816,7 @@ future<service::topology> system_keyspace::load_topology_state() {
         }
         if (map) {
             map->emplace(host_id, service::replica_state{
-                nstate, std::move(datacenter), std::move(rack), std::move(release_version),
+                nstate, locator::dc_name(datacenter), locator::rack_name(rack), std::move(release_version),
                 ring_slice, shard_count, ignore_msb, std::move(supported_features),
                 service::cleanup_status_from_string(cleanup_status), request_id});
         }

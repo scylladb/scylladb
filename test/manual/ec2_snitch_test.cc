@@ -49,8 +49,8 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
                                 "configuration file");
                     return snitch.stop();
                 }
-                auto cpu0_dc = make_lw_shared<sstring>();
-                auto cpu0_rack = make_lw_shared<sstring>();
+                auto cpu0_dc = make_lw_shared<locator::dc_name>();
+                auto cpu0_rack = make_lw_shared<locator::rack_name>();
                 auto res = make_lw_shared<bool>(true);
 
                 return snitch.invoke_on(0,

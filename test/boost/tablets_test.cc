@@ -1462,7 +1462,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
     };
 
     for (int i = 0; i < 13; ++i) {
-        std::unordered_map<sstring, std::vector<host_id>> hosts_by_rack;
+        std::unordered_map<locator::rack_name, std::vector<host_id>> hosts_by_rack;
 
         semaphore sem(1);
         shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {

@@ -36,6 +36,7 @@
 #include "utils/chunked_vector.hh"
 #include "utils/lexicographical_compare.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/frozen_sstring.hh"
 #include "tasks/types.hh"
 
 class tuple_type_impl;

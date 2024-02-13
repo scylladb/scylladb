@@ -30,10 +30,10 @@ future<> one_test(const std::string& property_fname1,
            (exp_result ? "success" : "failure"));
 
     return seastar::async([&property_fname1, &property_fname2, exp_result] {
-        auto cpu0_dc = make_lw_shared<sstring>();
-        auto cpu0_rack = make_lw_shared<sstring>();
-        auto cpu0_dc_new = make_lw_shared<sstring>();
-        auto cpu0_rack_new = make_lw_shared<sstring>();
+        auto cpu0_dc = make_lw_shared<dc_name>();
+        auto cpu0_rack = make_lw_shared<rack_name>();
+        auto cpu0_dc_new = make_lw_shared<dc_name>();
+        auto cpu0_rack_new = make_lw_shared<rack_name>();
         sharded<snitch_ptr> snitch;
         auto my_address = gms::inet_address("localhost");
 

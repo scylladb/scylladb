@@ -23,7 +23,7 @@ host_filter::host_filter(host_filter::disabled_for_all_tag)
         : _enabled_kind(host_filter::enabled_kind::disabled_for_all) {
 }
 
-host_filter::host_filter(std::unordered_set<sstring> allowed_dcs)
+host_filter::host_filter(std::unordered_set<locator::dc_name> allowed_dcs)
         : _enabled_kind(allowed_dcs.empty() ? enabled_kind::disabled_for_all : enabled_kind::enabled_selectively)
         , _dcs(std::move(allowed_dcs)) {
 }
@@ -65,7 +65,9 @@ host_filter host_filter::parse_from_dc_list(sstring opt) {
         }
     });
 
-    return host_filter(std::unordered_set<sstring>(dcs.begin(), dcs.end()));
+    return host_filter(boost::copy_range<std::unordered_set<locator::dc_name>>(dcs | boost::adaptors::transformed([] (const auto& dc) {
+        return locator::dc_name(dc);
+    })));
 }
 
 std::istream& operator>>(std::istream& is, host_filter& f) {

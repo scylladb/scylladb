@@ -82,8 +82,8 @@ void ec2_multi_region_snitch::set_local_private_addr(const sstring& addr_str) {
 
 gms::application_state_map ec2_multi_region_snitch::get_app_states() const {
     return {
-        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
-        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},
+        {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc.str())},
+        {gms::application_state::RACK, gms::versioned_value::rack(_my_rack.str())},
         {gms::application_state::INTERNAL_IP, gms::versioned_value::internal_ip(_local_private_address)},
     };
 }

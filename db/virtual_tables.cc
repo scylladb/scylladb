@@ -80,7 +80,7 @@ public:
                 }
 
                 if (hostid && tm.is_normal_token_owner(*hostid)) {
-                    sstring dc = tm.get_topology().get_location(endpoint).dc;
+                    const auto& dc = tm.get_topology().get_location(endpoint).dc.str();
                     set_cell(cr, "dc", dc);
                 }
 

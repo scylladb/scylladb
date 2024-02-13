@@ -82,9 +82,9 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
         if (!topology.has_endpoint(ep)) {
             // Cannot return error here, nodetool status can race, request
             // info about just-left node and not handle it nicely
-            return locator::endpoint_dc_rack::default_location.dc;
+            return locator::endpoint_dc_rack::default_location.dc.str();
         }
-        return topology.get_datacenter(ep);
+        return topology.get_datacenter(ep).str();
     });
 
     httpd::endpoint_snitch_info_json::get_rack.set(r, [&tm](const_req req) {
@@ -93,9 +93,9 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
         if (!topology.has_endpoint(ep)) {
             // Cannot return error here, nodetool status can race, request
             // info about just-left node and not handle it nicely
-            return locator::endpoint_dc_rack::default_location.rack;
+            return locator::endpoint_dc_rack::default_location.rack.str();
         }
-        return topology.get_rack(ep);
+        return topology.get_rack(ep).str();
     });
 }
 

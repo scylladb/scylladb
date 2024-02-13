@@ -45,7 +45,7 @@ private:
     std::vector<sstring> _cfs;
     dht::token_range_vector _ranges;
     std::vector<sstring> _hosts;
-    std::vector<sstring> _data_centers;
+    std::vector<locator::dc_name> _data_centers;
     std::unordered_set<gms::inet_address> _ignore_nodes;
     bool _small_table_optimization;
     std::optional<int> _ranges_parallelism;
@@ -56,7 +56,9 @@ public:
         , _cfs(std::move(cfs))
         , _ranges(std::move(ranges))
         , _hosts(std::move(hosts))
-        , _data_centers(std::move(data_centers))
+        , _data_centers(boost::copy_range<std::vector<locator::dc_name>>(data_centers | boost::adaptors::transformed([] (const auto& dc) {
+                return locator::dc_name(std::move(dc));
+            })))
         , _ignore_nodes(std::move(ignore_nodes))
         , _small_table_optimization(small_table_optimization)
         , _ranges_parallelism(ranges_parallelism)
@@ -138,7 +140,7 @@ public:
     std::vector<sstring> cfs;
     std::vector<table_id> table_ids;
     repair_uniq_id global_repair_id;
-    std::vector<sstring> data_centers;
+    std::vector<locator::dc_name> data_centers;
     std::vector<sstring> hosts;
     std::unordered_set<gms::inet_address> ignore_nodes;
     std::unordered_map<dht::token_range, repair_neighbors> neighbors;
@@ -165,7 +167,7 @@ public:
             const dht::token_range_vector& ranges_,
             std::vector<table_id> table_ids_,
             repair_uniq_id parent_id_,
-            const std::vector<sstring>& data_centers_,
+            const std::vector<locator::dc_name>& data_centers_,
             const std::vector<sstring>& hosts_,
             const std::unordered_set<gms::inet_address>& ignore_nodes_,
             streaming::stream_reason reason_,

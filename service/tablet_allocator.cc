@@ -16,6 +16,7 @@
 #include "utils/stall_free.hh"
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
+#include "locator/types.hh"
 #include <utility>
 
 using namespace locator;
@@ -48,8 +49,6 @@ struct load_balancer_cluster_stats {
     uint64_t resizes_finalized = 0;
 };
 
-using dc_name = sstring;
-
 class load_balancer_stats_manager {
     std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
     std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
@@ -60,7 +59,7 @@ class load_balancer_stats_manager {
 
     void setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
         namespace sm = seastar::metrics;
-        auto dc_lb = dc_label(dc);
+        auto dc_lb = dc_label(dc.str());
         _metrics.add_group("load_balancer", {
             sm::make_counter("calls", sm::description("number of calls to the load balancer"),
                              stats.calls)(dc_lb),
@@ -73,7 +72,7 @@ class load_balancer_stats_manager {
 
     void setup_metrics(const dc_name& dc, host_id node, load_balancer_node_stats& stats) {
         namespace sm = seastar::metrics;
-        auto dc_lb = dc_label(dc);
+        auto dc_lb = dc_label(dc.str());
         auto node_lb = node_label(node);
         _metrics.add_group("load_balancer", {
             sm::make_gauge("load", sm::description("node load during last load balancing"),
@@ -891,7 +890,7 @@ public:
                 std::pop_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
             } else {
                 std::unordered_set<host_id> replicas;
-                std::unordered_map<sstring, int> rack_load;
+                std::unordered_map<rack_name, int> rack_load;
                 int max_rack_load = 0;
                 for (auto&& r : tmap.get_tablet_info(source_tablet.tablet).replicas) {
                     replicas.insert(r.host);
@@ -992,7 +991,7 @@ public:
 
             bool check_rack_load = false;
             bool has_replica_on_target = false;
-            std::unordered_map<sstring, int> rack_load; // Will be built if check_rack_load
+            std::unordered_map<rack_name, int> rack_load; // Will be built if check_rack_load
 
             if (nodes_to_drain.empty()) {
                 check_rack_load = target_node.dc_rack().rack != topo.get_node(src.host).dc_rack().rack;

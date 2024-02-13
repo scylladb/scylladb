@@ -64,7 +64,7 @@ static std::map<sstring, sstring> prepare_options(
         }
 
         for (const auto& dc : tm.get_topology().get_datacenters()) {
-            options.emplace(dc, *rf);
+            options.emplace(dc.str(), *rf);
         }
     }
 

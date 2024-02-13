@@ -95,8 +95,8 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
                 }
                 return;
             }
-            auto cpu0_dc = make_lw_shared<sstring>();
-            auto cpu0_rack = make_lw_shared<sstring>();
+            auto cpu0_dc = make_lw_shared<dc_name>();
+            auto cpu0_rack = make_lw_shared<rack_name>();
             auto res = make_lw_shared<bool>(true);
 
             snitch.invoke_on(0, [cpu0_dc, cpu0_rack, res] (snitch_ptr& inst) {

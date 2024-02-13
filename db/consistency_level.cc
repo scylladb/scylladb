@@ -32,12 +32,12 @@ size_t quorum_for(const locator::effective_replication_map& erm) {
     return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
-static size_t local_quorum_for(const locator::network_topology_strategy& nrs, const sstring& dc) {
+static size_t local_quorum_for(const locator::network_topology_strategy& nrs, const locator::dc_name& dc) {
     size_t replication_factor = nrs.get_replication_factor(dc);
     return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
-size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
+size_t local_quorum_for(const locator::effective_replication_map& erm, const locator::dc_name& dc) {
     using namespace locator;
 
     auto& rs = erm.get_replication_strategy();
@@ -119,7 +119,7 @@ bool is_datacenter_local(consistency_level l) {
 }
 
 template <typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
-std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
+std::unordered_map<locator::dc_name, dc_node_count> count_per_dc_endpoints(
         const locator::effective_replication_map& erm,
         const Range& live_endpoints,
         const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>()) {
@@ -131,7 +131,7 @@ std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
     const network_topology_strategy* nrs =
             static_cast<const network_topology_strategy*>(&rs);
 
-    std::unordered_map<sstring, dc_node_count> dc_endpoints;
+    std::unordered_map<locator::dc_name, dc_node_count> dc_endpoints;
     for (auto& dc : nrs->get_datacenters()) {
         dc_endpoints.emplace(dc, dc_node_count());
     }

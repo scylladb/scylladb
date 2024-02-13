@@ -58,8 +58,9 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
 
         auto rf = parse_replication_factor(val);
         rep_factor += rf;
-        _dc_rep_factor.emplace(key, rf);
-        _datacenteres.push_back(key);
+        locator::dc_name dc_name(key);
+        _dc_rep_factor.emplace(dc_name, rf);
+        _datacenteres.push_back(dc_name);
     }
 
     _rep_factor = rep_factor;
@@ -155,7 +156,7 @@ class natural_endpoints_tracker {
 
     const token_metadata& _tm;
     const topology& _tp;
-    std::unordered_map<sstring, size_t> _dc_rep_factor;
+    std::unordered_map<locator::dc_name, size_t> _dc_rep_factor;
 
     //
     // We want to preserve insertion order so that the first added endpoint
@@ -169,20 +170,20 @@ class natural_endpoints_tracker {
     // all endpoints in each DC, so we can check when we have exhausted all
     // the members of a DC
     //
-    std::unordered_map<sstring, std::unordered_set<inet_address>> _all_endpoints;
+    std::unordered_map<locator::dc_name, std::unordered_set<inet_address>> _all_endpoints;
 
     //
     // all racks in a DC so we can check when we have exhausted all racks in a
     // DC
     //
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>> _racks;
+    std::unordered_map<locator::dc_name, std::unordered_map<locator::rack_name, std::unordered_set<inet_address>>> _racks;
 
-    std::unordered_map<sstring_view, data_center_endpoints> _dcs;
+    std::unordered_map<locator::dc_name, data_center_endpoints> _dcs;
 
     size_t _dcs_to_fill;
 
 public:
-    natural_endpoints_tracker(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rep_factor)
+    natural_endpoints_tracker(const token_metadata& tm, const std::unordered_map<locator::dc_name, size_t>& dc_rep_factor)
         : _tm(tm)
         , _tp(_tm.get_topology())
         , _dc_rep_factor(dc_rep_factor)
@@ -229,9 +230,9 @@ public:
         return _replicas;
     }
 
-    static void check_enough_endpoints(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rf) {
+    static void check_enough_endpoints(const token_metadata& tm, const std::unordered_map<locator::dc_name, size_t>& dc_rf) {
         const auto& dc_endpoints = tm.get_topology().get_datacenter_endpoints();
-        auto endpoints_in = [&dc_endpoints](sstring dc) {
+        auto endpoints_in = [&dc_endpoints](const locator::dc_name& dc) {
             auto i = dc_endpoints.find(dc);
             return i != dc_endpoints.end() ? i->second.size() : size_t(0);
         };
@@ -282,7 +283,9 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs)
 
 std::optional<std::unordered_set<sstring>> network_topology_strategy::recognized_options(const topology& topology) const {
     // We only allow datacenter names as options
-    auto opts = topology.get_datacenters();
+    auto opts = boost::copy_range<std::unordered_set<sstring>>(topology.get_datacenters() | boost::adaptors::transformed([] (const auto& dc_name) {
+        return dc_name.str();
+    }));
     opts.merge(recognized_tablet_options());
     return opts;
 }
@@ -301,7 +304,7 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
 //    initial_tablets = max(nr_shards_in(dc) / RF_in(dc) for dc in datacenters)
 //
 
-static unsigned calculate_initial_tablets_from_topology(const schema& s, const topology& topo, const std::unordered_map<sstring, size_t>& rf) {
+static unsigned calculate_initial_tablets_from_topology(const schema& s, const topology& topo, const std::unordered_map<locator::dc_name, size_t>& rf) {
     unsigned initial_tablets = std::numeric_limits<unsigned>::min();
     for (const auto& dc : topo.get_datacenter_endpoints()) {
         unsigned shards_in_dc = 0;

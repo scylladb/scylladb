@@ -38,12 +38,12 @@ public:
 
     explicit production_snitch_base(snitch_config);
 
-    virtual sstring get_rack() const override;
-    virtual sstring get_datacenter() const override;
+    virtual locator::rack_name get_rack() const override;
+    virtual locator::dc_name get_datacenter() const override;
     virtual void set_backreference(snitch_ptr& d) override;
 
 private:
-    virtual void set_my_dc_and_rack(const sstring& new_dc, const sstring& new_rack) override;
+    virtual void set_my_dc_and_rack(const dc_name& new_dc, const rack_name& new_rack) override;
     virtual void set_prefer_local(bool prefer_local) override;
     void parse_property_file();
 

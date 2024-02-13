@@ -314,7 +314,7 @@ vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
 dht::token_range_vector
 vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
     const topology& topo = _tmptr->get_topology();
-    sstring local_dc = topo.get_datacenter(ep);
+    const auto& local_dc = topo.get_datacenter(ep);
     std::unordered_set<inet_address> local_dc_nodes = topo.get_datacenter_endpoints().at(local_dc);
     // The callback function below is called for each endpoint
     // in each token natural endpoints.

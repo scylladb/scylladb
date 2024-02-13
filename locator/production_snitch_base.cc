@@ -33,11 +33,11 @@ production_snitch_base::production_snitch_base(snitch_config cfg)
 }
 
 
-sstring production_snitch_base::get_rack() const {
+locator::rack_name production_snitch_base::get_rack() const {
     return _my_rack;
 }
 
-sstring production_snitch_base::get_datacenter() const {
+locator::dc_name production_snitch_base::get_datacenter() const {
     return _my_dc;
 }
 
@@ -45,18 +45,18 @@ void production_snitch_base::set_backreference(snitch_ptr& d) {
     _backreference = &d;
 }
 
-void production_snitch_base::set_my_dc_and_rack(const sstring& new_dc, const sstring& new_rack) {
+void production_snitch_base::set_my_dc_and_rack(const dc_name& new_dc, const rack_name& new_rack) {
     if (!new_dc.empty()) {
         _my_dc = new_dc;
     } else {
-        _my_dc = default_dc;
+        _my_dc = locator::dc_name(default_dc);
         logger().warn("{} snitch attempted to set DC to an empty string, falling back to {}.", get_name(), default_dc);
     }
 
     if (!new_rack.empty()) {
         _my_rack = new_rack;
     } else {
-        _my_rack = default_rack;
+        _my_rack = locator::rack_name(default_rack);
         logger().warn("{} snitch attempted to set rack to an empty string, falling back to {}.", get_name(), default_rack);
     }
 }

@@ -33,14 +33,14 @@ struct rack_inferring_snitch : public snitch_base {
         set_snitch_ready();
     }
 
-    virtual sstring get_rack() const override {
+    virtual locator::rack_name get_rack() const override {
         auto& endpoint = _cfg.broadcast_address;
-        return std::to_string(uint8_t(endpoint.bytes()[2]));
+        return locator::rack_name(std::to_string(uint8_t(endpoint.bytes()[2])));
     }
 
-    virtual sstring get_datacenter() const override {
+    virtual locator::dc_name get_datacenter() const override {
         auto& endpoint = _cfg.broadcast_address;
-        return std::to_string(uint8_t(endpoint.bytes()[1]));
+        return locator::dc_name(std::to_string(uint8_t(endpoint.bytes()[1])));
     }
 
     virtual sstring get_name() const override {

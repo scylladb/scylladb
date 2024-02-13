@@ -212,8 +212,9 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_pr
         std::vector<sstring> res;
         const auto& filter = proxy.local().get_hints_host_filter();
         const auto& dcs = filter.get_dcs();
-        res.reserve(res.size());
-        std::copy(dcs.begin(), dcs.end(), std::back_inserter(res));
+        res = boost::copy_range<std::vector<sstring>>(dcs | boost::adaptors::transformed([] (const auto& dc_name) {
+            return dc_name.str();
+        }));
         return make_ready_future<json::json_return_type>(res);
     });
 

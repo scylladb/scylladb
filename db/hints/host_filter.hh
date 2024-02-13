@@ -15,6 +15,7 @@
 
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
+#include "locator/types.hh"
 
 namespace gms {
     class inet_address;
@@ -35,7 +36,7 @@ private:
     };
 
     enabled_kind _enabled_kind;
-    std::unordered_set<sstring> _dcs;
+    std::unordered_set<locator::dc_name> _dcs;
 
     static std::string_view enabled_kind_to_string(host_filter::enabled_kind ek);
 
@@ -50,7 +51,7 @@ public:
     host_filter(disabled_for_all_tag);
 
     // Creates a filter that allows sending hints to specified DCs.
-    explicit host_filter(std::unordered_set<sstring> allowed_dcs);
+    explicit host_filter(std::unordered_set<locator::dc_name> allowed_dcs);
 
     // Parses hint filtering configuration from the hinted_handoff_enabled option.
     static host_filter parse_from_config_string(sstring opt);
@@ -60,7 +61,7 @@ public:
 
     bool can_hint_for(const locator::topology& topo, gms::inet_address ep) const;
 
-    inline const std::unordered_set<sstring>& get_dcs() const {
+    inline const std::unordered_set<locator::dc_name>& get_dcs() const {
         return _dcs;
     }
 

@@ -378,7 +378,7 @@ private:
     future<> start_sys_dist_ks();
 public:
 
-    future<> rebuild(sstring source_dc);
+    future<> rebuild(locator::dc_name source_dc);
 
 private:
     void set_mode(mode m);
@@ -819,7 +819,7 @@ private:
     future<> raft_initialize_discovery_leader(raft::server&, const join_node_request_params& params);
     future<> raft_decommission();
     future<> raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params);
-    future<> raft_rebuild(sstring source_dc);
+    future<> raft_rebuild(locator::dc_name source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
 

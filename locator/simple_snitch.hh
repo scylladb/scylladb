@@ -29,12 +29,12 @@ struct simple_snitch : public snitch_base {
         set_snitch_ready();
     }
 
-    virtual sstring get_rack() const override {
-        return "rack1";
+    virtual locator::rack_name get_rack() const override {
+        return locator::rack_name("rack1");
     }
 
-    virtual sstring get_datacenter() const override {
-        return "datacenter1";
+    virtual locator::dc_name get_datacenter() const override {
+        return locator::dc_name("datacenter1");
     }
 
     virtual sstring get_name() const override {

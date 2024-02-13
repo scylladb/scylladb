@@ -12,6 +12,7 @@
 #include "utils/estimated_histogram.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
+#include "locator/types.hh"
 
 namespace locator { class topology; }
 
@@ -31,7 +32,7 @@ private:
     // counter of operations performed on a local Node
     stats_counter _local;
     // counters of operations performed on external Nodes aggregated per Nodes' DCs
-    std::unordered_map<sstring, stats_counter> _dc_stats;
+    std::unordered_map<locator::dc_name, stats_counter> _dc_stats;
     // collectd registrations container
     seastar::metrics::metric_groups _metrics;
     // a prefix string that will be used for a collectd counters' description
@@ -54,7 +55,7 @@ public:
     split_stats(const sstring& category, const sstring& short_description_prefix, const sstring& long_description_prefix, const sstring& op_type, bool auto_register_metrics = true);
 
     void register_metrics_local();
-    void register_metrics_for(sstring dc, gms::inet_address ep);
+    void register_metrics_for(const locator::dc_name& dc, gms::inet_address ep);
 
     /**
      * Get a reference to the statistics counter corresponding to the given

@@ -207,7 +207,7 @@ protected:
         // using _gossiper().get_live_members(). But getting
         // just the list of live nodes in this DC needs more elaborate code:
         auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
-        sstring local_dc = topology.get_datacenter();
+        const auto& local_dc = topology.get_datacenter();
         std::unordered_set<gms::inet_address> local_dc_nodes = topology.get_datacenter_endpoints().at(local_dc);
         for (auto& ip : local_dc_nodes) {
             if (_gossiper.is_alive(ip)) {
