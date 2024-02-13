@@ -660,13 +660,13 @@ future<> global_vnode_effective_replication_map::get_keyspace_erms(sharded<repli
         // all e_r_m:s and clone both on all shards. including the ring version,
         // all under the lock.
         auto lk = co_await db.get_shared_token_metadata().get_lock();
-        auto erm = db.find_keyspace(keyspace_name).get_effective_replication_map();
+        auto erm = db.find_keyspace(keyspace_name).get_vnode_effective_replication_map();
         auto ring_version = erm->get_token_metadata().get_ring_version();
         _erms[0] = make_foreign(std::move(erm));
         co_await coroutine::parallel_for_each(boost::irange(1u, smp::count), [this, &sharded_db, keyspace_name, ring_version] (unsigned shard) -> future<> {
             _erms[shard] = co_await sharded_db.invoke_on(shard, [keyspace_name, ring_version] (const replica::database& db) {
                 const auto& ks = db.find_keyspace(keyspace_name);
-                auto erm = ks.get_effective_replication_map();
+                auto erm = ks.get_vnode_effective_replication_map();
                 auto local_ring_version = erm->get_token_metadata().get_ring_version();
                 if (local_ring_version != ring_version) {
                     on_internal_error(rslogger, format("Inconsistent effective_replication_map ring_verion {}, expected {}", local_ring_version, ring_version));
