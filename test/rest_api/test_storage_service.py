@@ -40,6 +40,32 @@ def test_storage_service_keyspaces(cql, this_dc, rest_api):
         resp.raise_for_status()
         assert keyspace in resp.json()
 
+@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
+def test_storage_service_keyspaces_replication(cql, this_dc, rest_api):
+    def get_keyspaces(replication):
+        resp = rest_api.send("GET", "storage_service/keyspaces", { "type": "user", "replication": replication })
+        resp.raise_for_status()
+        return resp.json()
+
+    with (new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': false }}") as vnodes_keyspace,
+            new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': true }}") as tablets_keyspace):
+        resp = rest_api.send("GET", "storage_service/keyspaces", { "type": "user" })
+        resp.raise_for_status()
+        default_ks = resp.json()
+        assert vnodes_keyspace in default_ks
+        assert tablets_keyspace in default_ks
+
+        all_ks = get_keyspaces("all")
+        assert vnodes_keyspace in all_ks
+        assert tablets_keyspace in all_ks
+
+        tablets_ks = get_keyspaces("tablets")
+        assert vnodes_keyspace not in tablets_ks
+        assert tablets_keyspace in tablets_ks
+
+        vnodes_ks = get_keyspaces("vnodes")
+        assert vnodes_keyspace in vnodes_ks
+        assert tablets_keyspace not in vnodes_ks
 
 def do_test_storage_service_attribute_api_keyspace(cql, this_dc, rest_api, api_name):
     keyspace = new_keyspace(cql, this_dc)

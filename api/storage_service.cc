@@ -993,12 +993,22 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::get_keyspaces.set(r, [&ctx](const_req req) {
         auto type = req.get_query_param("type");
+        auto replication = req.get_query_param("replication");
+        std::vector<sstring> keyspaces;
         if (type == "user") {
-            return ctx.db.local().get_user_keyspaces();
+            keyspaces = ctx.db.local().get_user_keyspaces();
         } else if (type == "non_local_strategy") {
-            return ctx.db.local().get_non_local_strategy_keyspaces();
+            keyspaces = ctx.db.local().get_non_local_strategy_keyspaces();
+        } else {
+            keyspaces = map_keys(ctx.db.local().get_keyspaces());
         }
-        return map_keys(ctx.db.local().get_keyspaces());
+        if (replication.empty() || replication == "all") {
+            return keyspaces;
+        }
+        const auto want_tablets = replication == "tablets";
+        return boost::copy_range<std::vector<sstring>>(keyspaces | boost::adaptors::filtered([&ctx, want_tablets] (const sstring& ks) {
+            return ctx.db.local().find_keyspace(ks).get_replication_strategy().uses_tablets() == want_tablets;
+        }));
     });
 
     ss::stop_gossiping.set(r, [&ss](std::unique_ptr<http::request> req) {

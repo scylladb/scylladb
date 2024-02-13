@@ -1514,6 +1514,15 @@
                      "type":"string",
                      "enum": [ "all", "user", "non_local_strategy" ],
                      "paramType":"query"
+                  },
+                  {
+                     "name":"replication",
+                     "description":"Filter keyspaces for the replication used: vnodes or tablets (default: all)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "enum": [ "all", "vnodes", "tablets" ],
+                     "paramType":"query"
                   }
                ]
             }
