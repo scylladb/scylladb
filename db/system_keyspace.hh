@@ -314,6 +314,10 @@ public:
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
     static query_mutations(distributed<replica::database>& db,
+                    schema_ptr schema);
+
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+    static query_mutations(distributed<replica::database>& db,
                     const sstring& ks_name,
                     const sstring& cf_name);
 

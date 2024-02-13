@@ -14,6 +14,7 @@
 #include <seastar/core/shared_future.hh>
 #include "gms/endpoint_state.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
+#include "schema/schema_fwd.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_guard.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -855,6 +856,7 @@ public:
     future<> start_maintenance_mode();
 
 private:
+    future<std::vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<std::vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.

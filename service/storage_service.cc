@@ -11,6 +11,7 @@
 
 #include "storage_service.hh"
 #include "compaction/task_manager_module.hh"
+#include "db/system_auth_keyspace.hh"
 #include "gc_clock.hh"
 #include "raft/raft.hh"
 #include "service/topology_guard.hh"
@@ -6065,17 +6066,20 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
     }
 }
 
-future<std::vector<canonical_mutation>> storage_service::get_system_mutations(const sstring& ks_name, const sstring& cf_name) {
+future<std::vector<canonical_mutation>> storage_service::get_system_mutations(schema_ptr schema) {
     std::vector<canonical_mutation> result;
-    auto rs = co_await db::system_keyspace::query_mutations(
-        _db, ks_name, cf_name);
-    auto s = _db.local().find_schema(ks_name, cf_name);
+    auto rs = co_await db::system_keyspace::query_mutations(_db, schema);
     result.reserve(rs->partitions().size());
     boost::range::transform(
-            rs->partitions(), std::back_inserter(result), [s] (const partition& p) {
-        return canonical_mutation{p.mut().unfreeze(s)};
+            rs->partitions(), std::back_inserter(result), [schema] (const partition& p) {
+        return canonical_mutation{p.mut().unfreeze(schema)};
     });
     co_return result;
+}
+
+future<std::vector<canonical_mutation>> storage_service::get_system_mutations(const sstring& ks_name, const sstring& cf_name) {
+    auto s = _db.local().find_schema(ks_name, cf_name);
+    return get_system_mutations(s);
 }
 
 node_state storage_service::get_node_state(locator::host_id id) {
@@ -6158,6 +6162,24 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
                     .topology_mutations = std::move(topology_mutations),
                     .cdc_generation_mutations = std::move(cdc_generation_mutations),
                     .topology_requests_mutations = std::move(topology_requests_mutations),
+                };
+            });
+        });
+        ser::storage_service_rpc_verbs::register_raft_pull_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_snapshot_pull_params params) {
+            return handle_raft_rpc(dst_id, [params = std::move(params)] (storage_service& ss) -> future<raft_snapshot> {
+                utils::chunked_vector<canonical_mutation> mutations;
+                // FIXME: make it an rwlock, here we only need to lock for reads,
+                // might be useful if multiple nodes are trying to pull concurrently.
+                auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
+                for (const auto& table : params.tables) {
+                    auto schema = ss._db.local().find_schema(table);
+                    auto muts = co_await ss.get_system_mutations(schema);
+                    mutations.reserve(mutations.size() + muts.size());
+                    std::move(muts.begin(), muts.end(), std::back_inserter(mutations));
+                }
+
+                co_return raft_snapshot{
+                    .mutations = std::move(mutations),
                 };
             });
         });

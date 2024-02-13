@@ -2161,9 +2161,14 @@ void system_keyspace::mark_writable() {
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+system_keyspace::query_mutations(distributed<replica::database>& db, schema_ptr schema) {
+    return replica::query_mutations(db, schema, query::full_partition_range, schema->full_slice(), db::no_timeout);
+}
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 system_keyspace::query_mutations(distributed<replica::database>& db, const sstring& ks_name, const sstring& cf_name) {
     schema_ptr schema = db.local().find_schema(ks_name, cf_name);
-    return replica::query_mutations(db, schema, query::full_partition_range, schema->full_slice(), db::no_timeout);
+    return query_mutations(db, schema);
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
