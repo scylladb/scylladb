@@ -276,13 +276,10 @@ size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entrie
     return released_memory;
 }
 
-std::ostream& operator<<(std::ostream& os, const log& l) {
-    os << "first idx: " << l._first_idx << ", ";
-    os << "last idx: " << l.last_idx() << ", ";
-    os << "next idx: " << l.next_idx() << ", ";
-    os << "stable idx: " << l.stable_idx() << ", ";
-    os << "last term: " << l.last_term();
-    return os;
-}
-
 } // end of namespace raft
+
+auto fmt::formatter<raft::log>::format(const raft::log& log, fmt::format_context& ctx) const
+    -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "first idx: {}, last idx: {}, next idx: {}, stable idx: {}, last term: {}",
+                          log._first_idx, log.last_idx(), log.next_idx(), log.stable_idx(), log.last_term());
+}

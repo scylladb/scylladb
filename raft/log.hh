@@ -185,7 +185,7 @@ public:
     // @retval return an index of last appended entry
     index_t maybe_append(std::vector<log_entry_ptr>&& entries);
 
-    friend std::ostream& operator<<(std::ostream& os, const log& l);
+    friend fmt::formatter<log>;
 
     // The log keeps track of the memory it uses. This function returns the number
     // of bytes that will be marked as used when a log_entry is added to the log.
@@ -215,3 +215,7 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<raft::log> : fmt::formatter<std::string_view> {
+    auto format(const raft::log&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
