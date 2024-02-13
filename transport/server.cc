@@ -1016,8 +1016,7 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
     auto dialect = get_dialect();
     auto msg = co_await process_fn(client_state, _server._query_processor, in, stream,
             _version, permit, trace_state, true, {}, dialect);
-    auto* bounce_msg = std::get_if<result_with_bounce_to_shard>(&msg);
-    if (bounce_msg) {
+    while (auto* bounce_msg = std::get_if<result_with_bounce_to_shard>(&msg)) {
         auto shard = (*bounce_msg)->move_to_shard().value();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
         msg = co_await process_on_shard(shard, stream, is, client_state, trace_state, dialect, std::move(cached_vals), process_fn);
