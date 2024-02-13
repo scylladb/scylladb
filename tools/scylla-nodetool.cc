@@ -21,6 +21,7 @@
 #include <unordered_map>
 
 #include "api/scrub_status.hh"
+#include "gms/application_state.hh"
 #include "db_clock.hh"
 #include "log.hh"
 #include "tools/utils.hh"
@@ -542,6 +543,29 @@ void getlogginglevels_operation(scylla_rest_client& client, const bpo::variables
 void gettraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto res = client.get("/storage_service/trace_probability");
     fmt::print(std::cout, "Current trace probability: {}\n", res.GetDouble());
+}
+
+void gossipinfo_operation(scylla_rest_client& client, const bpo::variables_map&) {
+    auto res = client.get("/failure_detector/endpoints");
+    for (const auto& element : res.GetArray()) {
+        const auto& endpoint = element.GetObject();
+        fmt::print("/{}\n"
+                   "  generation:{}\n"
+                   "  heartbeat:{}\n",
+                   rjson::to_string_view(endpoint["addrs"]),
+                   endpoint["generation"].GetInt64(),
+                   endpoint["version"].GetInt64());
+
+        for (auto& element : endpoint["application_state"].GetArray()) {
+            const auto& obj = element.GetObject();
+            auto state = static_cast<gms::application_state>(obj["application_state"].GetInt());
+            if (state == gms::application_state::TOKENS) {
+                // skip tokens' state
+                continue;
+            }
+            fmt::print("  {}:{}\n", state, rjson::to_string_view(obj["value"]));
+        }
+    }
 }
 
 void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -1203,6 +1227,16 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             gettraceprobability_operation
+        },
+        {
+            {
+                "gossipinfo",
+                "Shows the gossip information for the cluster",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/gossipinfo.html
+)",
+            },
+            gossipinfo_operation
         },
         {
             {
