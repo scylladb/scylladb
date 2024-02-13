@@ -79,6 +79,11 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
         co_return api_error::validation("UpdateTimeToLive requires boolean Enabled");
     }
     bool enabled = v->GetBool();
+    // Alternator TTL doesn't yet work when the table uses tablets (#16567)
+    if (enabled && _proxy.local_db().find_keyspace(schema->ks_name()).get_replication_strategy().uses_tablets()) {
+        co_return api_error::validation("TTL not yet supported on a table using tablets (issue #16567). "
+            "Create a table with the tag 'experimental:initial_tablets' set to 'none' to use vnodes.");
+    }
     v = rjson::find(*spec, "AttributeName");
     if (!v || !v->IsString()) {
         co_return api_error::validation("UpdateTimeToLive requires string AttributeName");

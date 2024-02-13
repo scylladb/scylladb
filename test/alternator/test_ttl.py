@@ -20,6 +20,18 @@ from decimal import Decimal
 # using the following tags when creating each table below:
 TAGS = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
 
+# Before Alternator TTL is supported with tablets (#16567), let's verify
+# that enabling TTL results in an orderly error. This test should be deleted
+# when #16567 is fixed.
+def test_ttl_enable_error_with_tablets(dynamodb, scylla_only):
+    with new_test_table(dynamodb,
+        Tags=[{'Key': 'experimental:initial_tablets', 'Value': '4'}],
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+        with pytest.raises(ClientError, match='ValidationException.*tablets'):
+            table.meta.client.update_time_to_live(TableName=table.name,
+                TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+
 # passes_or_raises() is similar to pytest.raises(), except that while raises()
 # expects a certain exception must happen, the new passes_or_raises()
 # expects the code to either pass (not raise), or if it throws, it must
