@@ -447,7 +447,7 @@ future<> global_cleanup_compaction_task_impl::run() {
             auto& module = db.get_compaction_manager().get_task_manager_module();
             const tasks::task_info task_info{_status.id, _status.shard};
             auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>(
-                task_info, _status.keyspace, _status.id, db, std::move(tables));
+                task_info, ks, _status.id, db, std::move(tables));
             co_await task->done();
         });
     });
