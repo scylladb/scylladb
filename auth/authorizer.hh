@@ -81,14 +81,14 @@ public:
     ///
     /// \throws \ref unsupported_authorization_operation if granting permissions is not supported.
     ///
-    virtual future<> grant(std::string_view role_name, permission_set, const resource&) const = 0;
+    virtual future<> grant(std::string_view role_name, permission_set, const resource&) = 0;
 
     ///
     /// Revoke a set of permissions from a role for a particular \ref resource.
     ///
     /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
     ///
-    virtual future<> revoke(std::string_view role_name, permission_set, const resource&) const = 0;
+    virtual future<> revoke(std::string_view role_name, permission_set, const resource&) = 0;
 
     ///
     /// Query for all directly granted permissions.
@@ -102,14 +102,14 @@ public:
     ///
     /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
     ///
-    virtual future<> revoke_all(std::string_view role_name) const = 0;
+    virtual future<> revoke_all(std::string_view role_name) = 0;
 
     ///
     /// Revoke all permissions granted to any role for a particular resource.
     ///
     /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
     ///
-    virtual future<> revoke_all(const resource&) const = 0;
+    virtual future<> revoke_all(const resource&) = 0;
 
     ///
     /// System resources used internally as part of the implementation. These are made inaccessible to users.

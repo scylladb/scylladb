@@ -175,7 +175,7 @@ future<> standard_role_manager::create_metadata_tables_if_missing() const {
                     _migration_manager)).discard_result();
 }
 
-future<> standard_role_manager::create_default_role_if_missing() const {
+future<> standard_role_manager::create_default_role_if_missing() {
     return default_role_row_satisfies(_qp, &has_can_login, _superuser).then([this](bool exists) {
         if (!exists) {
             static const sstring query = format("INSERT INTO {} ({}, is_superuser, can_login) VALUES (?, true, true)",
@@ -206,7 +206,7 @@ bool standard_role_manager::legacy_metadata_exists() {
     return _qp.db().has_schema(meta::AUTH_KS, legacy_table_name);
 }
 
-future<> standard_role_manager::migrate_legacy_metadata() const {
+future<> standard_role_manager::migrate_legacy_metadata() {
     log.info("Starting migration of legacy user metadata.");
     static const sstring query = format("SELECT * FROM {}.{}", meta::AUTH_KS, legacy_table_name);
 
@@ -267,7 +267,7 @@ future<> standard_role_manager::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});;
 }
 
-future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c) const {
+future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c) {
     static const sstring query = format("INSERT INTO {} ({}, is_superuser, can_login) VALUES (?, ?, ?)",
             meta::roles_table::qualified_name,
             meta::roles_table::role_col_name);
@@ -400,7 +400,7 @@ future<>
 standard_role_manager::modify_membership(
         std::string_view grantee_name,
         std::string_view role_name,
-        membership_change ch) const {
+        membership_change ch) {
 
 
     const auto modify_roles = [this, role_name, grantee_name, ch] {

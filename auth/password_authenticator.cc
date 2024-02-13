@@ -114,7 +114,7 @@ future<> password_authenticator::migrate_legacy_metadata() const {
     });
 }
 
-future<> password_authenticator::create_default_if_missing() const {
+future<> password_authenticator::create_default_if_missing() {
     return default_role_row_satisfies(_qp, &has_salted_hash, _superuser).then([this](bool exists) {
         if (!exists) {
             std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
@@ -252,7 +252,7 @@ future<authenticated_user> password_authenticator::authenticate(
     });
 }
 
-future<> password_authenticator::create(std::string_view role_name, const authentication_options& options) const {
+future<> password_authenticator::create(std::string_view role_name, const authentication_options& options) {
     if (!options.password) {
         return make_ready_future<>();
     }
@@ -265,7 +265,7 @@ future<> password_authenticator::create(std::string_view role_name, const authen
             cql3::query_processor::cache_internal::no).discard_result();
 }
 
-future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options) const {
+future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options) {
     if (!options.password) {
         return make_ready_future<>();
     }
@@ -283,7 +283,7 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
             cql3::query_processor::cache_internal::no).discard_result();
 }
 
-future<> password_authenticator::drop(std::string_view name) const {
+future<> password_authenticator::drop(std::string_view name) {
     static const sstring query = format("DELETE {} FROM {} WHERE {} = ?",
             SALTED_HASH,
             meta::roles_table::qualified_name,
