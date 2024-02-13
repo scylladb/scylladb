@@ -3,7 +3,7 @@ Handling Node Failures
 
 ScyllaDB relies on the Raft consensus algorithm, which requires at least a quorum 
 of nodes in a cluster to be available. If one or more nodes are down, but the quorum 
-is live, reads, writes, and schema updates proceed unaffected. When the node that 
+is live, reads, writes, schema updates, and topology changes proceed unaffected. When the node that 
 was down is up again, it first contacts the cluster to fetch the latest schema and 
 then starts serving queries.
 
@@ -21,10 +21,10 @@ Examples
      - Consequence
      - Action to take
    * - 1 node
-     - Schema updates are possible and safe.
+     - Schema and topology updates are possible and safe.
      - Try restarting the node. If the node is dead, :doc:`replace it with a new node </operating-scylla/procedures/cluster-management/replace-dead-node/>`.
    * - 2 nodes
-     - Data is available for reads and writes, schema changes are impossible.
+     - Data is available for reads and writes; schema and topology changes are impossible.
      - Restart at least 1 of the 2 nodes that are down to regain quorum. If you can’t recover at least 1 of the 2 nodes, consult the :ref:`manual recovery section <recovery-procedure>`.
 
 .. list-table:: Cluster B: 2 datacenters, 6  nodes (3 nodes per DC)
@@ -35,13 +35,13 @@ Examples
      - Consequence
      - Action to take
    * - 1-2 nodes
-     - Schema updates are possible and safe.
+     - Schema and topology updates are possible and safe.
      - Try restarting the node(s). If the node is dead, :doc:`replace it with a new node </operating-scylla/procedures/cluster-management/replace-dead-node/>`.
    * - 3 nodes
-     - Data is available for reads and writes, schema changes are impossible.
+     - Data is available for reads and writes; schema and topology changes are impossible.
      - Restart 1 of the 3 nodes that are down to regain quorum. If you can’t recover at least 1 of the 3 failed nodes, consult the :ref:`manual recovery <recovery-procedure>` section.
    * - 1DC
-     - Data is available for reads and writes, schema changes are impossible.
+     - Data is available for reads and writes; schema and topology changes are impossible.
      - When the DCs come back online, restart the nodes. If the DC fails to come back online and the nodes are lost, consult the :ref:`manual recovery <recovery-procedure>` section.
 
 
@@ -53,13 +53,13 @@ Examples
      - Consequence
      - Action to take
    * - 1-4 nodes
-     - Schema updates are possible and safe.
+     - Schema and topology updates are possible and safe.
      - Try restarting the nodes. If the nodes are dead, :doc:`replace them with new nodes </operating-scylla/procedures/cluster-management/replace-dead-node-or-more/>`.
    * - 1 DC
-     - Schema updates are possible and safe.
+     - Schema and topology updates are possible and safe.
      - When the DC comes back online, try restarting the nodes in the cluster. If the nodes are dead, :doc:`add 3 new nodes in a new region </operating-scylla/procedures/cluster-management/add-dc-to-existing-dc/>`.
    * - 2 DCs
-     - Data is available for reads and writes, schema changes are impossible.
+     - Data is available for reads and writes, schema and topology changes are impossible.
      - When the DCs come back online, restart the nodes. If at least one DC fails to come back online and the nodes are lost, consult the :ref:`manual recovery <recovery-procedure>` section.
 
 .. _recovery-procedure:
