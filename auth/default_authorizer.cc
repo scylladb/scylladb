@@ -75,7 +75,7 @@ future<bool> default_authorizer::any_granted() const {
     });
 }
 
-future<> default_authorizer::migrate_legacy_metadata() const {
+future<> default_authorizer::migrate_legacy_metadata() {
     alogger.info("Starting migration of legacy permissions metadata.");
     static const sstring query = format("SELECT * FROM {}.{}", meta::AUTH_KS, legacy_table_name);
 
@@ -177,7 +177,7 @@ default_authorizer::modify(
         std::string_view role_name,
         permission_set set,
         const resource& resource,
-        std::string_view op) const {
+        std::string_view op) {
     return do_with(
             format("UPDATE {}.{} SET {} = {} {} ? WHERE {} = ? AND {} = ?",
                     meta::AUTH_KS,
@@ -198,11 +198,11 @@ default_authorizer::modify(
 }
 
 
-future<> default_authorizer::grant(std::string_view role_name, permission_set set, const resource& resource) const {
+future<> default_authorizer::grant(std::string_view role_name, permission_set set, const resource& resource) {
     return modify(role_name, std::move(set), resource, "+");
 }
 
-future<> default_authorizer::revoke(std::string_view role_name, permission_set set, const resource& resource) const {
+future<> default_authorizer::revoke(std::string_view role_name, permission_set set, const resource& resource) {
     return modify(role_name, std::move(set), resource, "-");
 }
 
@@ -235,7 +235,7 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
     });
 }
 
-future<> default_authorizer::revoke_all(std::string_view role_name) const {
+future<> default_authorizer::revoke_all(std::string_view role_name) {
     static const sstring query = format("DELETE FROM {}.{} WHERE {} = ?",
             meta::AUTH_KS,
             PERMISSIONS_CF,
@@ -255,7 +255,7 @@ future<> default_authorizer::revoke_all(std::string_view role_name) const {
     });
 }
 
-future<> default_authorizer::revoke_all(const resource& resource) const {
+future<> default_authorizer::revoke_all(const resource& resource) {
     static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
             ROLE_NAME,
             meta::AUTH_KS,

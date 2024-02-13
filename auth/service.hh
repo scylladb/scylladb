@@ -155,11 +155,11 @@ public:
 
     future<bool> exists(const resource&) const;
 
-    const authenticator& underlying_authenticator() const {
+    authenticator& underlying_authenticator() const {
         return *_authenticator;
     }
 
-    const authorizer& underlying_authorizer() const {
+    authorizer& underlying_authorizer() const {
         return *_authorizer;
     }
 

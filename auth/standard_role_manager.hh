@@ -81,13 +81,13 @@ private:
 
     bool legacy_metadata_exists();
 
-    future<> migrate_legacy_metadata() const;
+    future<> migrate_legacy_metadata();
 
-    future<> create_default_role_if_missing() const;
+    future<> create_default_role_if_missing();
 
-    future<> create_or_replace(std::string_view role_name, const role_config&) const;
+    future<> create_or_replace(std::string_view role_name, const role_config&);
 
-    future<> modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change) const;
+    future<> modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change);
 };
 
 }

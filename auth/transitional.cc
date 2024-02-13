@@ -86,15 +86,15 @@ public:
         });
     }
 
-    virtual future<> create(std::string_view role_name, const authentication_options& options) const override {
+    virtual future<> create(std::string_view role_name, const authentication_options& options) override {
         return _authenticator->create(role_name, options);
     }
 
-    virtual future<> alter(std::string_view role_name, const authentication_options& options) const override {
+    virtual future<> alter(std::string_view role_name, const authentication_options& options) override {
         return _authenticator->alter(role_name, options);
     }
 
-    virtual future<> drop(std::string_view role_name) const override {
+    virtual future<> drop(std::string_view role_name) override {
         return _authenticator->drop(role_name);
     }
 
@@ -186,11 +186,11 @@ public:
         return make_ready_future<permission_set>(transitional_permissions);
     }
 
-    virtual future<> grant(std::string_view s, permission_set ps, const resource& r) const override {
+    virtual future<> grant(std::string_view s, permission_set ps, const resource& r)  override {
         return _authorizer->grant(s, std::move(ps), r);
     }
 
-    virtual future<> revoke(std::string_view s, permission_set ps, const resource& r) const override {
+    virtual future<> revoke(std::string_view s, permission_set ps, const resource& r) override {
         return _authorizer->revoke(s, std::move(ps), r);
     }
 
@@ -198,11 +198,11 @@ public:
         return _authorizer->list_all();
     }
 
-    virtual future<> revoke_all(std::string_view s) const override {
+    virtual future<> revoke_all(std::string_view s) override {
         return _authorizer->revoke_all(s);
     }
 
-    virtual future<> revoke_all(const resource& r) const override {
+    virtual future<> revoke_all(const resource& r) override {
         return _authorizer->revoke_all(r);
     }
 
