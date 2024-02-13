@@ -620,27 +620,18 @@ future<> shard_reshaping_compaction_task_impl::run() {
 
         desc.creator = _creator;
 
-        std::exception_ptr ex;
         try {
             co_await table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshape, "Reshape compaction", [&dir = _dir, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info, sstables::compaction_progress_monitor& progress_monitor) mutable -> future<> {
                 sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state(), progress_monitor);
                 co_await dir.remove_unshared_sstables(std::move(sstlist));
                 co_await dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::no);
             }, info, throw_if_stopping::yes);
+        } catch (sstables::compaction_stopped_exception& e) {
+            dblog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
+            break;
         } catch (...) {
-            ex = std::current_exception();
-        }
-
-        if (ex != nullptr) {
-              try {
-                std::rethrow_exception(std::move(ex));
-              } catch (sstables::compaction_stopped_exception& e) {
-                  dblog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
-                  break;
-              } catch (...) {
-                  dblog.info("Reshape failed for Table {}.{} with compaction strategy {} due to {}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
-                  break;
-              }
+            dblog.info("Reshape failed for Table {}.{} with compaction strategy {} due to {}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
+            break;
         }
 
         co_await coroutine::maybe_yield();
