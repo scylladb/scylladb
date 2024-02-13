@@ -420,7 +420,7 @@ modes = {
         'description': 'a mode with optimizations and no debug checks, used for production builds',
     },
     'dev': {
-        'cxxflags': '-DDEVEL -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
+        'cxxflags': '-DDEVEL -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION -DSCYLLA_ENABLE_PREEMPTION_SOURCE',
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*21,
         'optimization-level': '2',

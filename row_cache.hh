@@ -333,13 +333,15 @@ private:
     //
     snapshot_and_phase snapshot_of(dht::ring_position_view pos);
 
+    static thread_local preemption_source default_preemption_source;
+
     // Merges the memtable into cache with configurable logic for handling memtable entries.
     // The Updater gets invoked for every entry in the memtable with a lower bound iterator
     // into _partitions (cache_i), and the memtable entry.
     // It is invoked inside allocating section and in the context of cache's allocator.
     // All memtable entries will be removed.
     template <typename Updater>
-    future<> do_update(external_updater, replica::memtable& m, Updater func);
+    future<> do_update(external_updater, replica::memtable& m, Updater func, preemption_source&);
 
     // Clears given memtable invalidating any affected cache elements.
     void invalidate_sync(replica::memtable&) noexcept;
@@ -424,7 +426,7 @@ public:
     // has just been flushed to the underlying data source.
     // The memtable can be queried during the process, but must not be written.
     // After the update is complete, memtable is empty.
-    future<> update(external_updater, replica::memtable&);
+    future<> update(external_updater, replica::memtable&, preemption_source& preempt = default_preemption_source);
 
     // Like update(), synchronizes cache with an incremental change to the underlying
     // mutation source, but instead of inserting and merging data, invalidates affected ranges.

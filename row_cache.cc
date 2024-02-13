@@ -1018,9 +1018,11 @@ row_cache::phase_type row_cache::phase_of(dht::ring_position_view pos) {
     return _underlying_phase - 1;
 }
 
+thread_local preemption_source row_cache::default_preemption_source;
+
 template <typename Updater>
-future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater updater) {
-  return do_update(std::move(eu), [this, &m, updater = std::move(updater)] {
+future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater updater, preemption_source& preempt_src) {
+  return do_update(std::move(eu), [this, &m, &preempt_src, updater = std::move(updater)] {
     real_dirty_memory_accounter real_dirty_acc(m, _tracker);
     m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
@@ -1031,7 +1033,7 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
         STAP_PROBE(scylla, row_cache_update_end);
     });
 
-    return seastar::async([this, &m, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
+    return seastar::async([this, &m, &preempt_src, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
         size_t size_entry;
         // In case updater fails, we must bring the cache to consistency without deferring.
         auto cleanup = defer([&m, this] () noexcept {
@@ -1062,7 +1064,7 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                                     size_entry = mem_e.size_in_allocator_without_rows(_tracker.allocator());
                                     partitions_type::bound_hint hint;
                                     auto cache_i = _partitions.lower_bound(mem_e.key(), cmp, hint);
-                                    update = updater(_update_section, cache_i, mem_e, is_present, real_dirty_acc, hint);
+                                    update = updater(_update_section, cache_i, mem_e, is_present, real_dirty_acc, hint, preempt_src);
                                 });
                             }
                             // We use cooperative deferring instead of futures so that
@@ -1082,7 +1084,7 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                             ++partition_count;
                           }
                           STAP_PROBE(scylla, row_cache_update_partition_end);
-                        } while (!m.partitions.empty() && !need_preempt());
+                        } while (!m.partitions.empty() && !preempt_src.should_preempt());
                         with_allocator(standard_allocator(), [&] {
                             if (m.partitions.empty()) {
                                 _prev_snapshot_pos = {};
@@ -1097,16 +1099,16 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                 }
             });
             real_dirty_acc.commit();
-            seastar::thread::yield();
+            preempt_src.thread_yield();
         }
     }).finally([cleanup = std::move(cleanup)] {});
   });
 }
 
-future<> row_cache::update(external_updater eu, replica::memtable& m) {
+future<> row_cache::update(external_updater eu, replica::memtable& m, preemption_source& preempt_src) {
     return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
             row_cache::partitions_type::iterator cache_i, replica::memtable_entry& mem_e, partition_presence_checker& is_present,
-            real_dirty_memory_accounter& acc, const partitions_type::bound_hint& hint) mutable {
+            real_dirty_memory_accounter& acc, const partitions_type::bound_hint& hint, preemption_source& preempt_src) mutable {
         // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
         // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
         //        search it.
@@ -1117,7 +1119,7 @@ future<> row_cache::update(external_updater eu, replica::memtable& m) {
             _tracker.on_partition_merge();
             mem_e.upgrade_schema(_tracker.region(), _schema, _tracker.memtable_cleaner());
             return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
-                alloc, _tracker.region(), _tracker, _underlying_phase, acc);
+                alloc, _tracker.region(), _tracker, _underlying_phase, acc, preempt_src);
         } else if (cache_i->continuous()
                    || with_allocator(standard_allocator(), [&] { return is_present(mem_e.key()); })
                       == partition_presence_checker_result::definitely_doesnt_exist) {
@@ -1129,17 +1131,17 @@ future<> row_cache::update(external_updater eu, replica::memtable& m) {
             _tracker.insert(*entry);
             mem_e.upgrade_schema(_tracker.region(), _schema, _tracker.memtable_cleaner());
             return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
-                alloc, _tracker.region(), _tracker, _underlying_phase, acc);
+                alloc, _tracker.region(), _tracker, _underlying_phase, acc, preempt_src);
         } else {
             return utils::make_empty_coroutine();
         }
-    });
+    }, preempt_src);
 }
 
 future<> row_cache::update_invalidating(external_updater eu, replica::memtable& m) {
     return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
         row_cache::partitions_type::iterator cache_i, replica::memtable_entry& mem_e, partition_presence_checker& is_present,
-        real_dirty_memory_accounter& acc, const partitions_type::bound_hint&)
+        real_dirty_memory_accounter& acc, const partitions_type::bound_hint&, preemption_source&)
     {
         if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {
             // FIXME: Invalidate only affected row ranges.
@@ -1152,7 +1154,7 @@ future<> row_cache::update_invalidating(external_updater eu, replica::memtable& 
         }
         // FIXME: subtract gradually from acc.
         return utils::make_empty_coroutine();
-    });
+    }, default_preemption_source);
 }
 
 void row_cache::refresh_snapshot() {

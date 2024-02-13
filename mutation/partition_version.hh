@@ -651,7 +651,8 @@ public:
         logalloc::region&,
         cache_tracker& this_tracker,
         partition_snapshot::phase_type,
-        real_dirty_memory_accounter&);
+        real_dirty_memory_accounter&,
+        preemption_source&);
 
     // If this entry is evictable, cache_tracker must be provided.
     // Must not be called when is_locked().
