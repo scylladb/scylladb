@@ -101,7 +101,7 @@ public:
     public:
         printer(const abstract_type& type, const collection_mutation_view& cmv)
                 : _type(type), _cmv(cmv) {}
-        friend std::ostream& operator<<(std::ostream& os, const printer& cmvp);
+        friend fmt::formatter<printer>;
     };
 };
 
@@ -130,3 +130,9 @@ collection_mutation difference(const abstract_type&, collection_mutation_view, c
 
 // Serializes the given collection of cells to a sequence of bytes ready to be sent over the CQL protocol.
 bytes_ostream serialize_for_cql(const abstract_type&, collection_mutation_view);
+
+template <>
+struct fmt::formatter<collection_mutation_view::printer> : fmt::formatter<std::string_view> {
+    auto format(const collection_mutation_view::printer&, fmt::format_context& ctx) const
+      -> decltype(ctx.out());
+};
