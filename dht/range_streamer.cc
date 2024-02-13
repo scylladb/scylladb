@@ -62,7 +62,7 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
 
         if (!found_source) {
             auto& ks = _db.local().find_keyspace(keyspace);
-            auto rf = ks.get_effective_replication_map()->get_replication_factor();
+            auto rf = ks.get_vnode_effective_replication_map()->get_replication_factor();
             // When a replacing node replaces a dead node with keyspace of RF
             // 1, it is expected that replacing node could not find a peer node
             // that contains data to stream from.

@@ -1316,7 +1316,7 @@ public:
         return _replication_strategy;
     }
 
-    locator::vnode_effective_replication_map_ptr get_effective_replication_map() const;
+    locator::vnode_effective_replication_map_ptr get_vnode_effective_replication_map() const;
 
     column_family::config make_column_family_config(const schema& s, const database& db) const;
     void add_or_update_column_family(const schema_ptr& s);
