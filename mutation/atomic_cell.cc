@@ -234,7 +234,7 @@ std::ostream& operator<<(std::ostream& os, const atomic_cell_or_collection::prin
     if (p._cdef.type->is_multi_cell()) {
         os << "collection ";
         auto cmv = p._cell.as_collection_mutation();
-        os << collection_mutation_view::printer(*p._cdef.type, cmv);
+        fmt::print(os, "{}", collection_mutation_view::printer(*p._cdef.type, cmv));
     } else {
         fmt::print(os, "{}", atomic_cell_view::printer(*p._cdef.type, p._cell.as_atomic_cell(p._cdef)));
     }

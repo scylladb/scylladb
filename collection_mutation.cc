@@ -95,41 +95,42 @@ api::timestamp_type collection_mutation_view::last_update(const abstract_type& t
     return max;
 }
 
-std::ostream& operator<<(std::ostream& os, const collection_mutation_view::printer& cmvp) {
-    fmt::print(os, "{{collection_mutation_view ");
-    cmvp._cmv.with_deserialized(cmvp._type, [&os, &type = cmvp._type] (const collection_mutation_view_description& cmvd) {
+auto fmt::formatter<collection_mutation_view::printer>::format(const collection_mutation_view::printer& cmvp, fmt::format_context& ctx) const
+    -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "{{collection_mutation_view ");
+    cmvp._cmv.with_deserialized(cmvp._type, [&out, &type = cmvp._type] (const collection_mutation_view_description& cmvd) {
         bool first = true;
-        fmt::print(os, "tombstone {}", cmvd.tomb);
+        out = fmt::format_to(out, "tombstone {}", cmvd.tomb);
         visit(type, make_visitor(
         [&] (const collection_type_impl& ctype) {
             auto&& key_type = ctype.name_comparator();
             auto&& value_type = ctype.value_comparator();
             for (auto&& [key, value] : cmvd.cells) {
                 if (!first) {
-                    fmt::print(os, ", ");
+                    out = fmt::format_to(out, ", ");
                 }
-                fmt::print(os, "{}: {}", key_type->to_string(key), atomic_cell_view::printer(*value_type, value));
+                fmt::format_to(out, "{}: {}", key_type->to_string(key), atomic_cell_view::printer(*value_type, value));
                 first = false;
             }
         },
         [&] (const user_type_impl& utype) {
             for (auto&& [raw_idx, value] : cmvd.cells) {
                 if (!first) {
-                    fmt::print(os, ", ");
+                    out = fmt::format_to(out, ", ");
                 }
                 auto idx = deserialize_field_index(raw_idx);
-                fmt::print(os, "{}: {}", utype.field_name_as_string(idx), atomic_cell_view::printer(*utype.type(idx), value));
+                out = fmt::format_to(out, "{}: {}", utype.field_name_as_string(idx), atomic_cell_view::printer(*utype.type(idx), value));
                 first = false;
             }
         },
         [&] (const abstract_type& o) {
             // Not throwing exception in this likely-to-be debug context
-            fmt::print(os, "attempted to pretty-print collection_mutation_view_description with type {}", o.name());
+            out = fmt::format_to(out, "attempted to pretty-print collection_mutation_view_description with type {}", o.name());
         }
         ));
     });
-    fmt::print(os, "}}");
-    return os;
+    return fmt::format_to(out, "}}");
 }
 
 
