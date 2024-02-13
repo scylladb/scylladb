@@ -36,7 +36,7 @@ future<std::vector<schema_ptr>> load_schemas(const db::config& dbcfg, std::strin
 
 /// Load exactly one schema from the specified path
 ///
-/// If the file at the specified path contains more or less then one schema,
+/// If the file at the specified path contains more or less than one schema,
 /// an exception will be thrown. See \ref load_schemas().
 future<schema_ptr> load_one_schema_from_file(const db::config& dbcfg, std::filesystem::path path);
 

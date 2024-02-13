@@ -871,7 +871,7 @@ the usual suspects. Sometimes just looking at these is enough to
 determine what is the cause of the OOM. If not, one has to look at the
 last section: the dump of the state of the small pools and the page
 spans. What we are looking for is a small pool or a span size that owns
-excessive amounts of memory. Once found (there can be more then one) the
+excessive amounts of memory. Once found (there can be more than one) the
 next task is to identify what the objects owning that memory are. Note
 that in the case of smaller allocations, the memory is usually occupied
 directly by some C++ object, why in the case of larger allocations, these are

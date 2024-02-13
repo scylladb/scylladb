@@ -5193,7 +5193,7 @@ public:
                         auto delta = int64_t(digest_resolver->last_modified()) - int64_t(exec->_cmd->read_timestamp);
                         if (std::abs(delta) <= write_timeout) {
                             exec->_proxy->get_stats().global_read_repairs_canceled_due_to_concurrent_write++;
-                            // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair
+                            // if CL is local and non matching data is modified less than write_timeout ms ago do only local repair
                             auto local_dc_filter = exec->_effective_replication_map_ptr->get_topology().get_local_dc_filter();
                             auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(local_dc_filter)));
                             exec->_targets.erase(i, exec->_targets.end());
