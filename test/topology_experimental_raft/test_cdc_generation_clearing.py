@@ -20,38 +20,9 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-async def test_current_cdc_generation_is_not_removed(manager: ManagerClient):
-    """Test that the current CDC generation is not removed from CDC_GENERATIONS_V3 by the CDC generation
-       publisher regardless of its timestamp."""
-    # We enable the injection to ensure that a too-late timestamp does not prevent removing the CDC generation.
-    logger.info("Bootstrapping first node")
-    server = await manager.server_add(
-        cmdline=['--logger-log-level', 'storage_service=trace:raft_topology=trace'],
-        config={'error_injections_at_startup': ['clean_obsolete_cdc_generations_ignore_ts']}
-    )
-
-    log_file = await manager.server_open_log(server.server_id)
-
-    # Wait until the CDC geneneration publisher publishes the first generation and tries to remove it.
-    await log_file.wait_for("CDC generation publisher fiber has nothing to do. Sleeping.")
-
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
-    query_gen_ids = SimpleStatement(
-        "SELECT id FROM system.cdc_generations_v3 WHERE key = 'cdc_generations'",
-        consistency_level = ConsistencyLevel.ONE)
-
-    # The first and only generation should not be removed.
-    gen_ids = {r.id for r in await cql.run_async(query_gen_ids)}
-    logger.info(f"Generations after clearing attempt: {gen_ids}")
-    assert len(gen_ids) == 1
-
-
-@pytest.mark.asyncio
-async def test_dependency_on_timestamps(manager: ManagerClient):
-    """Test that CDC generations are not removed from CDC_GENERATIONS_V3 when the difference between their timestamp
-       and the topology coordinator's clock is too small. Then, test that the CDC generation publisher removes
-       the clean-up candidate (together with older generations) if its timestamp is old enough."""
+async def test_cdc_generation_clearing(manager: ManagerClient):
+    """Test that obsolete CDC generations are removed from CDC_GENERATIONS_V3 if their timestamp is old enough
+       according to the topology coordinator's clock."""
     logger.info("Bootstrapping first node")
     servers = [await manager.server_add(cmdline=['--logger-log-level', 'storage_service=trace:raft_topology=trace'])]
 
@@ -72,8 +43,7 @@ async def test_dependency_on_timestamps(manager: ManagerClient):
 
         return (new_mark, new_gen_ids)
 
-    # The first generation should not be removed. It has become the clean-up candidate and its timestamp is too close
-    # to the topology coordinator's clock.
+    # The first generation should not be removed. We cannot remove the only generation.
     mark, gen_ids = await wait_for(tried_to_remove_new_gen, time.time() + 60)
     logger.info(f"Generations after first clearing attempt: {gen_ids}")
     assert len(gen_ids) == 1
@@ -82,19 +52,19 @@ async def test_dependency_on_timestamps(manager: ManagerClient):
     logger.info("Bootstrapping second node")
     servers += [await manager.server_add()]
 
-    # Both generations should not be removed. The first generation is still the clean-up candidate with a
-    # too-late timestamp.
+    # The first and second generations should not be removed. The first generation's timestamp is too close to the
+    # topology coordinator's clock.
     mark, gen_ids = await wait_for(tried_to_remove_new_gen, time.time() + 60)
     logger.info(f"Generations after second clearing attempt: {gen_ids}")
     assert len(gen_ids) == 2 and first_gen_id in gen_ids
+    second_gen_id = max(gen_ids)
 
-    # We enable this injection to stop timestamps from preventing the clearing of CDC generations.
-    await inject_error_one_shot(manager.api, servers[0].ip_addr, "clean_obsolete_cdc_generations_ignore_ts")
+    await inject_error_one_shot(manager.api, servers[0].ip_addr, "clean_obsolete_cdc_generations_change_ts_ub")
 
     logger.info("Bootstrapping third node")
     servers += [await manager.server_add()]
 
-    # The first generation should be removed thanks to the above injection.
+    # The first and second generations should be removed thanks to the above injection.
     mark, gen_ids = await wait_for(tried_to_remove_new_gen, time.time() + 60)
     logger.info(f"Generations after third clearing attempt: {gen_ids}")
-    assert len(gen_ids) == 2 and first_gen_id not in gen_ids
+    assert len(gen_ids) == 1 and first_gen_id not in gen_ids and second_gen_id not in gen_ids

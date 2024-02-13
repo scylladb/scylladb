@@ -296,11 +296,6 @@ schema_ptr system_keyspace::cdc_generations_v3() {
              * range when the generation was first created. Together with the set of streams above it fully
              * describes the mapping for this particular range. */
             .with_column("ignore_msb", byte_type)
-            /* The identifier and timestamp of the current clean-up candidate - the next generation to be
-             * removed. If set, the candidate will be removed together with all older generations when it
-             * becomes obsolete. Otherwise, the next published CDC generation will become a new candidate.
-             * This process prevents the CDC generation data from endlessly growing. */
-            .with_column("cleanup_candidate", cdc_generation_ts_id_type, column_kind::static_column)
             .with_version(system_keyspace::generate_schema_version(id))
             .build();
     }();
@@ -2988,26 +2983,6 @@ system_keyspace::read_cdc_generation_opt(utils::UUID id) {
     }
 
     co_return cdc::topology_description{std::move(entries)};
-}
-
-future<std::optional<cdc::generation_id_v2>> system_keyspace::get_cdc_generations_cleanup_candidate() {
-    static const auto req = format("SELECT cleanup_candidate FROM {}.{} WHERE key = '{}' LIMIT 1", NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY);
-    auto gen_rows = co_await execute_cql(req);
-    if (!gen_rows->empty() && gen_rows->one().has("cleanup_candidate")) {
-        auto blob = gen_rows->one().get_blob("cleanup_candidate");
-        co_return decode_cdc_generation_id(cdc_generation_ts_id_type->deserialize(blob));
-    }
-    co_return std::nullopt;
-}
-
-mutation system_keyspace::make_cleanup_candidate_mutation(std::optional<cdc::generation_id_v2> value, api::timestamp_type ts) {
-    auto s = cdc_generations_v3();
-    mutation m(s, partition_key::from_singular(*s, cdc::CDC_GENERATIONS_V3_KEY));
-    data_value dv = value
-        ? make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({value->ts, timeuuid_native_type{value->id}}))
-        : data_value::make_null(db::cdc_generation_ts_id_type);
-    m.set_static_cell("cleanup_candidate", dv, ts);
-    return m;
 }
 
 future<> system_keyspace::sstables_registry_create_entry(sstring location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) {

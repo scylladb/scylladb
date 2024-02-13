@@ -545,13 +545,6 @@ public:
     // previously created in raft topology mode.
     future<std::optional<cdc::topology_description>> read_cdc_generation_opt(utils::UUID id);
 
-    // Loads the current clean-up candidate for the CDC generation data. If there is no candidate, returns std::nullopt.
-    future<std::optional<cdc::generation_id_v2>> get_cdc_generations_cleanup_candidate();
-
-    // Returns a mutation that sets the current clean-up candidate for the CDC generation data. If given std::nullopt,
-    // the returned mutation sets the candidate to null, indicating there is no candidate.
-    mutation make_cleanup_candidate_mutation(std::optional<cdc::generation_id_v2> value, api::timestamp_type ts);
-
     // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.
     //
     // If `gc_older_than` is provided, the mutation will also contain a tombstone that clears all entries whose
