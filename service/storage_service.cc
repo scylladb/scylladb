@@ -6247,10 +6247,15 @@ storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
 inet_address_vector_replica_set
 storage_service::get_natural_endpoints(const sstring& keyspace,
         const sstring& cf, const sstring& key) const {
-    auto schema = _db.local().find_schema(keyspace, cf);
+    auto& table = _db.local().find_column_family(keyspace, cf);
+    const auto schema = table.schema();
     partition_key pk = partition_key::from_nodetool_style_string(schema, key);
     dht::token token = schema->get_partitioner().get_token(*schema, pk.view());
-    return _db.local().find_keyspace(keyspace).get_vnode_effective_replication_map()->get_natural_endpoints(token);
+    const auto& ks = _db.local().find_keyspace(keyspace);
+    if (ks.uses_tablets()) {
+        return table.get_effective_replication_map()->get_natural_endpoints(token);
+    }
+    return ks.get_vnode_effective_replication_map()->get_natural_endpoints(token);
 }
 
 future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint) {

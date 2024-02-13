@@ -545,3 +545,13 @@ def test_storage_service_system_keyspace_repair(rest_api):
     resp = rest_api.send("GET", "task_manager/list_module_tasks/repair")
     resp.raise_for_status()
     assert not [stats for stats in resp.json() if stats["sequence_number"] == sequence_number], "Repair task for keyspace with local replication strategy was created"
+
+@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
+@pytest.mark.parametrize("tablets_enabled", ["true", "false"])
+def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
+        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
+            resp = rest_api.send("GET", f"storage_service/natural_endpoints/{keyspace}", params={"cf": table, "key": 1})
+            resp.raise_for_status()
+
+            assert resp == [rest_api.host]
