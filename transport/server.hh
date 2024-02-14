@@ -266,10 +266,14 @@ private:
 
         // Helper functions to encapsulate bounce_to_shard processing for query, execute and batch verbs
         template<typename Process>
+        requires std::same_as<std::invoke_result_t<Process, service::client_state&, distributed<cql3::query_processor>&, request_reader,
+                uint16_t, cql_protocol_version_type, service_permit, tracing::trace_state_ptr, bool, cql3::computed_function_values>, future<process_fn_return_type>>
         future<result_with_foreign_response_ptr>
         process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state,
                 Process process_fn);
         template<typename Process>
+        requires std::same_as<std::invoke_result_t<Process, service::client_state&, distributed<cql3::query_processor>&, request_reader,
+                uint16_t, cql_protocol_version_type, service_permit, tracing::trace_state_ptr, bool, cql3::computed_function_values>, future<process_fn_return_type>>
         future<result_with_foreign_response_ptr>
         process_on_shard(::shared_ptr<messages::result_message::bounce_to_shard> bounce_msg, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
                 service_permit permit, tracing::trace_state_ptr trace_state, Process process_fn);
