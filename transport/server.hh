@@ -175,6 +175,8 @@ public:
 public:
     using response = cql_transport::response;
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
+    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, ::shared_ptr<messages::result_message::bounce_to_shard>>;
+
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
     cql_sg_stats::request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) {
