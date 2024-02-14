@@ -18,6 +18,7 @@
 #include <seastar/util/short_streams.hh>
 #include <yaml-cpp/yaml.h>
 #include <ranges>
+#include <unordered_map>
 
 #include "api/scrub_status.hh"
 #include "db_clock.hh"
@@ -508,6 +509,19 @@ void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
         params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
     }
     client.post(format("/storage_service/keyspace_flush/{}", keyspace), std::move(params));
+}
+
+void getendpoints_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("keyspace") || !vm.count("table") || !vm.count("key")) {
+        throw std::invalid_argument("getendpoint requires keyspace, table and partition key arguments");
+    }
+    auto res = client.get(seastar::format("/storage_service/natural_endpoints/{}",
+                                          vm["keyspace"].as<sstring>()),
+                          {{"cf", vm["table"].as<sstring>()},
+                           {"key", vm["key"].as<sstring>()}});
+    for (auto& inet_address : res.GetArray()) {
+        fmt::print("{}\n", rjson::to_string_view(inet_address));
+    }
 }
 
 void getlogginglevels_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -1151,6 +1165,22 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 }
             },
             flush_operation
+        },
+        {
+            {
+                "getendpoints",
+                "Print the end points that owns the key",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/getendpoints.html
+)",
+                { },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to query", 1),
+                    typed_option<sstring>("table", "The table to query", 1),
+                    typed_option<sstring>("key", "The partition key for which we need to find the endpoint", 1),
+                },
+            },
+            getendpoints_operation
         },
         {
             {
