@@ -6,16 +6,20 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <chrono>
 #include <fmt/chrono.h>
 #include <seastar/core/thread.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/core/units.hh>
+#include <stdexcept>
 #include <yaml-cpp/yaml.h>
 #include <ranges>
 #include <unordered_map>
@@ -26,6 +30,7 @@
 #include "tools/utils.hh"
 #include "utils/http.hh"
 #include "utils/human_readable.hh"
+#include "utils/pretty_printers.hh"
 #include "utils/rjson.hh"
 #include "utils/UUID.hh"
 
@@ -365,6 +370,137 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
     }
 }
 
+class Tabulate {
+    static constexpr std::string_view COLUMN_DELIMITER = " ";
+    std::vector<std::vector<std::string>> _rows;
+
+    int max_column_width(int col) const {
+        auto row = std::ranges::max_element(_rows, [col] (const auto& lhs, const auto& rhs) {
+            return lhs[col].size() < rhs[col].size();
+        });
+        return std::max((*row)[col].size(), 1UL);
+    }
+public:
+    template <typename... Fields>
+    void add(Fields... fields) {
+        if (!_rows.empty()) {
+            const auto& header = _rows.front();
+            if (header.size() != sizeof...(Fields)) {
+                throw std::logic_error("mismatched column number");
+            }
+        }
+        std::vector<std::string> row;
+        (row.push_back(fmt::to_string(fields)), ...);
+        _rows.push_back(std::move(row));
+    }
+
+    void print() const {
+        if (_rows.empty()) {
+            return;
+        }
+        const auto nr_cols = _rows.front().size();
+        std::vector<unsigned> max_column_widths;
+        for (unsigned col = 0; col < nr_cols; col++) {
+            max_column_widths.push_back(max_column_width(col));
+        }
+        for (auto& row : _rows) {
+            for (unsigned col = 0; col < nr_cols; col++) {
+                auto width = max_column_widths[col];
+                fmt::print("{:<{}}{}", row[col], width, col < nr_cols - 1 ? COLUMN_DELIMITER : "");
+            }
+            fmt::print("\n");
+        }
+    }
+};
+
+std::string format_size(bool human_readable, size_t size, std::string_view unit) {
+    if (human_readable && unit == "bytes") {
+        return fmt::to_string(utils::pretty_printed_data_size(size));
+    } else {
+        return fmt::to_string(size);
+    }
+}
+
+std::string format_percent(uint64_t completed, uint64_t total) {
+    if (total == 0) {
+        return "n/a";
+    }
+    auto percent = static_cast<float>(completed) / total * 100;
+    std::string formatted;
+    fmt::format_to(std::back_inserter(formatted), "{:.2f}%", percent);
+    return formatted;
+}
+
+void report_compaction_remaining_time(scylla_rest_client& client, uint64_t remaining_bytes) {
+    std::string fmt_remaining_time;
+    auto res = client.get("/storage_service/compaction_throughput");
+    int compaction_throughput_mb_per_sec = res.GetInt();
+    if (compaction_throughput_mb_per_sec != 0) {
+        auto remaining_time_in_secs = remaining_bytes / (compaction_throughput_mb_per_sec * 1_MiB);
+        std::chrono::hh_mm_ss remaining_time{std::chrono::seconds(remaining_time_in_secs)};
+        fmt::format_to(std::back_inserter(fmt_remaining_time), "{}h{:0>2}m{:0>2}s",
+                       remaining_time.hours().count(),
+                       remaining_time.minutes().count(),
+                       remaining_time.seconds().count());
+    } else {
+        fmt_remaining_time = "n/a";
+    }
+    fmt::print("Active compaction remaining time : {:>10}\n", fmt_remaining_time);
+}
+
+void report_compaction_table(scylla_rest_client& client, bool human_readable) {
+    auto res = client.get("/compaction_manager/compactions");
+    const auto& compactions = res.GetArray();
+    if (compactions.Empty()) {
+        return;
+    }
+    uint64_t remaining_bytes = 0;
+    Tabulate table;
+    table.add("id", "compaction type", "keyspace", "table", "completed", "total", "unit", "progress");
+    for (auto& element : compactions) {
+        const auto& compaction = element.GetObject();
+        std::string_view id = "n/a";
+        if (compaction.HasMember("id")) {
+            id = rjson::to_string_view(compaction["id"]);
+        }
+        auto unit = rjson::to_string_view(compaction["unit"]);
+        auto completed = compaction["completed"].GetInt64();
+        auto total = compaction["total"].GetInt64();
+        table.add(id,
+                  rjson::to_string_view(compaction["task_type"]),
+                  rjson::to_string_view(compaction["ks"]),
+                  rjson::to_string_view(compaction["cf"]),
+                  format_size(human_readable, completed, unit),
+                  format_size(human_readable, total, unit),
+                  unit,
+                  format_percent(completed, total));
+        remaining_bytes += total - completed;
+    }
+    table.print();
+    report_compaction_remaining_time(client, remaining_bytes);
+}
+
+void compactionstats_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto res = client.get("/compaction_manager/metrics/pending_tasks_by_table");
+    std::map<std::string_view, std::map<std::string_view, long>> pending_task_num_by_table;
+    long num_total_pending_tasks = 0;
+    for (auto& element : res.GetArray()) {
+        const auto& compaction = element.GetObject();
+        auto ks = rjson::to_string_view(compaction["ks"]);
+        auto cf = rjson::to_string_view(compaction["cf"]);
+        auto task = compaction["task"].GetInt64();
+        pending_task_num_by_table[ks][cf] = task;
+        num_total_pending_tasks += task;
+    }
+    fmt::print("pending tasks: {}\n", num_total_pending_tasks);
+    for (auto& [ks, table_tasks] : pending_task_num_by_table) {
+        for (auto& [cf, pending_task_num] : table_tasks) {
+            fmt::print("- {}.{}: {}\n", ks, cf, pending_task_num);
+        }
+    }
+    fmt::print("\n");
+    report_compaction_table(client, vm["human-readable"].as<bool>());
+}
 
 void decommission_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/decommission");
@@ -997,6 +1133,19 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             compactionhistory_operation
+        },
+        {
+            {
+                "compactionstats",
+                "Print statistics on compactions",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/compactionstats.html
+)",
+                {
+                    typed_option<bool>("human-readable,H", false, "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
+                },
+            },
+            compactionstats_operation
         },
         {
             {
