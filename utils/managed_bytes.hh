@@ -277,7 +277,7 @@ public:
     managed_bytes(const managed_bytes& o);
 
     managed_bytes(managed_bytes&& o) noexcept {
-        // Microoptimization: we use memcpy instead of assigments because
+        // Microoptimization: we use memcpy instead of assignments because
         // the compiler refuses the merge the load/stores otherwise for some reason.
         std::memcpy(reinterpret_cast<char*>(this), &o, sizeof(managed_bytes));
         o._inline_size = 0;
