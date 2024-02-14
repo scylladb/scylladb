@@ -10,6 +10,7 @@
 #include "sharder.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include "dht/ring_position.hh"
 #include "dht/token-sharding.hh"
 #include "utils/class_registrator.hh"
 #include <boost/range/adaptor/map.hpp>
@@ -55,26 +56,6 @@ sharder::next_shard(const token& t) const {
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
     fmt::print(out, "{}", dk);
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& out, partition_ranges_view v) {
-    out << "{";
-
-    if (v.empty()) {
-        out << " }";
-        return out;
-    }
-
-    auto it = v.begin();
-    out << *it;
-    ++it;
-
-    for (;it != v.end(); ++it) {
-        out << ", " << *it;
-    }
-
-    out << "}";
     return out;
 }
 
@@ -147,11 +128,6 @@ decorated_key::less_comparator::operator()(const ring_position& lhs, const decor
 bool
 decorated_key::less_comparator::operator()(const decorated_key& lhs, const ring_position& rhs) const {
     return lhs.tri_compare(*s, rhs) < 0;
-}
-
-std::ostream& operator<<(std::ostream& out, const i_partitioner& p) {
-    out << "{partitioner name = " << p.name();
-    return out << "}";
 }
 
 unsigned static_shard_of(const schema& s, const token& t) {
@@ -515,6 +491,15 @@ auto fmt::formatter<dht::ring_position>::format(const dht::ring_position& pos, f
         out = fmt::format_to(out, ", {}", *pos.key());
     } else {
         out = fmt::format_to(out, ", {}", (pos.relation_to_keys() < 0) ? "start" : "end");
+    }
+    return fmt::format_to(out, "}}");
+}
+
+auto fmt::formatter<dht::partition_ranges_view>::format(const dht::partition_ranges_view& v, fmt::format_context& ctx) const
+    -> decltype(ctx.out()) {
+    auto out = fmt::format_to(ctx.out(), "{{");
+    for (auto& range : v) {
+        out = fmt::format_to(out, "{}", range);
     }
     return fmt::format_to(out, "}}");
 }

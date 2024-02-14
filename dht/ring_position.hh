@@ -486,8 +486,6 @@ public:
     const dht::partition_range* end() const { return _data + _size; }
 };
 
-std::ostream& operator<<(std::ostream& out, partition_ranges_view v);
-
 } // namespace dht
 
 template<>
@@ -508,4 +506,9 @@ template<>
 struct fmt::formatter<dht::ring_position> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const dht::ring_position& pos, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<dht::partition_ranges_view> : fmt::formatter<std::string_view> {
+    auto format(const dht::partition_ranges_view&, fmt::format_context& ctx) const
+      -> decltype(ctx.out());
 };
