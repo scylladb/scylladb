@@ -7,7 +7,7 @@ Admin Tools
    
    Nodetool Reference </operating-scylla/nodetool>
    CQLSh </cql/cqlsh>
-   REST </operating-scylla/rest>
+   Admin REST API </operating-scylla/rest>
    Tracing </using-scylla/tracing>
    Scylla SStable </operating-scylla/admin-tools/scylla-sstable/>
    Scylla Types </operating-scylla/admin-tools/scylla-types/>
