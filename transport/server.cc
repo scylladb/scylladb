@@ -999,14 +999,13 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
 
     auto msg = co_await process_fn(client_state, _server._query_processor, in, stream,
             _version, permit, trace_state, true, {});
-        // FIXME: indentation
-        auto* bounce_msg = std::get_if<result_with_bounce_to_shard>(&msg);
-        if (bounce_msg) {
-            auto shard = (*bounce_msg)->move_to_shard().value();
-            auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
-            co_return co_await process_on_shard(shard, stream, is, client_state, trace_state, std::move(cached_vals), process_fn);
-        }
-        co_return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
+    auto* bounce_msg = std::get_if<result_with_bounce_to_shard>(&msg);
+    if (bounce_msg) {
+        auto shard = (*bounce_msg)->move_to_shard().value();
+        auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
+        co_return co_await process_on_shard(shard, stream, is, client_state, trace_state, std::move(cached_vals), process_fn);
+    }
+    co_return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
 }
 
 static future<cql_server::process_fn_return_type>
