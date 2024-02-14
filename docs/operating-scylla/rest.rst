@@ -1,6 +1,6 @@
 
-REST
-----
+Admin REST API
+--------------
 
 ScyllaDB exposes a REST API to retrieve administrative information from a node and execute 
 administrative operations. For example, it allows you to check or update configuration, 
