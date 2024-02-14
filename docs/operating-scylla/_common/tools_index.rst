@@ -7,7 +7,6 @@
 * :doc:`Scylla Types </operating-scylla/admin-tools/scylla-types/>` - Examines raw values obtained from SStables, logs, coredumps, etc.
 * :doc:`cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>` A tool for benchmarking and load testing a Scylla and Cassandra clusters.
 * :doc:`SSTabledump </operating-scylla/admin-tools/sstabledump>`
-* :doc:`SSTable2JSON </operating-scylla/admin-tools/sstable2json>`
 * :doc:`SSTableMetadata </operating-scylla/admin-tools/sstablemetadata>`
 * sstablelevelreset - Reset level to 0 on a selected set of SSTables that use LeveledCompactionStrategy (LCS).
 * sstablerepairedset - Mark specific SSTables as repaired or unrepaired.

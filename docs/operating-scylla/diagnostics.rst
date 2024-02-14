@@ -94,7 +94,6 @@ ScyllaDB has various other tools, mainly to work with sstables.
 If you are diagnosing a problem that is related to sstables misbehaving or being corrupt, you may find these useful:
 
 * `sstabledump </operating-scylla/admin-tools/sstabledump/>`_
-* `sstable2json </operating-scylla/admin-tools/sstable2json/>`_
 * `Scylla SStable </operating-scylla/admin-tools/scylla-sstable/>`_
 * `Scylla Types </operating-scylla/admin-tools/scylla-types/>`_
 

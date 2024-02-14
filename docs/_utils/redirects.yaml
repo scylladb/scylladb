@@ -1,6 +1,15 @@
 ### a dictionary of redirections
 #old path: new path
 
+
+# Remove the doc for the SSTable2json tool
+
+/stable/operating-scylla/admin-tools/sstable2json.html: /stable/operating-scylla/admin-tools/index.html
+
+# remove the Open Source vs. Enterprise Matrix from the Open Source docs
+
+/stable/reference/versions-matrix-enterprise-oss.html: https://enterprise.docs.scylladb.com/stable/reference/versions-matrix-enterprise-oss.html
+
 # Remove the Learn page (replaced with a link to a page in a different repo)
 
 /stable/using-scylla/learn: https://docs.scylladb.com/stable/get-started/learn-resources/index.html

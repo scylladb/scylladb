@@ -7,7 +7,6 @@ SSTabledump
 This tool allows you to converts SSTable into a JSON format file.
 If you need more flexibility or want to dump more than just the data-component, see :doc:`scylla-sstable </operating-scylla/admin-tools/scylla-sstable>`.
 
-
 Use the full path to the data file when executing the command.
 
 For example:
