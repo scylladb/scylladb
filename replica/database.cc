@@ -2591,6 +2591,16 @@ dht::token_range_vector database::get_keyspace_local_ranges(sstring ks) {
     return find_keyspace(ks).get_vnode_effective_replication_map()->get_ranges(my_address);
 }
 
+std::optional<dht::token_range_vector> database::maybe_get_keyspace_local_ranges(sstring ks) {
+    const auto& keyspace = find_keyspace(ks);
+    if (keyspace.get_replication_strategy().is_per_table()) {
+        // return nullopt if each tables have their own effective_replication_map
+        return std::nullopt;
+    }
+    auto my_address = get_token_metadata().get_topology().my_address();
+    return keyspace.get_vnode_effective_replication_map()->get_ranges(my_address);
+}
+
 /*!
  * \brief a helper function that gets a table name and returns a prefix
  * of the directory name of the table.

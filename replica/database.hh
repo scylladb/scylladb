@@ -1796,6 +1796,7 @@ public:
     // Returns the list of ranges held by this endpoint
     // The returned list is sorted, and its elements are non overlapping and non wrap-around.
     dht::token_range_vector get_keyspace_local_ranges(sstring ks);
+    std::optional<dht::token_range_vector> maybe_get_keyspace_local_ranges(sstring ks);
 
     void set_format(sstables::sstable_version_types format) noexcept;
     void set_format_by_config();
