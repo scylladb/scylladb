@@ -579,7 +579,7 @@ future<> table_scrub_sstables_compaction_task_impl::run() {
 future<> table_reshaping_compaction_task_impl::run() {
     auto start = std::chrono::steady_clock::now();
     auto total_size = co_await _dir.map_reduce0([&] (sstables::sstable_directory& d) -> future<uint64_t> {
-        uint64_t total_shard_size;
+        uint64_t total_shard_size = 0;
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<shard_reshaping_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, d, _db, _mode, _creator, _filter, total_shard_size);
@@ -595,7 +595,6 @@ future<> table_reshaping_compaction_task_impl::run() {
 
 future<> shard_reshaping_compaction_task_impl::run() {
     auto& table = _db.local().find_column_family(_status.keyspace, _status.table);
-    uint64_t reshaped_size = 0;
     tasks::task_info info{_status.id, _status.shard};
 
     while (true) {
@@ -608,10 +607,11 @@ future<> shard_reshaping_compaction_task_impl::run() {
             break;
         }
 
-        if (!reshaped_size) {
+        if (!_total_shard_size) {
             dblog.info("Table {}.{} with compaction strategy {} found SSTables that need reshape. Starting reshape process", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
         }
 
+        uint64_t reshaped_size = 0;
         std::vector<sstables::shared_sstable> sstlist;
         for (auto& sst : desc.sstables) {
             reshaped_size += sst->data_size();
@@ -634,10 +634,11 @@ future<> shard_reshaping_compaction_task_impl::run() {
             break;
         }
 
+        // reshape succeeded - update the total reshaped size
+        _total_shard_size += reshaped_size;
+
         co_await coroutine::maybe_yield();
     }
-
-    _total_shard_size = reshaped_size;
 }
 
 future<> table_resharding_compaction_task_impl::run() {
