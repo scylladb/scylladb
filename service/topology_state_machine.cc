@@ -53,29 +53,14 @@ raft::server_id topology::parse_replaced_node(const std::optional<request_param>
     return {};
 }
 
-std::unordered_set<raft::server_id> topology::parse_ignore_nodes(const std::optional<request_param>& req_param) {
-    if (req_param) {
-        auto* remove_param = std::get_if<removenode_param>(&*req_param);
-        if (remove_param) {
-            return remove_param->ignored_ids;
-        }
-        auto* rep_param = std::get_if<replace_param>(&*req_param);
-        if (rep_param) {
-            return rep_param->ignored_ids;
-        }
-    }
-    return {};
-}
-
 std::unordered_set<raft::server_id> topology::get_excluded_nodes(raft::server_id id,
-                                                                 const std::optional<topology_request>& req,
-                                                                 const std::optional<request_param>& req_param) {
-    auto exclude_nodes = parse_ignore_nodes(req_param);
-    if (auto replaced_node = parse_replaced_node(req_param)) {
-        exclude_nodes.insert(replaced_node);
-    }
-    if (req && *req == topology_request::remove) {
-        exclude_nodes.insert(id);
+                                                                 const std::optional<topology_request>& req) const {
+    std::unordered_set<raft::server_id> exclude_nodes;
+    // ignored_nodes is not per request any longer, but for now consider ignored nodes only
+    // for remove and replace operations since only those operations support it on streaming level
+    if ((req && (*req == topology_request::remove || *req == topology_request::replace)) ||
+        (transition_nodes.contains(id) && (transition_nodes.at(id).state == node_state::removing || transition_nodes.at(id).state == node_state::replacing))) {
+        exclude_nodes = ignored_nodes;
     }
     return exclude_nodes;
 }
@@ -89,22 +74,7 @@ std::optional<request_param> topology::get_request_param(raft::server_id id) con
 };
 
 std::unordered_set<raft::server_id> topology::get_excluded_nodes() const {
-    std::unordered_set<raft::server_id> result;
-
-    for (auto& [id, rs] : transition_nodes) {
-        std::optional<topology_request> req;
-        auto req_i = requests.find(id);
-        if (req_i != requests.end()) {
-            req = req_i->second;
-        }
-        if (rs.state == node_state::removing) {
-            result.insert(id);
-        }
-        auto excluded = get_excluded_nodes(id, req, get_request_param(id));
-        result.insert(excluded.begin(), excluded.end());
-    }
-
-    return result;
+    return ignored_nodes;
 }
 
 std::set<sstring> calculate_not_yet_enabled_features(const std::set<sstring>& enabled_features, const auto& supported_features) {

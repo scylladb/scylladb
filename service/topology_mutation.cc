@@ -237,6 +237,14 @@ topology_mutation_builder& topology_mutation_builder::add_unpublished_cdc_genera
     return apply_set("unpublished_cdc_generations", collection_apply_mode::update, std::vector<data_value>{std::move(dv)});
 }
 
+topology_mutation_builder& topology_mutation_builder::add_ignored_nodes(const std::unordered_set<raft::server_id>& value) {
+    return apply_set("ignore_nodes", collection_apply_mode::update, value | boost::adaptors::transformed([] (const auto& id) { return id.uuid(); }));
+}
+
+topology_mutation_builder& topology_mutation_builder::set_ignored_nodes(const std::unordered_set<raft::server_id>& value) {
+    return apply_set("ignore_nodes", collection_apply_mode::overwrite, value | boost::adaptors::transformed([] (const auto& id) { return id.uuid(); }));
+}
+
 topology_mutation_builder& topology_mutation_builder::del_global_topology_request() {
     return del("global_topology_request");
 }

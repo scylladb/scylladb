@@ -119,6 +119,8 @@ public:
     topology_mutation_builder& set_upgrade_state(topology::upgrade_state_type);
     topology_mutation_builder& add_enabled_features(const std::set<sstring>& value);
     topology_mutation_builder& add_unpublished_cdc_generation(const cdc::generation_id_v2& value);
+    topology_mutation_builder& add_ignored_nodes(const std::unordered_set<raft::server_id>& value);
+    topology_mutation_builder& set_ignored_nodes(const std::unordered_set<raft::server_id>& value);
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del_session();
     topology_mutation_builder& del_global_topology_request();

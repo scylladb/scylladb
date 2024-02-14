@@ -221,7 +221,6 @@ schema_ptr system_keyspace::topology() {
             .with_column("release_version", utf8_type)
             .with_column("topology_request", utf8_type)
             .with_column("replaced_id", uuid_type)
-            .with_column("ignore_nodes", set_type_impl::get_instance(uuid_type, true))
             .with_column("rebuild_option", utf8_type)
             .with_column("num_tokens", int32_type)
             .with_column("shard_count", int32_type)
@@ -229,6 +228,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("cleanup_status", utf8_type)
             .with_column("supported_features", set_type_impl::get_instance(utf8_type, true))
             .with_column("request_id", timeuuid_type)
+            .with_column("ignore_nodes", set_type_impl::get_instance(uuid_type, true), column_kind::static_column)
             .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
             .with_column("version", long_type, column_kind::static_column)
             .with_column("fence_version", long_type, column_kind::static_column)
@@ -2707,11 +2707,6 @@ future<service::topology> system_keyspace::load_topology_state() {
             rebuild_option = row.get_as<sstring>("rebuild_option");
         }
 
-        std::unordered_set<raft::server_id> ignored_ids;
-        if (row.has("ignore_nodes")) {
-            ignored_ids = decode_nodes_ids(deserialize_set_column(*topology(), row, "ignore_nodes"));
-        }
-
         std::set<sstring> supported_features;
         if (row.has("supported_features")) {
             supported_features = decode_features(deserialize_set_column(*topology(), row, "supported_features"));
@@ -2725,16 +2720,13 @@ future<service::topology> system_keyspace::load_topology_state() {
                 if (!replaced_id) {
                     on_internal_error(slogger, fmt::format("replaced_id is missing for a node {}", host_id));
                 }
-                ret.req_param.emplace(host_id, service::replace_param{*replaced_id, std::move(ignored_ids)});
+                ret.req_param.emplace(host_id, service::replace_param{*replaced_id});
                 break;
             case service::topology_request::rebuild:
                 if (!rebuild_option) {
                     on_internal_error(slogger, fmt::format("rebuild_option is missing for a node {}", host_id));
                 }
                 ret.req_param.emplace(host_id, service::rebuild_param{*rebuild_option});
-                break;
-            case service::topology_request::remove:
-                ret.req_param.emplace(host_id, service::removenode_param{std::move(ignored_ids)});
                 break;
             default:
                 // no parameters for other requests
@@ -2747,16 +2739,12 @@ future<service::topology> system_keyspace::load_topology_state() {
                 // Therefore we need to know the number of tokens when we generate them during the bootstrap process.
                 ret.req_param.emplace(host_id, service::join_param{num_tokens});
                 break;
-            case service::node_state::removing:
-                // If a node is removing we need to know which nodes are ignored
-                ret.req_param.emplace(host_id, service::removenode_param{std::move(ignored_ids)});
-                break;
             case service::node_state::replacing:
                 // If a node is replacing we need to know which node it is replacing and which nodes are ignored
                 if (!replaced_id) {
                     on_internal_error(slogger, fmt::format("replaced_id is missing for a node {}", host_id));
                 }
-                ret.req_param.emplace(host_id, service::replace_param{*replaced_id, std::move(ignored_ids)});
+                ret.req_param.emplace(host_id, service::replace_param{*replaced_id});
                 break;
             case service::node_state::rebuilding:
                 // If a node is rebuilding it needs to know the parameter for the operation
@@ -2901,6 +2889,10 @@ future<service::topology> system_keyspace::load_topology_state() {
             ret.upgrade_state = service::upgrade_state_from_string(some_row.get_as<sstring>("upgrade_state"));
         } else {
             ret.upgrade_state = service::topology::upgrade_state_type::not_upgraded;
+        }
+
+        if (some_row.has("ignore_nodes")) {
+            ret.ignored_nodes = decode_nodes_ids(deserialize_set_column(*topology(), some_row, "ignore_nodes"));
         }
     }
 

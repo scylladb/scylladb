@@ -58,8 +58,7 @@ future<inet_address> wait_for_ip(raft::server_id id, const raft_address_map& am,
         }
         if (lowres_clock::now() > deadline) {
             co_await coroutine::exception(std::make_exception_ptr(
-                std::runtime_error(format("failed to obtain an IP for {} in {}s",
-                    id, std::chrono::duration_cast<std::chrono::seconds>(timeout).count()))));
+                wait_for_ip_timeout(id, std::chrono::duration_cast<std::chrono::seconds>(timeout).count())));
         }
         static thread_local logger::rate_limit rate_limit{std::chrono::seconds(1)};
         rtlogger.log(log_level::warn, rate_limit, "cannot map {} to ip, retrying.", id);
@@ -214,7 +213,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         for (auto& req : topo.requests) {
             auto enough_live_nodes = [&] {
-                auto exclude_nodes = get_excluded_nodes(req.first, req.second, get_request_param(req.first));
+                if (req.second == topology_request::rebuild) {
+                    // For rebuild only the node itself should be alive to start it
+                    // it may still fail if down node has data for the rebuild process
+                    return !dead_nodes.contains(req.first);
+                }
+                auto exclude_nodes = get_excluded_nodes(topo, req.first, req.second);
                 for (auto id : dead_nodes) {
                     if (!exclude_nodes.contains(id)) {
                         return false;
@@ -314,10 +318,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return service::topology::parse_replaced_node(req_param);
     }
 
-    std::unordered_set<raft::server_id> parse_ignore_nodes(const std::optional<request_param>& req_param) {
-        return service::topology::parse_ignore_nodes(req_param);
-    }
-
     inet_address id2ip(locator::host_id id) {
         auto ip = _address_map.find(raft::server_id(id.uuid()));
         if (!ip) {
@@ -392,12 +392,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return guard;
     }
 
-    std::unordered_set<raft::server_id> get_excluded_nodes(raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param) {
-        return service::topology::get_excluded_nodes(id, req, req_param);
+    std::unordered_set<raft::server_id> get_excluded_nodes(const topology_state_machine::topology_type& topo,
+                raft::server_id id, const std::optional<topology_request>& req) {
+        return topo.get_excluded_nodes(id, req);
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {
-        return get_excluded_nodes(node.id, node.request, node.req_param);
+        return node.topology->get_excluded_nodes(node.id, node.request);
     }
 
     future<node_to_work_on> exec_global_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
@@ -1172,6 +1173,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return std::make_pair(false, std::move(guard));
     }
 
+    void cleanup_ignored_nodes_on_left(topology_mutation_builder& builder, raft::server_id id) {
+        if (_topo_sm._topology.ignored_nodes.contains(id)) {
+            auto l = _topo_sm._topology.ignored_nodes;
+            l.erase(id);
+            builder.set_ignored_nodes(l);
+        }
+    }
+
     future<> cancel_all_requests(group0_guard guard, std::unordered_set<raft::server_id> dead_nodes) {
         std::vector<canonical_mutation> muts;
         std::vector<raft::server_id> reject_join;
@@ -1565,23 +1574,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     [[fallthrough]];
                 case node_state::decommissioning: {
                     topology_mutation_builder builder(node.guard.write_timestamp());
-                    auto next_state = node.rs->state == node_state::decommissioning ? node.rs->state : node_state::left;
+                    node_state next_state;
+                    std::vector<canonical_mutation> muts;
+                    muts.reserve(2);
                     if (node.rs->state == node_state::decommissioning) {
+                        next_state = node.rs->state;
                         builder.set_transition_state(topology::transition_state::left_token_ring);
                     } else {
+                        next_state = node_state::left;
                         builder.del_transition_state();
+                        cleanup_ignored_nodes_on_left(builder, node.id);
+                        muts.push_back(rtbuilder.build());
                     }
                     builder.set_version(_topo_sm._topology.version + 1)
                            .with_node(node.id)
                            .del("tokens")
                            .set("node_state", next_state);
                     auto str = ::format("{}: read fence completed", node.rs->state);
-                    std::vector<canonical_mutation> muts;
-                    muts.reserve(2);
                     muts.push_back(builder.build());
-                    if (next_state == node_state::left) {
-                        muts.push_back(rtbuilder.build());
-                    }
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
                 }
                     break;
@@ -1598,6 +1608,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                     // Move old node to 'left'
                     topology_mutation_builder builder2(node.guard.write_timestamp());
+                    cleanup_ignored_nodes_on_left(builder2, replaced_node_id);
                     builder2.with_node(replaced_node_id)
                             .del("tokens")
                             .set("node_state", node_state::left);
@@ -1688,6 +1699,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 co_await remove_from_group0(node.id);
 
                 topology_mutation_builder builder(node.guard.write_timestamp());
+                cleanup_ignored_nodes_on_left(builder, node.id);
                 builder.del_transition_state()
                        .with_node(node.id)
                        .set("node_state", node_state::left);
@@ -1857,18 +1869,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     case topology_request::remove: {
                         assert(node.rs->ring);
 
-                        auto ip = id2ip(locator::host_id(node.id.uuid()));
-                        if (_gossiper.is_alive(ip)) {
-                            builder.with_node(node.id)
-                                   .del("topology_request");
-                            rtbuilder.done("the node is alive");
-                            co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()},
-                                                           "reject removenode");
-                            rtlogger.warn("rejected removenode operation for node {} "
-                                         "because it is alive", node.id);
-                            break;
-                        }
-
                         builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
@@ -1880,6 +1880,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     case topology_request::replace: {
                         assert(!node.rs->ring);
+
                         builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
                                .set("node_state", node_state::replacing)
@@ -1948,13 +1949,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             if (!_topo_sm._topology.normal_nodes.contains(replaced_id)) {
                 return join_node_response_params::rejected {
                     .reason = ::format("Cannot replace node {} because it is not in the 'normal' state", replaced_id),
-                };
-            }
-
-            auto replaced_ip = id2ip(locator::host_id(replaced_id.uuid()));
-            if (_gossiper.is_alive(replaced_ip)) {
-                return join_node_response_params::rejected {
-                    .reason = ::format("Cannot replace node {} because it is considered alive", replaced_id),
                 };
             }
         }

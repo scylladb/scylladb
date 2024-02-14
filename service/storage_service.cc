@@ -12,9 +12,11 @@
 #include "storage_service.hh"
 #include "compaction/task_manager_module.hh"
 #include "gc_clock.hh"
+#include "raft/raft.hh"
 #include "service/topology_guard.hh"
 #include "service/session.hh"
 #include "dht/boot_strapper.hh"
+#include <exception>
 #include <optional>
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
@@ -382,10 +384,6 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             }
         }
 
-        // FIXME: when removing a node from the cluster through `removenode`, we should ban it early,
-        // at the beginning of the removal process (so it doesn't disrupt us in the middle of the process).
-        // The node is only included in `left_nodes` at the end of the process.
-        //
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     };
@@ -647,6 +645,11 @@ future<> storage_service::topology_state_load() {
     if (auto gen_id = _topology_state_machine._topology.current_cdc_generation_id) {
         rtlogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
         co_await _cdc_gens.local().handle_cdc_generation(*gen_id);
+    }
+
+    for (auto& id : _topology_state_machine._topology.ignored_nodes) {
+        // Ban all ignored nodes. We do not allow them to go back online
+        co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
 
     slogger.debug("topology_state_load: excluded nodes: {}", _topology_state_machine._topology.get_excluded_nodes());
@@ -928,8 +931,41 @@ std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(
     return ids;
 }
 
+std::unordered_set<raft::server_id> storage_service::ignored_nodes_from_join_params(const join_node_request_params& params) {
+    std::unordered_set<raft::server_id> ignored_nodes;
+
+    if (!params.ignore_nodes.empty()) {
+        std::list<locator::host_id_or_endpoint> ignore_nodes_params;
+        for (const auto& n : params.ignore_nodes) {
+            ignore_nodes_params.emplace_back(n);
+        }
+
+        ignored_nodes = find_raft_nodes_from_hoeps(ignore_nodes_params);
+    }
+
+    if (params.replaced_id) {
+        // insert node that should be replaced to ignore list so that other topology operations
+        // can ignore it
+        ignored_nodes.insert(*params.replaced_id);
+    }
+
+    return ignored_nodes;
+}
+
 std::vector<canonical_mutation> storage_service::build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard) {
     topology_mutation_builder builder(guard.write_timestamp());
+    auto ignored_nodes = ignored_nodes_from_join_params(params);
+
+    if (!ignored_nodes.empty()) {
+        auto bad_id = std::find_if_not(ignored_nodes.begin(), ignored_nodes.end(), [&] (auto n) {
+            return _topology_state_machine._topology.normal_nodes.contains(n);
+        });
+        if (bad_id != ignored_nodes.end()) {
+            throw std::runtime_error(::format("replace: there is no node with id {} in normal state. Cannot ignore it.", *bad_id));
+        }
+        builder.add_ignored_nodes(std::move(ignored_nodes));
+    }
+
     auto& node_builder = builder.with_node(params.host_id)
         .set("node_state", node_state::none)
         .set("datacenter", params.datacenter)
@@ -942,17 +978,9 @@ std::vector<canonical_mutation> storage_service::build_mutation_from_join_params
         .set("supported_features", boost::copy_range<std::set<sstring>>(params.supported_features));
 
     if (params.replaced_id) {
-        std::list<locator::host_id_or_endpoint> ignore_nodes_params;
-        for (const auto& n : params.ignore_nodes) {
-            ignore_nodes_params.emplace_back(n);
-        }
-
-        auto ignored_ids = find_raft_nodes_from_hoeps(ignore_nodes_params);
-
         node_builder
             .set("topology_request", topology_request::replace)
-            .set("replaced_id", *params.replaced_id)
-            .set("ignore_nodes", ignored_ids);
+            .set("replaced_id", *params.replaced_id);
     } else {
         node_builder
             .set("topology_request", topology_request::join);
@@ -3540,11 +3568,21 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         }
 
         auto ignored_ids = find_raft_nodes_from_hoeps(ignore_nodes_params);
+        if (!ignored_ids.empty()) {
+            auto bad_id = std::find_if_not(ignored_ids.begin(), ignored_ids.end(), [&] (auto n) {
+                return _topology_state_machine._topology.normal_nodes.contains(n);
+            });
+            if (bad_id != ignored_ids.end()) {
+                throw std::runtime_error(::format("removenode: there is no node with id {} in normal state. Cannot ignore it.", *bad_id));
+            }
+        }
+        // insert node that should be removed to ignore list so that other topology operations
+        // can ignore it
+        ignored_ids.insert(id);
 
-        rtlogger.info("request removenode for: {}, ignored nodes: {}", id, ignored_ids);
+        rtlogger.info("request removenode for: {}, new ignored nodes: {}, existing ignore nodes: {}", id, ignored_ids, _topology_state_machine._topology.ignored_nodes);
         topology_mutation_builder builder(guard.write_timestamp());
-        builder.with_node(id)
-               .set("ignore_nodes", ignored_ids)
+        builder.add_ignored_nodes(ignored_ids).with_node(id)
                .set("topology_request", topology_request::remove)
                .set("request_id", guard.new_group0_state_id());
         topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id());
@@ -3555,6 +3593,8 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
 
         request_id = guard.new_group0_state_id();
         try {
+            // Make non voter during request submission for better HA
+            co_await _group0->make_nonvoters(ignored_ids);
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
         } catch (group0_concurrent_modification&) {
             rtlogger.info("removenode: concurrent operation is detected, retrying.");
@@ -5066,7 +5106,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
                                     // FIXME: we should not need to translate ids to IPs here. See #6403.
                                     std::unordered_set<gms::inet_address> ignored_ips;
-                                    for (const auto& id : std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).ignored_ids) {
+                                    for (const auto& id : _topology_state_machine._topology.ignored_nodes) {
                                         auto ip = _group0->address_map().find(id);
                                         if (!ip) {
                                             on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", id));
@@ -5117,12 +5157,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 }
                             });
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
-                                if (!_topology_state_machine._topology.req_param.contains(id)) {
-                                    on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", id));
-                                }
                                 // FIXME: we should not need to translate ids to IPs here. See #6403.
                                 std::list<gms::inet_address> ignored_ips;
-                                for (const auto& ignored_id : std::get<removenode_param>(_topology_state_machine._topology.req_param[id]).ignored_ids) {
+                                for (const auto& ignored_id : _topology_state_machine._topology.ignored_nodes) {
                                     auto ip = _group0->address_map().find(ignored_id);
                                     if (!ip) {
                                         on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", ignored_id));
@@ -5791,12 +5828,28 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
             co_return result;
         }
 
+        if (params.replaced_id) {
+            try {
+                auto ip = co_await wait_for_ip(*params.replaced_id, _group0->address_map(), _group0_as);
+                if (is_me(ip) || _gossiper.is_alive(ip)) {
+                    result.result = join_node_request_result::rejected{
+                        .reason = fmt::format("tried to replace alive node {}", *params.replaced_id),
+                    };
+                    co_return result;
+                }
+            } catch (wait_for_ip_timeout& ex) {
+                rtlogger.warn("Failed to check liveness for replaced id {}. Asumming it is dead, Error: {}", *params.replaced_id, ex);
+            }
+        }
+
         auto mutation = build_mutation_from_join_params(params, guard);
 
         topology_change change{{std::move(mutation)}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 format("raft topology: placing join request for {}", params.host_id));
         try {
+            // Make replaced node and ignored nodes non voters earlier for better HA
+            co_await _group0->make_nonvoters(ignored_nodes_from_join_params(params));
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
             break;
         } catch (group0_concurrent_modification&) {
@@ -5858,12 +5911,11 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
 
                 // Calculate nodes to ignore
                 // TODO: ignore_dead_nodes setting for bootstrap
-                std::unordered_set<raft::server_id> ignored_ids;
+                std::unordered_set<raft::server_id> ignored_ids = _topology_state_machine._topology.ignored_nodes;
                 auto my_request_it =
                         _topology_state_machine._topology.req_param.find(_group0->load_my_id());
                 if (my_request_it != _topology_state_machine._topology.req_param.end()) {
                     if (auto* replace = std::get_if<service::replace_param>(&my_request_it->second)) {
-                        ignored_ids = replace->ignored_ids;
                         ignored_ids.insert(replace->replaced_id);
                     }
                 }

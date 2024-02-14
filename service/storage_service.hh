@@ -878,6 +878,7 @@ private:
     future<> merge_topology_snapshot(raft_topology_snapshot snp);
 
     std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard);
+    std::unordered_set<raft::server_id> ignored_nodes_from_join_params(const join_node_request_params& params);
 
     future<join_node_request_result> join_node_request_handler(join_node_request_params params);
     future<join_node_response_result> join_node_response_handler(join_node_response_params params);
