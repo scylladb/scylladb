@@ -73,8 +73,6 @@ public:
     }
 };
 
-std::ostream& operator<<(std::ostream& out, const i_partitioner& p);
-
 // Returns the owning shard number for vnode-based replication strategies.
 // Use table::shard_of() for the general case.
 unsigned static_shard_of(const schema&, const token&);
@@ -120,3 +118,10 @@ dht::token first_token(const dht::partition_range&);
 std::optional<shard_id> is_single_shard(const dht::sharder&, const schema&, const dht::partition_range&);
 
 } // dht
+
+template <> struct fmt::formatter<dht::i_partitioner> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const dht::i_partitioner& p, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{partitioner name = {}}}", p.name());
+    }
+};
