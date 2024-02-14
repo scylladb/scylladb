@@ -187,7 +187,8 @@ public:
 public:
     using response = cql_transport::response;
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
-    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, ::shared_ptr<messages::result_message::bounce_to_shard>>;
+    using result_with_bounce_to_shard = foreign_ptr<seastar::shared_ptr<messages::result_message::bounce_to_shard>>;
+    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, result_with_bounce_to_shard>;
 
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
@@ -300,7 +301,6 @@ private:
         process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state,
                 Process process_fn);
 
-
         template <typename Process>
             requires std::is_invocable_r_v<future<cql_server::process_fn_return_type>,
                                            Process,
@@ -315,8 +315,8 @@ private:
                                            cql3::computed_function_values,
                                            cql3::dialect>
         future<result_with_foreign_response_ptr>
-        process_on_shard(::shared_ptr<messages::result_message::bounce_to_shard> bounce_msg, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
-                service_permit permit, tracing::trace_state_ptr trace_state, cql3::dialect dialect, Process process_fn);
+        process_on_shard(shard_id shard, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
+                service_permit permit, tracing::trace_state_ptr trace_state, cql3::dialect dialect, cql3::computed_function_values&& cached_vals, Process process_fn);
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
 
