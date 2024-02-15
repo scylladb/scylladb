@@ -218,7 +218,7 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
         assert len(cdc_res) != 0
 
         all_generations = frozenset(row.id for row in cdc_res)
-        assert max(committed_generations) in all_generations
+        assert committed_generations.issubset(all_generations)
 
         # Check that the contents fetched from the current host are the same as for other nodes
         assert topo_results[0] == topo_res
