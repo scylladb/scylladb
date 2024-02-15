@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-from test.pylib.rest_client import inject_error_one_shot
+from test.pylib.rest_client import inject_error
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.topology.util import check_system_topology_and_cdc_generations_v3_consistency
@@ -63,13 +63,22 @@ async def test_cdc_generation_clearing(manager: ManagerClient):
     await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
     second_gen_id = max(gen_ids)
 
-    await inject_error_one_shot(manager.api, servers[0].ip_addr, "clean_obsolete_cdc_generations_change_ts_ub")
+    async with inject_error(manager.api, servers[0].ip_addr, "clean_obsolete_cdc_generations_change_ts_ub"):
+        logger.info("Bootstrapping third node")
+        servers += [await manager.server_add()]
 
-    logger.info("Bootstrapping third node")
-    servers += [await manager.server_add()]
+        # The first and second generations should be removed thanks to the above injection.
+        mark, gen_ids, hosts = await wait_for(tried_to_remove_new_gen, time.time() + 60)
+        logger.info(f"Generations after third clearing attempt: {gen_ids}")
+        assert len(gen_ids) == 1 and first_gen_id not in gen_ids and second_gen_id not in gen_ids
+        await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
+        third_gen_id = max(gen_ids)
 
-    # The first and second generations should be removed thanks to the above injection.
-    mark, gen_ids, hosts = await wait_for(tried_to_remove_new_gen, time.time() + 60)
-    logger.info(f"Generations after third clearing attempt: {gen_ids}")
-    assert len(gen_ids) == 1 and first_gen_id not in gen_ids and second_gen_id not in gen_ids
-    await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
+        logger.info("Bootstrapping fourth node")
+        servers += [await manager.server_add()]
+
+        # The third generation should be removed thanks to the above injection.
+        mark, gen_ids, hosts = await wait_for(tried_to_remove_new_gen, time.time() + 60)
+        logger.info(f"Generations after fourth clearing attempt: {gen_ids}")
+        assert len(gen_ids) == 1 and third_gen_id not in gen_ids
+        await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
