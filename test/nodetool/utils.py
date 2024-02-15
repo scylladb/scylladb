@@ -6,6 +6,7 @@
 
 import pytest
 import subprocess
+import itertools
 
 
 def _do_check_nodetool_fails_with(
@@ -52,5 +53,24 @@ def check_nodetool_fails_with_all(
             if expected_error in err_lines or expected_error in out_lines:
                 match += 1
         assert match == len(expected_errors)
+
+    _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, matcher)
+
+
+def check_nodetool_fails_with_error_contains(
+        nodetool,
+        nodetool_args: tuple,
+        nodetool_kwargs: dict,
+        expected_errors: list[str]):
+
+    def matcher(out_lines, err_lines):
+        match = False
+        for expected_error in expected_errors:
+            for err_line in itertools.chain(out_lines, err_lines):
+                if expected_error in err_line:
+                    match = True
+                    break
+
+        assert match
 
     _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, matcher)
