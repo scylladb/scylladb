@@ -111,16 +111,11 @@ def test_viewbuildstatus(request, nodetool, args, statuses, returncode):
             assert exc_info.value.stdout == expected_stdout
             assert expected_stderr in exc_info.value.stderr
         else:
-            if is_scylla:
-                # scylla nodetool does not return status code of 1 if not all building are finished
+            with pytest.raises(CalledProcessError) as exc_info:
                 actual_output = nodetool("viewbuildstatus", *args, expected_requests=expected_requests)
-                assert actual_output == expected_output
-            else:
-                with pytest.raises(CalledProcessError) as exc_info:
-                    actual_output = nodetool("viewbuildstatus", *args, expected_requests=expected_requests)
-                assert exc_info.type is CalledProcessError
-                assert exc_info.value.returncode == 1
-                assert exc_info.value.output == expected_output
+            assert exc_info.type is CalledProcessError
+            assert exc_info.value.returncode == 1
+            assert exc_info.value.output == expected_output
     else:
         actual_output = nodetool("viewbuildstatus", *args, expected_requests=expected_requests)
         assert actual_output == expected_output
