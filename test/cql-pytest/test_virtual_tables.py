@@ -85,3 +85,23 @@ def test_system_config_read(scylla_only, cql):
     obj = json.loads(values['restrict_dtcs'])
     assert isinstance(obj, str)
     assert obj and obj.isascii() and obj.isprintable()
+
+def test_token_ring_vnodes(scylla_only, cql, test_keyspace_vnodes):
+    rows = list(cql.execute(f"SELECT * FROM system.token_ring WHERE keyspace_name = '{test_keyspace_vnodes}'"))
+    num_tokens = int(list(cql.execute("SELECT value FROM system.config WHERE name = 'num_tokens'"))[0].value)
+    assert len(rows) == num_tokens
+    for row in rows:
+        assert row.keyspace_name == test_keyspace_vnodes
+        assert row.table_name == "<ALL>"
+
+def test_token_ring_tablets(scylla_only, cql, test_keyspace_tablets):
+    if test_keyspace_tablets is None:
+        pytest.skip("skipping tablets specific tests -- tablets not enabled")
+
+    with util.new_test_table(cql, test_keyspace_tablets, 'pk int PRIMARY KEY') as table:
+        rows = list(cql.execute(f"SELECT * FROM system.token_ring WHERE keyspace_name = '{test_keyspace_tablets}' AND table_name = '{table}'"))
+        tablets = list(cql.execute(f"SELECT * from system.tablets WHERE keyspace_name = '{test_keyspace_tablets}' AND table_name = '{table}' ALLOW FILTERING"))
+        assert len(rows) == len(tablets)
+        for row in rows:
+            assert row.keyspace_name == test_keyspace_tablets
+            assert row.table_name == table
