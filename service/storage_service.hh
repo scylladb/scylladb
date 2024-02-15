@@ -347,11 +347,11 @@ public:
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
     future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
-            sharded<gms::gossiper>& gossiper_ptr, start_hint_manager start_hm);
+            sharded<gms::gossiper>& gossiper_ptr, start_hint_manager start_hm, gms::generation_type new_generation);
 
     void set_group0(service::raft_group0&, bool raft_experimental_topology);
 
-    future<> init_address_map(raft_address_map& address_map);
+    future<> init_address_map(raft_address_map& address_map, gms::generation_type new_generation);
 
     future<> uninit_address_map();
     bool is_topology_coordinator_enabled() const;
@@ -373,7 +373,8 @@ private:
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
             std::chrono::milliseconds,
-            start_hint_manager start_hm);
+            start_hint_manager start_hm,
+            gms::generation_type new_generation);
     future<> start_sys_dist_ks();
 public:
 

@@ -372,16 +372,37 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         return *used_ips;
     };
 
+    using host_id_to_ip_map_t = std::unordered_map<locator::host_id, gms::inet_address>;
+    auto get_host_id_to_ip_map = [&, map = std::optional<host_id_to_ip_map_t>{}]() mutable -> future<const host_id_to_ip_map_t*> {
+        if (!map.has_value()) {
+            const auto ep_to_id_map = co_await _sys_ks.local().load_host_ids();
+            map.emplace();
+            map->reserve(ep_to_id_map.size());
+            for (const auto& [ep, id]: ep_to_id_map) {
+                const auto [it, inserted] = map->insert({id, ep});
+                if (!inserted) {
+                    on_internal_error(slogger, ::format("duplicate IP for host_id {}, first IP {}, second IP {}",
+                        id, it->second, ep));
+                }
+            }
+        }
+        co_return &*map;
+    };
+
     std::vector<future<>> sys_ks_futures;
+
+    auto remove_ip = [&](inet_address ip) -> future<> {
+        sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(ip));
+
+        if (_gossiper.get_endpoint_state_ptr(ip) && !get_used_ips().contains(ip)) {
+            co_await _gossiper.force_remove_endpoint(ip, gms::null_permit_id);
+            co_await notify_left(ip);
+        }
+    };
 
     auto process_left_node = [&] (raft::server_id id) -> future<> {
         if (const auto ip = am.find(id)) {
-            sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(*ip));
-
-            if (_gossiper.get_endpoint_state_ptr(*ip) && !get_used_ips().contains(*ip)) {
-                co_await _gossiper.force_remove_endpoint(*ip, gms::null_permit_id);
-                co_await notify_left(*ip);
-            }
+            co_await remove_ip(*ip);
         }
 
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
@@ -407,6 +428,11 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             // In replace-with-same-ip scenario the replaced node IP will be the same
             // as ours, we shouldn't put it into system.peers.
 
+            // We need to fetch host_id_map before the update_peer_info call below,
+            // get_host_id_to_ip_map checks for duplicates and update_peer_info can
+            // add one.
+            const auto& host_id_to_ip_map = *(co_await get_host_id_to_ip_map());
+
             // Some state that is used to fill in 'peeers' table is still propagated over gossiper.
             // Populate the table with the state from the gossiper here since storage_service::on_change()
             // (which is called each time gossiper state changes) may have skipped it because the tokens
@@ -416,12 +442,19 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             info.tokens = rs.ring.value().tokens;
             info.data_center = rs.datacenter;
             info.rack = rs.rack;
-            info.host_id = id.uuid();
             info.release_version = rs.release_version;
             info.supported_features = fmt::to_string(fmt::join(rs.supported_features, ","));
-            sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, info));
+            sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, host_id, info));
             if (!prev_normal.contains(id)) {
                 co_await notify_joined(*ip);
+            }
+
+            if (const auto it = host_id_to_ip_map.find(host_id); it != host_id_to_ip_map.end() && it->second != *ip) {
+                utils::get_local_injector().inject("crash-before-prev-ip-removed", [] {
+                    slogger.info("crash-before-prev-ip-removed hit, killing the node");
+                    _exit(1);
+                });
+                co_await remove_ip(it->second);
             }
         }
         update_topology(host_id, ip, rs);
@@ -443,9 +476,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             if (rs.ring.has_value()) {
                 if (ip && !is_me(*ip)) {
                     // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
-                        db::system_keyspace::peer_info info;
-                        info.host_id = id.uuid();
-                        sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, info));
+                    sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, host_id, {}));
                 }
                 update_topology(host_id, ip, rs);
                 if (_topology_state_machine._topology.normal_nodes.empty()) {
@@ -686,6 +717,20 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
    co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
+// Moves the coroutine lambda onto the heap and extends its
+// lifetime until the resulting future is completed.
+// This allows to use captures in coroutine lambda after co_await-s.
+// Without this helper the coroutine lambda is destroyed immediately after
+// the caller (e.g. 'then' function implementation) has invoked it and got the future,
+// so referencing the captures after co_await would be use-after-free.
+template <typename Coro>
+static auto ensure_alive(Coro&& coro) {
+    return [coro_ptr = std::make_unique<Coro>(std::move(coro))]<typename ...Args>(Args&&... args) mutable {
+        auto& coro = *coro_ptr;
+        return coro(std::forward<Args>(args)...).finally([coro_ptr = std::move(coro_ptr)] {});
+    };
+}
+
 // {{{ raft_ip_address_updater
 
 class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_change_subscriber {
@@ -693,23 +738,39 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
     storage_service& _ss;
 
     future<>
-    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state) {
+    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id, const char* ev) {
         auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
         if (!app_state_ptr) {
             co_return;
         }
         raft::server_id id(utils::UUID(app_state_ptr->value()));
-        rslog.debug("raft_ip_address_updater::on_endpoint_change() {} {}", endpoint, id);
+        rslog.debug("raft_ip_address_updater::on_endpoint_change({}) {} {}", ev, endpoint, id);
 
         const auto prev_ip = _address_map.find(id);
         _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
+        if (prev_ip == endpoint) {
+            co_return;
+        }
+        if (_address_map.find(id) == prev_ip) {
+            // Address map refused to update IP for the host_id,
+            // this means prev_ip has higher generation than endpoint.
+            // We can immediately remove endpoint from gossiper
+            // since it represents and old IP (before an IP change)
+            // for the given host_id. This is not strictly
+            // necessary, but it reduces the noice circulated
+            // in gossiper messages and allows for clearer
+            // expectations of the gossiper state in tests.
+
+            co_await _ss._gossiper.force_remove_endpoint(endpoint, permit_id);
+            co_return;
+        }
 
         // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
-        if (_ss.raft_topology_change_enabled() && prev_ip != endpoint && _address_map.find(id) == endpoint) {
-            rslog.debug("raft_ip_address_updater::on_endpoint_change(), host_id {}, "
+        if (_ss.raft_topology_change_enabled()) {
+            rslog.debug("raft_ip_address_updater::on_endpoint_change({}), host_id {}, "
                         "ip changed from [{}] to [{}], "
                         "waiting for group 0 read/apply mutex before reloading Raft topology state...",
-                id, prev_ip, endpoint);
+                ev, id, prev_ip, endpoint);
 
             // We're in a gossiper event handler, so gossiper is currently holding a lock
             // for the endpoint parameter of on_endpoint_change.
@@ -717,15 +778,19 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
             // If we call sync_raft_topology_nodes here directly, a gossiper lock and
             // the _group0.read_apply_mutex could be taken in cross-order leading to a deadlock.
             // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
-            (void)_ss._group0->client().hold_read_apply_mutex().then([this, id, endpoint](semaphore_units<> g) {
+            (void)futurize_invoke(ensure_alive([this, id, endpoint, h = _ss._async_gate.hold()]() -> future<> {
+                auto guard = co_await _ss._group0->client().hold_read_apply_mutex();
                 const auto hid = locator::host_id{id.uuid()};
-                if (_address_map.find(id) == endpoint && _ss.get_token_metadata().get_endpoint_for_host_id_if_known(hid) != endpoint) {
-                    return _ss.mutate_token_metadata([this, hid](mutable_token_metadata_ptr t) {
-                        return _ss.sync_raft_topology_nodes(std::move(t), hid, {});
-                    }).finally([g = std::move(g)]{});
+                if (_address_map.find(id) != endpoint ||
+                    _ss.get_token_metadata().get_endpoint_for_host_id_if_known(hid) == endpoint)
+                {
+                    co_return;
                 }
-                return make_ready_future<>();
-            }).finally([h = _ss._async_gate.hold()] {});
+                co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
+                co_await _ss.mutate_token_metadata([this, hid](mutable_token_metadata_ptr t) {
+                    return _ss.sync_raft_topology_nodes(std::move(t), hid, {});
+                });
+            }));
         }
     }
 
@@ -736,8 +801,8 @@ public:
     {}
 
     virtual future<>
-    on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state);
+    on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, ep_state, permit_id, "on_join");
     }
 
     virtual future<>
@@ -747,8 +812,8 @@ public:
     }
 
     virtual future<>
-    on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state);
+    on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, ep_state, permit_id, "on_alive");
     }
 
     virtual future<>
@@ -765,8 +830,8 @@ public:
     }
 
     virtual future<>
-    on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state);
+    on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, ep_state, permit_id, "on_restart");
     }
 };
 
@@ -1222,7 +1287,8 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         std::unordered_set<gms::inet_address> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
         std::chrono::milliseconds delay,
-        start_hint_manager start_hm) {
+        start_hint_manager start_hm,
+        gms::generation_type new_generation) {
     std::unordered_set<token> bootstrap_tokens;
     gms::application_state_map app_states;
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
@@ -1395,9 +1461,8 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 
     slogger.info("Starting up server gossip");
 
-    auto generation_number = gms::generation_type(co_await _sys_ks.local().increment_and_get_generation());
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
-    co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
+    co_await _gossiper.start_gossiping(new_generation, app_states, advertise);
 
     if (!raft_topology_change_enabled() && should_bootstrap()) {
         // Wait for NORMAL state handlers to finish for existing nodes now, so that connection dropping
@@ -2207,7 +2272,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         try {
             auto info = get_peer_info_for_update(endpoint);
             info.tokens = std::move(owned_tokens);
-            co_await _sys_ks.local().update_peer_info(endpoint, info);
+            co_await _sys_ks.local().update_peer_info(endpoint, host_id, info);
         } catch (...) {
             slogger.error("handle_state_normal: fail to update tokens for {}: {}", endpoint, std::current_exception());
         }
@@ -2350,7 +2415,7 @@ future<> storage_service::on_change(gms::inet_address endpoint, const gms::appli
     if (ep && *ep == endpoint && tm.is_normal_token_owner(host_id)) {
         if (!is_me(endpoint)) {
             slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
-            co_await _sys_ks.local().update_peer_info(endpoint, get_peer_info_for_update(endpoint, states));
+            co_await _sys_ks.local().update_peer_info(endpoint, host_id, get_peer_info_for_update(endpoint, states));
         }
         if (states.contains(application_state::RPC_READY)) {
             slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
@@ -2443,9 +2508,6 @@ db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_ad
         switch (state) {
         case application_state::DC:
             set_field(ret.data_center, value, "data_center", true);
-            break;
-        case application_state::HOST_ID:
-            set_field(ret.host_id, value, "host_id", true);
             break;
         case application_state::INTERNAL_IP:
             set_field(ret.preferred_ip, value, "preferred_ip", false);
@@ -2554,10 +2616,13 @@ void storage_service::set_group0(raft_group0& group0, bool raft_experimental_top
     _raft_experimental_topology = raft_experimental_topology;
 }
 
-future<> storage_service::init_address_map(raft_address_map& address_map) {
+future<> storage_service::init_address_map(raft_address_map& address_map, gms::generation_type new_generation) {
     for (auto [ip, host] : co_await _sys_ks.local().load_host_ids()) {
         address_map.add_or_update_entry(raft::server_id(host.uuid()), ip);
     }
+    const auto& topology = get_token_metadata().get_topology();
+    address_map.add_or_update_entry(raft::server_id{topology.my_host_id().uuid()},
+        topology.my_address(), new_generation);
     _raft_ip_address_updater = make_shared<raft_ip_address_updater>(address_map, *this);
     _gossiper.register_(_raft_ip_address_updater);
 }
@@ -2571,7 +2636,7 @@ bool storage_service::is_topology_coordinator_enabled() const {
 }
 
 future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
-        sharded<gms::gossiper>& gossiper, start_hint_manager start_hm) {
+        sharded<gms::gossiper>& gossiper, start_hint_manager start_hm, gms::generation_type new_generation) {
     assert(this_shard_id() == 0);
 
     set_mode(mode::STARTING);
@@ -2689,7 +2754,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
     }
 
     co_return co_await join_token_ring(sys_dist_ks, proxy, gossiper, std::move(initial_contact_nodes),
-            std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm);
+            std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm, new_generation);
 }
 
 future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {

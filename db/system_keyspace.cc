@@ -1464,20 +1464,58 @@ struct local_cache {
     system_keyspace::bootstrap_state _state;
 };
 
+future<> system_keyspace::peers_table_read_fixup() {
+    assert(this_shard_id() == 0);
+    if (_peers_table_read_fixup_done) {
+        co_return;
+    }
+    _peers_table_read_fixup_done = true;
+
+    const auto cql = format("SELECT peer, host_id, WRITETIME(host_id) as ts from system.{}", PEERS);
+    std::unordered_map<utils::UUID, std::pair<net::inet_address, int64_t>> map{};
+    const auto cql_result = co_await execute_cql(cql);
+    for (const auto& row : *cql_result) {
+        const auto peer = row.get_as<net::inet_address>("peer");
+        if (!row.has("host_id")) {
+            slogger.error("Peer {} has no host_id in system.{}, the record is broken, removing it",
+                peer, system_keyspace::PEERS);
+            co_await remove_endpoint(gms::inet_address{peer});
+            continue;
+        }
+        const auto host_id = row.get_as<utils::UUID>("host_id");
+        const auto ts = row.get_as<int64_t>("ts");
+        const auto it = map.find(host_id);
+        if (it == map.end()) {
+            map.insert({host_id, {peer, ts}});
+            continue;
+        }
+        if (it->second.second >= ts) {
+            slogger.error("Peer {} with host_id {} has newer IP {} in system.{}, the record is stale, removing it",
+                peer, host_id, it->second.first, system_keyspace::PEERS);
+            co_await remove_endpoint(gms::inet_address{peer});
+        } else {
+            slogger.error("Peer {} with host_id {} has newer IP {} in system.{}, the record is stale, removing it",
+                it->second.first, host_id, peer, system_keyspace::PEERS);
+            co_await remove_endpoint(gms::inet_address{it->second.first});
+            it->second = {peer, ts};
+        }
+    }
+}
+
 future<std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>> system_keyspace::load_dc_rack_info() {
-    auto msg = co_await execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS));
+    co_await peers_table_read_fixup();
+
+    const auto msg = co_await execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS));
 
     std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> ret;
     for (const auto& row : *msg) {
-        net::inet_address peer = row.template get_as<net::inet_address>("peer");
         if (!row.has("data_center") || !row.has("rack")) {
             continue;
         }
-        gms::inet_address gms_addr(std::move(peer));
-        sstring dc = row.template get_as<sstring>("data_center");
-        sstring rack = row.template get_as<sstring>("rack");
-
-        ret.emplace(gms_addr, locator::endpoint_dc_rack{ dc, rack });
+        ret.emplace(row.get_as<net::inet_address>("peer"), locator::endpoint_dc_rack {
+            row.get_as<sstring>("data_center"),
+            row.get_as<sstring>("rack")
+        });
     }
 
     co_return ret;
@@ -1735,58 +1773,42 @@ static std::vector<cdc::generation_id_v2> decode_cdc_generations_ids(const set_t
     return gen_ids_list;
 }
 
-static locator::host_id get_host_id(const gms::inet_address& peer, const cql3::untyped_result_set::row& row) {
-    locator::host_id host_id;
-    if (row.has("host_id")) {
-        host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
-    }
-    if (!host_id) {
-        slogger.warn("Peer {} has no host_id in system.{}", peer, system_keyspace::PEERS);
-    }
-    return host_id;
-}
-
 future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> system_keyspace::load_tokens() {
-    sstring req = format("SELECT peer, host_id, tokens FROM system.{}", PEERS);
-    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
-        std::unordered_map<gms::inet_address, std::unordered_set<dht::token>> ret;
-        for (auto& row : *cql_result) {
-            auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
-            if (!get_host_id(peer, row)) {
-                continue;
-            }
-            if (row.has("tokens")) {
-                ret.emplace(peer, decode_tokens(deserialize_set_column(*peers(), row, "tokens")));
-            }
+    co_await peers_table_read_fixup();
+
+    const sstring req = format("SELECT peer, tokens FROM system.{}", PEERS);
+    std::unordered_map<gms::inet_address, std::unordered_set<dht::token>> ret;
+    const auto cql_result = co_await execute_cql(req);
+    for (const auto& row : *cql_result) {
+        if (row.has("tokens")) {
+            ret.emplace(gms::inet_address(row.get_as<net::inet_address>("peer")),
+                decode_tokens(deserialize_set_column(*peers(), row, "tokens")));
         }
-        return ret;
-    });
+    }
+    co_return ret;
 }
 
 future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace::load_host_ids() {
-    sstring req = format("SELECT peer, host_id FROM system.{}", PEERS);
-    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
-        std::unordered_map<gms::inet_address, locator::host_id> ret;
-        for (auto& row : *cql_result) {
-            auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
-            if (auto host_id = get_host_id(peer, row)) {
-                ret.emplace(peer, host_id);
-            }
-        }
-        return ret;
-    });
+    co_await peers_table_read_fixup();
+
+    const sstring req = format("SELECT peer, host_id FROM system.{}", PEERS);
+    std::unordered_map<gms::inet_address, locator::host_id> ret;
+    const auto cql_result = co_await execute_cql(req);
+    for (const auto& row : *cql_result) {
+        ret.emplace(gms::inet_address(row.get_as<net::inet_address>("peer")),
+            locator::host_id(row.get_as<utils::UUID>("host_id")));
+    }
+    co_return ret;
 }
 
 future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
-    auto res = co_await execute_cql(format("SELECT peer, host_id, tokens FROM system.{}", PEERS));
+    co_await peers_table_read_fixup();
+
+    const auto res = co_await execute_cql(format("SELECT peer, tokens FROM system.{}", PEERS));
     assert(res);
 
     std::vector<gms::inet_address> ret;
-    for (auto& row: *res) {
-        auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
-        if (!get_host_id(peer, row)) {
-            continue;
-        }
+    for (const auto& row: *res) {
         if (!row.has("tokens")) {
             // Ignore rows that don't have tokens. Such rows may
             // be introduced by code that persists parts of peer
@@ -1794,55 +1816,55 @@ future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
             // race with deleting a peer (during node removal).
             continue;
         }
-        ret.emplace_back(peer);
+        ret.emplace_back(gms::inet_address(row.get_as<net::inet_address>("peer")));
     }
     co_return ret;
 }
 
 future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_peer_features() {
-    sstring req = format("SELECT peer, supported_features FROM system.{}", PEERS);
-    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
-        std::unordered_map<gms::inet_address, sstring> ret;
-        for (auto& row : *cql_result) {
-            if (row.has("supported_features")) {
-                ret.emplace(row.get_as<net::inet_address>("peer"),
-                        row.get_as<sstring>("supported_features"));
-            }
+    co_await peers_table_read_fixup();
+
+    const sstring req = format("SELECT peer, supported_features FROM system.{}", PEERS);
+    std::unordered_map<gms::inet_address, sstring> ret;
+    const auto cql_result = co_await execute_cql(req);
+    for (const auto& row : *cql_result) {
+        if (row.has("supported_features")) {
+            ret.emplace(row.get_as<net::inet_address>("peer"),
+                    row.get_as<sstring>("supported_features"));
         }
-        return ret;
-    });
+    }
+    co_return ret;
 }
 
 future<std::unordered_map<gms::inet_address, gms::inet_address>> system_keyspace::get_preferred_ips() {
-    sstring req = format("SELECT peer, preferred_ip FROM system.{}", PEERS);
-    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_res_set) {
-        std::unordered_map<gms::inet_address, gms::inet_address> res;
+    co_await peers_table_read_fixup();
 
-        for (auto& r : *cql_res_set) {
-            if (r.has("preferred_ip")) {
-                res.emplace(gms::inet_address(r.get_as<net::inet_address>("peer")),
-                            gms::inet_address(r.get_as<net::inet_address>("preferred_ip")));
-            }
+    const sstring req = format("SELECT peer, preferred_ip FROM system.{}", PEERS);
+    std::unordered_map<gms::inet_address, gms::inet_address> res;
+
+    const auto cql_result = co_await execute_cql(req);
+    for (const auto& r : *cql_result) {
+        if (r.has("preferred_ip")) {
+            res.emplace(gms::inet_address(r.get_as<net::inet_address>("peer")),
+                        gms::inet_address(r.get_as<net::inet_address>("preferred_ip")));
         }
+    }
 
-        return res;
-    });
+    co_return res;
 }
 
 namespace {
 template <typename T>
-static data_value_or_unset make_data_value_or_unset(const std::optional<T>& opt, bool& any_set) {
+static data_value_or_unset make_data_value_or_unset(const std::optional<T>& opt) {
     if (opt) {
-        any_set = true;
         return data_value(*opt);
     } else {
         return unset_value{};
     }
 };
 
-static data_value_or_unset make_data_value_or_unset(const std::optional<std::unordered_set<dht::token>>& opt, bool& any_set) {
+static data_value_or_unset make_data_value_or_unset(const std::optional<std::unordered_set<dht::token>>& opt) {
     if (opt) {
-        any_set = true;
         auto set_type = set_type_impl::get_instance(utf8_type, true);
         return make_set_value(set_type, prepare_tokens(*opt));
     } else {
@@ -1851,28 +1873,29 @@ static data_value_or_unset make_data_value_or_unset(const std::optional<std::uno
 };
 }
 
-future<> system_keyspace::update_peer_info(gms::inet_address ep, const peer_info& info) {
+future<> system_keyspace::update_peer_info(gms::inet_address ep, locator::host_id hid, const peer_info& info) {
+    if (ep == gms::inet_address{}) {
+        on_internal_error(slogger, format("update_peer_info called with empty inet_address, host_id {}", hid));
+    }
+    if (!hid) {
+        on_internal_error(slogger, format("update_peer_info called with empty host_id, ep {}", ep));
+    }
     if (_db.get_token_metadata().get_topology().is_me(ep)) {
         on_internal_error(slogger, format("update_peer_info called for this node: {}", ep));
     }
 
-    bool any_set = false;
     data_value_list values = {
         data_value_or_unset(data_value(ep.addr())),
-        make_data_value_or_unset(info.data_center, any_set),
-        make_data_value_or_unset(info.host_id, any_set),
-        make_data_value_or_unset(info.preferred_ip, any_set),
-        make_data_value_or_unset(info.rack, any_set),
-        make_data_value_or_unset(info.release_version, any_set),
-        make_data_value_or_unset(info.rpc_address, any_set),
-        make_data_value_or_unset(info.schema_version, any_set),
-        make_data_value_or_unset(info.tokens, any_set),
-        make_data_value_or_unset(info.supported_features, any_set),
+        make_data_value_or_unset(info.data_center),
+        data_value_or_unset(hid.id),
+        make_data_value_or_unset(info.preferred_ip),
+        make_data_value_or_unset(info.rack),
+        make_data_value_or_unset(info.release_version),
+        make_data_value_or_unset(info.rpc_address),
+        make_data_value_or_unset(info.schema_version),
+        make_data_value_or_unset(info.tokens),
+        make_data_value_or_unset(info.supported_features),
     };
-
-    if (!any_set) {
-        co_return;
-    }
 
     auto query = fmt::format("INSERT INTO system.{} "
             "(peer,data_center,host_id,preferred_ip,rack,release_version,rpc_address,schema_version,tokens,supported_features) VALUES"
@@ -1928,7 +1951,7 @@ future<> system_keyspace::update_schema_version(table_schema_version version) {
  * Remove stored tokens being used by another node
  */
 future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
-    sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
+    const sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
     slogger.debug("DELETE FROM system.{} WHERE peer = {}", PEERS, ep);
     co_await execute_cql(req, ep.addr()).discard_result();
 }
