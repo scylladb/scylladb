@@ -481,6 +481,17 @@ size_t tablet_metadata::external_memory_usage() const {
     return result;
 }
 
+bool tablet_metadata::has_replica_on(host_id host) const {
+    for (auto&& [id, map] : _tablets) {
+        for (auto&& tablet : map.tablet_ids()) {
+            if (map.get_shard(tablet, host)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host) {
     bool valid = true;
     for (const auto& [table_id, tmap] : tm.all_tables()) {

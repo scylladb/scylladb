@@ -636,8 +636,7 @@ public:
                 return;
             }
             bool is_drained = node_ptr->get_state() == locator::node::state::being_decommissioned
-                              || node_ptr->get_state() == locator::node::state::being_removed
-                              || node_ptr->get_state() == locator::node::state::being_replaced;
+                              || node_ptr->get_state() == locator::node::state::being_removed;
             if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
                 if (is_drained) {
                     ensure_node(node_ptr->host_id());
@@ -652,12 +651,6 @@ public:
             }
         });
 
-        if (nodes.empty()) {
-            lblogger.debug("No nodes to balance.");
-            _stats.for_dc(dc).stop_balance++;
-            co_return plan;
-        }
-
         // Compute tablet load on nodes.
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
@@ -665,6 +658,20 @@ public:
 
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
+
+                // Check if any replica is on a node which has left.
+                // When node is replaced we don't rebuild as part of topology request.
+                for (auto&& r : ti.replicas) {
+                    auto* node = topo.find_node(r.host);
+                    if (!node) {
+                        on_internal_error(lblogger, format("Replica {} of tablet {} not found in topology",
+                                                           r, global_tablet_id{table, tid}));
+                    }
+                    if (node->left() && node->dc_rack().dc == dc) {
+                        ensure_node(r.host);
+                        nodes_to_drain.insert(r.host);
+                    }
+                }
 
                 // We reflect migrations in the load as if they already happened,
                 // optimistically assuming that they will succeed.
@@ -681,6 +688,12 @@ public:
 
                 return make_ready_future<>();
             });
+        }
+
+        if (nodes.empty()) {
+            lblogger.debug("No nodes to balance.");
+            _stats.for_dc(dc).stop_balance++;
+            co_return plan;
         }
 
         // Detect finished drain.
@@ -1064,7 +1077,7 @@ public:
             auto dst = global_shard_id {target, target_load_sketch.next_shard(target)};
 
             tablet_transition_kind kind = (src_info.state() == locator::node::state::being_removed
-                                           || src_info.state() == locator::node::state::being_replaced)
+                                           || src_info.state() == locator::node::state::left)
                        ? tablet_transition_kind::rebuild : tablet_transition_kind::migration;
             auto mig = tablet_migration_info {kind, source_tablet, src, dst};
             auto mig_streaming_info = get_migration_streaming_info(topo, tmap.get_tablet_info(source_tablet.tablet), mig);
