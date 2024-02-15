@@ -991,6 +991,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
             };
 
+            auto check_excluded_replicas = [&] {
+                    auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tmap.get_tablet_info(gid.tablet), trinfo);
+                    for (auto r : tsi.read_from) {
+                        if (is_excluded(raft::server_id(r.host.uuid()))) {
+                            rtlogger.debug("Aborting streaming of {} because read-from {} is marked as ignored", gid, r);
+                            return true;
+                        }
+                    }
+                    for (auto r : tsi.written_to) {
+                        if (is_excluded(raft::server_id(r.host.uuid()))) {
+                            rtlogger.debug("Aborting streaming of {} because written-to {} is marked as ignored", gid, r);
+                            return true;
+                        }
+                    }
+                    return false;
+            };
+
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old:
                     if (do_barrier()) {
@@ -1014,6 +1031,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         utils::get_local_injector().inject("stream_tablet_fail_on_drain",
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
                     }
+
+                    if (tablet_state.streaming && tablet_state.streaming->failed()) {
+                        if (check_excluded_replicas()) {
+                            transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            break;
+                        }
+                    }
+
                     if (advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
                         rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, trinfo.pending_replica);
                         auto dst = trinfo.pending_replica.host;
