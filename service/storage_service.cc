@@ -6059,6 +6059,21 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
     }
 }
 
+node_state storage_service::get_node_state(locator::host_id id) {
+    if (this_shard_id() != 0) {
+        on_internal_error(rtlogger, "cannot access node state on non zero shard");
+    }
+    auto rid = raft::server_id{id.uuid()};
+    if (!_topology_state_machine._topology.contains(rid)) {
+        on_internal_error(rtlogger, format("unknown node {}", rid));
+    }
+    auto p = _topology_state_machine._topology.find(rid);
+    if (!p) {
+        return node_state::left;
+    }
+    return p->second.state;
+}
+
 void storage_service::init_messaging_service(bool raft_topology_change_enabled) {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");

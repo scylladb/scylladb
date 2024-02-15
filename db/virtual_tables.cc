@@ -8,6 +8,7 @@
 
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm.hpp>
+#include <boost/algorithm/string.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/json/json_elements.hh>
@@ -79,11 +80,16 @@ public:
                 row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
 
                 set_cell(cr, "up", gossiper.is_alive(endpoint));
-                set_cell(cr, "status", gossiper.get_gossip_status(endpoint));
+                if (!ss.raft_topology_change_enabled() || gossiper.is_shutdown(endpoint)) {
+                    set_cell(cr, "status", gossiper.get_gossip_status(endpoint));
+                }
                 set_cell(cr, "load", gossiper.get_application_state_value(endpoint, gms::application_state::LOAD));
 
                 auto hostid = tm.get_host_id_if_known(endpoint);
                 if (hostid) {
+                    if (ss.raft_topology_change_enabled() && !gossiper.is_shutdown(endpoint)) {
+                        set_cell(cr, "status", boost::to_upper_copy<std::string>(fmt::format("{}", ss.get_node_state(*hostid))));
+                    }
                     set_cell(cr, "host_id", hostid->uuid());
                 }
 
