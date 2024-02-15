@@ -192,13 +192,9 @@ public:
         };
 
         auto keyspace_names = boost::copy_range<std::vector<decorated_keyspace_name>>(
-            _db.get_keyspaces()
-                | boost::adaptors::filtered([] (auto&& e) {
-                      auto&& rs = e.second.get_replication_strategy();
-                      return rs.is_vnode_based();
-                  })
-                | boost::adaptors::transformed([this] (auto&& e) {
-                    return decorated_keyspace_name{e.first, make_partition_key(e.first)};
+            _db.get_non_local_strategy_keyspaces()
+                | boost::adaptors::transformed([this] (auto&& ks) {
+                    return decorated_keyspace_name{ks, make_partition_key(ks)};
         }));
 
         boost::sort(keyspace_names, [less = dht::ring_position_less_comparator(*_s)]
@@ -212,8 +208,19 @@ public:
                 continue;
             }
 
-            std::vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring(e.name);
-            co_await emit_ring(result, e.key, "<ALL>", std::move(ranges));
+            if (_db.find_keyspace(e.name).get_replication_strategy().uses_tablets()) {
+                co_await _db.get_tables_metadata().for_each_table_gently([&, this] (table_id, lw_shared_ptr<replica::table> table) -> future<> {
+                    if (table->schema()->ks_name() != e.name) {
+                        co_return;
+                    }
+                    const auto& table_name = table->schema()->cf_name();
+                    std::vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring_for_table(e.name, table_name);
+                    co_await emit_ring(result, e.key, table_name, std::move(ranges));
+                });
+            } else {
+                std::vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring(e.name);
+                co_await emit_ring(result, e.key, "<ALL>", std::move(ranges));
+            }
         }
     }
 };
