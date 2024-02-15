@@ -12,8 +12,7 @@ def _do_check_nodetool_fails_with(
         nodetool,
         nodetool_args: tuple,
         nodetool_kwargs: dict,
-        expected_errors: list[str],
-        match_all: bool = False):
+        matcher):
 
     with pytest.raises(subprocess.CalledProcessError) as e:
         nodetool(*nodetool_args, **nodetool_kwargs)
@@ -21,15 +20,7 @@ def _do_check_nodetool_fails_with(
     err_lines = e.value.stderr.rstrip().split('\n')
     out_lines = e.value.stdout.rstrip().split('\n')
 
-    match = 0
-    for expected_error in expected_errors:
-        if expected_error in err_lines or expected_error in out_lines:
-            match += 1
-
-    if match_all:
-        assert match == len(expected_errors)
-    else:
-        assert match > 0
+    matcher(out_lines, err_lines)
 
 
 def check_nodetool_fails_with(
@@ -37,7 +28,16 @@ def check_nodetool_fails_with(
         nodetool_args: tuple,
         nodetool_kwargs: dict,
         expected_errors: list[str]):
-    _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, expected_errors, False)
+
+    def matcher(out_lines, err_lines):
+        match = False
+        for expected_error in expected_errors:
+            if expected_error in err_lines or expected_error in out_lines:
+                match = True
+                break
+        assert match
+
+    _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, matcher)
 
 
 def check_nodetool_fails_with_all(
@@ -45,4 +45,12 @@ def check_nodetool_fails_with_all(
         nodetool_args: tuple,
         nodetool_kwargs: dict,
         expected_errors: list[str]):
-    _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, expected_errors, True)
+
+    def matcher(out_lines, err_lines):
+        match = 0
+        for expected_error in expected_errors:
+            if expected_error in err_lines or expected_error in out_lines:
+                match += 1
+        assert match == len(expected_errors)
+
+    _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, matcher)
