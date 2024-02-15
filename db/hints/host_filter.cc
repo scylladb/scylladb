@@ -68,6 +68,11 @@ host_filter host_filter::parse_from_dc_list(sstring opt) {
     return host_filter(std::unordered_set<sstring>(dcs.begin(), dcs.end()));
 }
 
+std::ostream& operator<<(std::ostream& os, const host_filter& f) {
+    fmt::print(os, "{}", f);
+    return os;
+}
+
 std::istream& operator>>(std::istream& is, host_filter& f) {
     sstring tmp;
     is >> tmp;
@@ -100,16 +105,17 @@ std::string_view host_filter::enabled_kind_to_string(host_filter::enabled_kind e
     throw std::logic_error("Uncovered variant of enabled_kind");
 }
 
-std::ostream& operator<<(std::ostream& os, const host_filter& f) {
-    fmt::print(os, "host_filter{{enabled_kind={}",
+}
+}
+
+auto fmt::formatter<db::hints::host_filter>::format(const db::hints::host_filter& f, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    using db::hints::host_filter;
+    auto out = ctx.out();
+    out = fmt::format_to(out, "host_filter{{enabled_kind={}",
                host_filter::enabled_kind_to_string(f._enabled_kind));
     if (f._enabled_kind == host_filter::enabled_kind::enabled_selectively) {
-        fmt::print(os, ", dcs={{{}}}", fmt::join(f._dcs, ","));
+        out = fmt::format_to(out, ", dcs={{{}}}", fmt::join(f._dcs, ","));
     }
-    fmt::print(os, "}}");
-    return os;
+    return fmt::format_to(out, "}}");
 }
-
-}
-}
-
