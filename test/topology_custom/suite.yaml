@@ -5,6 +5,7 @@ cluster:
 extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
+    experimental_features: ['consistent-topology-changes']
 run_first:
   - test_raft_recovery_majority_loss
   - test_raft_recovery_stuck
