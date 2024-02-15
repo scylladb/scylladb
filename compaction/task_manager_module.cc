@@ -531,7 +531,8 @@ future<> shard_upgrade_sstables_compaction_task_impl::run() {
 
 future<> table_upgrade_sstables_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
-    auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
+    auto owned_ranges = _db.maybe_get_keyspace_local_ranges(_status.keyspace);
+    auto owned_ranges_ptr = owned_ranges ? compaction::make_owned_ranges_ptr(std::move(owned_ranges.value())) : nullptr;
     tasks::task_info info{_status.id, _status.shard};
     co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
         return t.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
