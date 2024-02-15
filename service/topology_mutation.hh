@@ -113,6 +113,7 @@ public:
     topology_mutation_builder& set_session(session_id);
     topology_mutation_builder& set_tablet_balancing_enabled(bool);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
+    topology_mutation_builder& set_committed_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
     topology_mutation_builder& set_global_topology_request(global_topology_request);
     topology_mutation_builder& set_upgrade_state(topology::upgrade_state_type);

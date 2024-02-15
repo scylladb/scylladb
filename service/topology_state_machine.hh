@@ -150,6 +150,7 @@ struct topology {
     std::optional<global_topology_request> global_request;
 
     // The IDs of the committed CDC generations sorted by timestamps.
+    // The obsolete generations may not be in this list as they are continually deleted.
     std::vector<cdc::generation_id_v2> committed_cdc_generations;
 
     // This is the time UUID used to access the data of a new CDC generation introduced

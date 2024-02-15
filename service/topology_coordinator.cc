@@ -592,6 +592,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         m.partition().apply_delete(*s, range_tombstone{bv.first, bv.second, tombstone{mut_ts, gc_clock::now()}});
         updates.push_back(canonical_mutation(m));
 
+        std::vector<cdc::generation_id_v2> new_committed_gens(*first_nonobsolete_gen_it, committed_gens.end());
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.set_committed_cdc_generations(std::move(new_committed_gens));
+        updates.push_back(builder.build());
+
         reason += ::format("deleted data of CDC generations with time UUID not exceeding {}", id_upper_bound);
     }
 

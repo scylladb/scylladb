@@ -206,6 +206,13 @@ topology_mutation_builder& topology_mutation_builder::set_new_cdc_generation_dat
     return apply_atomic("new_cdc_generation_data_uuid", value);
 }
 
+topology_mutation_builder& topology_mutation_builder::set_committed_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
+    auto dv = values | boost::adaptors::transformed([&] (const auto& v) {
+        return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
+    });
+    return apply_set("committed_cdc_generations", collection_apply_mode::overwrite, std::move(dv));
+}
+
 topology_mutation_builder& topology_mutation_builder::set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
     auto dv = values | boost::adaptors::transformed([&] (const auto& v) {
         return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
