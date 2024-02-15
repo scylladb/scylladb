@@ -1047,6 +1047,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         transition_to(locator::tablet_transition_stage::end_migration);
                     }
                     break;
+                case locator::tablet_transition_stage::revert_migration:
+                    // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
+                    // See do_tablet_operation() doc.
+                    if (do_barrier()) {
+                        _tablets.erase(gid);
+                        updates.emplace_back(get_mutation_builder()
+                                .del_transition(last_token)
+                                .build());
+                    }
+                    break;
                 case locator::tablet_transition_stage::end_migration:
                     // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
                     // See do_tablet_operation() doc.

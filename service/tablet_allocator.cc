@@ -425,6 +425,8 @@ private:
                 return false;
             case tablet_transition_stage::cleanup:
                 return false;
+            case tablet_transition_stage::revert_migration:
+                return false;
             case tablet_transition_stage::end_migration:
                 return false;
         }
