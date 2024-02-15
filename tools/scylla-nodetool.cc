@@ -49,6 +49,14 @@ struct operation_failed_on_scylladb : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+struct operation_failed_with_status : public std::runtime_error {
+    const int exit_status;
+    explicit operation_failed_with_status(int status)
+        : std::runtime_error::runtime_error("exit")
+        , exit_status(status)
+    {}
+};
+
 struct api_request_failed : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
@@ -1083,7 +1091,7 @@ void viewbuildstatus_operation(scylla_rest_client& client, const bpo::variables_
         fmt::print("{}.{} has not finished building; node status is below.\n", keyspace, view);
         fmt::print("\n");
         table.print();
-        // TODO: should return with status code of 1 in this case
+        throw operation_failed_with_status(1);
     }
 }
 
@@ -1818,6 +1826,8 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
         } catch (api_request_failed& e) {
             fmt::print(std::cerr, "{}\n", e.what());
             return 4;
+        } catch (operation_failed_with_status& e) {
+            return e.exit_status;
         } catch (...) {
             fmt::print(std::cerr, "error running operation: {}\n", std::current_exception());
             return 2;
