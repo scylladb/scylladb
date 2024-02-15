@@ -1240,13 +1240,6 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
      */
     std::optional<cdc::generation_id> cdc_gen_id;
 
-    if (_sys_ks.local().was_decommissioned()) {
-        auto msg = sstring("This node was decommissioned and will not rejoin the ring unless "
-                           "all existing data is removed and the node is bootstrapped again");
-        slogger.error("{}", msg);
-        throw std::runtime_error(msg);
-    }
-
     bool replacing_a_node_with_same_ip = false;
     bool replacing_a_node_with_diff_ip = false;
     std::optional<replacement_info> ri;
@@ -2573,6 +2566,13 @@ bool storage_service::is_topology_coordinator_enabled() const {
 future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
         sharded<gms::gossiper>& gossiper, start_hint_manager start_hm) {
     assert(this_shard_id() == 0);
+
+    if (_sys_ks.local().was_decommissioned()) {
+        auto msg = sstring("This node was decommissioned and will not rejoin the ring unless "
+                           "all existing data is removed and the node is bootstrapped again");
+        slogger.error("{}", msg);
+        throw std::runtime_error(msg);
+    }
 
     set_mode(mode::STARTING);
 
