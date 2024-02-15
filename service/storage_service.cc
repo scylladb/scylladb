@@ -683,6 +683,20 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
    co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
+// Moves the coroutine lambda onto the heap and extends its
+// lifetime until the resulting future is completed.
+// This allows to use captures in coroutine lambda after co_await-s.
+// Without this helper the coroutine lambda is destroyed immediately after
+// the caller (e.g. 'then' function implementation) has invoked it and got the future,
+// so referencing the captures after co_await would be use-after-free.
+template <typename Coro>
+static auto ensure_alive(Coro&& coro) {
+    return [coro_ptr = std::make_unique<Coro>(std::move(coro))]<typename ...Args>(Args&&... args) mutable {
+        auto& coro = *coro_ptr;
+        return coro(std::forward<Args>(args)...).finally([coro_ptr = std::move(coro_ptr)] {});
+    };
+}
+
 // {{{ raft_ip_address_updater
 
 class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_change_subscriber {
@@ -714,15 +728,18 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
             // If we call sync_raft_topology_nodes here directly, a gossiper lock and
             // the _group0.read_apply_mutex could be taken in cross-order leading to a deadlock.
             // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
-            (void)_ss._group0->client().hold_read_apply_mutex().then([this, id, endpoint](semaphore_units<> g) {
+            (void)futurize_invoke(ensure_alive([this, id, endpoint, h = _ss._async_gate.hold()]() -> future<> {
+                auto guard = co_await _ss._group0->client().hold_read_apply_mutex();
                 const auto hid = locator::host_id{id.uuid()};
-                if (_address_map.find(id) == endpoint && _ss.get_token_metadata().get_endpoint_for_host_id_if_known(hid) != endpoint) {
-                    return _ss.mutate_token_metadata([this, hid](mutable_token_metadata_ptr t) {
-                        return _ss.sync_raft_topology_nodes(std::move(t), hid, {});
-                    }).finally([g = std::move(g)]{});
+                if (_address_map.find(id) != endpoint ||
+                    _ss.get_token_metadata().get_endpoint_for_host_id_if_known(hid) == endpoint)
+                {
+                    co_return;
                 }
-                return make_ready_future<>();
-            }).finally([h = _ss._async_gate.hold()] {});
+                co_await _ss.mutate_token_metadata([this, hid](mutable_token_metadata_ptr t) {
+                    return _ss.sync_raft_topology_nodes(std::move(t), hid, {});
+                });
+            }));
         }
     }
 
