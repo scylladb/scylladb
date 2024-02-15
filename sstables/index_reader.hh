@@ -923,6 +923,7 @@ public:
     // If upper_bound is provided, the upper bound within position is looked up
     future<bool> advance_lower_and_check_if_present(
             dht::ring_position_view key, std::optional<position_in_partition_view> pos = {}) {
+        utils::get_local_injector().inject("advance_lower_and_check_if_present", [] { throw std::runtime_error("advance_lower_and_check_if_present"); });
         return advance_to(_lower_bound, key).then([this, key, pos] {
             if (eof()) {
                 return make_ready_future<bool>(false);
