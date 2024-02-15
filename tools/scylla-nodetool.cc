@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -1162,6 +1163,96 @@ void stop_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/compaction_manager/stop_compaction", {{"type", compaction_type}});
 }
 
+void toppartitions_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    // sanity check the arguments
+    auto list_size = vm["size"].as<int>();
+    auto capacity = vm["capacity"].as<int>();
+    if (list_size >= capacity) {
+        throw std::invalid_argument("TopK count (-k) option must be smaller than the summary capacity (-s)");
+    }
+    {
+        // scylla's API server does not use samplers, but let's verify them anyway
+        std::vector<sstring> samplers;
+        boost::split(samplers, vm["samplers"].as<sstring>(), boost::algorithm::is_any_of(","));
+        for (auto& sampler : samplers) {
+            auto sampler_lo = boost::to_lower_copy(sampler);
+            if (sampler_lo != "reads" && sampler_lo != "writes") {
+                throw std::invalid_argument(
+                    fmt::format("{} is not a valid sampler, choose one of: READS, WRITES", sampler));
+            }
+        }
+    }
+    // prepare the query params
+    int duration_in_milli = vm["duration"].as<int>();
+    sstring table_filters = vm["cf-filters"].as<sstring>();
+    if (vm.contains("keyspace") && vm.contains("table") && vm.contains("duration-milli")) {
+        table_filters = seastar::format("{}:{}",
+                                        vm["keyspace"].as<sstring>(),
+                                        vm["table"].as<sstring>());
+        duration_in_milli = vm["duration-milli"].as<int>();
+    } else if (vm.contains("keyspace")) {
+        throw std::invalid_argument("toppartitions requires either a keyspace, column family name and duration or no arguments at all");
+    }
+    std::unordered_map<sstring, sstring> params{
+        {"duration", fmt::to_string(duration_in_milli)},
+        {"capacity", fmt::to_string(capacity)},
+        {"list_size", fmt::to_string(list_size)}
+    };
+    if (vm.contains("ks-filters")) {
+        params.emplace("keyspace_filters", vm["ks-filters"].as<sstring>());
+    }
+    if (!table_filters.empty()) {
+        params.emplace("table_filters", table_filters);
+    }
+    auto res = client.get("/storage_service/toppartitions", std::move(params));
+    const auto& toppartitions = res.GetObject();
+    struct record {
+        std::string_view partition;
+        int64_t count;
+        int64_t error;
+    };
+    // format the query result
+    bool first = true;
+    for (auto operation : {"read", "write"}) {
+        auto cardinality = toppartitions[fmt::format("{}_cardinality", operation)].GetInt64();
+        fmt::print("{}S Sampler:\n", boost::to_upper_copy(std::string(operation)));
+        fmt::print("  Cardinality: ~{} ({} capacity)\n", cardinality, capacity);
+        fmt::print("  Top {} partitions:\n", list_size);
+
+        std::vector<record> topk;
+        if (toppartitions.HasMember(operation)) {
+            auto counters = toppartitions[operation].GetArray();
+            topk.reserve(counters.Size());
+            for (auto& element : counters) {
+                const auto& counter = element.GetObject();
+                topk.push_back(record(rjson::to_string_view(counter["partition"]),
+                                      counter["count"].GetInt64(),
+                                      counter["error"].GetInt64()));
+            }
+            std::ranges::sort(topk, [](auto& lhs, auto& rhs) {
+                return lhs.count > rhs.count;
+            });
+        }
+        if (topk.empty()) {
+            fmt::print("\tNothing recorded during sampling period...\n");
+        } else {
+            auto max_width_record = std::ranges::max_element(
+                topk,
+                [] (auto& lhs, auto& rhs) {
+                    return lhs.partition.size() < rhs.partition.size();
+                });
+            auto width = max_width_record->partition.size();
+            fmt::print("\t{:<{}}{:>10}{:>10}\n", "Partition", width, "Count", "+/-");
+            for (auto& record : topk) {
+                fmt::print("\t{:<{}}{:>10}{:>10}\n", record.partition, width, record.count, record.error);
+            }
+            if (std::exchange(first, false)) {
+                fmt::print("\n");
+            }
+        }
+    }
+}
+
 void upgradesstables_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, false);
 
@@ -1878,6 +1969,29 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             stop_operation
+        },
+        {
+            {
+                "toppartitions",
+                "Sample and print the most active partitions for a given column family",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/toppartitions.html
+)",
+                {
+                    typed_option<int>("duration,d", 5000, "Duration in milliseconds"),
+                    typed_option<sstring>("ks-filters", "Comma separated list of keyspaces to include in the query (Default: all)"),
+                    typed_option<sstring>("cf-filters", "", "Comma separated list of column families to include in the query in the form of 'ks:cf' (Default: all)"),
+                    typed_option<int>("capacity,s", 256, "Capacity of stream summary, closer to the actual cardinality of partitions will yield more accurate results (Default: 256)"),
+                    typed_option<int>("size,k", 10, "Number of the top partitions to list (Default: 10)"),
+                    typed_option<sstring>("samplers,a", "READS,WRITES", "Comma separated list of samplers to use (Default: all)"),
+                },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to filter", 1),
+                    typed_option<sstring>("table", "The column family to filter", 1),
+                    typed_option<int>("duration-milli", "Duration in milliseconds", 1),
+                },
+            },
+            toppartitions_operation
         },
         {
             {
