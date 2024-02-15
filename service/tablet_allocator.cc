@@ -218,6 +218,7 @@ class load_balancer {
         host_id id;
         uint64_t shard_count = 0;
         uint64_t tablet_count = 0;
+        const locator::node* node; // never nullptr
 
         // The average shard load on this node.
         load_type avg_load = 0;
@@ -226,6 +227,18 @@ class load_balancer {
         std::vector<shard_load> shards; // Indexed by shard_id to which a given shard_load corresponds.
 
         std::optional<locator::load_sketch> target_load_sketch;
+
+        const sstring& dc() const {
+            return node->dc_rack().dc;
+        }
+
+        const sstring& rack() const {
+            return node->dc_rack().rack;
+        }
+
+        locator::node::state state() const {
+            return node->get_state();
+        }
 
         future<load_sketch&> get_load_sketch(const token_metadata_ptr& tm) {
             if (!target_load_sketch) {
@@ -599,6 +612,25 @@ public:
 
         std::unordered_map<host_id, node_load> nodes;
         std::unordered_set<host_id> nodes_to_drain;
+
+        auto ensure_node = [&] (host_id host) {
+            if (nodes.contains(host)) {
+                return;
+            }
+            auto* node = topo.find_node(host);
+            if (!node) {
+                on_internal_error(lblogger, format("Node {} not found in topology", host));
+            }
+            node_load& load = nodes[host];
+            load.id = host;
+            load.node = node;
+            load.shard_count = node->get_shard_count();
+            load.shards.resize(load.shard_count);
+            if (!load.shard_count) {
+                throw std::runtime_error(format("Shard count of {} not found in topology", host));
+            }
+        };
+
         topo.for_each_node([&] (const locator::node* node_ptr) {
             if (node_ptr->dc_rack().dc != dc) {
                 return;
@@ -607,20 +639,15 @@ public:
                               || node_ptr->get_state() == locator::node::state::being_removed
                               || node_ptr->get_state() == locator::node::state::being_replaced;
             if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
-                node_load& load = nodes[node_ptr->host_id()];
-                load.id = node_ptr->host_id();
-                load.shard_count = node_ptr->get_shard_count();
-                load.shards.resize(load.shard_count);
-                if (!load.shard_count) {
-                    throw std::runtime_error(format("Shard count of {} not found in topology", node_ptr->host_id()));
-                }
                 if (is_drained) {
+                    ensure_node(node_ptr->host_id());
                     lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc);
                     nodes_to_drain.emplace(node_ptr->host_id());
                 } else if (node_ptr->is_excluded() || _skiplist.contains(node_ptr->host_id())) {
                     // Excluded nodes should not be chosen as targets for migration.
                     lblogger.debug("Ignoring excluded or dead node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
-                    nodes.erase(node_ptr->host_id());
+                } else {
+                    ensure_node(node_ptr->host_id());
                 }
             }
         });
