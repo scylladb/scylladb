@@ -1013,6 +1013,56 @@ void stop_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/compaction_manager/stop_compaction", {{"type", compaction_type}});
 }
 
+void viewbuildstatus_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto invalid_argument_message = "viewbuildstatus requires keyspace and view name arguments";
+    if (!vm.contains("keyspace_view")) {
+        throw std::invalid_argument(invalid_argument_message);
+    }
+    const auto keyspace_view_args = vm["keyspace_view"].as<std::vector<sstring>>();
+    sstring keyspace;
+    sstring view;
+    if (keyspace_view_args.size() == 1) {
+        // Usually, keyspace name and table is are separated by a dot, but to
+        // allow names which themselves contain a dot (this is allowed in
+        // Alternator), also allow to separate the two parts with a slash
+        // instead.
+        auto keyspace_view = keyspace_view_args[0];
+        auto sep = std::ranges::find_first_of(keyspace_view, "/.");
+        if (sep == keyspace_view.end()) {
+            throw std::invalid_argument(invalid_argument_message);
+        }
+        keyspace = sstring(keyspace_view.begin(), sep++);
+        view = sstring(sep, keyspace_view.end());
+    } else if (keyspace_view_args.size() == 2) {
+        keyspace = keyspace_view_args[0];
+        view = keyspace_view_args[1];
+    } else {
+        throw std::invalid_argument(invalid_argument_message);
+    }
+
+    auto res = client.get(seastar::format("/storage_service/view_build_statuses/{}/{}", keyspace, view));
+    Tabulate table;
+    bool succeed = true;
+    table.add("Host", "Info");
+    for (auto& element : res.GetArray()) {
+        const auto& object = element.GetObject();
+        auto endpoint = rjson::to_string_view(object["key"]);
+        auto status = rjson::to_string_view(object["value"]);
+        if (status != "SUCCESS") {
+            succeed = false;
+        }
+        table.add(endpoint, status);
+    }
+    if (succeed) {
+        fmt::print("{}.{} has finished building\n", keyspace, view);
+    } else {
+        fmt::print("{}.{} has not finished building; node status is below.\n", keyspace, view);
+        fmt::print("\n");
+        table.print();
+        // TODO: should return with status code of 1 in this case
+    }
+}
+
 void version_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto version_json = client.get("/storage_service/release_version");
     fmt::print(std::cout, "ReleaseVersion: {}\n", rjson::to_string_view(version_json));
@@ -1598,6 +1648,20 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             stop_operation
+        },
+        {
+            {
+                "viewbuildstatus",
+                "Show progress of a materialized view build",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/viewbuildstatus.html
+)",
+                {},
+                {
+                    typed_option<std::vector<sstring>>("keyspace_view", "<keyspace> <view> | <keyspace.view>, The keyspace and view name ", -1),
+                },
+            },
+            viewbuildstatus_operation
         },
         {
             {
