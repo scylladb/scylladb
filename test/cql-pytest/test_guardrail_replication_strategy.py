@@ -10,7 +10,7 @@ from cassandra.protocol import ConfigurationException
 def all_tests_are_scylla_only(scylla_only):
     pass
 
-def create_ks_and_assert_warnings_and_errors(cql, ks_opts, warnings_count=0, fails_count=0):
+def create_ks_and_assert_warnings_and_errors(cql, ks_opts, warnings_count=None, expected_warning=None, unexpected_warning=None, fails_count=0):
     if fails_count:
         with pytest.raises(ConfigurationException):
             with new_test_keyspace(cql, ks_opts):
@@ -20,20 +20,26 @@ def create_ks_and_assert_warnings_and_errors(cql, ks_opts, warnings_count=0, fai
         response_future = cql.execute_async("CREATE KEYSPACE " + keyspace + " " + ks_opts)
         response_future.result()
         cql.execute("DROP KEYSPACE " + keyspace)
-        if warnings_count:
-            assert response_future.warnings is not None and len(response_future.warnings) == warnings_count
-        else:
-            assert response_future.warnings is None
+
+        if warnings_count is not None:
+            if warnings_count:
+                assert response_future.warnings is not None and len(response_future.warnings) == warnings_count
+            else:
+                assert response_future.warnings is None
+        if expected_warning is not None:
+            assert response_future.warnings is not None and expected_warning in "\n".join(response_future.warnings)
+        if unexpected_warning is not None and response_future.warnings is not None:
+            assert not unexpected_warning in "\n".join(response_future.warnings)
 
 
 def test_given_default_config_when_creating_ks_should_only_produce_warning_for_simple_strategy(cql, this_dc):
     ks_opts = " WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 3 }"
-    create_ks_and_assert_warnings_and_errors(cql, ks_opts, warnings_count=1, fails_count=0)
+    create_ks_and_assert_warnings_and_errors(cql, ks_opts, expected_warning='replication_strategy_warn_list', fails_count=0)
 
     for key, value in {'NetworkTopologyStrategy': this_dc, 'EverywhereStrategy': 'replication_factor',
                        'LocalStrategy': 'replication_factor'}.items():
         create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 3 }}",
-                                                 warnings_count=0, fails_count=0)
+                                                 unexpected_warning='replication_strategy_warn_list', fails_count=0)
 
 
 def test_given_cleared_guardrails_when_creating_ks_should_not_get_warning_nor_error(cql, this_dc):
@@ -44,7 +50,7 @@ def test_given_cleared_guardrails_when_creating_ks_should_not_get_warning_nor_er
         for key, value in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
             create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 3 }}",
-                                                     warnings_count=0, fails_count=0)
+                                                     unexpected_warning='replication_strategy_warn_list', fails_count=0)
 
 
 def test_given_non_empty_warn_list_when_creating_ks_should_only_warn_when_listed_strategy_used(cql, this_dc):
@@ -55,7 +61,7 @@ def test_given_non_empty_warn_list_when_creating_ks_should_only_warn_when_listed
         for key, value in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
             create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 3 }}",
-                                                     warnings_count=1, fails_count=0)
+                                                     expected_warning='replication_strategy_warn_list', fails_count=0)
 
 
 def test_given_non_empty_warn_and_fail_lists_when_creating_ks_should_fail_query_when_listed_strategy_used(cql, this_dc):
