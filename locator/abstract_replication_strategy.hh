@@ -231,6 +231,12 @@ public:
     /// Returns a list of nodes to which a read request should be directed.
     virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const = 0;
 
+    /// Returns replicas for a given token.
+    /// During topology change returns replicas which should be targets for writes, excluding the pending replica.
+    /// Unlike get_natural_endpoints(), the replica set may include nodes in the left state which were
+    /// replaced but not yet rebuilt.
+    virtual host_id_vector_replica_set get_replicas(const token& search_token) const = 0;
+
     virtual std::optional<tablet_routing_info> check_locality(const token& token) const = 0;
 
 
@@ -318,6 +324,7 @@ public: // effective_replication_map
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
     inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
     inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override;
+    host_id_vector_replica_set get_replicas(const token& search_token) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
@@ -378,6 +385,7 @@ public:
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
     inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
+    host_id_vector_replica_set do_get_replicas(const token& tok, bool is_vnode) const;
     stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
 
 public:

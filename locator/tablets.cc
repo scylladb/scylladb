@@ -506,27 +506,30 @@ private:
     inet_address_vector_replica_set to_replica_set(const tablet_replica_set& replicas) const {
         inet_address_vector_replica_set result;
         result.reserve(replicas.size());
+        auto& topo = _tmptr->get_topology();
         for (auto&& replica : replicas) {
-            result.emplace_back(_tmptr->get_endpoint_for_host_id(replica.host));
+            auto* node = topo.find_node(replica.host);
+            if (node) {
+                result.emplace_back(node->endpoint());
+            }
         }
         return result;
     }
+
+    host_id_vector_replica_set to_host_set(const tablet_replica_set& replicas) const {
+        host_id_vector_replica_set result;
+        result.reserve(replicas.size());
+        for (auto&& replica : replicas) {
+            result.emplace_back(replica.host);
+        }
+        return result;
+    }
+
     const tablet_map& get_tablet_map() const {
         return _tmptr->tablets().get_tablet_map(_table);
     }
-public:
-    tablet_effective_replication_map(table_id table,
-                                     replication_strategy_ptr rs,
-                                     token_metadata_ptr tmptr,
-                                     size_t replication_factor)
-            : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
-            , _table(table)
-            , _sharder(*_tmptr, table)
-    { }
 
-    virtual ~tablet_effective_replication_map() = default;
-
-    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override {
+    const tablet_replica_set& get_replicas_for_write(dht::token search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto* info = tablets.get_tablet_transition_info(tablet);
@@ -545,8 +548,27 @@ public:
             }
             on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
         });
-        tablet_logger.trace("get_natural_endpoints({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
-        return to_replica_set(replicas);
+        tablet_logger.trace("get_replicas_for_write({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        return replicas;
+    }
+public:
+    tablet_effective_replication_map(table_id table,
+                                     replication_strategy_ptr rs,
+                                     token_metadata_ptr tmptr,
+                                     size_t replication_factor)
+            : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
+            , _table(table)
+            , _sharder(*_tmptr, table)
+    { }
+
+    virtual ~tablet_effective_replication_map() = default;
+
+    virtual host_id_vector_replica_set get_replicas(const token& search_token) const override {
+        return to_host_set(get_replicas_for_write(search_token));
+    }
+
+    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override {
+        return to_replica_set(get_replicas_for_write(search_token));
     }
 
     virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override {
