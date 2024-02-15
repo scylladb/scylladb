@@ -298,13 +298,6 @@ future<> set_server_done(http_context& ctx) {
     return ctx.http_server.set_routes([rb, &ctx](routes& r) {
         rb->register_function(r, "lsa", "Log-structured allocator API");
         set_lsa(ctx, r);
-
-        rb->register_function(r, "commitlog",
-                "The commit log API");
-        set_commitlog(ctx,r);
-        rb->register_function(r, "error_injection",
-                "The error injection API");
-        set_error_injection(ctx, r);
     });
 }
 
