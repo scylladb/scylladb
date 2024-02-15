@@ -4675,7 +4675,7 @@ future<> storage_service::move(token new_token) {
 
 future<std::vector<storage_service::token_range_endpoints>>
 storage_service::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
-    if (_db.local().find_keyspace(keyspace).get_replication_strategy().uses_tablets()) {
+    if (_db.local().find_keyspace(keyspace).uses_tablets()) {
         throw std::runtime_error(fmt::format("The keyspace {} has tablet table. Query describe_ring with the table parameter!", keyspace));
     }
     co_return co_await locator::describe_ring(_db.local(), _gossiper, keyspace, include_only_local_dc);
@@ -6299,15 +6299,15 @@ storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
 inet_address_vector_replica_set
 storage_service::get_natural_endpoints(const sstring& keyspace,
         const sstring& cf, const sstring& key) const {
-    auto schema = _db.local().find_schema(keyspace, cf);
+    auto& table = _db.local().find_column_family(keyspace, cf);
+    const auto schema = table.schema();
     partition_key pk = partition_key::from_nodetool_style_string(schema, key);
     dht::token token = schema->get_partitioner().get_token(*schema, pk.view());
-    return get_natural_endpoints(keyspace, token);
-}
-
-inet_address_vector_replica_set
-storage_service::get_natural_endpoints(const sstring& keyspace, const token& pos) const {
-    return _db.local().find_keyspace(keyspace).get_vnode_effective_replication_map()->get_natural_endpoints(pos);
+    const auto& ks = _db.local().find_keyspace(keyspace);
+    if (ks.uses_tablets()) {
+        return table.get_effective_replication_map()->get_natural_endpoints(token);
+    }
+    return ks.get_vnode_effective_replication_map()->get_natural_endpoints(token);
 }
 
 future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint) {

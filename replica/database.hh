@@ -1318,6 +1318,10 @@ public:
 
     locator::vnode_effective_replication_map_ptr get_vnode_effective_replication_map() const;
 
+    bool uses_tablets() const {
+        return _replication_strategy->uses_tablets();
+    }
+
     column_family::config make_column_family_config(const schema& s, const database& db) const;
     void add_or_update_column_family(const schema_ptr& s);
     void add_user_type(const user_type ut);

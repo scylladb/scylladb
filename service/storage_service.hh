@@ -604,16 +604,6 @@ public:
             const sstring& cf, const sstring& key) const;
 
     /**
-     * This method returns the N endpoints that are responsible for storing the
-     * specified key i.e for replication.
-     *
-     * @param keyspaceName keyspace name also known as keyspace
-     * @param pos position for which we need to find the endpoint
-     * @return the endpoint responsible for this token
-     */
-    inet_address_vector_replica_set  get_natural_endpoints(const sstring& keyspace, const token& pos) const;
-
-    /**
      * @return Vector of Token ranges (_not_ keys!) together with estimated key count,
      *      breaking up the data this node is responsible for into pieces of roughly keys_per_split
      */
