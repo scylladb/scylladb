@@ -98,8 +98,7 @@ const log_entry& fsm::add_entry(T command) {
         logger.trace("[{}] appending joint config entry at {}: {}", _my_id, _log.next_idx(), command);
     }
 
-    utils::get_local_injector().inject("fsm::add_entry/test-failure",
-                                       [] { throw std::runtime_error("fsm::add_entry/test-failure"); });
+    utils::get_local_injector().inject<std::runtime_error>("fsm::add_entry/test-failure");
 
     _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(command)}));
     _sm_events.signal();

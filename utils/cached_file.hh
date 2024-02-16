@@ -191,9 +191,7 @@ private:
                         first_page = std::move(ptr);
                     }
                 }
-                utils::get_local_injector().inject("cached_file_get_first_page", []() {
-                    throw std::bad_alloc();
-                });
+                utils::get_local_injector().inject<std::bad_alloc>("cached_file_get_first_page");
                 return first_page;
             });
     }

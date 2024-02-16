@@ -3420,8 +3420,7 @@ future<> storage_service::decommission() {
                 // If the node failed to leave the token ring, don't remove it from group 0
                 // --- hence the `left_token_ring` check.
                 try {
-                    utils::get_local_injector().inject("decommission_fail_before_leave_group0",
-                        [] { throw std::runtime_error("decommission_fail_before_leave_group0"); });
+                    utils::get_local_injector().inject<std::runtime_error>("decommission_fail_before_leave_group0");
 
                     if (raft_available && left_token_ring) {
                         slogger.info("decommission[{}]: leaving Raft group 0", uuid);
@@ -3790,8 +3789,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
             // If the node was a token ring member but we failed to remove it,
             // don't remove it from group 0 -- hence the `removed_from_token_ring` check.
             try {
-                utils::get_local_injector().inject("removenode_fail_before_remove_from_group0",
-                    [] { throw std::runtime_error("removenode_fail_before_remove_from_group0"); });
+                utils::get_local_injector().inject<std::runtime_error>("removenode_fail_before_remove_from_group0");
 
                 if (is_group0_member && removed_from_token_ring) {
                     slogger.info("removenode[{}]: removing node {} from Raft group 0", uuid, raft_id);
@@ -5057,8 +5055,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
 
         switch (cmd.cmd) {
             case raft_topology_cmd::command::barrier: {
-                utils::get_local_injector().inject("raft_topology_barrier_fail",
-                                       [] { throw std::runtime_error("raft topology barrier failed due to error injection"); });
+                utils::get_local_injector().inject<std::runtime_error>("raft_topology_barrier_fail");
                 // This barrier might have been issued by the topology coordinator
                 // as a step in enabling a feature, i.e. it noticed that all
                 // nodes support some feature, then issue the barrier to make
@@ -5131,8 +5128,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         co_return;
                     }
 
-                    utils::get_local_injector().inject("stream_ranges_fail",
-                                           [] { throw std::runtime_error("stream_range failed due to error injection"); });
+                    utils::get_local_injector().inject<std::runtime_error>("stream_ranges_fail");
 
                     switch(rs.state) {
                     case node_state::bootstrapping:

@@ -1101,8 +1101,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
             _stats.truncate_persisted_log++;
         }
 
-        utils::get_local_injector().inject("store_log_entries/test-failure",
-            [] { throw std::runtime_error("store_log_entries/test-failure"); });
+        utils::get_local_injector().inject<std::runtime_error>("store_log_entries/test-failure");
 
         // Combine saving and truncating into one call?
         // will require persistence to keep track of last idx

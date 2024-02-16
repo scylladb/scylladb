@@ -1469,7 +1469,7 @@ private:
         }
 
         void fill_buffer_from_underlying() {
-            utils::get_local_injector().inject("rest_api_keyspace_scrub_abort", [] { throw compaction_aborted_exception("", "", "scrub compaction found invalid data"); });
+            utils::get_local_injector().inject<compaction_aborted_exception>("rest_api_keyspace_scrub_abort");
             while (!_reader.is_buffer_empty() && !is_buffer_full()) {
                 auto mf = _reader.pop_mutation_fragment();
                 if (mf.is_partition_start()) {
