@@ -371,22 +371,23 @@ public:
     }
 
     // \brief Inject exception
-    // \param exception_factory function returning an exception pointer
-    template <typename Func>
-    requires std::is_invocable_r_v<std::exception_ptr, Func>
+    template <typename Exception>
+    requires std::is_base_of_v<std::exception, Exception> && (std::is_constructible_v<Exception> || std::is_constructible_v<Exception, const char *>)
     [[gnu::always_inline]]
-    future<>
-    inject(const std::string_view& name,
-            Func&& exception_factory) {
+    void inject(const std::string_view& name) {
 
         if (!is_enabled(name)) {
-            return make_ready_future<>();
+            return;
         }
         if (is_one_shot(name)) {
             disable(name);
         }
         errinj_logger.debug("Triggering exception injection \"{}\"", name);
-        return make_exception_future<>(exception_factory());
+        if constexpr (std::is_constructible_v<Exception, const char*>) {
+            throw Exception(name.data());
+        } else {
+            throw Exception();
+        }
     }
 
     // \brief Inject exception
@@ -523,13 +524,10 @@ public:
     }
 
     // Inject exception
-    template <typename Func>
-    requires std::is_invocable_r_v<std::exception_ptr, Func>
+    template <typename Exception>
+    requires std::is_base_of_v<std::exception, Exception> && (std::is_constructible_v<Exception> || std::is_constructible_v<Exception, const char *>)
     [[gnu::always_inline]]
-    future<>
-    inject(const std::string_view& name,
-            Func&& exception_factory) {
-        return make_ready_future<>();
+    void inject(const std::string_view& name) {
     }
 
     // \brief Inject exception
