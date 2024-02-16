@@ -1,6 +1,14 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Moving pages from the install-scylla folder
+
+/stable/getting-started/install-scylla/scylla-web-installer.html: /stable/getting-started/installation-common/scylla-web-installer.html
+/stable/getting-started/install-scylla/unified-installer.html: /stable/getting-started/installation-common/unified-installer.html
+/stable/getting-started/install-scylla/air-gapped-install.html: /stable/getting-started/installation-common/air-gapped-install.html
+/stable/getting-started/install-scylla/disable-housekeeping.html: /stable/getting-started/installation-common/disable-housekeeping.html
+/stable/getting-started/install-scylla/dev-mod.html: /stable/getting-started/installation-common/dev-mod.html
+/stable/getting-started/install-scylla/config-commands.html: /stable/getting-started/config-commands.html
 
 # remove the Open Source vs. Enterprise Matrix from the Open Source docs
 
