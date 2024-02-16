@@ -2646,6 +2646,7 @@ void version_operation(scylla_rest_client& client, const bpo::variables_map& vm)
 const std::vector<operation_option> global_options{
     typed_option<sstring>("host,h", "localhost", "the hostname or ip address of the ScyllaDB node"),
     typed_option<uint16_t>("port,p", 10000, "the port of the REST API of the ScyllaDB node"),
+    typed_option<uint16_t>("rest-api-port", "the port of the REST API of the ScyllaDB node; takes precedence over --port|-p"),
     typed_option<sstring>("password", "Remote jmx agent password (unused)"),
     typed_option<sstring>("password-file", "Path to the JMX password file (unused)"),
     typed_option<sstring>("username,u", "Remote jmx agent username (unused)"),
@@ -2654,6 +2655,7 @@ const std::vector<operation_option> global_options{
 
 const std::map<std::string_view, std::string_view> option_substitutions{
     {"-h", "--host"},
+    {"-Dcom.scylladb.apiPort", "--rest-api-port"},
     {"-pw", "--password"},
     {"-pwf", "--password-file"},
     {"-pp", "--print-port"},
@@ -3495,12 +3497,14 @@ std::vector<char*> massage_argv(int argc, char** argv) {
             continue;
         }
 
+        std::string arg = argv[i];
+
         // Java JVM options, they look like -Dkey=value, or just -Dkey
-        if (argv[i][1] == 'D') {
+        // We leave -Dcom.scylladb.apiPort, it will be substituted to --rest-api-port
+        if (argv[i][1] == 'D' && !arg.starts_with("-Dcom.scylladb.apiPort=")) {
             continue;
         }
 
-        std::string arg = argv[i];
         std::string arg_key;
         std::optional<std::string> arg_value;
 
@@ -3573,7 +3577,13 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
             if (operation.name() == "help") {
                 help_operation(app.get_config(), app_config);
             } else {
-                scylla_rest_client client(app_config["host"].as<sstring>(), app_config["port"].as<uint16_t>());
+                uint16_t port{};
+                if (app_config.count("rest-api-port")) {
+                    port = app_config["rest-api-port"].as<uint16_t>();
+                } else {
+                    port = app_config["port"].as<uint16_t>();
+                }
+                scylla_rest_client client(app_config["host"].as<sstring>(), port);
                 get_operations_with_func().at(operation)(client, app_config);
             }
         } catch (std::invalid_argument& e) {

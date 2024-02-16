@@ -97,3 +97,16 @@ def test_jvm_options(nodetool_path, rest_api_mock_server, scylla_only):
     subprocess.run([nodetool_path, "nodetool", "compact", "-h", ip, "-p", port, jvm_opt], check=True)
     subprocess.run([nodetool_path, "nodetool", "compact", "-h", ip, jvm_opt, "-p", port], check=True)
     subprocess.run([nodetool_path, "nodetool", jvm_opt, "compact", "-h", ip, "-p", port], check=True)
+
+
+def test_alternative_api_port(nodetool_path, rest_api_mock_server, scylla_only):
+    set_expected_requests(rest_api_mock_server, [
+        expected_request("POST", "/storage_service/compact", multiple=expected_request.MULTIPLE)])
+
+    ip, port = rest_api_mock_server
+    port = str(port)
+
+    subprocess.run([nodetool_path, "nodetool", "compact", "-h", ip, "-p", "1", "--rest-api-port", port], check=True)
+    subprocess.run([nodetool_path, "nodetool", "compact", "-h", ip, "-p", "1", f"--rest-api-port={port}"], check=True)
+    subprocess.run([nodetool_path, "nodetool", "compact", "-h", ip, "-p", "1", f"-Dcom.scylladb.apiPort={port}"],
+                   check=True)
