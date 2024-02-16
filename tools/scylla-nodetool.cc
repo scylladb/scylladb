@@ -10,6 +10,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/split.hpp>
+#include <boost/lexical_cast.hpp>
 #include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <chrono>
@@ -21,6 +22,9 @@
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
+#include <seastar/net/dns.hh>
+#include <seastar/net/inet_address.hh>
+
 #include <stdexcept>
 #include <yaml-cpp/yaml.h>
 #include <ranges>
@@ -41,6 +45,31 @@ namespace bpo = boost::program_options;
 
 using namespace std::chrono_literals;
 using namespace tools::utils;
+
+// mimic the behavior of FileUtils::stringifyFileSize
+struct file_size_printer {
+    uint64_t value;
+};
+
+template <>
+struct fmt::formatter<file_size_printer> : fmt::formatter<std::string_view> {
+    auto format(file_size_printer size, auto& ctx) const {
+        using unit_t = std::pair<uint64_t, std::string_view>;
+        const unit_t units[] = {
+            {1UL << 40, "TB"},
+            {1UL << 30, "GB"},
+            {1UL << 20, "MB"},
+            {1UL << 10, "KB"},
+        };
+        for (auto [n, prefix] : units) {
+            if (size.value > n) {
+                auto d = static_cast<float>(size.value) / n;
+                return fmt::format_to(ctx.out(), "{:.2f} {}", d, prefix);
+            }
+        }
+        return fmt::format_to(ctx.out(), "{} bytes", size.value);
+    }
+};
 
 namespace {
 
@@ -992,6 +1021,243 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     }
 }
 
+struct host_stat {
+    sstring endpoint;
+    std::optional<float> ownership;
+    sstring token;
+};
+
+class SnitchInfo {
+    // memorize the snitch info
+    scylla_rest_client& _client;
+    std::map<std::string, sstring> _endpoint_to_dc;
+    std::map<std::string, sstring> _endpoint_to_rack;
+
+public:
+    SnitchInfo(scylla_rest_client& client)
+        : _client{client}
+    {}
+    sstring get_datacenter(const std::string& host) {
+        if (auto found = _endpoint_to_dc.find(host);
+            found != _endpoint_to_dc.end()) {
+            return found->second;
+        }
+        auto res = _client.get("/snitch/datacenter", {{"host", sstring(host)}});
+        auto dc = sstring(rjson::to_string_view(res));
+        _endpoint_to_dc.emplace(host, dc);
+        return dc;
+    }
+    sstring get_rack(const std::string& host) {
+        if (auto found = _endpoint_to_rack.find(host);
+            found != _endpoint_to_rack.end()) {
+            return found->second;
+        }
+        auto res = _client.get("/snitch/rack", {{"host", sstring(host)}});
+        auto rack = sstring(rjson::to_string_view(res));
+        _endpoint_to_rack.emplace(host, rack);
+        return rack;
+    }
+};
+
+using ownership_by_dc_t = std::map<sstring, std::vector<host_stat>>;
+ownership_by_dc_t get_ownership_by_dc(SnitchInfo& snitch,
+                                      const std::vector<std::pair<sstring, std::string>>& token_to_endpoint,
+                                      const std::map<sstring, float>& endpoint_to_ownership) {
+    ownership_by_dc_t ownership_by_dc;
+    std::map<std::string_view, std::string_view> endpoint_to_dc;
+    for (auto& [token, endpoint] : token_to_endpoint) {
+        sstring dc = snitch.get_datacenter(endpoint);
+        std::optional<float> ownership;
+        if (auto found = endpoint_to_ownership.find(endpoint);
+            found != endpoint_to_ownership.end()) {
+            ownership = found->second;
+        }
+        ownership_by_dc[dc].emplace_back(host_stat{endpoint, ownership, token});
+    }
+    return ownership_by_dc;
+}
+
+auto get_endpoints_of_status(scylla_rest_client& client, std::string_view status) {
+    auto res = client.get(seastar::format("/gossiper/endpoint/{}", status));
+    std::set<sstring> endpoints;
+    for (auto& element : res.GetArray()) {
+        endpoints.insert(sstring(rjson::to_string_view(element)));
+    }
+    return endpoints;
+}
+
+auto get_nodes_of_state(scylla_rest_client& client, std::string_view state) {
+    auto res = client.get(seastar::format("/storage_service/nodes/{}", state));
+    std::set<sstring> nodes;
+    for (auto& element : res.GetArray()) {
+        nodes.insert(sstring(rjson::to_string_view(element)));
+    }
+    return nodes;
+}
+
+// deserialize httpd::storage_service_json back to a map
+template<typename Value>
+std::map<sstring, Value> rjson_to_map(const rjson::value& v) {
+    std::map<sstring, Value> result;
+    for (auto& element : v.GetArray()) {
+        const auto& object = element.GetObject();
+        auto key = rjson::to_string_view(object["key"]);
+        Value v;
+        try {
+            v = object["value"].Get<Value>();
+        } catch (const rjson::error&) {
+            v = boost::lexical_cast<Value>(object["value"].Get<std::string>());
+        }
+        result.emplace(sstring(key), v);
+    }
+    return result;
+}
+
+template<typename Value>
+std::vector<std::pair<sstring, Value>> rjson_to_vector(const rjson::value& v) {
+    std::vector<std::pair<sstring, Value>> result;
+    for (auto& element : v.GetArray()) {
+        const auto& object = element.GetObject();
+        auto key = rjson::to_string_view(object["key"]);
+        Value v = object["value"].Get<Value>();
+        result.emplace_back(sstring(key), v);
+    }
+    return result;
+}
+
+std::string last_token_in_hosts(const std::vector<std::pair<sstring, std::string>>& tokens_endpoint,
+                                const std::vector<host_stat>& host_stats) {
+    if (host_stats.size() <= 2) {
+        return {};
+    }
+    auto& last_host = host_stats.back();
+    auto last_token = std::find_if(tokens_endpoint.rbegin(),
+                                   tokens_endpoint.rend(),
+                                   [&last_host] (auto& token_endpoint) {
+                                       return token_endpoint.second == last_host.endpoint;
+                                   });
+    assert(last_token != tokens_endpoint.rend());
+    return last_token->first;
+}
+
+void print_dc(scylla_rest_client& client,
+              SnitchInfo& snitch,
+              const sstring& dc,
+              unsigned max_endpoint_width,
+              bool resolve_ip,
+              const sstring& last_token,
+              const std::multimap<std::string_view, std::string_view>& endpoints_to_tokens,
+              const std::vector<host_stat>& host_stats) {
+    fmt::print("\n"
+               "Datacenter: {}\n"
+               "==========\n", dc);
+    const auto fmt_str = fmt::runtime("{:<{}}  {:<12}{:<7}{:<8}{:<16}{:<20}{:<44}\n");
+    fmt::print(fmt_str,
+               "Address", max_endpoint_width,
+               "Rack", "Status", "State", "Load", "Owns", "Token");
+
+    if (host_stats.size() > 1) {
+        fmt::print(fmt_str,
+                   "", max_endpoint_width,
+                   "", "", "", "", "", last_token);
+    } else {
+        fmt::print("\n");
+    }
+
+    const auto live_nodes = get_endpoints_of_status(client, "live");
+    const auto down_nodes = get_endpoints_of_status(client, "down");
+    const auto joining_nodes = get_nodes_of_state(client, "joining");
+    const auto leaving_nodes = get_nodes_of_state(client, "leaving");
+    const auto moving_nodes = get_nodes_of_state(client, "moving");
+    const auto load_map = rjson_to_map<double>(client.get("/storage_service/load_map"));
+    for (auto& stat : host_stats) {
+        auto addr = stat.endpoint;
+        if (resolve_ip) {
+            addr = net::dns::resolve_addr(net::inet_address(addr)).get();
+        }
+        auto rack = snitch.get_rack(stat.endpoint);
+
+        sstring status = "?";
+        if (live_nodes.contains(stat.endpoint)) {
+            status = "Up";
+        } else if (down_nodes.contains(stat.endpoint)) {
+            status = "Down";
+        }
+
+        sstring state;
+        if (joining_nodes.contains(stat.endpoint)) {
+            state = "Joining";
+        } else if (leaving_nodes.contains(stat.endpoint)) {
+            state = "Leaving";
+        } else if (moving_nodes.contains(stat.endpoint)) {
+            state = "Moving";
+        } else {
+            state = "Normal";
+        }
+
+        sstring load = "?";
+        if (auto found = load_map.find(stat.endpoint); found != load_map.end()) {
+            load = fmt::to_string(file_size_printer(found->second));
+        }
+
+        sstring ownership = "?";
+        if (stat.ownership) {
+            ownership = fmt::format("{:.2f}%", *stat.ownership * 100);
+        }
+        fmt::print(fmt_str,
+                   stat.endpoint, max_endpoint_width,
+                   rack, status, state, load, ownership, stat.token);
+    }
+}
+
+void ring_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.contains("keyspace")) {
+        throw std::invalid_argument("required parameters are missing: keyspace");
+    }
+    bool resolve_ip = vm["resolve-ip"].as<bool>();
+
+    std::multimap<std::string_view, std::string_view> endpoints_to_tokens;
+    bool have_vnodes = false;
+    size_t max_endpoint_width = 0;
+    auto tokens_endpoint = rjson_to_vector<std::string>(client.get("/storage_service/tokens_endpoint"));
+    for (auto& [token, endpoint] : tokens_endpoint) {
+        if (endpoints_to_tokens.contains(endpoint)) {
+            have_vnodes = true;
+        }
+        endpoints_to_tokens.emplace(endpoint, token);
+        max_endpoint_width = std::max(max_endpoint_width, endpoint.size());
+    }
+    // Calculate per-token ownership of the ring
+    std::string_view warnings;
+    std::map<sstring, float> endpoint_to_ownership;
+    try {
+        auto ownership_res = client.get(seastar::format("/storage_service/ownership/{}",
+                                                        vm["keyspace"].as<sstring>()));
+        endpoint_to_ownership = rjson_to_map<float>(ownership_res);
+    } catch (const api_request_failed&) {
+        warnings = "Note: Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless\n";
+    }
+
+    SnitchInfo snitch{client};
+    for (auto& [dc, host_stats] : get_ownership_by_dc(snitch,
+                                                      tokens_endpoint,
+                                                      endpoint_to_ownership)) {
+        auto last_token = last_token_in_hosts(tokens_endpoint, host_stats);
+        print_dc(client, snitch, dc, max_endpoint_width, resolve_ip,
+                 last_token, endpoints_to_tokens, host_stats);
+    }
+
+    if (have_vnodes) {
+        fmt::print(R"(
+  Warning: "nodetool ring" is used to output all the tokens of a node.
+  To view status related info of a node use "nodetool status" instead.
+
+
+)");
+    }
+    fmt::print("  {}", warnings);
+}
+
 void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, false);
     if (keyspace.empty()) {
@@ -1737,6 +2003,22 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             repair_operation
+        },
+        {
+            {
+                "ring",
+                "Print information about the token ring",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/ring.html
+)",
+                {
+                    typed_option<bool>("resolve-ip,r", false, "Show node domain names instead of IPs")
+                },
+                {
+                    typed_option<sstring>("keyspace", "Specify a keyspace for accurate ownership information (topology awareness)", 1),
+                },
+            },
+            ring_operation
         },
         {
             {
