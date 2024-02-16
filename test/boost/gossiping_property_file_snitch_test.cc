@@ -15,78 +15,45 @@
 #include "locator/snitch_base.hh"
 #include "gms/inet_address.hh"
 #include "seastarx.hh"
+#include "locator/production_snitch_base.hh"
 
-namespace fs = std::filesystem;
-
-static fs::path test_files_subdir("test/resource/snitch_property_files");
+static std::filesystem::path test_files_subdir("test/resource/snitch_property_files");
 
 future<> one_test(const std::string& property_fname, bool exp_result) {
     using namespace locator;
-    using namespace std::filesystem;
 
     printf("Testing %s property file: %s\n",
            (exp_result ? "well-formed" : "ill-formed"),
            property_fname.c_str());
 
-    path fname(test_files_subdir);
-    fname /= path(property_fname);
-
     engine().set_strict_dma(false);
 
-    auto my_address = gms::inet_address("localhost");
+    sharded<snitch_ptr> snitch;
+    const auto my_address = gms::inet_address("localhost");
+    co_await snitch.start(snitch_config {
+        .name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch",
+        .properties_file_name = (std::filesystem::path(test_files_subdir) / property_fname).string(),
+        .listen_address = my_address,
+        .broadcast_address = my_address
+    });
 
-    snitch_config cfg;
-    cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
-    cfg.properties_file_name = fname.string();
-    cfg.listen_address = my_address;
-    cfg.broadcast_address = my_address;
-    auto snitch_i = std::make_unique<sharded<locator::snitch_ptr>>();
-    auto& snitch = *snitch_i;
+    auto start = [&]() {
+        return snitch.invoke_on_all(&snitch_ptr::start);
+    };
+    if (exp_result) {
+        BOOST_CHECK_NO_THROW(co_await start());
 
-    return snitch.start(cfg).then([&snitch] {
-        return snitch.invoke_on_all(&locator::snitch_ptr::start);
-    }).then_wrapped([&snitch, exp_result] (auto&& f) -> future<> {
-            try {
-                f.get();
-                if (!exp_result) {
-                    BOOST_ERROR("Failed to catch an error in a malformed "
-                                "configuration file");
-                    return snitch.stop();
-                }
-                auto cpu0_dc = make_lw_shared<sstring>();
-                auto cpu0_rack = make_lw_shared<sstring>();
-                auto res = make_lw_shared<bool>(true);
-
-                return snitch.invoke_on(0,
-                        [cpu0_dc, cpu0_rack,
-                         res] (snitch_ptr& inst) {
-                    *cpu0_dc =inst->get_datacenter();
-                    *cpu0_rack = inst->get_rack();
-                }).then([&snitch, cpu0_dc, cpu0_rack, res] {
-                    return snitch.invoke_on_all(
-                            [cpu0_dc, cpu0_rack,
-                             res] (snitch_ptr& inst) {
-                        if (*cpu0_dc != inst->get_datacenter() ||
-                            *cpu0_rack != inst->get_rack()) {
-                            *res = false;
-                        }
-                    }).then([res] {
-                        if (!*res) {
-                            BOOST_ERROR("Data center or Rack do not match on "
-                                        "different shards");
-                        } else {
-                            BOOST_CHECK(true);
-                        }
-                        return make_ready_future<>();
-                    });
-                });
-            } catch (std::exception& e) {
-                BOOST_CHECK(!exp_result);
-                return make_ready_future<>();
-            }
-        }).finally([ snitch_i = std::move(snitch_i) ] () mutable {
-            return snitch_i->stop().finally([snitch_i = std::move(snitch_i)] {});
+        std::vector<std::pair<sstring, sstring>> dc_racks(smp::count);
+        co_await snitch.invoke_on_all([&] (snitch_ptr& inst) {
+            dc_racks[this_shard_id()] = {inst->get_datacenter(), inst->get_rack()};
         });
+        for (unsigned i = 1; i < smp::count; ++i) {
+            BOOST_REQUIRE_EQUAL(dc_racks[i], dc_racks[0]);
+        }
+    } else {
+        BOOST_CHECK_THROW(co_await start(), bad_property_file_error);
+    }
+    co_await snitch.stop();
 }
 
 #define GOSSIPING_TEST_CASE(tag, exp_res) \
