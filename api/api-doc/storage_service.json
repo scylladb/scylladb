@@ -336,6 +336,14 @@
                      "allowMultiple":false,
                      "type":"boolean",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Column family name",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             }

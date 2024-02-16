@@ -19,6 +19,7 @@
 #include <sstream>
 #include <time.h>
 #include <algorithm>
+#include <functional>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/algorithm/string/trim_all.hpp>
@@ -80,6 +81,12 @@ static void validate_table(const http_context& ctx, sstring ks_name, sstring tab
         db.find_column_family(ks_name, table_name);
     } catch (replica::no_such_column_family& e) {
         throw bad_param_exception(e.what());
+    }
+}
+
+static void ensure_tablets_disabled(const http_context& ctx, const sstring& ks_name, const sstring& api_endpoint_path) {
+    if (ctx.db.local().find_keyspace(ks_name).uses_tablets()) {
+        throw bad_param_exception{fmt::format("{} is per-table in keyspace '{}'. Please provide table name using 'cf' parameter.", api_endpoint_path, ks_name)};
     }
 }
 
@@ -646,8 +653,23 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
+        auto table = req->get_query_param("cf");
+
+        auto erm = std::invoke([&]() -> locator::effective_replication_map_ptr {
+            auto& ks = ctx.db.local().find_keyspace(keyspace);
+            if (table.empty()) {
+                ensure_tablets_disabled(ctx, keyspace, "storage_service/range_to_endpoint_map");
+                return ks.get_vnode_effective_replication_map();
+            } else {
+                validate_table(ctx, keyspace, table);
+
+                auto& cf = ctx.db.local().find_column_family(keyspace, table);
+                return cf.get_effective_replication_map();
+            }
+        });
+
         std::vector<ss::maplist_mapper> res;
-        co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace),
+        co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(erm),
                 [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
             ss::maplist_mapper m;
             if (entry.first.start()) {
