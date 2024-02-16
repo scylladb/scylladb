@@ -755,9 +755,9 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
             // Address map refused to update IP for the host_id,
             // this means prev_ip has higher generation than endpoint.
             // We can immediately remove endpoint from gossiper
-            // since it represents and old IP (before an IP change)
+            // since it represents an old IP (before an IP change)
             // for the given host_id. This is not strictly
-            // necessary, but it reduces the noice circulated
+            // necessary, but it reduces the noise circulated
             // in gossiper messages and allows for clearer
             // expectations of the gossiper state in tests.
 
