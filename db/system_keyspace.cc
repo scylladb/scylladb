@@ -2857,17 +2857,17 @@ future<service::topology> system_keyspace::load_topology_state() {
         if (!ret.committed_cdc_generations.empty()) {
             // Sanity check for CDC generation data consistency.
             auto gen_id = ret.committed_cdc_generations.back();
-                auto gen_rows = co_await execute_cql(
-                    format("SELECT count(range_end) as cnt FROM {}.{} WHERE key = '{}' AND id = ?",
-                           NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
-                    gen_id.id);
-                assert(gen_rows);
-                if (gen_rows->empty()) {
-                    on_internal_error(slogger, format(
-                        "load_topology_state: last committed CDC generation time UUID ({}) present, but data missing", gen_id.id));
-                }
-                auto cnt = gen_rows->one().get_as<int64_t>("cnt");
-                slogger.debug("load_topology_state: last committed CDC generation time UUID ({}), loaded {} ranges", gen_id.id, cnt);
+            auto gen_rows = co_await execute_cql(
+                format("SELECT count(range_end) as cnt FROM {}.{} WHERE key = '{}' AND id = ?",
+                        NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
+                gen_id.id);
+            assert(gen_rows);
+            if (gen_rows->empty()) {
+                on_internal_error(slogger, format(
+                    "load_topology_state: last committed CDC generation time UUID ({}) present, but data missing", gen_id.id));
+            }
+            auto cnt = gen_rows->one().get_as<int64_t>("cnt");
+            slogger.debug("load_topology_state: last committed CDC generation time UUID ({}), loaded {} ranges", gen_id.id, cnt);
         } else {
             if (!ret.normal_nodes.empty()) {
                 on_internal_error(slogger,
