@@ -53,6 +53,8 @@ public:
 // and should be aborted.
 class compaction_aborted_exception : public compaction_job_exception {
 public:
+    compaction_aborted_exception(std::string_view reason)
+        : compaction_job_exception(format("Compaction was aborted due to: {}", reason)) {}
     compaction_aborted_exception(sstring ks, sstring cf, sstring reason)
         : compaction_job_exception(format("Compaction for {}/{} was aborted due to: {}", ks, cf, reason)) {}
 };
