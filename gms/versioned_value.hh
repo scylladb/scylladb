@@ -82,10 +82,6 @@ public:
         : _version(-1) {
     }
 
-    friend inline std::ostream& operator<<(std::ostream& os, const versioned_value& x) {
-        return os << "Value(" << x.value() << "," << x.version() <<  ")";
-    }
-
     static sstring version_string(const std::initializer_list<sstring>& args) {
         return fmt::to_string(fmt::join(args, std::string_view(versioned_value::DELIMITER_STR)));
     }
@@ -207,3 +203,10 @@ template <> struct fmt::formatter<gms::versioned_value> : fmt::formatter<std::st
         return fmt::format_to(ctx.out(), "Value({},{})", v.value(), v.version());
     }
  };
+
+namespace gms {
+inline std::ostream& operator<<(std::ostream& os, const versioned_value& v) {
+    fmt::print(os, "{}", v);
+    return os;
+}
+}
