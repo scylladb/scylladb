@@ -605,6 +605,8 @@ private:
     sstables::compaction_sstable_creator_fn _creator;
     std::function<bool (const sstables::shared_sstable&)> _filter;
     uint64_t& _total_shard_size;
+
+    future<> reshape_compaction_group(std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info);
 public:
     shard_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
