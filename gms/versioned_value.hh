@@ -209,3 +209,9 @@ public:
 }; // class versioned_value
 
 } // namespace gms
+
+template <> struct fmt::formatter<gms::versioned_value> : fmt::formatter<std::string_view> {
+    auto format(const gms::versioned_value& v, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "Value({},{})", v.value(), v.version());
+    }
+ };
