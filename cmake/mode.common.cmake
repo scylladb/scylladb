@@ -18,6 +18,7 @@ list(TRANSFORM _supported_warnings PREPEND "-Wno-")
 add_compile_options(
   "-Wall"
   "-Werror"
+  "-Wextra"
   "-Wno-error=deprecated-declarations"
   "-Wimplicit-fallthrough"
   ${_supported_warnings})
