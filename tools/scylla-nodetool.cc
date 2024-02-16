@@ -1045,6 +1045,31 @@ void stop_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/compaction_manager/stop_compaction", {{"type", compaction_type}});
 }
 
+void upgradesstables_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, false);
+
+    std::vector<sstring> keyspaces;
+    if (keyspace.empty()) {
+        keyspaces = get_keyspaces(client);
+    } else {
+        keyspaces.push_back(keyspace);
+    }
+
+    std::unordered_map<sstring, sstring> params;
+
+    if (!vm.count("include-all-sstables")) {
+        params["exclude_current_version"] = "true";
+    }
+
+    if (!tables.empty()) {
+        params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+    }
+
+    for (const auto& keyspace : keyspaces) {
+        client.get(format("/storage_service/keyspace_upgrade_sstables/{}", keyspace), params);
+    }
+}
+
 void viewbuildstatus_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const auto invalid_argument_message = "viewbuildstatus requires keyspace and view name arguments";
     if (!vm.contains("keyspace_view")) {
@@ -1690,6 +1715,30 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             stop_operation
+        },
+        {
+            {
+                "upgradesstables",
+                "Upgrades sstables to the latest available sstable version and applies the current options",
+R"(
+Run this command if you want to force-apply changes that are relevant to sstables, like changing the compression settings, or enabling EAR (enterprise only).
+Can also be used to upgrade all sstables to the latest sstable version.
+
+Note that this command is not needed for changes described above to take effect. They take effect gradually as new sstables are written and old ones are compacted.
+This command should be used when it is desired that such changes take effect right away.
+
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/upgradesstables.html
+)",
+                {
+                    typed_option<>("include-all-sstables,a", "Include all sstables, even those already on the current version"),
+                    typed_option<unsigned>("jobs,j", "Number of sstables to upgrade simultanously (unused)"),
+                },
+                {
+                    typed_option<sstring>("keyspace", "Keyspace to upgrade sstables for, if missing, all sstables are upgraded", 1),
+                    typed_option<std::vector<sstring>>("table", "Table to upgrade sstables for, if missing, all tables in the keyspace are upgraded", -1),
+                },
+            },
+            upgradesstables_operation
         },
         {
             {
