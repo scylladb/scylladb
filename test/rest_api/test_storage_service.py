@@ -423,8 +423,8 @@ def test_materialized_view_pre_scrub_snapshot(cql, this_dc, rest_api):
                 resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}")
                 resp.raise_for_status()
 
-def test_range_to_endpoint_map(cql, this_dc, rest_api):
-    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+def test_range_to_endpoint_map_tablets_disabled_keyspace_param_only(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': false }}") as keyspace:
         resp = rest_api.send("GET", f"storage_service/range_to_endpoint_map/{keyspace}")
         resp.raise_for_status()
 
@@ -555,3 +555,34 @@ def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled):
             resp.raise_for_status()
 
             assert resp == [rest_api.host]
+
+@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
+def test_range_to_endpoint_map_tablets_enabled_keyspace_param_only(cql,  rest_api):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 } AND TABLETS = { 'enabled': true }") as keyspace:
+        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
+            resp = rest_api.send("GET", f"storage_service/range_to_endpoint_map/{keyspace}")
+            assert resp.status_code == requests.codes.bad_request
+
+            resp_json = resp.json()
+            actual_error_reason = resp_json["message"]
+            expected_error_reason = f"storage_service/range_to_endpoint_map is per-table in keyspace '{keyspace}'. Please provide table name using 'cf' parameter."
+            assert expected_error_reason == actual_error_reason
+
+@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
+@pytest.mark.parametrize("tablets_enabled", ["true", "false"])
+def test_range_to_endpoint_map_with_table_param(cql,  rest_api, tablets_enabled):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
+        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
+            cf = table.split('.')[1]
+            resp = rest_api.send("GET", f"storage_service/range_to_endpoint_map/{keyspace}", params={"cf": cf})
+            resp.raise_for_status()
+
+            entries_array = resp.json()
+            assert len(entries_array) > 0
+
+            expected_endpoint = [rest_api.host]
+            for entry in entries_array:
+                token_range = entry["key"]
+                endpoint = entry["value"]
+
+                assert endpoint == expected_endpoint, f"Unexpected endpoint={endpoint} for token_range={token_range}. Expected endpoint was {expected_endpoint}"

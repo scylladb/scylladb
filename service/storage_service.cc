@@ -2007,18 +2007,13 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-storage_service::get_range_to_address_map(const sstring& keyspace) const {
-    return get_range_to_address_map(_db.local().find_keyspace(keyspace).get_vnode_effective_replication_map());
-}
-
-future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-storage_service::get_range_to_address_map(locator::vnode_effective_replication_map_ptr erm) const {
+storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm) const {
     return get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens());
 }
 
 // Caller is responsible to hold token_metadata valid until the returned future is resolved
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-storage_service::get_range_to_address_map(locator::vnode_effective_replication_map_ptr erm,
+storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm,
         const std::vector<token>& sorted_tokens) const {
     co_return co_await construct_range_to_endpoint_map(erm, co_await get_all_ranges(sorted_tokens));
 }
@@ -4788,7 +4783,7 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::construct_range_to_endpoint_map(
-        locator::vnode_effective_replication_map_ptr erm,
+        locator::effective_replication_map_ptr erm,
         const dht::token_range_vector& ranges) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
     res.reserve(ranges.size());
