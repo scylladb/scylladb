@@ -9,21 +9,18 @@
  */
 
 #include "gms/gossip_digest_ack.hh"
-#include <ostream>
 
-namespace gms {
-
-std::ostream& operator<<(std::ostream& os, const gossip_digest_ack& ack) {
-    os << "digests:{";
+auto fmt::formatter<gms::gossip_digest_ack>::format(const gms::gossip_digest_ack& ack, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "digests:{{");
     for (auto& d : ack._digests) {
-        os << d << " ";
+        out = fmt::format_to(out, "{} ", d);
     }
-    os << "} ";
-    os << "endpoint_state:{";
+    out = fmt::format_to(out, "}} ");
+    out = fmt::format_to(out, "endpoint_state:{{");
     for (auto& d : ack._map) {
-        fmt::print(os, "[{}->{}]", d.first, d.second);
+        out = fmt::format_to(out, "[{}->{}]", d.first, d.second);
     }
-    return os << "}";
+    return fmt::format_to(out, "}}");
 }
-
-} // namespace gms

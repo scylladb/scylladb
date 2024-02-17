@@ -11,6 +11,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
+#include <fmt/core.h>
 #include "utils/serialization.hh"
 #include "gms/gossip_digest.hh"
 #include "utils/chunked_vector.hh"
@@ -67,7 +68,11 @@ public:
         return _digests;
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const gossip_digest_syn& syn);
+    friend fmt::formatter<gossip_digest_syn>;
 };
 
 }
+
+template <> struct fmt::formatter<gms::gossip_digest_syn> : fmt::formatter<std::string_view> {
+    auto format(const gms::gossip_digest_syn&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
