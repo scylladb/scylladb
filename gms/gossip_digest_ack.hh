@@ -15,6 +15,7 @@
 #include "gms/inet_address.hh"
 #include "gms/endpoint_state.hh"
 #include "utils/chunked_vector.hh"
+#include <fmt/core.h>
 
 namespace gms {
 
@@ -48,7 +49,11 @@ public:
         return _map;
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const gossip_digest_ack& ack);
+    friend fmt::formatter<gossip_digest_ack>;
 };
 
 }
+
+template <> struct fmt::formatter<gms::gossip_digest_ack> : fmt::formatter<std::string_view> {
+    auto format(const gms::gossip_digest_ack&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
