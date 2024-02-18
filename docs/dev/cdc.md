@@ -158,9 +158,27 @@ We're not able to prevent a node learning about a new generation too late due to
 However, it could happen that a node learns about the generation from gossip in time, but then won't be able to extract it from `cdc_generation_descriptions_v2`. In that case we can still maintain consistency: the node will remember that there is a new generation even though it doesn't yet know what it is (it knows only the ID, in particular it knows the timestamp) using the `cdc::metadata::prepare(db_clock::time_point)` method, and then _reject_ writes for CDC-enabled tables that are supposed to use this new generation. The node will keep trying to read the generation's data in background until it succeeds or sees that it's not necessary anymore (e.g. because the generation was already superseded by a new generation).
 Thus we give up availability for safety. This likely won't happen if the administrator ensures that the cluster is not partitioned before bootstrapping a new node. This problem will also be mitigated with a future patch.
 
-Due to the need of maintaining colocation we don't allow the client to send writes with arbitrary timestamps.
-Suppose that a write is requested and the write coordinator's local clock has time `C` and the generation operating at time `C` has timestamp `T` (`T <= C`). Then we only allow the write if its timestamp is in the interval [`T`, `C + generation_leeway`), where `generation_leeway` is a small time-inteval constant (e.g. 5 seconds).
-Reason: we cannot allow writes before `T`, because they belong to the old generation whose token ranges might no longer refine the current vnodes, so the corresponding log write would not necessarily be colocated with the base write. We also cannot allow writes too far "into the future" because we don't know what generation will be operating at that time (the node which will introduce this generation might not have joined yet). But, as mentioned before, we assume that we'll learn about the next generation in time. Again --- the need for this assumption will be gone in a future patch.
+#### Generation switching: accepting writes
+
+Due to the need of maintaining colocation we don't allow the client to send writes with arbitrary timestamps. We allow:
+- writes to the current and next generations unless they are too far into the future,
+- writes to the previous generations unless they are too far into the past.
+
+##### Writes to the current and next generations
+
+Suppose that a write with timestamp `W` is requested and the write coordinator's local clock has time `C` and the generation operating at time `C` has timestamp `T` (`T <= C`) such that `T <= W`. Then we only allow the write if `W < C + generation_leeway`, where `generation_leeway` is a small time-interval constant (e.g. 5 seconds).
+
+We cannot allow writes too far "into the future" because we don't know what generation will be operating at that time (the node which will introduce this generation might not have joined yet). But, as mentioned before, we assume that we'll learn about the next generation in time. Again --- the need for this assumption will be gone in a future patch.
+
+##### Writes to the previous generations
+
+This time suppose that `T > W`. Then we only allow the write if `W > C - generation_leeway` and there was a generation operating at `W`.
+
+We allow writes to previous generations to improve user experience. If a client generates timestamps by itself and clocks are not perfectly synchronized, there may be short periods of time around the moment of switching generations when client's writes are rejected because they fall into one of the previous generations. Usually, this problem is easy to overcome by the client. It can simply repeat a write a few times, but using a higher timestamp. Unfortunately, if a table additionally uses LWT, the client cannot increase the timestamp because LWT makes timestamps permanent. Once Paxos commits an entry with a given timestamp, Scylla will keep trying to apply that entry until it succeeds, with the same timestamp. Applying the entry involves doing a CDC log table write. If it fails, we are stuck. Allowing writes to the previous generations is also a probabilistic fix for this bug.
+
+Note that writing only to the previous generation might not be enough. With the Raft-based topology and tablets, we can add multiple nodes almost instantly. Then, we can have multiple generations with almost identical timestamps.
+
+We allow writes only to the recent past to reduce the number of generations that must be stored in memory.
 
 ### Streams description tables
 

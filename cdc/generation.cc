@@ -25,6 +25,7 @@
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/error_injection.hh"
 
 #include "cdc/generation.hh"
 #include "cdc/cdc_options.hh"
@@ -44,8 +45,16 @@ static unsigned get_sharding_ignore_msb(const gms::inet_address& endpoint, const
 
 namespace cdc {
 
-extern const api::timestamp_clock::duration generation_leeway =
-    std::chrono::duration_cast<api::timestamp_clock::duration>(std::chrono::seconds(5));
+api::timestamp_clock::duration get_generation_leeway() {
+    static thread_local auto generation_leeway =
+            std::chrono::duration_cast<api::timestamp_clock::duration>(std::chrono::seconds(5));
+
+    utils::get_local_injector().inject("increase_cdc_generation_leeway", [&] {
+        generation_leeway = std::chrono::duration_cast<api::timestamp_clock::duration>(std::chrono::minutes(5));
+    });
+
+    return generation_leeway;
+}
 
 static void copy_int_to_bytes(int64_t i, size_t offset, bytes& b) {
     i = net::hton(i);
@@ -331,7 +340,7 @@ future<cdc::generation_id> generation_service::make_new_generation(const std::un
     auto new_generation_timestamp = [add_delay, ring_delay = _cfg.ring_delay] {
         auto ts = db_clock::now();
         if (add_delay && ring_delay != 0ms) {
-            ts += 2 * ring_delay + duration_cast<milliseconds>(generation_leeway);
+            ts += 2 * ring_delay + duration_cast<milliseconds>(get_generation_leeway());
         }
         return ts;
     };

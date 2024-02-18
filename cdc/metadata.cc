@@ -15,10 +15,6 @@
 
 extern logging::logger cdc_log;
 
-namespace cdc {
-    extern const api::timestamp_clock::duration generation_leeway;
-} // namespace cdc
-
 static api::timestamp_type to_ts(db_clock::time_point tp) {
     // This assumes that timestamp_clock and db_clock have the same epochs.
     return std::chrono::duration_cast<api::timestamp_clock::duration>(tp.time_since_epoch()).count();
@@ -73,7 +69,7 @@ bool cdc::metadata::streams_available() const {
 
 cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok) {
     auto now = api::new_timestamp();
-    if (ts > now + generation_leeway.count()) {
+    if (ts > now + get_generation_leeway().count()) {
         throw exceptions::invalid_request_exception(format(
                 "cdc: attempted to get a stream \"from the future\" ({}; current server time: {})."
                 " With CDC you cannot send writes with timestamps arbitrarily into the future, because we don't"
@@ -86,27 +82,43 @@ cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok)
         // Nothing protects us from that until we start using transactions for generation switching.
     }
 
-    auto it = gen_used_at(now);
-    if (it == _gens.end()) {
+    auto it = gen_used_at(now - get_generation_leeway().count());
+
+    if (it != _gens.end()) {
+        // Garbage-collect generations that will no longer be used.
+        it = _gens.erase(_gens.begin(), it);
+    }
+
+    if (ts <= now - get_generation_leeway().count()) {
+        // We reject the write if `ts <= now - generation_leeway` and the write is not to the current generation, which
+        // happens iff one of the following is true:
+        // - the write is to no generation,
+        // - the write is to a generation older than the generation under `it`,
+        // - the write is to the generation under `it` and that generation is not the current generation.
+        // Note that we cannot distinguish the first and second cases because we garbage-collect obsolete generations,
+        // but we can check if one of them takes place (`it == _gens.end() || ts < it->first`). These three conditions
+        // are sufficient. The write with `ts <= now - generation_leeway` cannot be to one of the generations following
+        // the generation under `it` because that generation was operating at `now - generation_leeway`.
+        bool is_previous_gen = it != _gens.end() && std::next(it) != _gens.end() && std::next(it)->first <= now;
+        if (it == _gens.end() || ts < it->first || is_previous_gen) {
+            throw exceptions::invalid_request_exception(format(
+                    "cdc: attempted to get a stream \"from the past\" ({}; current server time: {})."
+                    " With CDC you cannot send writes with timestamps too far into the past, because that would break"
+                    " consistency properties.\n"
+                    "We *do* allow sending writes into the near past, but our ability to do that is limited."
+                    " Are you using client-side timestamps? Make sure your clocks are well-synchronized"
+                    " with the database's clocks.", format_timestamp(ts), format_timestamp(now)));
+        }
+    }
+
+    it = _gens.begin();
+    if (it == _gens.end() || ts < it->first) {
         throw std::runtime_error(format(
-                "cdc::metadata::get_stream: could not find any CDC stream (current time: {})."
-                " Are we in the middle of a cluster upgrade?", format_timestamp(now)));
+                "cdc::metadata::get_stream: could not find any CDC stream for timestamp {}."
+                " Are we in the middle of a cluster upgrade?", format_timestamp(ts)));
     }
 
-    // Garbage-collect generations that will no longer be used.
-    it = _gens.erase(_gens.begin(), it);
-
-    if (it->first > ts) {
-        throw exceptions::invalid_request_exception(format(
-                "cdc: attempted to get a stream from an earlier generation than the currently used one."
-                " With CDC you cannot send writes with timestamps too far into the past, because that would break"
-                " consistency properties (write timestamp: {}, current generation started at: {})",
-                format_timestamp(ts), format_timestamp(it->first)));
-    }
-
-    // With `generation_leeway` we allow sending writes to the near future. It might happen
-    // that `ts` doesn't belong to the current generation ("current" according to our clock),
-    // but to the next generation. Adjust for this case:
+    // Find the generation operating at `ts`.
     {
         auto next_it = std::next(it);
         while (next_it != _gens.end() && next_it->first <= ts) {
@@ -147,8 +159,8 @@ bool cdc::metadata::known_or_obsolete(db_clock::time_point tp) const {
         ++it;
     }
 
-    // Check if some new generation has already superseded this one.
-    return it != _gens.end() && it->first <= api::new_timestamp();
+    // Check if the generation is obsolete.
+    return it != _gens.end() && it->first <= api::new_timestamp() - get_generation_leeway().count();
 }
 
 bool cdc::metadata::insert(db_clock::time_point tp, topology_description&& gen) {
@@ -157,7 +169,7 @@ bool cdc::metadata::insert(db_clock::time_point tp, topology_description&& gen) 
     }
 
     auto now = api::new_timestamp();
-    auto it = gen_used_at(now);
+    auto it = gen_used_at(now - get_generation_leeway().count());
 
     if (it != _gens.end()) {
         // Garbage-collect generations that will no longer be used.
