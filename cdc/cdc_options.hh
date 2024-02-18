@@ -33,9 +33,6 @@ enum class image_mode : uint8_t {
     full,
 };
 
-std::ostream& operator<<(std::ostream& os, delta_mode);
-std::ostream& operator<<(std::ostream& os, image_mode);
-
 class options final {
     std::optional<bool> _enabled;
     image_mode _preimage = image_mode::off;
@@ -68,3 +65,11 @@ public:
 };
 
 } // namespace cdc
+
+template <> struct fmt::formatter<cdc::image_mode> : fmt::formatter<string_view> {
+    auto format(cdc::image_mode, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<cdc::delta_mode> : fmt::formatter<string_view> {
+    auto format(cdc::delta_mode, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
