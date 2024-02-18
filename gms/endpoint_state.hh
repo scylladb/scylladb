@@ -13,6 +13,7 @@
 #include "gms/heart_beat_state.hh"
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"
+#include "locator/host_id.hh"
 #include <optional>
 #include <chrono>
 
@@ -148,6 +149,10 @@ public:
     }
 
     bool is_cql_ready() const noexcept;
+
+    // Return the value of the HOST_ID application state
+    // or a null host_id if the application state is not found.
+    locator::host_id get_host_id() const noexcept;
 
     friend fmt::formatter<endpoint_state>;
 };
