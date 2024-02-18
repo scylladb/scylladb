@@ -46,6 +46,8 @@ namespace gms {
 
 namespace cdc {
 
+api::timestamp_clock::duration get_generation_leeway();
+
 class stream_id final {
     bytes _value;
 public:

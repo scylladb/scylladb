@@ -52,8 +52,16 @@ namespace db {
 
 namespace cdc {
 
-extern const api::timestamp_clock::duration generation_leeway =
-    std::chrono::duration_cast<api::timestamp_clock::duration>(std::chrono::seconds(5));
+api::timestamp_clock::duration get_generation_leeway() {
+    static thread_local auto generation_leeway =
+            std::chrono::duration_cast<api::timestamp_clock::duration>(std::chrono::seconds(5));
+
+    utils::get_local_injector().inject("increase_cdc_generation_leeway", [&] {
+        generation_leeway = std::chrono::duration_cast<api::timestamp_clock::duration>(std::chrono::minutes(5));
+    });
+
+    return generation_leeway;
+}
 
 static void copy_int_to_bytes(int64_t i, size_t offset, bytes& b) {
     i = net::hton(i);
@@ -373,7 +381,7 @@ db_clock::time_point new_generation_timestamp(bool add_delay, std::chrono::milli
 
     auto ts = db_clock::now();
     if (add_delay && ring_delay != 0ms) {
-        ts += 2 * ring_delay + duration_cast<milliseconds>(generation_leeway);
+        ts += 2 * ring_delay + duration_cast<milliseconds>(get_generation_leeway());
     }
     return ts;
 }
