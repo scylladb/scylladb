@@ -14,7 +14,9 @@
 #include <boost/range/adaptor/map.hpp>
 #include <chrono>
 #include <fmt/chrono.h>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/when_all.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
@@ -37,6 +39,7 @@
 
 namespace bpo = boost::program_options;
 
+using namespace std::chrono_literals;
 using namespace tools::utils;
 
 namespace {
@@ -875,6 +878,120 @@ void removenode_operation(scylla_rest_client& client, const bpo::variables_map& 
     }
 }
 
+void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::vector<sstring> keyspaces, tables;
+    if (vm.contains("keyspace")) {
+        auto res = parse_keyspace_and_tables(client, vm, true);
+        keyspaces.push_back(std::move(res.keyspace));
+        tables = std::move(res.tables);
+    } else {
+        keyspaces = get_keyspaces(client, "non_local_strategy");
+    }
+
+    if (vm.contains("partitioner-range") && (vm.contains("in-dc") || vm.contains("in-hosts"))) {
+        throw std::invalid_argument("primary range repair should be performed on all nodes in the cluster");
+    }
+
+    // Use the same default param-set that the legacy nodetool uses, makes testing easier.
+    std::unordered_map<sstring, sstring> repair_params{
+            {"trace", "false"},
+            {"ignoreUnreplicatedKeyspaces", "false"},
+            {"parallelism", "parallel"},
+            {"incremental", "false"},
+            {"pullRepair", "false"},
+            {"primaryRange", "false"},
+            {"jobThreads", "1"}};
+
+    if (!tables.empty()) {
+        repair_params["columnFamilies"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+    }
+
+    if (vm.contains("trace")) {
+        repair_params["trace"] = "true";
+    }
+
+    if (vm.contains("start-token") || vm.contains("end-token")) {
+        const auto st = vm.contains("start-token") ? fmt::to_string(vm["start-token"].as<uint64_t>()) : "";
+        const auto et = vm.contains("end-token") ? fmt::to_string(vm["end-token"].as<uint64_t>()) : "";
+        repair_params["ranges"] = format("{}:{}", st, et);
+    }
+
+    if (vm.contains("ignore-unreplicated-keyspaces")) {
+        repair_params["ignoreUnreplicatedKeyspaces"] = "true";
+    }
+
+    if (vm.contains("in-hosts")) {
+        const auto hosts = vm["in-hosts"].as<std::vector<sstring>>();
+        repair_params["hosts"] = fmt::to_string(fmt::join(hosts.begin(), hosts.end(), ","));
+    }
+
+    if (vm.contains("sequential")) {
+        repair_params["parallelism"] = "sequential";
+    } else if (vm.contains("dc-parallel")) {
+        repair_params["parallelism"] = "dc_parallel";
+    }
+
+    if (vm.contains("in-local-dc")) {
+        const auto res = client.get("/snitch/datacenter");
+        repair_params["dataCenters"] = sstring(rjson::to_string_view(res));
+    } else if (vm.contains("in-dc")) {
+        const auto dcs = vm["in-dc"].as<std::vector<sstring>>();
+        repair_params["dataCenters"] = fmt::to_string(fmt::join(dcs.begin(), dcs.end(), ","));
+    }
+
+    if (vm.contains("pull")) {
+        repair_params["pullRepair"] = "true";
+    }
+
+    if (vm.contains("partitioner-range")) {
+        repair_params["primaryRange"] = "true";
+    }
+
+    auto log = [&] (const char* fmt, auto&&... param) {
+        const auto msg = fmt::format(fmt::runtime(fmt), param...);
+        using clock = std::chrono::system_clock;
+        const auto n = clock::now();
+        const auto t = clock::to_time_t(n);
+        const auto ms = (n - clock::from_time_t(t)) / 1ms;
+        fmt::print("[{:%F %T},{:03d}] {}\n", fmt::localtime(t), ms, msg);
+    };
+
+    size_t failed = 0;
+    for (const auto& keyspace : keyspaces) {
+        const auto url = format("/storage_service/repair_async/{}", keyspace);
+
+        const auto id = client.post(url, repair_params).GetInt();
+
+        log("Starting repair command #{}, repairing 1 ranges for keyspace {} (parallelism=SEQUENTIAL, full=true)", id, keyspace);
+        log("Repair session {}", id);
+
+        std::unordered_map<sstring, sstring> poll_params{{"id", fmt::to_string(id)}};
+
+        auto get_status = [&] {
+            const auto res = client.get(url, poll_params);
+            return sstring(rjson::to_string_view(res));
+        };
+
+        auto status = get_status();
+
+        while (status == "RUNNING") {
+            sleep(std::chrono::milliseconds(200)).get();
+            status = get_status();
+        }
+
+        if (status == "SUCCESSFUL") {
+            log("Repair session {} finished", id);
+        } else {
+            log("Repair session {} failed", id);
+            ++failed;
+        }
+    }
+
+    if (failed) {
+        throw operation_failed_on_scylladb(format("{} out of {} repair session(s) failed", failed, keyspaces.size()));
+    }
+}
+
 void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, false);
     if (keyspace.empty()) {
@@ -1152,6 +1269,15 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"-pro", "--primary-replica-only"},
     {"-ns", "--no-snapshot"},
     {"-m", "--mode"}, // FIXME: this clashes with seastar option for memory
+    {"-tr", "--trace"},
+    {"-iuk", "--ignore-unreplicated-keyspaces"},
+    {"-seq", "--sequential"},
+    {"-dcpar", "--dc-parallel"},
+    {"-dc", "--in-dc"},
+    {"-local", "--in-local-dc"},
+    {"-pl", "--pull"},
+    {"-pr", "--partitioner-range"},
+    {"-hosts", "--in-hosts"},
 };
 
 std::map<operation, operation_func> get_operations_with_func() {
@@ -1574,6 +1700,43 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             removenode_operation
+        },
+        {
+            {
+                "repair",
+                "Synchronize data between nodes in the background",
+R"(
+When running nodetool repair on a single node, it acts as the repair master.
+Only the data contained in the master node and its replications will be
+repaired. Typically, this subset of data is replicated on many nodes in
+the cluster, often all, and the repair process syncs between all the
+replicas until the master data subset is in-sync.
+
+To repair all of the data in the cluster, you need to run a repair on
+all of the nodes in the cluster, or let ScyllaDB Manager do it for you.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/repair.html
+)",
+                {
+                    typed_option<>("dc-parallel", "Repair datacenters in parallel"),
+                    typed_option<uint64_t>("end-token", "Repair data up to this token"),
+                    typed_option<std::vector<sstring>>("in-dc", "Constrain repair to specific datacenter(s)"),
+                    typed_option<>("in-local-dc", "Constrain repair to the local datacenter only"),
+                    typed_option<std::vector<sstring>>("in-hosts", "Constrain repair to the specific host(s)"),
+                    typed_option<>("ignore-unreplicated-keyspaces", "Ignore keyspaces which are not replicated, without this repair will fail on such keyspaces"),
+                    typed_option<unsigned>("jobs", "Number of threads to run repair on. "),
+                    typed_option<>("partitioner-range", "Repair only the first range returned by the partitioner"),
+                    typed_option<>("pull", "Fix local node only"),
+                    typed_option<>("sequential", "Perform repair sequentially"),
+                    typed_option<uint64_t>("start-token", "Repair data starting from this token"),
+                    typed_option<>("trace", "Trace repair, traces are stored in system.traces"),
+                },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to repair, if missing all keyspaces are repaired", 1),
+                    typed_option<std::vector<sstring>>("table", "The table(s) to repair, if missing all tables are repaired", -1),
+                },
+            },
+            repair_operation
         },
         {
             {
