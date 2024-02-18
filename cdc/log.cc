@@ -296,36 +296,38 @@ future<> cdc::cdc_service::stop() {
 cdc::cdc_service::~cdc_service() = default;
 
 namespace {
-static const sstring delta_mode_string_keys = "keys";
-static const sstring delta_mode_string_full = "full";
+static constexpr std::string_view delta_mode_string_keys = "keys";
+static constexpr std::string_view delta_mode_string_full = "full";
 
-static const std::string_view image_mode_string_full = delta_mode_string_full;
+static constexpr std::string_view image_mode_string_full = delta_mode_string_full;
 
-sstring to_string(cdc::delta_mode dm) {
-    switch (dm) {
-        case cdc::delta_mode::keys : return delta_mode_string_keys;
-        case cdc::delta_mode::full : return delta_mode_string_full;
+} // anon. namespace
+
+auto fmt::formatter<cdc::delta_mode>::format(cdc::delta_mode m, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    using enum cdc::delta_mode;
+    switch (m) {
+        case keys:
+            return fmt::format_to(ctx.out(), delta_mode_string_keys);
+        case full:
+            return fmt::format_to(ctx.out(), delta_mode_string_full);
     }
     throw std::logic_error("Impossible value of cdc::delta_mode");
 }
 
-sstring to_string(cdc::image_mode m) {
+auto fmt::formatter<cdc::image_mode>::format(cdc::image_mode m, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    using enum cdc::image_mode;
     switch (m) {
-        case cdc::image_mode::off : return "false";
-        case cdc::image_mode::on : return "true";
-        case cdc::image_mode::full : return sstring(image_mode_string_full);
+        case off:
+            return fmt::format_to(ctx.out(), "false");
+        case on:
+            return fmt::format_to(ctx.out(), "true");
+            break;
+        case full:
+            return fmt::format_to(ctx.out(), image_mode_string_full);
     }
     throw std::logic_error("Impossible value of cdc::image_mode");
-}
-
-} // anon. namespace
-
-std::ostream& cdc::operator<<(std::ostream& os, delta_mode m) {
-    return os << to_string(m);
-}
-
-std::ostream& cdc::operator<<(std::ostream& os, image_mode m) {
-    return os << to_string(m);
 }
 
 cdc::options::options(const std::map<sstring, sstring>& map) {
@@ -391,9 +393,9 @@ std::map<sstring, sstring> cdc::options::to_map() const {
 
     return {
         { "enabled", enabled() ? "true" : "false" },
-        { "preimage", to_string(_preimage) },
+        { "preimage", fmt::format("{}", _preimage) },
         { "postimage", _postimage ? "true" : "false" },
-        { "delta", to_string(_delta_mode) },
+        { "delta", fmt::format("{}", _delta_mode) },
         { "ttl", std::to_string(_ttl) },
     };
 }
