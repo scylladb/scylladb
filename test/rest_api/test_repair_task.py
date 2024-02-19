@@ -1,3 +1,4 @@
+import pytest
 import sys
 
 # Use the util.py library from ../cql-pytest:
@@ -76,6 +77,7 @@ def test_repair_task_tree(cql, this_dc, rest_api):
                     check_child_parent_relationship(rest_api, top_level_task, False, repair_tree_depth)
     drain_module_tasks(rest_api, module_name)
 
+@pytest.mark.xfail(run=False, reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 def test_repair_task_progress(cql, this_dc, rest_api):
     drain_module_tasks(rest_api, module_name)
     with set_tmp_task_ttl(rest_api, long_time):

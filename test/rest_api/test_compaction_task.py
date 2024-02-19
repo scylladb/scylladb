@@ -1,3 +1,4 @@
+import pytest
 import sys
 import threading
 
@@ -82,6 +83,7 @@ def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}?flush_memtables=true"), "major compaction", task_tree_depth)
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}?flush_memtables=false"), "major compaction", task_tree_depth)
 
+@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 def test_cleanup_keyspace_compaction_task(cql, this_dc, rest_api):
     task_tree_depth = 3
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}"), "cleanup compaction", task_tree_depth, True)
@@ -97,10 +99,12 @@ def test_rewrite_sstables_keyspace_compaction_task(cql, this_dc, rest_api):
     # scrub sstables compaction
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}"), "scrub sstables compaction", task_tree_depth)
 
+@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 def test_reshaping_compaction_task(cql, this_dc, rest_api):
     task_tree_depth = 2
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"storage_service/sstables/{keyspace}", {'cf': table, 'load_and_stream': False}), "reshaping compaction", task_tree_depth, True)
 
+@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 def test_resharding_compaction_task(cql, this_dc, rest_api):
     task_tree_depth = 2
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"storage_service/sstables/{keyspace}", {'cf': table, 'load_and_stream': False}), "resharding compaction", task_tree_depth, True)
@@ -164,6 +168,7 @@ def test_compaction_task_abort(cql, this_dc, rest_api):
 def test_major_keyspace_compaction_task_async(cql, this_dc, rest_api):
     checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_compaction/{keyspace}"), "major compaction")
 
+@pytest.mark.xfail(run=False, reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 def test_cleanup_keyspace_compaction_task_async(cql, this_dc, rest_api):
     checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_cleanup/{keyspace}"), "cleanup compaction")
 

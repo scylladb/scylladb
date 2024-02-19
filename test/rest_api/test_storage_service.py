@@ -453,6 +453,7 @@ def test_range_to_endpoint_map_tablets_disabled_keyspace_param_only(cql, this_dc
         resp = rest_api.send("GET", f"storage_service/range_to_endpoint_map/{keyspace}")
         resp.raise_for_status()
 
+@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 def test_describe_ring(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
         resp = rest_api.send("GET", f"storage_service/describe_ring/{keyspace}")
@@ -490,6 +491,7 @@ def test_storage_service_keyspace_cleanup(cql, this_dc, rest_api):
                 resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}")
                 resp.raise_for_status()
 
+@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 def test_storage_service_keyspace_cleanup_with_no_owned_ranges(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
         schema = 'p int, v text, primary key (p)'
@@ -529,6 +531,7 @@ def test_storage_service_keyspace_cleanup_with_no_owned_ranges(cql, this_dc, res
                         assert snapshots[after_alter_keyspace_tag]['total'] == snapshots[after_flush_tag]['total'], f"snapshots after alter-keyspace should have the same data as after flush: {snapshots}"
                         assert snapshots[after_cleanup_tag]['total'] == 0, f"snapshots after clean should have no data: {snapshots}"
 
+@pytest.mark.xfail(run=False, reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 def test_storage_service_keyspace_upgrade_sstables(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
         schema = 'p int, v text, primary key (p)'
@@ -571,6 +574,7 @@ def test_storage_service_system_keyspace_repair(rest_api):
     resp.raise_for_status()
     assert not [stats for stats in resp.json() if stats["sequence_number"] == sequence_number], "Repair task for keyspace with local replication strategy was created"
 
+@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
 def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
