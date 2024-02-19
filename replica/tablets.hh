@@ -67,4 +67,7 @@ future<locator::tablet_metadata> read_tablet_metadata(cql3::query_processor&);
 /// Reads tablet metadata from system.tablets in the form of mutations.
 future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<database>&);
 
+/// Reads tablet transition stage (if any)
+future<std::optional<locator::tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token);
+
 } // namespace replica

@@ -415,6 +415,16 @@ lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr s, const
     return tablet_sstable_set::make(std::move(s), sgm, tmap);
 }
 
+future<std::optional<tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token) {
+    auto rs = co_await qp.execute_internal("select stage from system.tablets where table_id = ? and last_token = ?",
+            {tid.uuid(), dht::token::to_int64(last_token)}, cql3::query_processor::cache_internal::no);
+    if (rs->empty() || !rs->one().has("stage")) {
+        co_return std::nullopt;
+    }
+
+    co_return tablet_transition_stage_from_string(rs->one().get_as<sstring>("stage"));
+}
+
 stop_iteration tablet_sstable_set::for_each_sstable_set_until(const dht::partition_range& pr, std::function<stop_iteration(lw_shared_ptr<sstables::sstable_set>)> func) const {
     size_t candidate_start = pr.start() ? group_of(pr.start()->value().token()) : size_t(0);
     size_t candidate_end = pr.end() ? group_of(pr.end()->value().token()) : (_sstable_sets.size() - 1);
