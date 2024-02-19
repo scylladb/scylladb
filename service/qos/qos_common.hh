@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "db/consistency_level_type.hh"
 #include "seastarx.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/print.hh>
@@ -15,6 +16,14 @@
 #include <stdexcept>
 #include <variant>
 #include <seastar/core/lowres_clock.hh>
+
+namespace cql3 {
+class query_processor;
+}
+
+namespace service {
+class query_state;
+}
 
 namespace qos {
 
@@ -83,6 +92,11 @@ public:
             : service_level_argument_exception(format("Service Level {} doesn't exists.", service_level_name)) {
     }
 };
+
+service::query_state& qos_query_state();
+
+future<service_levels_info> get_service_levels(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, db::consistency_level cl);
+future<service_levels_info> get_service_level(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, sstring service_level_name, db::consistency_level cl);
 
 }
 
