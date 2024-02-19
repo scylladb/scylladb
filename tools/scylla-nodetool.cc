@@ -1469,7 +1469,11 @@ std::map<sstring, Value> rjson_to_map(const rjson::value& v) {
         auto key = rjson::to_string_view(object["key"]);
         Value v;
         try {
-            v = object["value"].Get<Value>();
+            if constexpr (std::is_same_v<Value, sstring>) {
+                v = sstring(rjson::to_string_view(object["value"]));
+            } else {
+                v = object["value"].Get<Value>();
+            }
         } catch (const rjson::error&) {
             v = boost::lexical_cast<Value>(object["value"].Get<std::string>());
         }
@@ -1767,6 +1771,91 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
             params["tag"],
             params["sf"]);
     fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
+}
+
+void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::optional<sstring> keyspace;
+    if (vm.count("keyspace")) {
+        keyspace.emplace(vm["keyspace"].as<sstring>());
+    }
+    const auto resolve_ips = vm.count("resolve-ip");
+
+    const auto live = get_endpoints_of_status(client, "live");
+    const auto down = get_endpoints_of_status(client, "down");
+    const auto joining = get_nodes_of_state(client, "joining");
+    const auto leaving = get_nodes_of_state(client, "leaving");
+    const auto moving = get_nodes_of_state(client, "moving");
+    const auto endpoint_load = rjson_to_map<size_t>(client.get("/storage_service/load_map"));
+    const auto endpoint_host_id = rjson_to_map<sstring>(client.get("/storage_service/host_id"));
+    const auto endpoint_ownership = keyspace
+        ? rjson_to_map<double>(client.get(format("/storage_service/ownership/{}", *keyspace)))
+        : std::map<sstring, double>{};
+
+    std::unordered_map<sstring, sstring> endpoint_rack;
+    std::map<sstring, std::set<sstring>> dc_endpoints;
+    std::unordered_map<sstring, size_t> endpoint_tokens;
+    const auto tokens_endpoint_res = client.get("/storage_service/tokens_endpoint");
+    for (const auto& te : tokens_endpoint_res.GetArray()) {
+        const auto ep = sstring(rjson::to_string_view(te["value"]));
+         // We are not printing the actual tokens, so it is enough just to count them.
+        ++endpoint_tokens[ep];
+        if (endpoint_rack.contains(ep)) {
+            continue;
+        }
+        const auto dc = sstring(rjson::to_string_view(client.get("/snitch/datacenter", {{"host", ep}})));
+        const auto rack = sstring(rjson::to_string_view(client.get("/snitch/rack", {{"host", ep}})));
+        endpoint_rack.emplace(ep, rack);
+        dc_endpoints[dc].insert(ep);
+    }
+
+    for (const auto& [dc, endpoints] : dc_endpoints) {
+        const auto dc_header = fmt::format("Datacenter: {}", dc);
+        fmt::print("{}\n", dc_header);
+        fmt::print("{}\n", std::string(dc_header.size(), '='));
+        fmt::print("Status=Up/Down\n");
+        fmt::print("|/ State=Normal/Leaving/Joining/Moving\n");
+        Tabulate table;
+        if (keyspace) {
+            table.add("--", "Address", "Load", "Tokens", "Owns (effective)", "Host ID", "Rack");
+        } else {
+            table.add("--", "Address", "Load", "Tokens", "Owns", "Host ID", "Rack");
+        }
+        for (const auto& ep : endpoints) {
+            char status, state;
+            if (live.contains(ep)) {
+                status = 'U';
+            } else if (down.contains(ep)) {
+                status = 'D';
+            } else {
+                status = '?';
+            }
+            if (joining.contains(ep)) {
+                state = 'J';
+            } else if (leaving.contains(ep)) {
+                state = 'L';
+            } else if (moving.contains(ep)) {
+                state = 'M';
+            } else {
+                state = 'N';
+            }
+            sstring address = resolve_ips ? net::dns::resolve_addr(net::inet_address(ep)).get() : ep;
+            table.add(
+                    fmt::format("{}{}", status, state),
+                    address,
+                    file_size_printer(endpoint_load.at(ep)),
+                    endpoint_tokens.at(ep),
+                    keyspace ? format("{:.1f}%", endpoint_ownership.at(ep) * 100) : "?",
+                    endpoint_host_id.at(ep),
+                    endpoint_rack.at(ep));
+        }
+        table.print();
+    }
+
+    fmt::print("\n");
+    if (!keyspace) {
+        fmt::print("Note: Non-system keyspaces don't have the same replication settings, "
+                "effective ownership information is meaningless\n");
+    }
 }
 
 void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -3185,6 +3274,22 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             snapshot_operation
+        },
+        {
+            {
+                "status",
+                "Displays cluster information for a single keyspace or all keyspaces",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/status.html
+)",
+                {
+                    typed_option<>("resolve-ip,r", "Show node domain names instead of IPs"),
+                },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace name", 1),
+                },
+            },
+            status_operation
         },
         {
             {
