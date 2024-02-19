@@ -313,6 +313,15 @@ class ScyllaRESTAPIClient():
         assert(type(data) == str)
         return data
 
+    async def get_raft_leader(self, node_ip: str, group_id: Optional[str] = None) -> HostID:
+        """Returns host ID of the current leader of the given raft group as seen by the registry on the contact node.
+           When group_id is not specified, group0 is used."""
+        params = {}
+        if group_id:
+            params["group_id"] = group_id
+        data = await self.client.get_json("/raft/leader_host", host=node_ip, params=params)
+        return HostID(data)
+
     async def repair(self, node_ip: str, keyspace: str, table: str, ranges: str = '') -> None:
         """Repair the given table and wait for it to complete"""
         if ranges:
