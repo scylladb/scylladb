@@ -115,42 +115,56 @@ public:
 
 } // anonymous namespace
 
-future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
-        ::table_id table_id, std::vector<sstables::shared_sstable> sstables, bool primary_replica_only) {
+class sstable_streamer {
+    netw::messaging_service& _ms;
+    replica::database& _db;
+    replica::table& _table;
+    locator::effective_replication_map_ptr _erm;
+    std::vector<sstables::shared_sstable> _sstables;
+public:
+    sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, std::vector<sstables::shared_sstable> sstables)
+            : _ms(ms)
+            , _db(db)
+            , _table(db.find_column_family(table_id))
+            , _erm(_table.get_effective_replication_map())
+            , _sstables(std::move(sstables)) {
+        // By sorting SSTables by their primary key, we allow SSTable runs to be
+        // incrementally streamed.
+        // Overlapping run fragments can have their content deduplicated, reducing
+        // the amount of data we need to put on the wire.
+        // Elements are popped off from the back of the vector, therefore we're sorting
+        // it in descending order, to start from the smaller tokens.
+        std::ranges::sort(_sstables, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
+            return x->compare_by_first_key(*y) > 0;
+        });
+    }
+
+    future<> stream(bool primary_replica_only);
+};
+
+future<> sstable_streamer::stream(bool primary_replica_only) {
     const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
     const auto full_token_range = dht::token_range::make_open_ended_both_sides();
-    auto& table = _db.local().find_column_family(table_id);
-    auto s = table.schema();
+    auto s = _table.schema();
     const auto cf_id = s->id();
     const auto reason = streaming::stream_reason::repair;
-    auto erm = _db.local().find_column_family(s).get_effective_replication_map();
 
-    // By sorting SSTables by their primary key, we allow SSTable runs to be
-    // incrementally streamed.
-    // Overlapping run fragments can have their content deduplicated, reducing
-    // the amount of data we need to put on the wire.
-    // Elements are popped off from the back of the vector, therefore we're sorting
-    // it in descending order, to start from the smaller tokens.
-    std::ranges::sort(sstables, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
-        return x->compare_by_first_key(*y) > 0;
-    });
-
-    size_t nr_sst_total = sstables.size();
+    size_t nr_sst_total = _sstables.size();
     size_t nr_sst_current = 0;
-    while (!sstables.empty()) {
+    while (!_sstables.empty()) {
         auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
         auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
         size_t batch_sst_nr = 16;
         std::vector<sstring> sst_names;
         std::vector<sstables::shared_sstable> sst_processed;
         size_t estimated_partitions = 0;
-        while (batch_sst_nr-- && !sstables.empty()) {
-            auto sst = sstables.back();
+        while (batch_sst_nr-- && !_sstables.empty()) {
+            auto sst = _sstables.back();
             estimated_partitions += sst->estimated_keys_for_range(full_token_range);
             sst_names.push_back(sst->get_filename());
             sst_set->insert(sst);
             sst_processed.push_back(sst);
-            sstables.pop_back();
+            _sstables.pop_back();
         }
 
         llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables={}",
@@ -162,12 +176,12 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         size_t num_partitions_processed = 0;
         size_t num_bytes_read = 0;
         nr_sst_current += sst_processed.size();
-        auto permit = co_await _db.local().obtain_reader_permit(table, "sstables_loader::load_and_stream()", db::no_timeout, {});
-        auto reader = mutation_fragment_v1_stream(table.make_streaming_reader(s, std::move(permit), full_partition_range, sst_set, gc_clock::now()));
+        auto permit = co_await _db.obtain_reader_permit(_table, "sstables_loader::load_and_stream()", db::no_timeout, {});
+        auto reader = mutation_fragment_v1_stream(_table.make_streaming_reader(s, std::move(permit), full_partition_range, sst_set, gc_clock::now()));
         std::exception_ptr eptr;
         bool failed = false;
+
         try {
-            netw::messaging_service& ms = _messaging;
             while (auto mf = co_await reader()) {
                 bool is_partition_start = mf->is_partition_start();
                 if (is_partition_start) {
@@ -175,7 +189,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
                     auto& start = mf->as_partition_start();
                     const auto& current_dk = start.key();
 
-                    current_targets = erm->get_natural_endpoints(current_dk.token());
+                    current_targets = _erm->get_natural_endpoints(current_dk.token());
                     if (primary_replica_only && current_targets.size() > 1) {
                         current_targets.resize(1);
                     }
@@ -183,7 +197,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
                             current_dk.token(), current_targets);
                     for (auto& node : current_targets) {
                         if (!metas.contains(node)) {
-                            auto [sink, source] = co_await ms.make_sink_and_source_for_stream_mutation_fragments(reader.schema()->version(),
+                            auto [sink, source] = co_await _ms.make_sink_and_source_for_stream_mutation_fragments(reader.schema()->version(),
                                     ops_uuid, cf_id, estimated_partitions, reason, service::default_session_id, netw::messaging_service::msg_addr(node));
                             llog.debug("load_and_stream: ops_uuid={}, make sink and source for node={}", ops_uuid, node);
                             metas.emplace(node, send_meta_data(node, std::move(sink), std::move(source)));
@@ -201,7 +215,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
             failed = true;
             eptr = std::current_exception();
             llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, send_phase, err={}",
-                    ops_uuid, ks_name, cf_name, eptr);
+                    ops_uuid, s->ks_name(), s->cf_name(), eptr);
         }
         co_await reader.close();
         try {
@@ -213,37 +227,46 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
             failed = true;
             eptr = std::current_exception();
             llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, finish_phase, err={}",
-                    ops_uuid, ks_name, cf_name, eptr);
+                    ops_uuid, s->ks_name(), s->cf_name(), eptr);
         }
         if (!failed) {
             try {
                 co_await coroutine::parallel_for_each(sst_processed, [&] (sstables::shared_sstable& sst) {
                     llog.debug("load_and_stream: ops_uuid={}, ks={}, table={}, remove sst={}",
-                            ops_uuid, ks_name, cf_name, sst->component_filenames());
+                            ops_uuid, s->ks_name(), s->cf_name(), sst->component_filenames());
                     return sst->unlink();
                 });
             } catch (...) {
                 failed = true;
                 eptr = std::current_exception();
                 llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, del_sst_phase, err={}",
-                        ops_uuid, ks_name, cf_name, eptr);
+                        ops_uuid, s->ks_name(), s->cf_name(), eptr);
             }
         }
         auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start_time).count();
         for (auto& [node, meta] : metas) {
             llog.info("load_and_stream: ops_uuid={}, ks={}, table={}, target_node={}, num_partitions_sent={}, num_bytes_sent={}",
-                    ops_uuid, ks_name, cf_name, node, meta.num_partitions_sent(), meta.num_bytes_sent());
+                    ops_uuid, s->ks_name(), s->cf_name(), node, meta.num_partitions_sent(), meta.num_bytes_sent());
         }
         auto partition_rate = std::fabs(duration) > FLT_EPSILON ? num_partitions_processed / duration : 0;
         auto bytes_rate = std::fabs(duration) > FLT_EPSILON ? num_bytes_read / duration / 1024 / 1024 : 0;
         auto status = failed ? "failed" : "succeeded";
         llog.info("load_and_stream: finished ops_uuid={}, ks={}, table={}, partitions_processed={} partitions, bytes_processed={} bytes, partitions_per_second={} partitions/s, bytes_per_second={} MiB/s, duration={} s, status={}",
-                ops_uuid, ks_name, cf_name, num_partitions_processed, num_bytes_read, partition_rate, bytes_rate, duration, status);
+                ops_uuid, s->ks_name(), s->cf_name(), num_partitions_processed, num_bytes_read, partition_rate, bytes_rate, duration, status);
         if (failed) {
             std::rethrow_exception(eptr);
         }
     }
     co_return;
+}
+
+future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
+        ::table_id table_id, std::vector<sstables::shared_sstable> sstables, bool primary_replica_only) {
+    // streamer guarantees topology stability, for correctness, by holding effective_replication_map
+    // throughout its lifetime.
+    sstable_streamer streamer(_messaging, _db.local(), table_id, std::move(sstables));
+
+    co_await streamer.stream(primary_replica_only);
 }
 
 // For more details, see distributed_loader::process_upload_dir().
