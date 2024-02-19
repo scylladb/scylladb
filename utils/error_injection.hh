@@ -14,6 +14,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/util/defer.hh>
 #include "seastarx.hh"
 
 #include "log.hh"

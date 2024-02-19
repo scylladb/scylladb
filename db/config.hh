@@ -26,6 +26,7 @@
 #include "db/hints/host_filter.hh"
 #include "utils/updateable_value.hh"
 #include "utils/s3/creds.hh"
+#include "utils/error_injection.hh"
 
 namespace seastar {
 class file;
@@ -71,10 +72,12 @@ inline std::istream& operator>>(std::istream& is, seed_provider_type&);
 struct error_injection_at_startup {
     sstring name;
     bool one_shot = false;
+    utils::error_injection_parameters parameters;
 
     bool operator==(const error_injection_at_startup& other) const {
         return name == other.name
-            && one_shot == other.one_shot;
+            && one_shot == other.one_shot
+            && parameters == other.parameters;
     }
 };
 
