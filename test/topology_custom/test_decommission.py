@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 async def test_decommissioned_node_cant_rejoin(request, manager: ManagerClient):
     # This a regression test for #17282.
 
-    logger.info("Bootstrapping a leader node")
+    logger.info("Bootstrapping the leader node")
     servers = [await manager.server_add()]
 
-    logger.info(f"Bootstrapping second node")
+    logger.info(f"Bootstrapping the second node")
     servers += [await manager.server_add()]
 
     # It's important that we decommission a node which is not a leader.
@@ -28,7 +28,7 @@ async def test_decommissioned_node_cant_rejoin(request, manager: ManagerClient):
     logger.info(f"Decommissioning node {servers[1]}")
     await manager.decommission_node(servers[1].server_id)
     await check_token_ring_and_group0_consistency(manager)
-    logger.info(f"huj1")
+    logger.info(f"Attempting to start the node {servers[1]} after it was decommissioned")
     await manager.server_start(servers[1].server_id,
                                expected_error='This node was decommissioned and will not rejoin the ring')
-    logger.info(f"huj2")
+    logger.info(f"Got the expected error")
