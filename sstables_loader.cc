@@ -116,6 +116,7 @@ public:
 } // anonymous namespace
 
 class sstable_streamer {
+protected:
     netw::messaging_service& _ms;
     replica::database& _db;
     replica::table& _table;
@@ -139,25 +140,33 @@ public:
         });
     }
 
-    future<> stream(bool primary_replica_only);
-private:
+    virtual ~sstable_streamer() {}
+
+    virtual future<> stream(bool primary_replica_only);
+protected:
+    future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, bool primary_replica_only);
     future<> stream_sstable_mutations(const dht::partition_range&, std::vector<sstables::shared_sstable>, bool primary_replica_only);
 };
 
 future<> sstable_streamer::stream(bool primary_replica_only) {
     const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
 
-    while (!_sstables.empty()) {
+    co_await stream_sstables(full_partition_range, std::move(_sstables), primary_replica_only);
+}
+
+future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables,
+                                           bool primary_replica_only) {
+    while (!sstables.empty()) {
         size_t batch_sst_nr = 16;
         std::vector<sstables::shared_sstable> sst_processed;
-        sst_processed.reserve(std::min(_sstables.size(), size_t(16)));
-        while (batch_sst_nr-- && !_sstables.empty()) {
-            auto sst = _sstables.back();
+        sst_processed.reserve(std::min(sstables.size(), size_t(16)));
+        while (batch_sst_nr-- && !sstables.empty()) {
+            auto sst = sstables.back();
             sst_processed.push_back(sst);
-            _sstables.pop_back();
+            sstables.pop_back();
         }
 
-        co_await stream_sstable_mutations(full_partition_range, std::move(sst_processed), primary_replica_only);
+        co_await stream_sstable_mutations(pr, std::move(sst_processed), primary_replica_only);
     }
 }
 
