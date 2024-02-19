@@ -5134,6 +5134,23 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
 
                     rtlogger.debug("raft_topology_cmd::barrier_and_drain done");
                 });
+
+                co_await utils::get_local_injector().inject_with_handler("raft_topology_barrier_and_drain_fail", [this] (auto& handler) -> future<> {
+                    auto ks = handler.get("keyspace");
+                    auto cf = handler.get("table");
+                    auto last_token = dht::token::from_int64(std::atoll(handler.get("last_token")->data()));
+                    auto table_id = _db.local().find_column_family(*ks, *cf).schema()->id();
+                    auto stage = co_await replica::read_tablet_transition_stage(_qp, table_id, last_token);
+                    if (stage) {
+                        sstring want_stage(handler.get("stage").value());
+                        if (*stage == locator::tablet_transition_stage_from_string(want_stage)) {
+                            rtlogger.info("raft_topology_cmd: barrier handler waits");
+                            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                            rtlogger.info("raft_topology_cmd: barrier handler continues");
+                        }
+                    }
+                });
+
                 result.status = raft_topology_cmd_result::command_status::success;
             }
             break;
