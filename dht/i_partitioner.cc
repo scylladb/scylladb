@@ -300,19 +300,22 @@ std::strong_ordering ring_position_comparator_for_sstables::operator()(sstables:
 
 dht::partition_range
 to_partition_range(dht::token_range r) {
+    using bound = dht::partition_range::bound;
     using bound_opt = std::optional<dht::partition_range::bound>;
     auto start = r.start()
-                 ? bound_opt(dht::ring_position(r.start()->value(),
+                 ? bound_opt(bound(dht::ring_position(r.start()->value(),
                                                 r.start()->is_inclusive()
                                                 ? dht::ring_position::token_bound::start
-                                                : dht::ring_position::token_bound::end))
+                                                : dht::ring_position::token_bound::end),
+                         r.start()->is_inclusive()))
                  : bound_opt();
 
     auto end = r.end()
-               ? bound_opt(dht::ring_position(r.end()->value(),
+               ? bound_opt(bound(dht::ring_position(r.end()->value(),
                                               r.end()->is_inclusive()
                                               ? dht::ring_position::token_bound::end
-                                              : dht::ring_position::token_bound::start))
+                                              : dht::ring_position::token_bound::start),
+                         r.end()->is_inclusive()))
                : bound_opt();
 
     return { std::move(start), std::move(end) };
