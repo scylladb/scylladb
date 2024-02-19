@@ -14,6 +14,7 @@
 #include "query-result-writer.hh"
 #include "readers/multishard.hh"
 
+#include <fmt/core.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
 
@@ -177,17 +178,6 @@ class read_context : public reader_lifecycle_policy_v2 {
             ++discarded_fragments;
             discarded_bytes += ps.memory_usage(s);
         }
-        friend std::ostream& operator<<(std::ostream& os, const dismantle_buffer_stats& s) {
-            os << format(
-                    "kept {} partitions/{} fragments/{} bytes, discarded {} partitions/{} fragments/{} bytes",
-                    s.partitions,
-                    s.fragments,
-                    s.bytes,
-                    s.discarded_partitions,
-                    s.discarded_fragments,
-                    s.discarded_bytes);
-            return os;
-        }
     };
 
     distributed<replica::database>& _db;
@@ -207,6 +197,8 @@ class read_context : public reader_lifecycle_policy_v2 {
     dismantle_buffer_stats dismantle_combined_buffer(flat_mutation_reader_v2::tracked_buffer combined_buffer, const dht::decorated_key& pkey);
     dismantle_buffer_stats dismantle_compaction_state(detached_compaction_state compaction_state);
     future<> save_reader(shard_id shard, full_position_view last_pos);
+
+    friend fmt::formatter<dismantle_buffer_stats>;
 
 public:
     read_context(distributed<replica::database>& db, schema_ptr s, locator::effective_replication_map_ptr erm,
@@ -294,6 +286,19 @@ public:
             full_position last_pos) noexcept;
 
     future<> stop();
+};
+
+template <> struct fmt::formatter<read_context::dismantle_buffer_stats> : fmt::formatter<std::string_view> {
+    auto format(const read_context::dismantle_buffer_stats& s, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(),
+                              "kept {} partitions/{} fragments/{} bytes, discarded {} partitions/{} fragments/{} bytes",
+                              s.partitions,
+                              s.fragments,
+                              s.bytes,
+                              s.discarded_partitions,
+                              s.discarded_fragments,
+                              s.discarded_bytes);
+    }
 };
 
 std::string_view read_context::reader_state_to_string(reader_state rs) {
