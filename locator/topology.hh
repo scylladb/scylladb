@@ -437,11 +437,38 @@ std::ostream& operator<<(std::ostream& out, const locator::node::state& state);
 
 } // namespace std
 
+// Accepts :v format option for verbose printing
 template <>
 struct fmt::formatter<locator::node> : fmt::formatter<std::string_view> {
+    bool verbose = false;
+    constexpr auto parse(fmt::format_parse_context& ctx) {
+        auto it = ctx.begin(), end = ctx.end();
+        if (it != end) {
+            if (*it == 'v') {
+                verbose = true;
+                it++;
+            }
+            if (it != end && *it != '}') {
+                throw fmt::format_error("invalid format specifier");
+            }
+        }
+        return it;
+    }
     template <typename FormatContext>
     auto format(const locator::node& node, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{}/{}", node.host_id(), node.endpoint());
+        if (!verbose) {
+            return fmt::format_to(ctx.out(), "{}/{}", node.host_id(), node.endpoint());
+        } else {
+            return fmt::format_to(ctx.out(), " idx={} host_id={} endpoint={} dc={} rack={} state={} shards={} this_node={}",
+                    node.idx(),
+                    node.host_id(),
+                    node.endpoint(),
+                    node.dc_rack().dc,
+                    node.dc_rack().rack,
+                    locator::node::to_string(node.get_state()),
+                    node.get_shard_count(),
+                    bool(node.is_this_node()));
+        }
     }
 };
 

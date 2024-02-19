@@ -9,12 +9,35 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/util/lazy.hh>
 #include <utility>
 
 #include "log.hh"
 #include "locator/topology.hh"
 #include "locator/production_snitch_base.hh"
 #include "utils/stall_free.hh"
+
+struct node_printer {
+    const locator::node* v;
+    node_printer(const locator::node* n) noexcept : v(n) {}
+};
+
+template <>
+struct fmt::formatter<node_printer> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const node_printer& np, fmt::format_context& ctx) const {
+        const locator::node* node = np.v;
+        auto out = fmt::format_to(ctx.out(), "node={}", fmt::ptr(node));
+        if (node) {
+            out = fmt::format_to(out, " {:v}", *node);
+        }
+        return out;
+    }
+};
+
+static auto lazy_backtrace() {
+    return seastar::value_of([] { return current_backtrace(); });
+}
 
 namespace locator {
 
@@ -124,14 +147,6 @@ future<topology> topology::clone_gently() const {
     co_return ret;
 }
 
-std::string topology::debug_format(const node* node) {
-    if (!node) {
-        return format("node={}", fmt::ptr(node));
-    }
-    return format("node={} idx={} host_id={} endpoint={} dc={} rack={} state={} shards={} this_node={}", fmt::ptr(node),
-            node->idx(), node->host_id(), node->endpoint(), node->dc_rack().dc, node->dc_rack().rack, node::to_string(node->get_state()), node->get_shard_count(), bool(node->is_this_node()));
-}
-
 const node* topology::add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state, shard_id shard_count) {
     if (dr.dc.empty() || dr.rack.empty()) {
         on_internal_error(tlogger, "Node must have valid dc and rack");
@@ -154,13 +169,13 @@ const node* topology::add_node(node_holder nptr) {
 
     if (nptr->topology() != this) {
         if (nptr->topology()) {
-            on_fatal_internal_error(tlogger, format("topology[{}]: {} belongs to different topology={}", fmt::ptr(this), debug_format(node), fmt::ptr(node->topology())));
+            on_fatal_internal_error(tlogger, format("topology[{}]: {} belongs to different topology={}", fmt::ptr(this), node_printer(node), fmt::ptr(node->topology())));
         }
         nptr->set_topology(this);
     }
 
     if (node->idx() > 0) {
-        on_internal_error(tlogger, format("topology[{}]: {}: has assigned idx", fmt::ptr(this), debug_format(node)));
+        on_internal_error(tlogger, format("topology[{}]: {}: has assigned idx", fmt::ptr(this), nptr));
     }
 
     // Note that _nodes contains also the this_node()
@@ -170,7 +185,7 @@ const node* topology::add_node(node_holder nptr) {
     try {
         if (is_configured_this_node(*node)) {
             if (_this_node) {
-                on_internal_error(tlogger, format("topology[{}]: {}: local node already mapped to {}", fmt::ptr(this), debug_format(node), debug_format(this_node())));
+                on_internal_error(tlogger, format("topology[{}]: {}: local node already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(this_node())));
             }
             locator::node& n = *_nodes.back();
             n._is_this_node = node::this_node::yes;
@@ -179,9 +194,7 @@ const node* topology::add_node(node_holder nptr) {
             }
         }
 
-        if (tlogger.is_enabled(log_level::debug)) {
-            tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
-        }
+        tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), nptr, lazy_backtrace());
 
         index_node(node);
     } catch (...) {
@@ -192,28 +205,26 @@ const node* topology::add_node(node_holder nptr) {
 }
 
 const node* topology::update_node(node* node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> opt_shard_count) {
-    if (tlogger.is_enabled(log_level::debug)) {
-        tlogger.debug("topology[{}]: update_node: {}: to: host_id={} endpoint={} dc={} rack={} state={}, at {}", fmt::ptr(this), debug_format(node),
-            opt_id ? format("{}", *opt_id) : "unchanged",
-            opt_ep ? format("{}", *opt_ep) : "unchanged",
-            opt_dr ? format("{}", opt_dr->dc) : "unchanged",
-            opt_dr ? format("{}", opt_dr->rack) : "unchanged",
-            opt_st ? format("{}", *opt_st) : "unchanged",
-            opt_shard_count ? format("{}", *opt_shard_count) : "unchanged",
-            current_backtrace());
-    }
+    tlogger.debug("topology[{}]: update_node: {}: to: host_id={} endpoint={} dc={} rack={} state={}, at {}", fmt::ptr(this), node_printer(node),
+        opt_id ? format("{}", *opt_id) : "unchanged",
+        opt_ep ? format("{}", *opt_ep) : "unchanged",
+        opt_dr ? format("{}", opt_dr->dc) : "unchanged",
+        opt_dr ? format("{}", opt_dr->rack) : "unchanged",
+        opt_st ? format("{}", *opt_st) : "unchanged",
+        opt_shard_count ? format("{}", *opt_shard_count) : "unchanged",
+        lazy_backtrace());
 
     bool changed = false;
     if (opt_id) {
         if (*opt_id != node->host_id()) {
             if (!*opt_id) {
-                on_internal_error(tlogger, format("Updating node host_id to null is disallowed: {}: new host_id={}", debug_format(node), *opt_id));
+                on_internal_error(tlogger, format("Updating node host_id to null is disallowed: {}: new host_id={}", node_printer(node), *opt_id));
             }
             if (node->is_this_node() && node->host_id()) {
-                on_internal_error(tlogger, format("This node host_id is already set: {}: new host_id={}", debug_format(node), *opt_id));
+                on_internal_error(tlogger, format("This node host_id is already set: {}: new host_id={}", node_printer(node), *opt_id));
             }
             if (_nodes_by_host_id.contains(*opt_id)) {
-                on_internal_error(tlogger, format("Cannot update node host_id: {}: new host_id already exists: {}", debug_format(node), debug_format(_nodes_by_host_id[*opt_id])));
+                on_internal_error(tlogger, format("Cannot update node host_id: {}: new host_id already exists: {}", node_printer(node), node_printer(_nodes_by_host_id[*opt_id])));
             }
             changed = true;
         } else {
@@ -223,7 +234,7 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
     if (opt_ep) {
         if (*opt_ep != node->endpoint()) {
             if (*opt_ep == inet_address{}) {
-                on_internal_error(tlogger, format("Updating node endpoint to null is disallowed: {}: new endpoint={}", debug_format(node), *opt_ep));
+                on_internal_error(tlogger, format("Updating node endpoint to null is disallowed: {}: new endpoint={}", node_printer(node), *opt_ep));
             }
             changed = true;
         } else {
@@ -282,7 +293,7 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
 
 bool topology::remove_node(host_id id) {
     auto node = find_node(id);
-    tlogger.debug("topology[{}]: remove_node: host_id={}: {}", fmt::ptr(this), id, debug_format(node));
+    tlogger.debug("topology[{}]: remove_node: host_id={}: {}", fmt::ptr(this), id, node_printer(node));
     if (node) {
         remove_node(node);
         return true;
@@ -295,12 +306,10 @@ void topology::remove_node(const node* node) {
 }
 
 void topology::index_node(const node* node) {
-    if (tlogger.is_enabled(log_level::trace)) {
-        tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
-    }
+    tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
 
     if (node->idx() < 0) {
-        on_internal_error(tlogger, format("topology[{}]: {}: must already have a valid idx", fmt::ptr(this), debug_format(node)));
+        on_internal_error(tlogger, format("topology[{}]: {}: must already have a valid idx", fmt::ptr(this), node_printer(node)));
     }
 
     // FIXME: for now we allow adding nodes with null host_id, for the following cases:
@@ -310,7 +319,7 @@ void topology::index_node(const node* node) {
     if (node->host_id()) {
         auto [nit, inserted_host_id] = _nodes_by_host_id.emplace(node->host_id(), node);
         if (!inserted_host_id) {
-            on_internal_error(tlogger, format("topology[{}]: {}: node already exists", fmt::ptr(this), debug_format(node)));
+            on_internal_error(tlogger, format("topology[{}]: {}: node already exists", fmt::ptr(this), node_printer(node)));
         }
     }
     if (node->endpoint() != inet_address{}) {
@@ -327,7 +336,7 @@ void topology::index_node(const node* node) {
                 if (node->host_id()) {
                     _nodes_by_host_id.erase(node->host_id());
                 }
-                on_internal_error(tlogger, format("topology[{}]: {}: node endpoint already mapped to {}", fmt::ptr(this), debug_format(node), debug_format(eit->second)));
+                on_internal_error(tlogger, format("topology[{}]: {}: node endpoint already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(eit->second)));
             }
         }
         if (node->get_state() != node::state::left) {
@@ -350,9 +359,7 @@ void topology::index_node(const node* node) {
 }
 
 void topology::unindex_node(const node* node) {
-    if (tlogger.is_enabled(log_level::trace)) {
-        tlogger.trace("topology[{}]: unindex_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
-    }
+    tlogger.trace("topology[{}]: unindex_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
 
     const auto& dc = node->dc_rack().dc;
     const auto& rack = node->dc_rack().rack;
@@ -396,9 +403,7 @@ void topology::unindex_node(const node* node) {
 }
 
 node_holder topology::pop_node(const node* node) {
-    if (tlogger.is_enabled(log_level::trace)) {
-        tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
-    }
+    tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
 
     unindex_node(node);
 
@@ -450,11 +455,9 @@ const node* topology::find_node(node::idx_type idx) const noexcept {
 
 const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
 {
-    if (tlogger.is_enabled(log_level::trace)) {
-        tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
-            id, opt_ep, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
-            current_backtrace());
-    }
+    tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
+        id, opt_ep, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
+        lazy_backtrace());
 
     const auto* n = find_node(id);
     if (n) {
@@ -473,7 +476,7 @@ const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_addr
 bool topology::remove_endpoint(locator::host_id host_id)
 {
     auto node = find_node(host_id);
-    tlogger.debug("topology[{}]: remove_endpoint: host_id={}: {}", fmt::ptr(this), host_id, debug_format(node));
+    tlogger.debug("topology[{}]: remove_endpoint: host_id={}: {}", fmt::ptr(this), host_id, node_printer(node));
     if (node) {
         remove_node(node);
         return true;
@@ -483,13 +486,13 @@ bool topology::remove_endpoint(locator::host_id host_id)
 
 bool topology::has_node(host_id id) const noexcept {
     auto node = find_node(id);
-    tlogger.trace("topology[{}]: has_node: host_id={}: {}", fmt::ptr(this), id, debug_format(node));
+    tlogger.trace("topology[{}]: has_node: host_id={}: {}", fmt::ptr(this), id, node_printer(node));
     return bool(node);
 }
 
 bool topology::has_node(inet_address ep) const noexcept {
     auto node = find_node(ep);
-    tlogger.trace("topology[{}]: has_node: endpoint={}: node={}", fmt::ptr(this), ep, debug_format(node));
+    tlogger.trace("topology[{}]: has_node: endpoint={}: node={}", fmt::ptr(this), ep, node_printer(node));
     return bool(node);
 }
 
@@ -512,7 +515,7 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
     // FIXME -- this shouldn't happen. After topology is stable and is
     // correctly populated with endpoints, this should be replaced with
     // on_internal_error()
-    tlogger.warn("Requested location for node {} not in topology. backtrace {}", ep, current_backtrace());
+    tlogger.warn("Requested location for node {} not in topology. backtrace {}", ep, lazy_backtrace());
     return endpoint_dc_rack::default_location;
 }
 
@@ -564,7 +567,7 @@ std::ostream& operator<<(std::ostream& out, const locator::topology& t) {
         << ", rack: " << t._cfg.local_dc_rack.rack
         << ", nodes:\n";
     for (auto&& node : t._nodes) {
-        out << "  " << locator::topology::debug_format(&*node) << "\n";
+        out << "  " << fmt::format("{}", node_printer(node.get())) << "\n";
     }
     return out << "}";
 }
