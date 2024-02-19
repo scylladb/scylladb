@@ -151,11 +151,12 @@ public:
     using version_t = service::topology::version_t;
     using version_tracker_t = version_tracker;
 
-    token_metadata(config cfg);
+    token_metadata(topology_registry& topology_registry, token_metadata::config cfg);
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
     token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
     token_metadata& operator=(token_metadata&&) noexcept;
     ~token_metadata();
+
     const std::vector<token>& sorted_tokens() const;
     const tablet_metadata& tablets() const;
     tablet_metadata& tablets();
@@ -384,8 +385,8 @@ private:
 public:
     // used to construct the shared object as a sharded<> instance
     // lock_func returns semaphore_units<>
-    explicit shared_token_metadata(token_metadata_lock_func lock_func, token_metadata::config cfg)
-        : _shared(make_token_metadata_ptr(std::move(cfg)))
+    explicit shared_token_metadata(topology_registry& topology_registry, token_metadata_lock_func lock_func, token_metadata::config cfg)
+        : _shared(make_token_metadata_ptr(std::ref(topology_registry), std::move(cfg)))
         , _lock_func(std::move(lock_func))
     {
         _shared->set_version_tracker(new_tracker(_shared->get_version()));

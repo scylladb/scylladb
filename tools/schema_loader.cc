@@ -230,13 +230,14 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
 
     gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
     feature_service.enable(feature_service.supported_feature_set()).get();
+    locator::topology_registry topology_registry;
     sharded<locator::shared_token_metadata> token_metadata;
 
     auto my_address = gms::inet_address("localhost");
     locator::token_metadata::config tm_cfg;
     tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.this_cql_address = my_address;
-    token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
+    token_metadata.start(std::ref(topology_registry), [] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
     auto stop_token_metadata = deferred_stop(token_metadata);
 
     data_dictionary_impl dd_impl;

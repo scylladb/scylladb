@@ -30,6 +30,8 @@ static std::vector<dht::ring_position> make_ring(schema_ptr s, int n_keys) {
 SEASTAR_TEST_CASE(test_get_restricted_ranges) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([] {
+            locator::topology_registry topology_registry;
+
             auto s = schema_builder("ks", "cf")
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("v", bytes_type, column_kind::regular_column)
@@ -50,7 +52,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
             {
                 // Ring with minimum token
-                auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
+                auto tmptr = locator::make_token_metadata_ptr(std::ref(topology_registry), locator::token_metadata::config{});
                 const auto host_id = locator::host_id{utils::UUID(0, 1)};
                 tmptr->update_topology(host_id, locator::endpoint_dc_rack{"dc1", "rack1"});
                 tmptr->update_normal_tokens(std::unordered_set<dht::token>({dht::minimum_token()}), host_id).get();
@@ -65,7 +67,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
             }
 
             {
-                auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
+                auto tmptr = locator::make_token_metadata_ptr(std::ref(topology_registry), locator::token_metadata::config{});
                 const auto id1 = locator::host_id{utils::UUID(0, 1)};
                 const auto id2 = locator::host_id{utils::UUID(0, 2)};
                 tmptr->update_topology(id1, locator::endpoint_dc_rack{"dc1", "rack1"});

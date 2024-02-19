@@ -57,6 +57,7 @@ int main(int ac, char ** av) {
             auto cfg = std::make_unique<db::config>();
 
             sharded<abort_source> abort_sources;
+            locator::topology_registry topology_registry;
             sharded<locator::shared_token_metadata> token_metadata;
             sharded<netw::messaging_service> messaging;
 
@@ -67,7 +68,7 @@ int main(int ac, char ** av) {
             auto my_address = gms::inet_address("localhost");
             tm_cfg.topo_cfg.this_endpoint = my_address;
             tm_cfg.topo_cfg.this_cql_address = my_address;
-            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
+            token_metadata.start(std::ref(topology_registry), [] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_mgr = defer([&] { token_metadata.stop().get(); });
 
             messaging.start(locator::host_id{}, listen, 7000).get();

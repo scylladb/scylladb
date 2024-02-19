@@ -22,6 +22,7 @@
 
 #include "locator/types.hh"
 #include "inet_address_vectors.hh"
+#include "seastar/core/sharded.hh"
 
 using namespace seastar;
 
@@ -39,6 +40,49 @@ class node;
 using node_holder = std::unique_ptr<node>;
 
 using shard_id = seastar::shard_id;
+
+struct rack {
+    sstring name;
+
+    explicit rack(sstring_view rack_name) : name(rack_name) {}
+};
+
+struct datacenter {
+    using rack_ptr = std::unique_ptr<rack>;
+    using racks_map_t = std::unordered_map<sstring_view, rack_ptr>;
+
+    sstring name;
+    racks_map_t racks;
+
+    explicit datacenter(sstring_view dc_name) : name(dc_name) {}
+};
+
+struct location {
+    const datacenter* dc = nullptr;
+    const rack* rack = nullptr;
+};
+
+// A global service that manages datacenters and racks by name
+class topology_registry {
+public:
+    using datacenter_ptr = std::unique_ptr<datacenter>;
+    using datacenters_map_t = std::unordered_map<sstring_view, datacenter_ptr>;
+
+private:
+    datacenters_map_t _datacenters;
+
+public:
+    const datacenters_map_t& datacenters() const noexcept {
+        return _datacenters;
+    }
+
+    const datacenter* find_datacenter(sstring_view name) const noexcept;
+    location find_location(sstring_view dc_name, sstring_view rack_name) const noexcept;
+
+    // Datacenters and racks can only be created on shard 0
+    // They are kept forever, even when empty.
+    location find_or_create_location(sstring_view dc_name, sstring_view rack_name);
+};
 
 class node {
 public:
@@ -60,6 +104,7 @@ private:
     const locator::topology* _topology;
     locator::host_id _host_id;
     inet_address _endpoint;
+    location _location;
     endpoint_dc_rack _dc_rack;
     state _state;
     shard_id _shard_count = 0;
@@ -95,6 +140,14 @@ public:
 
     const endpoint_dc_rack& dc_rack() const noexcept {
         return _dc_rack;
+    }
+
+    const datacenter* dc() const noexcept {
+        return _location.dc;
+    }
+
+    const rack* rack() const noexcept {
+        return _location.rack;
     }
 
     // Is this "localhost"?
@@ -177,15 +230,20 @@ public:
 
         bool operator==(const config&) const = default;
     };
-    topology(config cfg);
+    topology(topology_registry& topology_registry, config cfg);
     topology(topology&&) noexcept;
 
     topology& operator=(topology&&) noexcept;
 
+    // Note: must be called on shard 0
     future<topology> clone_gently() const;
     future<> clear_gently() noexcept;
 
 public:
+    topology_registry& get_topology_registry() const noexcept {
+        return _topology_registry;
+    }
+
     const config& get_config() const noexcept { return _cfg; }
 
     void set_host_id_cfg(host_id this_host_id) {
@@ -197,12 +255,16 @@ public:
     }
 
     // Adds a node with given host_id, endpoint, and DC/rack.
+    //
+    // Note: must be called on shard 0
     const node* add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state,
                          shard_id shard_count = 0);
 
     // Optionally updates node's current host_id, endpoint, or DC/rack.
     // Note: the host_id may be updated from null to non-null after a new node gets a new, random host_id,
     // or a peer node host_id may be updated when the node is replaced with another node using the same ip address.
+    //
+    // Note: must be called on shard 0
     const node* update_node(node* node,
                             std::optional<host_id> opt_id,
                             std::optional<inet_address> opt_ep,
@@ -212,6 +274,8 @@ public:
 
     // Removes a node using its host_id
     // Returns true iff the node was found and removed.
+    //
+    // Note: must be called on shard 0
     bool remove_node(host_id id);
 
     // Looks up a node by its host_id.
@@ -243,12 +307,15 @@ public:
      * Stores current DC/rack assignment for ep
      *
      * Adds or updates a node with given endpoint
+     *
+     * Note: must be called on shard 0
      */
     const node* add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep,
                                        std::optional<endpoint_dc_rack> opt_dr = std::nullopt,
                                        std::optional<node::state> opt_st = std::nullopt,
                                        std::optional<shard_id> shard_count = std::nullopt);
 
+    // Note: must be called on shard 0
     bool remove_endpoint(locator::host_id ep);
 
     /**
@@ -277,6 +344,13 @@ public:
 
     std::unordered_set<sstring> get_datacenter_names() const noexcept {
         return _datacenters;
+    }
+
+    const datacenter* find_datacenter(sstring_view name) const noexcept {
+        if (const auto* dc = _topology_registry.find_datacenter(name); _dc_rack_nodes.contains(dc->name)) {
+            return dc;
+        }
+        return nullptr;
     }
 
     // Get dc/rack location of this node
@@ -388,6 +462,7 @@ private:
     std::weak_ordering compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
 
     unsigned _shard;
+    topology_registry& _topology_registry;
     config _cfg;
     const node* _this_node = nullptr;
     std::vector<node_holder> _nodes;

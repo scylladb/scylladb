@@ -604,8 +604,9 @@ future<> storage_service::topology_state_load() {
 
     {
         auto tmlock = co_await get_token_metadata_lock();
-        auto tmptr = make_token_metadata_ptr(token_metadata::config {
-            get_token_metadata().get_topology().get_config()
+        const auto& topology = get_token_metadata().get_topology();
+        auto tmptr = make_token_metadata_ptr(std::ref(topology.get_topology_registry()), token_metadata::config {
+            topology.get_config()
         });
         tmptr->invalidate_cached_rings();
 

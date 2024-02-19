@@ -150,6 +150,7 @@ private:
     sharded<tasks::task_manager> _task_manager;
     sharded<netw::messaging_service> _ms;
     sharded<service::storage_service> _ss;
+    locator::topology_registry _topology_registry;
     sharded<locator::shared_token_metadata> _token_metadata;
     sharded<locator::effective_replication_map_factory> _erm_factory;
     sharded<sstables::directory_semaphore> _sst_dir_semaphore;
@@ -508,7 +509,7 @@ private:
             tm_cfg.topo_cfg.this_endpoint = my_address;
             tm_cfg.topo_cfg.this_cql_address = my_address;
             tm_cfg.topo_cfg.local_dc_rack = { _snitch.local()->get_datacenter(), _snitch.local()->get_rack() };
-            _token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
+            _token_metadata.start(std::ref(_topology_registry), [] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_metadata = defer([this] { _token_metadata.stop().get(); });
 
             _erm_factory.start().get();

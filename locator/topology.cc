@@ -93,8 +93,9 @@ future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_nodes);
 }
 
-topology::topology(config cfg)
+topology::topology(topology_registry& topology_registry, config cfg)
         : _shard(this_shard_id())
+        , _topology_registry(topology_registry)
         , _cfg(cfg)
         , _sort_by_proximity(!cfg.disable_proximity_sorting)
 {
@@ -104,6 +105,7 @@ topology::topology(config cfg)
 
 topology::topology(topology&& o) noexcept
     : _shard(o._shard)
+    , _topology_registry(o._topology_registry)
     , _cfg(std::move(o._cfg))
     , _this_node(std::exchange(o._this_node, nullptr))
     , _nodes(std::move(o._nodes))
@@ -135,7 +137,7 @@ topology& topology::operator=(topology&& o) noexcept {
 }
 
 future<topology> topology::clone_gently() const {
-    topology ret(_cfg);
+    topology ret(_topology_registry, _cfg);
     tlogger.debug("topology[{}]: clone_gently to {} from shard {}", fmt::ptr(this), fmt::ptr(&ret), _shard);
     for (const auto& nptr : _nodes) {
         if (nptr) {
@@ -148,6 +150,7 @@ future<topology> topology::clone_gently() const {
 }
 
 const node* topology::add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state, shard_id shard_count) {
+    assert(this_shard_id() == 0);
     return add_node(node::make(this, id, ep, state, shard_count), dr);
 }
 
@@ -199,6 +202,7 @@ const node* topology::add_node(node_holder nptr, const endpoint_dc_rack& dr) {
 }
 
 const node* topology::update_node(node* node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> opt_shard_count) {
+    assert(this_shard_id() == 0);
     tlogger.debug("topology[{}]: update_node: {}: to: host_id={} endpoint={} dc={} rack={} state={}, at {}", fmt::ptr(this), node_printer(node),
         opt_id ? format("{}", *opt_id) : "unchanged",
         opt_ep ? format("{}", *opt_ep) : "unchanged",
@@ -297,6 +301,7 @@ bool topology::remove_node(host_id id) {
 }
 
 void topology::remove_node(const node* node) {
+    assert(this_shard_id() == 0);
     pop_node(node);
 }
 
@@ -346,10 +351,13 @@ void topology::index_node(node* node, const endpoint_dc_rack& dr) {
             loc.rack = _cfg.local_dc_rack.rack;
         }
     }
+    node->_location = _topology_registry.find_or_create_location(loc.dc, loc.rack);
+
     const auto& endpoint = node->endpoint();
     // FIXME: provide storing exception safety guarantees
     auto& dc = loc.dc;
     auto& rack = loc.rack;
+    // FIXME: use native datacenter* and rack* for indexing the nodes
     _dc_nodes[dc].emplace(node);
     _dc_rack_nodes[dc][rack].emplace(node);
     _dc_endpoints[dc].insert(endpoint);
@@ -560,6 +568,46 @@ void topology::for_each_node(std::function<void(const node*)> func) const {
             func(np.get());
         }
     }
+}
+
+const datacenter* topology_registry::find_datacenter(sstring_view name) const noexcept {
+    if (auto it = _datacenters.find(name); it != _datacenters.end()) {
+        return it->second.get();
+    }
+    return nullptr;
+}
+
+location topology_registry::find_location(sstring_view dc_name, sstring_view rack_name) const noexcept {
+    if (const auto* dc = find_datacenter(dc_name)) {
+        if (auto rack_it = dc->racks.find(rack_name); rack_it != dc->racks.end()) {
+            return location{ .dc = dc, .rack = rack_it->second.get() };
+        }
+    }
+    return location{};
+}
+
+location topology_registry::find_or_create_location(sstring_view dc_name, sstring_view rack_name) {
+    auto dc_it = _datacenters.find(dc_name);
+    if (dc_it == _datacenters.end()) {
+        if (this_shard_id() != 0) {
+            on_internal_error(tlogger, "datacenters and racks can be created only on shard 0");
+        }
+        auto dc_ptr = std::make_unique<locator::datacenter>(dc_name);
+        dc_it = _datacenters.emplace(dc_ptr->name, std::move(dc_ptr)).first;
+    }
+    auto* dc = dc_it->second.get();
+
+    auto rack_it = dc->racks.find(rack_name);
+    if (rack_it == dc->racks.end()) {
+        if (this_shard_id() != 0) {
+            on_internal_error(tlogger, "datacenters and racks can be created only on shard 0");
+        }
+        auto rack_ptr = std::make_unique<rack>(rack_name);
+        rack_it = const_cast<datacenter*>(dc)->racks.emplace(rack_ptr->name, std::move(rack_ptr)).first;
+    }
+    auto* rack = rack_it->second.get();
+
+    return {dc, rack};
 }
 
 } // namespace locator

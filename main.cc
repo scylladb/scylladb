@@ -16,6 +16,8 @@
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
 #include "auth/maintenance_socket_role_manager.hh"
+#include "locator/token_metadata.hh"
+#include "locator/topology.hh"
 #include "seastar/core/timer.hh"
 #include "tasks/task_manager.hh"
 #include "utils/build_id.hh"
@@ -638,6 +640,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     auto parsed_opts = bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run();
     print_starting_message(ac, av, parsed_opts);
 
+    locator::topology_registry topology_registry;
     sharded<locator::shared_token_metadata> token_metadata;
     sharded<locator::effective_replication_map_factory> erm_factory;
     sharded<service::migration_notifier> mm_notifier;
@@ -696,7 +699,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
         return seastar::async([&app, cfg, ext, &cm, &sstm, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
-                &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
+                &token_metadata, &topology_registry, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
@@ -931,7 +934,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 //
                 tm_cfg.topo_cfg.disable_proximity_sorting = true;
             }
-            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
+            token_metadata.start(std::ref(topology_registry), [] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             token_metadata.invoke_on_all([&] (auto& stm) {
                 stm.set_stall_detector_threshold(
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(

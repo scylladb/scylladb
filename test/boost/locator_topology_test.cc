@@ -35,8 +35,8 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
         .this_endpoint = ep1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
-
-    auto topo = topology(cfg);
+    locator::topology_registry topology_registry;
+    auto topo = topology(topology_registry, cfg);
 
     set_abort_on_internal_error(false);
     auto reset_on_internal_abort = seastar::defer([] {
@@ -71,8 +71,8 @@ SEASTAR_THREAD_TEST_CASE(test_moving) {
         .this_endpoint = ep1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
-
-    auto topo = topology(cfg);
+    locator::topology_registry topology_registry;
+    auto topo = topology(topology_registry, cfg);
 
     topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal);
 
@@ -101,8 +101,8 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
         .this_host_id = id1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
-
-    auto topo = topology(cfg);
+    locator::topology_registry topology_registry;
+    auto topo = topology(topology_registry, cfg);
 
     set_abort_on_internal_error(false);
     auto reset_on_internal_abort = seastar::defer([] {
@@ -182,7 +182,8 @@ SEASTAR_THREAD_TEST_CASE(test_add_or_update_by_host_id) {
     // We need to make the second node 'being_decommissioned', so that
     // it gets removed from ip index and we don't get the non-unique IP error.
 
-    auto topo = topology({});
+    locator::topology_registry topology_registry;
+    auto topo = topology(topology_registry, {});
     //auto topo = topology({});
     topo.add_node(id1, gms::inet_address{}, endpoint_dc_rack::default_location, node::state::normal);
     topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::being_decommissioned);
@@ -225,8 +226,8 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
         .this_endpoint = ep1,
         .local_dc_rack = dc_rack1
     };
-
-    auto topo = topology(cfg);
+    locator::topology_registry topology_registry;
+    auto topo = topology(topology_registry, cfg);
 
     topo.add_node(id1, ep1, dc_rack1, node::state::normal);
     topo.add_node(id2, ep2, dc_rack2, node::state::normal);
@@ -260,7 +261,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
     unsigned node3_shard_count = 3;
 
     semaphore sem(1);
-    shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+    locator::topology_registry topology_registry;
+    shared_token_metadata stm(std::ref(topology_registry), [&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
         topology::config{
             .this_endpoint = ip1,
             .this_host_id = host1

@@ -192,8 +192,9 @@ int main(int ac, char ** av) {
             auto my_address = listen != gms::inet_address("0.0.0.0") ? listen : gms::inet_address("localhost");
             locator::token_metadata::config tm_cfg;
             tm_cfg.topo_cfg.this_endpoint = my_address;
+            locator::topology_registry topology_registry;
             sharded<locator::shared_token_metadata> token_metadata;
-            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
+            token_metadata.start(std::ref(topology_registry), [] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_tm = deferred_stop(token_metadata);
             seastar::sharded<netw::messaging_service> messaging;
             messaging.start(locator::host_id{}, listen, 7000).get();
