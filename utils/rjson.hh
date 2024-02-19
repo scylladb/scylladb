@@ -28,6 +28,7 @@
 
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include "utils/base64.hh"
 
 #include <seastar/core/future.hh>
@@ -393,6 +394,26 @@ public:
     bool EndObject(rapidjson::SizeType memberCount = 0) { return _writer.EndObject(memberCount); }
     bool StartArray() { return _writer.StartArray(); }
     bool EndArray(rapidjson::SizeType elementCount = 0) { return _writer.EndArray(elementCount); }
+
+    template<typename U>
+    bool Write(U v) {
+        using T = std::remove_cvref_t<U>;
+        if constexpr (std::same_as<T, bool>) {
+            return Bool(v);
+        } else if constexpr (std::same_as<T, int>) {
+            return Int(v);
+        } else if constexpr (std::same_as<T, unsigned>) {
+            return Uint(v);
+        } else if constexpr (std::same_as<T, int64_t>) {
+            return Int64(v);
+        } else if constexpr (std::same_as<T, uint64_t>) {
+            return Uint64(v);
+        } else if constexpr (std::same_as<T, double>) {
+            return Double(v);
+        } else if constexpr (std::convertible_to<T, std::string_view>) {
+            return String(v);
+        }
+    }
 };
 
 } // end namespace rjson
