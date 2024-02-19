@@ -150,6 +150,7 @@ future<> sstable_streamer::stream(bool primary_replica_only) {
     while (!_sstables.empty()) {
         size_t batch_sst_nr = 16;
         std::vector<sstables::shared_sstable> sst_processed;
+        sst_processed.reserve(std::min(_sstables.size(), size_t(16)));
         while (batch_sst_nr-- && !_sstables.empty()) {
             auto sst = _sstables.back();
             sst_processed.push_back(sst);
