@@ -1146,6 +1146,23 @@ token_metadata::set_version_tracker(version_tracker_t tracker) {
     _impl->set_version_tracker(std::move(tracker));
 }
 
+version_tracker::~version_tracker() {
+    if (_expired_at) {
+        auto now = std::chrono::steady_clock::now();
+        if (*_expired_at + _log_threshold < now) {
+            auto d = std::chrono::duration_cast<std::chrono::duration<float>>(now - *_expired_at);
+            tlogger.warn("topology version {} held for {:.3f} [s] past expiry, released at: {}", _version, d.count(),
+                         seastar::current_backtrace());
+        }
+    }
+}
+
+version_tracker shared_token_metadata::new_tracker(token_metadata::version_t version) {
+    auto tracker = version_tracker(_versions_barrier.start(), version);
+    _trackers.push_front(tracker);
+    return tracker;
+}
+
 void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
     if (_shared->get_ring_version() >= tmptr->get_ring_version()) {
         on_internal_error(tlogger, format("shared_token_metadata: must not set non-increasing ring_version: {} -> {}", _shared->get_ring_version(), tmptr->get_ring_version()));
@@ -1158,7 +1175,14 @@ void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
     }
 
     _shared = std::move(tmptr);
-    _shared->set_version_tracker(_versions_barrier.start());
+    _shared->set_version_tracker(new_tracker(_shared->get_version()));
+
+    for (auto&& v : _trackers) {
+        if (v.version() != _shared->get_version()) {
+            v.mark_expired(_stall_detector_threshold);
+        }
+    }
+
     tlogger.debug("new token_metadata is set, version {}", _shared->get_version());
 }
 

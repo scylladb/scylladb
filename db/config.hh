@@ -486,6 +486,7 @@ public:
     utils::updateable_value_source<std::unordered_map<sstring, s3::endpoint_config>> object_storage_config;
 
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
+    named_value<double> topology_barrier_stall_detector_threshold_seconds;
 
     static const sstring default_tls_priority;
 private:
