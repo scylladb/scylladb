@@ -66,10 +66,10 @@ public:
 
 } // namespace cdc
 
-template <> struct fmt::formatter<cdc::image_mode> : fmt::formatter<string_view> {
+template <> struct fmt::formatter<cdc::image_mode> : fmt::formatter<std::string_view> {
     auto format(cdc::image_mode, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<cdc::delta_mode> : fmt::formatter<string_view> {
+template <> struct fmt::formatter<cdc::delta_mode> : fmt::formatter<std::string_view> {
     auto format(cdc::delta_mode, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
