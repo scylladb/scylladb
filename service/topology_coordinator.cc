@@ -1025,6 +1025,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old:
+                    if (action_failed(tablet_state.barriers[trinfo.stage])) {
+                        if (check_excluded_replicas()) {
+                            transition_to_with_barrier(locator::tablet_transition_stage::revert_migration);
+                            break;
+                        }
+                    }
                     if (do_barrier()) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
                         updates.emplace_back(get_mutation_builder()

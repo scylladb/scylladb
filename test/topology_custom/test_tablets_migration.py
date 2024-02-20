@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
-@pytest.mark.parametrize("fail_stage", ["streaming"])
+@pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old"])
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage):
