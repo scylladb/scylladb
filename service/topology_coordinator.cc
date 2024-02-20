@@ -1042,6 +1042,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_old:
+                    if (action_failed(tablet_state.barriers[trinfo.stage])) {
+                        if (check_excluded_replicas()) {
+                            transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            break;
+                        }
+                    }
                     transition_to_with_barrier(locator::tablet_transition_stage::streaming);
                     break;
                 // The state "streaming" is needed to ensure that stale stream_tablet() RPC doesn't
