@@ -215,7 +215,8 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
 
         # Check the return-code first, if the command failed probably not all requests were consumed
         res.check_returncode()
-        assert len(unconsumed_expected_requests) == 0
+        expected_requests = [req for req in unconsumed_expected_requests if req.multiple >= 0]
+        assert len(expected_requests) == 0, ''.join(str(r) for r in expected_requests)
 
         return res.stdout
 
