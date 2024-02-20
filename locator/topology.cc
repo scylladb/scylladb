@@ -560,6 +560,12 @@ void topology::sort_by_proximity(inet_address address, inet_address_vector_repli
 }
 
 std::weak_ordering topology::compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
+    auto get_location = [this] (const inet_address& address) {
+        if (const auto* node = find_node(address)) {
+            return node->location();
+        }
+        return location{};
+    };
     const auto loc = get_location(address);
     const auto loc1 = get_location(a1);
     const auto loc2 = get_location(a2);
