@@ -22,7 +22,7 @@ class stream_request {
     sstring keyspace;
     // For compatibility with <= 1.5, we use wrapping ranges
     // (though we never send wraparounds; only allow receiving them)
-    std::vector<range<dht::token>> ranges_compat();
+    std::vector<wrapping_interval<dht::token>> ranges_compat();
     std::vector<sstring> column_families;
 };
 

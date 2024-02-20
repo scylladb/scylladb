@@ -10,7 +10,7 @@
 
 #include "dht/ring_position.hh"
 #include "dht/token-sharding.hh"
-#include "range.hh"
+#include "interval.hh"
 
 #include <vector>
 
@@ -48,7 +48,7 @@ class ring_position_range_sharder {
     bool _done = false;
 public:
     // Initializes the ring_position_range_sharder with a given range to subdivide.
-    ring_position_range_sharder(const sharder& sharder, nonwrapping_range<ring_position> rrp)
+    ring_position_range_sharder(const sharder& sharder, nonwrapping_interval<ring_position> rrp)
             : _sharder(sharder), _range(std::move(rrp)) {}
     // Fetches the next range-shard mapping. When the input range is exhausted, std::nullopt is
     // returned. The returned ranges are contiguous and non-overlapping, and together span the
@@ -124,7 +124,7 @@ class selective_token_range_sharder {
     bool _done = false;
     shard_id _next_shard;
     dht::token _start_token;
-    std::optional<range_bound<dht::token>> _start_boundary;
+    std::optional<interval_bound<dht::token>> _start_boundary;
 public:
     // Initializes the selective_token_range_sharder with a token range and shard_id of interest.
     selective_token_range_sharder(const sharder& sharder, dht::token_range range, shard_id shard)
@@ -134,7 +134,7 @@ public:
             , _next_shard(_shard + 1 == _sharder.shard_count() ? 0 : _shard + 1)
             , _start_token(_range.start() ? _range.start()->value() : minimum_token())
             , _start_boundary(_sharder.shard_of(_start_token) == shard ?
-                _range.start() : range_bound<dht::token>(_sharder.token_for_next_shard(_start_token, shard))) {
+                _range.start() : interval_bound<dht::token>(_sharder.token_for_next_shard(_start_token, shard))) {
     }
     // Returns the next token_range that is both wholly contained within the input range and also
     // wholly owned by the input shard_id. When the input range is exhausted, std::nullopt is returned.

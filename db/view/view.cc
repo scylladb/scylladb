@@ -1508,14 +1508,14 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
         const dht::decorated_key& key,
         const mutation_partition& mp,
         const std::vector<view_and_base>& views) {
-    utils::chunked_vector<nonwrapping_range<clustering_key_prefix_view>> row_ranges;
-    utils::chunked_vector<nonwrapping_range<clustering_key_prefix_view>> view_row_ranges;
+    utils::chunked_vector<nonwrapping_interval<clustering_key_prefix_view>> row_ranges;
+    utils::chunked_vector<nonwrapping_interval<clustering_key_prefix_view>> view_row_ranges;
     clustering_key_prefix_view::tri_compare cmp(base);
     if (mp.partition_tombstone() || !mp.row_tombstones().empty()) {
         for (auto&& v : views) {
             // FIXME: #2371
             if (v.view->view_info()->select_statement(db).get_restrictions()->has_unrestricted_clustering_columns()) {
-                view_row_ranges.push_back(nonwrapping_range<clustering_key_prefix_view>::make_open_ended_both_sides());
+                view_row_ranges.push_back(nonwrapping_interval<clustering_key_prefix_view>::make_open_ended_both_sides());
                 break;
             }
             for (auto&& r : v.view->view_info()->partition_slice(db).default_row_ranges()) {
@@ -1529,9 +1529,9 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
     } else {
         // FIXME: Optimize, as most often than not clustering keys will not be restricted.
         for (auto&& rt : mp.row_tombstones()) {
-            nonwrapping_range<clustering_key_prefix_view> rtr(
-                    bound_view::to_range_bound<nonwrapping_range>(rt.start_bound()),
-                    bound_view::to_range_bound<nonwrapping_range>(rt.end_bound()));
+            nonwrapping_interval<clustering_key_prefix_view> rtr(
+                    bound_view::to_interval_bound<nonwrapping_interval>(rt.start_bound()),
+                    bound_view::to_interval_bound<nonwrapping_interval>(rt.end_bound()));
             for (auto&& vr : view_row_ranges) {
                 auto overlap = rtr.intersection(vr, cmp);
                 if (overlap) {
@@ -1558,7 +1558,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
 
     //FIXME: Unfortunate copy.
     co_return boost::copy_range<query::clustering_row_ranges>(
-            nonwrapping_range<clustering_key_prefix_view>::deoverlap(std::move(row_ranges), cmp)
+            nonwrapping_interval<clustering_key_prefix_view>::deoverlap(std::move(row_ranges), cmp)
             | boost::adaptors::transformed([] (auto&& v) {
                 return std::move(v).transform([] (auto&& ckv) { return clustering_key_prefix(ckv); });
             }));
@@ -2019,13 +2019,13 @@ void view_builder::reshard(
             return v1->id() == v2->id();
         }
     };
-    std::unordered_map<view_ptr, std::optional<nonwrapping_range<dht::token>>, view_ptr_hash, view_ptr_equals> my_status;
+    std::unordered_map<view_ptr, std::optional<nonwrapping_interval<dht::token>>, view_ptr_hash, view_ptr_equals> my_status;
     for (auto& shard_status : view_build_status_per_shard) {
         for (auto& [view, first_token, next_token] : shard_status ) {
             // We start from an open-ended range, which we'll try to restrict.
             auto& my_range = my_status.emplace(
                     std::move(view),
-                    nonwrapping_range<dht::token>::make_open_ended_both_sides()).first->second;
+                    nonwrapping_interval<dht::token>::make_open_ended_both_sides()).first->second;
             if (!next_token || !my_range) {
                 // A previous shard made no progress, so for this view we'll start over.
                 my_range = std::nullopt;
@@ -2036,7 +2036,7 @@ void view_builder::reshard(
                 // is marked as in-progress, then at least one shard will have a non-full range.
                 continue;
             }
-            wrapping_range<dht::token> other_range(first_token, *next_token);
+            wrapping_interval<dht::token> other_range(first_token, *next_token);
             if (other_range.is_wrap_around(dht::token_comparator())) {
                 // The intersection of a wrapping range with a non-wrapping range may yield more
                 // multiple non-contiguous ranges. To avoid the complexity of dealing with more

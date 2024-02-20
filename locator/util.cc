@@ -33,14 +33,14 @@ get_all_ranges(const std::vector<token>& sorted_tokens) {
     int size = sorted_tokens.size();
     dht::token_range_vector ranges;
     ranges.reserve(size);
-    ranges.push_back(dht::token_range::make_ending_with(range_bound<token>(sorted_tokens[0], true)));
+    ranges.push_back(dht::token_range::make_ending_with(interval_bound<token>(sorted_tokens[0], true)));
     co_await coroutine::maybe_yield();
     for (int i = 1; i < size; ++i) {
-        dht::token_range r(range<token>::bound(sorted_tokens[i - 1], false), range<token>::bound(sorted_tokens[i], true));
+        dht::token_range r(wrapping_interval<token>::bound(sorted_tokens[i - 1], false), wrapping_interval<token>::bound(sorted_tokens[i], true));
         ranges.push_back(r);
         co_await coroutine::maybe_yield();
     }
-    ranges.push_back(dht::token_range::make_starting_with(range_bound<token>(sorted_tokens[size-1], false)));
+    ranges.push_back(dht::token_range::make_starting_with(interval_bound<token>(sorted_tokens[size-1], false)));
 
     co_return ranges;
 }

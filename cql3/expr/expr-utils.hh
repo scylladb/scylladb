@@ -7,7 +7,7 @@
 
 #include "bytes.hh"
 #include "keys.hh"
-#include "range.hh"
+#include "interval.hh"
 #include "cql3/expr/restrictions.hh"
 #include "cql3/assignment_testable.hh"
 #include "cql3/statements/bound.hh"
@@ -44,9 +44,9 @@ extern bool is_satisfied_by(
 /// A set of discrete values.
 using value_list = std::vector<managed_bytes>; // Sorted and deduped using value comparator.
 
-/// General set of values.  Empty set and single-element sets are always value_list.  nonwrapping_range is
-/// never singular and never has start > end.  Universal set is a nonwrapping_range with both bounds null.
-using value_set = std::variant<value_list, nonwrapping_range<managed_bytes>>;
+/// General set of values.  Empty set and single-element sets are always value_list.  nonwrapping_interval is
+/// never singular and never has start > end.  Universal set is a nonwrapping_interval with both bounds null.
+using value_set = std::variant<value_list, nonwrapping_interval<managed_bytes>>;
 
 /// A set of all column values that would satisfy an expression. The _token_values variant finds
 /// matching values for the partition token function call instead of the column.
@@ -63,10 +63,10 @@ extern value_set possible_column_values(const column_definition*, const expressi
 extern value_set possible_partition_token_values(const expression&, const query_options&, const schema& table_schema);
 
 /// Turns value_set into a range, unless it's a multi-valued list (in which case this throws).
-extern nonwrapping_range<managed_bytes> to_range(const value_set&);
+extern nonwrapping_interval<managed_bytes> to_range(const value_set&);
 
 /// A range of all X such that X op val.
-nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix& val);
+nonwrapping_interval<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix& val);
 
 /// True iff the index can support the entire expression.
 extern bool is_supported_by(const expression&, const secondary_index::index&);

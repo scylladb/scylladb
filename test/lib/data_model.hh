@@ -64,7 +64,7 @@ public:
         row cells;
     };
     struct range_tombstone {
-        nonwrapping_range<key> range;
+        nonwrapping_interval<key> range;
         tombstone tomb;
     };
 
@@ -95,7 +95,7 @@ public:
     // range-tombstone is created with start <= end.
     void add_range_tombstone(const key& start, const key& end,
             tombstone tomb = tombstone(previously_removed_column_timestamp, gc_clock::time_point()));
-    void add_range_tombstone(nonwrapping_range<key> range,
+    void add_range_tombstone(nonwrapping_interval<key> range,
             tombstone tomb = tombstone(previously_removed_column_timestamp, gc_clock::time_point()));
 
     mutation build(schema_ptr s) const;

@@ -406,7 +406,7 @@ test_something_with_some_interesting_ranges_and_sharder(std::function<void (cons
     auto t3 = token_from_long(int64_t(1));
     auto t4 = token_from_long(int64_t(0x7fff'ffff'ffff'fffe));
     auto make_bound = [] (dht::ring_position rp) {
-        return std::make_optional(range_bound<dht::ring_position>(std::move(rp)));
+        return std::make_optional(interval_bound<dht::ring_position>(std::move(rp)));
     };
     auto some_murmur3_ranges = {
             dht::partition_range::make_open_ended_both_sides(),
@@ -490,7 +490,7 @@ test_something_with_some_interesting_ranges_and_sharder_with_token_range(std::fu
     auto t3 = token_from_long(int64_t(1));
     auto t4 = token_from_long(int64_t(0x7fff'ffff'ffff'fffe));
     auto make_bound = [] (dht::token t) {
-        return range_bound<dht::token>(std::move(t));
+        return interval_bound<dht::token>(std::move(t));
     };
     auto some_ranges = {
             dht::token_range::make_open_ended_both_sides(),

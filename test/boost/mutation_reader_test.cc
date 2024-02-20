@@ -1345,9 +1345,9 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
         range(inf, inf) { }
         range(bound b) : start(b), end(b), singular(true) { }
 
-        static std::optional<range_bound<clustering_key>> to_bound(const schema& s, std::optional<bound> b) {
+        static std::optional<interval_bound<clustering_key>> to_bound(const schema& s, std::optional<bound> b) {
             if (b) {
-                return range_bound<clustering_key>(b->value.to_clustering_key(s), b->inclusive);
+                return interval_bound<clustering_key>(b->value.to_clustering_key(s), b->inclusive);
             }
             return {};
         }

@@ -856,7 +856,7 @@ public:
             dht::token_range_vector ranges;
             auto tstart = start_token.empty() ? dht::minimum_token() : dht::token::from_sstring(sstring(start_token));
             auto tend = end_token.empty() ? dht::maximum_token() : dht::token::from_sstring(sstring(end_token));
-            range<dht::token> r({{ std::move(tstart), false }}, {{ std::move(tend), true }});
+            wrapping_interval<dht::token> r({{ std::move(tstart), false }}, {{ std::move(tend), true }});
             auto cf = sstring(cfName);
             auto splits = _ss.local().get_splits(current_keyspace(), cf, std::move(r), keys_per_split);
 
@@ -1500,8 +1500,8 @@ private:
         validate_key(s, ck, v);
         return query::clustering_range::bound(std::move(ck), last != exclusiveness_marker);
     }
-    static range<clustering_key_prefix> make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
-        using bound = range<clustering_key_prefix>::bound;
+    static wrapping_interval<clustering_key_prefix> make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
+        using bound = wrapping_interval<clustering_key_prefix>::bound;
         std::optional<bound> start_bound;
         if (!start.empty()) {
             start_bound = make_clustering_bound(s, to_bytes_view(start), composite::eoc::end);
@@ -1520,8 +1520,8 @@ private:
         }
         return query::clustering_range(std::move(range));
     }
-    static range<bytes> make_range(const std::string& start, const std::string& end) {
-        using bound = range<bytes>::bound;
+    static wrapping_interval<bytes> make_range(const std::string& start, const std::string& end) {
+        using bound = wrapping_interval<bytes>::bound;
         std::optional<bound> start_bound;
         if (!start.empty()) {
             start_bound = bound(to_bytes(start));
@@ -1860,13 +1860,13 @@ private:
         return ret;
     }
     template<typename RangeType, typename Comparator, typename RangeComparator>
-    static std::vector<nonwrapping_range<RangeType>> make_non_overlapping_ranges(
+    static std::vector<nonwrapping_interval<RangeType>> make_non_overlapping_ranges(
             std::vector<ColumnSlice> column_slices,
-            const std::function<wrapping_range<RangeType>(ColumnSlice&&)> mapper,
+            const std::function<wrapping_interval<RangeType>(ColumnSlice&&)> mapper,
             Comparator&& cmp,
             RangeComparator&& is_wrap_around,
             bool reversed) {
-        std::vector<nonwrapping_range<RangeType>> ranges;
+        std::vector<nonwrapping_interval<RangeType>> ranges;
         std::transform(column_slices.begin(), column_slices.end(), std::back_inserter(ranges), [&](auto&& cslice) {
             auto range = mapper(std::move(cslice));
             if (!reversed && is_wrap_around(range)) {
@@ -1878,12 +1878,12 @@ private:
                 if (is_wrap_around(range)) {
                     // If a wrap around range is still wrapping after reverse, then it's (a, a). This is equivalent
                     // to an open ended range.
-                    range = wrapping_range<RangeType>::make_open_ended_both_sides();
+                    range = wrapping_interval<RangeType>::make_open_ended_both_sides();
                 }
             }
-            return nonwrapping_range<RangeType>(std::move(range));
+            return nonwrapping_interval<RangeType>(std::move(range));
         });
-        return nonwrapping_range<RangeType>::deoverlap(std::move(ranges), std::forward<Comparator>(cmp));
+        return nonwrapping_interval<RangeType>::deoverlap(std::move(ranges), std::forward<Comparator>(cmp));
     }
     static range_tombstone make_range_tombstone(const schema& s, const SliceRange& range, tombstone tomb) {
         using bound = query::clustering_range::bound;

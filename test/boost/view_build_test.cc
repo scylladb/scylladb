@@ -824,7 +824,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
                 mut_desc.add_clustered_cell({int32_type->decompose(data_value(ck))}, "v", tests::data_model::mutation_description::value(blob_100kb));
             }
             // Reproduces #14503
-            mut_desc.add_range_tombstone(nonwrapping_range<tests::data_model::mutation_description::key>::make_open_ended_both_sides());
+            mut_desc.add_range_tombstone(nonwrapping_interval<tests::data_model::mutation_description::key>::make_open_ended_both_sides());
             muts.push_back(mut_desc.build(schema));
             partition_rows.emplace(muts.back().decorated_key(), partition_size_100kb);
         }

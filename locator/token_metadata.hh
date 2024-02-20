@@ -18,7 +18,7 @@
 #include <memory>
 #include <boost/range/iterator_range.hpp>
 #include <boost/icl/interval.hpp>
-#include "range.hh"
+#include "interval.hh"
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
@@ -251,8 +251,8 @@ public:
      * Number of returned ranges = O(1)
      */
     dht::token_range_vector get_primary_ranges_for(token right) const;
-    static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
-    static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
+    static boost::icl::interval<token>::interval_type range_to_interval(wrapping_interval<dht::token> r);
+    static wrapping_interval<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
     future<> update_topology_change_info(dc_rack_fn& get_dc_rack);
 

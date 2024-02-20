@@ -37,7 +37,7 @@
 using namespace std::chrono_literals;
 using namespace seastar;
 namespace fs = std::filesystem;
-using int_range = nonwrapping_range<int>;
+using int_range = nonwrapping_interval<int>;
 
 namespace sstables {
     extern bool use_binary_search_in_promoted_index;

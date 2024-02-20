@@ -7,21 +7,21 @@
  */
 
 template<typename T>
-class range_bound {
+class interval_bound {
     T value();
     bool is_inclusive();
 };
 
 template<typename T>
-class range {
-    std::optional<range_bound<T>> start();
-    std::optional<range_bound<T>> end();
+class wrapping_interval {
+    std::optional<interval_bound<T>> start();
+    std::optional<interval_bound<T>> end();
     bool is_singular();
 };
 
 template<typename T>
-class nonwrapping_range {
-    std::optional<range_bound<T>> start();
-    std::optional<range_bound<T>> end();
+class nonwrapping_interval {
+    std::optional<interval_bound<T>> start();
+    std::optional<interval_bound<T>> end();
     bool is_singular();
 };
