@@ -307,7 +307,9 @@ ratio_holder filter_recent_false_positive_as_ratio_holder(const sstables::shared
 void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace>& sys_ks) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         std::vector<sstring> res;
-        ctx.db.local().get_tables_metadata().for_each_table_id([&] (const std::pair<sstring, sstring>& kscf, table_id) {
+        const replica::database::tables_metadata& meta = ctx.db.local().get_tables_metadata();
+        res.reserve(meta.size());
+        meta.for_each_table_id([&] (const std::pair<sstring, sstring>& kscf, table_id) {
             res.push_back(kscf.first + ":" + kscf.second);
         });
         return res;
@@ -328,6 +330,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     cf::get_column_family_name_keyspace.set(r, [&ctx] (const_req req){
         std::vector<sstring> res;
         const flat_hash_map<sstring, replica::keyspace>& keyspaces = ctx.db.local().get_keyspaces();
+        res.reserve(keyspaces.size());
         for (const auto& i : keyspaces) {
             res.push_back(i.first);
         }
