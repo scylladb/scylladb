@@ -424,3 +424,72 @@ BOOST_AUTO_TEST_CASE(test_intersection) {
     BOOST_REQUIRE_EQUAL(r13.intersection(nwr(b(0), b(123, false)), cmp), std::nullopt);
     BOOST_REQUIRE_EQUAL(r13.intersection(nwr(b(0), b(1000)), cmp), nwr(b(123), b(123)));
 }
+
+BOOST_AUTO_TEST_CASE(test_before_point) {
+    using r = interval<unsigned>;
+    using b = r::bound;
+    auto cmp = unsigned_comparator();
+
+    BOOST_REQUIRE_EQUAL(r::make_open_ended_both_sides().before(8, cmp), false);
+    BOOST_REQUIRE_EQUAL(r::make_ending_with(10).before(8, cmp), false);
+    BOOST_REQUIRE_EQUAL(r::make_ending_with(10).before(100, cmp), false);
+    BOOST_REQUIRE_EQUAL(r::make_starting_with(10).before(8, cmp), true);
+    BOOST_REQUIRE_EQUAL(r::make_starting_with(10).before(10, cmp), false);
+    BOOST_REQUIRE_EQUAL(r::make_starting_with({10, true}).before(10, cmp), false);
+    BOOST_REQUIRE_EQUAL(r::make_starting_with({10, false}).before(10, cmp), true);
+    BOOST_REQUIRE_EQUAL(r::make_starting_with(10).before(100, cmp), false);
+    BOOST_REQUIRE_EQUAL(r::make_singular(10).before(8, cmp), true);
+    BOOST_REQUIRE_EQUAL(r::make_singular(10).before(10, cmp), false);
+    BOOST_REQUIRE_EQUAL(r::make_singular(10).before(100, cmp), false);
+    BOOST_REQUIRE_EQUAL(r::make(b(10, true), b(11, true)).before(10, cmp), false);
+    BOOST_REQUIRE_EQUAL(r::make(b(10, false), b(11, true)).before(10, cmp), true);
+    BOOST_REQUIRE_EQUAL(r::make(b(10, true), b(11, true)).before(11, cmp), false);
+    BOOST_REQUIRE_EQUAL(r::make(b(10, true), b(11, true)).before(100, cmp), false);
+}
+
+BOOST_AUTO_TEST_CASE(test_before_interval) {
+    using r = interval<unsigned>;
+    using b = r::bound;
+    auto cmp = unsigned_comparator();
+
+    auto check = [&] (const r& r1, const r& r2, bool is_before, std::source_location sl = std::source_location::current()) {
+        BOOST_TEST_MESSAGE(fmt::format("check() @ {}:{} {} before {} -> {}", sl.file_name(), sl.line(), r2, r1, is_before));
+        BOOST_REQUIRE_EQUAL(r1.other_is_before(r2, cmp), is_before);
+    };
+
+    check(r::make_open_ended_both_sides(), r::make_singular(10), false);
+    check(r::make_open_ended_both_sides(), r::make_starting_with(10), false);
+    check(r::make_open_ended_both_sides(), r::make_ending_with(10), false);
+    check(r::make_open_ended_both_sides(), r::make(b(10, false), b(11, true)), false);
+    check(r::make_open_ended_both_sides(), r::make(b(10, false), b(11, false)), false);
+
+    // Check with intervals that has inclusive start bound with value 10
+    for (const auto& i : {r::make_starting_with(10), r::make_starting_with({10, true}), r::make_singular(10), r::make(b{10, true}, b{11, true})}) {
+        check(i, r::make_starting_with(1), false);
+        check(i, r::make_starting_with(10), false);
+        check(i, r::make_starting_with(100), false);
+        check(i, r::make(b(10, false), b(11, true)), false);
+        check(i, r::make(b(10, false), b(11, false)), false);
+        check(i, r::make_singular(8), true);
+        check(i, r::make_singular(10), false);
+        check(i, r::make_singular(10), false);
+        check(i, r::make_singular(100), false);
+        check(i, r::make_ending_with(8), true);
+        check(i, r::make_ending_with(10), false);
+        check(i, r::make_ending_with({10, true}), false);
+        check(i, r::make_ending_with({10, false}), true);
+        check(i, r::make_ending_with(100), false);
+        check(i, r::make(b{1, false}, b{10, true}), false);
+        check(i, r::make(b{1, false}, b{10, true}), false);
+        check(i, r::make(b{1, false}, b{10, false}), true);
+    }
+
+    // Check with intervals that has exclusive start bound with value 10
+    for (const auto& i : {r::make_starting_with({10, false}), r::make(b{10, false}, b{11, true})}) {
+        check(i, r::make_singular(10), true);
+        check(i, r::make_ending_with({10, true}), true);
+        check(i, r::make_ending_with({10, false}), true);
+        check(i, r::make(b{1, false}, b{10, true}), true);
+        check(i, r::make(b{1, false}, b{10, false}), true);
+    }
+}
