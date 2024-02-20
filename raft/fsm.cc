@@ -1133,39 +1133,40 @@ void fsm::stop() {
     }
 }
 
-std::ostream& operator<<(std::ostream& os, const fsm& f) {
-    fmt::print(os, "current term: {}, current leader: {}, len messages: {}, voted_for: {}, commit idx: {}, log ({}), ",
+} // end of namespace raft
+
+auto fmt::formatter<raft::fsm>::format(const raft::fsm& f, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "current term: {}, current leader: {}, len messages: {}, voted_for: {}, commit idx: {}, log ({}), ",
                f._current_term, f.current_leader(), f._messages.size(), f._voted_for, f._commit_idx, f._log);
-    fmt::print(os, "observed (current term: {}, voted for {}, commit index: {}), ",
+    out = fmt::format_to(out, "observed (current term: {}, voted for {}, commit index: {}), ",
                f._observed._current_term, f._observed._voted_for, f._observed._commit_idx);
-    fmt::print(os, "current time: {}, last election time: {}, ",
+    out = fmt::format_to(out, "current time: {}, last election time: {}, ",
                f._clock.now(), f._last_election_time);
     if (f.is_candidate()) {
-        fmt::print(os, "votes ({}), ", f.candidate_state().votes);
+        out = fmt::format_to(out, "votes ({}), ", f.candidate_state().votes);
     }
-    fmt::print(os, "messages: {}, ", f._messages.size());
-    if (std::holds_alternative<leader>(f._state)) {
-        fmt::print(os, "leader, ");
-    } else if (std::holds_alternative<candidate>(f._state)) {
-        fmt::print(os, "candidate");
-    } else if (std::holds_alternative<follower>(f._state)) {
-        fmt::print(os, "follower");
+    out = fmt::format_to(out, "messages: {}, ", f._messages.size());
+    if (std::holds_alternative<raft::leader>(f._state)) {
+        out = fmt::format_to(out, "leader, ");
+    } else if (std::holds_alternative<raft::candidate>(f._state)) {
+        out = fmt::format_to(out, "candidate");
+    } else if (std::holds_alternative<raft::follower>(f._state)) {
+        out = fmt::format_to(out, "follower");
     }
     if (f.is_leader()) {
-        fmt::print(os, "followers (");
+        out = fmt::format_to(out, "followers (");
         for (const auto& [server_id, follower_progress]: f.leader_state().tracker) {
-            fmt::print(os, "{}, {}, {}, ", server_id, follower_progress.next_idx, follower_progress.match_idx);
-            if (follower_progress.state == follower_progress::state::PROBE) {
-                fmt::print(os, "PROBE, ");
-            } else if (follower_progress.state == follower_progress::state::PIPELINE) {
-                fmt::print(os, "PIPELINE, ");
+            out = fmt::format_to(out, "{}, {}, {}, ", server_id, follower_progress.next_idx, follower_progress.match_idx);
+            if (follower_progress.state == raft::follower_progress::state::PROBE) {
+                out = fmt::format_to(out, "PROBE, ");
+            } else if (follower_progress.state == raft::follower_progress::state::PIPELINE) {
+                out = fmt::format_to(out, "PIPELINE, ");
             }
-            fmt::print(os, "{}; ", follower_progress.in_flight);
+            out = fmt::format_to(out, "{}; ", follower_progress.in_flight);
         }
-        fmt::print(os, ")");
-
+        out = fmt::format_to(out, ")");
     }
-    return os;
+    return out;
 }
-
-} // end of namespace raft

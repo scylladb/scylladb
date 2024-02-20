@@ -479,7 +479,7 @@ public:
 
     server_id id() const { return _my_id; }
 
-    friend std::ostream& operator<<(std::ostream& os, const fsm& f);
+    friend fmt::formatter<fsm>;
     friend leader;
 };
 
@@ -650,3 +650,7 @@ void fsm::step(server_id from, Message&& msg) {
 }
 
 } // namespace raft
+
+template <> struct fmt::formatter<raft::fsm> : fmt::formatter<string_view> {
+    auto format(const raft::fsm&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
