@@ -5505,15 +5505,21 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
             if (!trinfo) {
                 throw std::runtime_error(fmt::format("No transition info for tablet {}", tablet));
             }
-            if (trinfo->stage != locator::tablet_transition_stage::cleanup) {
-                throw std::runtime_error(fmt::format("Tablet {} stage is not at cleanup", tablet));
+
+            if (trinfo->stage == locator::tablet_transition_stage::cleanup) {
+                auto& tinfo = tmap.get_tablet_info(tablet.tablet);
+                locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
+                if (leaving_replica.host != tm->get_my_id()) {
+                    throw std::runtime_error(fmt::format("Tablet {} has leaving replica different than this one", tablet));
+                }
+            } else if (trinfo->stage == locator::tablet_transition_stage::cleanup_target) {
+                if (trinfo->pending_replica.host != tm->get_my_id()) {
+                    throw std::runtime_error(fmt::format("Tablet {} has pending replica different than this one", tablet));
+                }
+            } else {
+                throw std::runtime_error(fmt::format("Tablet {} stage is not at cleanup/cleanup_target", tablet));
             }
 
-            auto& tinfo = tmap.get_tablet_info(tablet.tablet);
-            locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-            if (leaving_replica.host != tm->get_my_id()) {
-                throw std::runtime_error(fmt::format("Tablet {} has leaving replica different than this one", tablet));
-            }
             auto shard_opt = tmap.get_shard(tablet.tablet, tm->get_my_id());
             if (!shard_opt) {
                 on_internal_error(rtlogger, format("Tablet {} has no shard on this node", tablet));

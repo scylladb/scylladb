@@ -157,6 +157,8 @@ enum class tablet_transition_stage {
     write_both_read_new,
     use_new,
     cleanup,
+    cleanup_target,
+    revert_migration,
     end_migration,
 };
 
