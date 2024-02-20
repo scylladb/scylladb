@@ -3230,11 +3230,13 @@ future<> repair_service::cleanup_history(tasks::task_id repair_id) {
 }
 
 future<> repair_service::load_history() {
-    co_await get_db().local().get_tables_metadata().for_each_table_gently(coroutine::lambda([&] (table_id table_uuid, lw_shared_ptr<replica::table> table) -> future<> {
-        auto shard = unsigned(table_uuid.uuid().get_most_significant_bits()) % smp::count;
+    co_await get_db().local().get_tables_metadata().parallel_for_each_table(coroutine::lambda([&] (table_id table_uuid, lw_shared_ptr<replica::table> table) -> future<> {
+        auto shard = utils::uuid_xor_to_uint32(table_uuid.uuid()) % smp::count;
         if (shard != this_shard_id()) {
             co_return;
         }
+        auto permit = co_await seastar::get_units(_load_parallelism_semaphore, 1);
+
         rlogger.info("Loading repair history for keyspace={}, table={}, table_uuid={}",
                 table->schema()->ks_name(), table->schema()->cf_name(), table_uuid);
         co_await _sys_ks.local().get_repair_history(table_uuid, [this] (const auto& entry) -> future<> {

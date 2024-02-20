@@ -108,6 +108,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 
     size_t _max_repair_memory;
     seastar::semaphore _memory_sem;
+    seastar::named_semaphore _load_parallelism_semaphore = {16, named_semaphore_exception_factory{"Load repair history parallelism"}};
 
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
