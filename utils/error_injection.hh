@@ -119,9 +119,12 @@ class error_injection {
         size_t received_message_count{0};
         condition_variable received_message_cv;
         error_injection_parameters parameters;
+        sstring injection_name;
 
-        explicit injection_shared_data(error_injection_parameters parameters)
-            : parameters(std::move(parameters)) {}
+        explicit injection_shared_data(error_injection_parameters parameters, std::string_view injection_name)
+            : parameters(std::move(parameters))
+            , injection_name(injection_name)
+            {}
     };
 
     class injection_data;
@@ -202,9 +205,9 @@ private:
         lw_shared_ptr<injection_shared_data> shared_data;
         bi::list<injection_handler, bi::constant_time_size<false>> handlers;
 
-        explicit injection_data(bool one_shot, error_injection_parameters parameters)
+        explicit injection_data(bool one_shot, error_injection_parameters parameters, std::string_view injection_name)
             : one_shot(one_shot)
-            , shared_data(make_lw_shared<injection_shared_data>(std::move(parameters))) {}
+            , shared_data(make_lw_shared<injection_shared_data>(std::move(parameters), injection_name)) {}
 
         void receive_message() {
             assert(shared_data);
@@ -222,21 +225,8 @@ private:
         }
     };
 
-    // String cross-type comparator
-    class str_less
-    {
-    public:
-        using is_transparent = std::true_type;
-
-        template<typename TypeLeft, typename TypeRight>
-        bool operator()(const TypeLeft& left, const TypeRight& right) const
-        {
-            return left < right;
-        }
-    };
     // Map enabled-injection-name -> is-one-shot
-    // TODO: change to unordered_set once we have heterogeneous lookups
-    std::map<sstring, injection_data, str_less> _enabled;
+    std::unordered_map<std::string_view, injection_data> _enabled;
 
     bool is_one_shot(const std::string_view& injection_name) const {
         const auto it = _enabled.find(injection_name);
@@ -283,18 +273,15 @@ public:
     }
 
     void enable(const std::string_view& injection_name, bool one_shot = false, error_injection_parameters parameters = {}) {
-        _enabled.emplace(injection_name, injection_data{one_shot, std::move(parameters)});
+        auto data = injection_data{one_shot, std::move(parameters), injection_name};
+        std::string_view name = data.shared_data->injection_name;
+        _enabled.emplace(name, std::move(data));
         errinj_logger.debug("Enabling injection {} \"{}\"",
                 one_shot? "one-shot ": "", injection_name);
     }
 
     void disable(const std::string_view& injection_name) {
-        // TODO: plain erase once _enabled has heterogeneous lookups
-        auto it = _enabled.find(injection_name);
-        if (it == _enabled.end()) {
-            return;
-        }
-        _enabled.erase(it);
+        _enabled.erase(injection_name);
     }
 
     void disable_all() {
