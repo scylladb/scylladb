@@ -764,6 +764,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\tworkdir        the node will open the maintenance socket on the path <scylla's workdir>/cql.m,\n"
         "\t               where <scylla's workdir> is a path defined by the workdir configuration option\n"
         "\t<socket path>  the node will open the maintenance socket on the path <socket path>")
+    , maintenance_socket_group(this, "maintenance_socket_group", value_status::Used, "",
+        "The group that the maintenance socket will be owned by. If not set, the group will be the same as the user running the scylla node.")
     , maintenance_mode(this, "maintenance_mode", value_status::Used, false, "If set to true, the node will not connect to other nodes. It will only serve requests to its local data.")
     , native_transport_port_ssl(this, "native_transport_port_ssl", value_status::Used, 9142,
         "Port on which the CQL TLS native transport listens for clients."
