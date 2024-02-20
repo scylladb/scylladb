@@ -50,6 +50,14 @@ namespace bpo = boost::program_options;
 using namespace std::chrono_literals;
 using namespace tools::utils;
 
+namespace std {
+// required by boost::lexical_cast<std::string>(vector<string>), which is in turn used
+// by boost::program_option for printing out the default value of an option
+static std::ostream& operator<<(std::ostream& os, const std::vector<sstring>& v) {
+    return os << fmt::format("{{{}}}", fmt::join(v, ", "));
+}
+}
+
 // mimic the behavior of FileUtils::stringifyFileSize
 struct file_size_printer {
     uint64_t value;
