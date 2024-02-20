@@ -43,6 +43,10 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
             {
                 'name': 'group0-raft-op-timeout-in-ms',
                 'value': raft_op_timeout
+            },
+            {
+                'name': 'raft-group-registry-fd-threshold-in-ms',
+                'value': '500'
             }
         ]
     }
@@ -60,7 +64,7 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
                          manager.server_stop_gracefully(servers[3].server_id))
 
     logger.info("starting a fifth node with no quorum")
-    await manager.server_add(expected_error="raft operation [read_barrier] timed out",
+    await manager.server_add(expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
                              timeout=60)
 
     logger.info("done")

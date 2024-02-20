@@ -290,8 +290,11 @@ seastar::future<> raft_group_registry::start() {
     // then to send VoteRequest messages.
     init_rpc_verbs();
 
-    _direct_fd_subscription.emplace(co_await _direct_fd.register_listener(*_direct_fd_proxy,
-        direct_fd_clock::base::duration{std::chrono::seconds{1}}.count()));
+    direct_fd_clock::base::duration threshold{std::chrono::seconds{1}};
+    if (const auto ms = utils::get_local_injector().inject_parameter<int64_t>("raft-group-registry-fd-threshold-in-ms"); ms) {
+        threshold = direct_fd_clock::base::duration{std::chrono::milliseconds{*ms}};
+    }
+    _direct_fd_subscription.emplace(co_await _direct_fd.register_listener(*_direct_fd_proxy, threshold.count()));
 }
 
 const raft::server_id& raft_group_registry::get_my_raft_id() {
@@ -468,8 +471,40 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
         if (!expiry.abort_source().abort_requested() || (as && as->abort_requested())) {
             throw;
         }
-        // TODO: improve error message (check for quorum loss etc)
-        const auto message = ::format("group [{}] raft operation [{}] timed out", _group_server.gid, op_name);
+        sstring quorum_message;
+        {
+            auto fd = _registry.failure_detector();
+            const auto& am = _registry.address_map();
+            unsigned voters_count = 0;
+            std::vector<raft::server_id> dead_voters;
+            for (const auto& c: _group_server.server->get_configuration().current) {
+                if (c.can_vote) {
+                    ++voters_count;
+                    if (!fd->is_alive(c.addr.id)) {
+                        dead_voters.push_back(c.addr.id);
+                    }
+                }
+            }
+            if (voters_count > 0 && dead_voters.size() >= (voters_count + 1) / 2) {
+                std::string dead_voters_str;
+                for (const auto id: dead_voters) {
+                    const auto ip = am.find(id);
+                    if (ip) {
+                        fmt::format_to(std::back_inserter(dead_voters_str), ",{}", *ip);
+                    } else {
+                        fmt::format_to(std::back_inserter(dead_voters_str), ",{}", id);
+                    }
+                    if (dead_voters_str.size() > 512) {
+                        dead_voters_str.append("...");
+                        break;
+                    }
+                }
+                quorum_message = ::format(", there is no raft quorum, total voters count {}, alive voters count {}, dead voters [{}]",
+                    voters_count, voters_count - dead_voters.size(), std::string_view(dead_voters_str).substr(1));
+            }
+        }
+        const auto message = ::format("group [{}] raft operation [{}] timed out{}",
+            _group_server.gid, op_name, quorum_message);
         static thread_local logger::rate_limit rate_limit{std::chrono::seconds(1)};
         rslog.log(log_level::warn, rate_limit, "{}; timeout requested at [{}], original error {}",
             message, fmt_loc(timeout->loc), std::current_exception());
