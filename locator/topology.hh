@@ -10,10 +10,13 @@
 
 #pragma once
 
+#include <boost/intrusive/link_mode.hpp>
 #include <unordered_set>
 #include <unordered_map>
 #include <compare>
 #include <iostream>
+
+#include <boost/intrusive/list.hpp>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
@@ -114,6 +117,10 @@ private:
     // Is this node the `localhost` instance
     this_node _is_this_node;
     idx_type _idx = -1;
+
+    using list_hook_t = boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>;
+    list_hook_t _dc_hook;
+    list_hook_t _rack_hook;
 
 public:
     node(const locator::topology* topology,
@@ -245,6 +252,20 @@ public:
     future<> clear_gently() noexcept;
 
 public:
+    struct datacenter_inventory {
+        using dc_nodes_list_t = boost::intrusive::list<node,
+            boost::intrusive::member_hook<node, node::list_hook_t, &node::_dc_hook>,
+            boost::intrusive::constant_time_size<false>>;
+        dc_nodes_list_t nodes;
+        size_t node_count;
+
+        using rack_nodes_list_t = boost::intrusive::list<node,
+            boost::intrusive::member_hook<node, node::list_hook_t, &node::_rack_hook>,
+            boost::intrusive::constant_time_size<false>>;
+        std::unordered_map<const rack*, rack_nodes_list_t> racks;
+    };
+    using inventory_map = std::unordered_map<const datacenter*, datacenter_inventory>;
+
     topology_registry& get_topology_registry() const noexcept {
         return _topology_registry;
     }
@@ -328,34 +349,41 @@ public:
      */
     bool has_endpoint(inet_address) const;
 
-    std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>
-    get_datacenter_endpoints() const {
-        return _dc_endpoints;
+    // Return the total number of nodes.
+    size_t node_count() const noexcept {
+        return _nodes.size();
+    }
+
+    // Return the number of nodes in the datacenter.
+    // datacenter must exist in topology.
+    size_t node_count(const datacenter* dc) const {
+        return _inventory_map.at(dc).node_count;
     }
 
     std::unordered_map<sstring,
+                           std::unordered_set<inet_address>>
+    get_datacenter_endpoints() const;
+
+    std::unordered_map<sstring,
                             std::unordered_set<const node*>>
-    get_datacenter_nodes() const {
-        return _dc_nodes;
-    }
+    get_datacenter_nodes() const;
 
     std::unordered_map<sstring,
                        std::unordered_map<sstring,
                                           std::unordered_set<inet_address>>>
-    get_datacenter_racks() const {
-        return _dc_racks;
-    }
+    get_datacenter_racks() const;
 
-    std::unordered_set<sstring> get_datacenter_names() const noexcept {
-        return _datacenters;
-    }
+    std::unordered_set<sstring> get_datacenter_names() const noexcept;
 
     const datacenter* find_datacenter(sstring_view name) const noexcept {
-        if (const auto* dc = _topology_registry.find_datacenter(name); _dc_rack_nodes.contains(dc->name)) {
+        if (const auto* dc = _topology_registry.find_datacenter(name); _inventory_map.contains(dc)) {
             return dc;
         }
         return nullptr;
+    }
+
+    const inventory_map& get_inventory() const noexcept {
+        return _inventory_map;
     }
 
     // Get dc/rack location of this node
@@ -420,6 +448,9 @@ public:
 
     void for_each_node(std::function<void(const node*)> func) const;
 
+    // Call func for every node in the datacenter
+    void for_each_node(const datacenter*, std::function<void(const node*)> func) const;
+
     host_id my_host_id() const noexcept {
         return _cfg.this_host_id;
     }
@@ -448,8 +479,8 @@ private:
     static std::string debug_format(const node*);
 
     void index_node(node* node, const endpoint_dc_rack& dr);
-    void unindex_node(const node* node);
-    node_holder pop_node(const node* node);
+    void unindex_node(node* node);
+    node_holder pop_node(node* node);
 
     static node* make_mutable(const node* nptr) {
         return const_cast<node*>(nptr);
@@ -474,23 +505,9 @@ private:
     std::unordered_map<host_id, const node*> _nodes_by_host_id;
     std::unordered_map<inet_address, const node*> _nodes_by_endpoint;
 
-    std::unordered_map<sstring, std::unordered_set<const node*>> _dc_nodes;
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<const node*>>> _dc_rack_nodes;
-
-    /** multi-map: DC -> endpoints in that DC */
-    std::unordered_map<sstring,
-                       std::unordered_set<inet_address>>
-        _dc_endpoints;
-
-    /** map: DC -> (multi-map: rack -> endpoints in that rack) */
-    std::unordered_map<sstring,
-                       std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>
-        _dc_racks;
+    inventory_map _inventory_map;
 
     bool _sort_by_proximity = true;
-
-    std::unordered_set<sstring> _datacenters;
 
     const std::unordered_map<inet_address, const node*>& get_nodes_by_endpoint() const noexcept {
         return _nodes_by_endpoint;
