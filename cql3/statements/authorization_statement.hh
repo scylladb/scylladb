@@ -37,7 +37,7 @@ protected:
 
 class authorization_altering_statement : public authorization_statement {
 public:
-    virtual bool needs_guard(query_processor& qp) const override;
+    virtual bool needs_guard(query_processor& qp, service::query_state& state) const override;
 };
 
 }

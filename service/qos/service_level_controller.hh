@@ -170,6 +170,13 @@ public:
         return sl_it->second;
     }
 
+public:
+
+    /**
+     * Returns true if service levels module is running under raft
+     */
+    bool is_v2() const;
+
 private:
     /**
      *  Adds a service level configuration if it doesn't exists, and updates

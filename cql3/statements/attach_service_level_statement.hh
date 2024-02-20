@@ -21,7 +21,7 @@ class attach_service_level_statement final : public service_level_statement {
 
 public:
     attach_service_level_statement(sstring service_level, sstring role_name);
-    virtual bool needs_guard(query_processor& qp) const override;
+    virtual bool needs_guard(query_processor& qp, service::query_state&) const override;
     std::unique_ptr<cql3::statements::prepared_statement> prepare(data_dictionary::database db, cql_stats &stats) override;
     virtual future<> check_access(query_processor& qp, const service::client_state&) const override;
     virtual future<::shared_ptr<cql_transport::messages::result_message>>

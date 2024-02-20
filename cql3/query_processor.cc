@@ -547,7 +547,7 @@ template<typename... Args>
 future<::shared_ptr<result_message>>
 query_processor::execute_maybe_with_guard(service::query_state& query_state, ::shared_ptr<cql_statement> statement, const query_options& options,
     future<::shared_ptr<result_message>>(query_processor::*fn)(service::query_state&, ::shared_ptr<cql_statement>, const query_options&, std::optional<service::group0_guard>, Args...), Args... args) {
-    if (!statement->needs_guard(*this)) {
+    if (!statement->needs_guard(*this, query_state)) {
         return (this->*fn)(query_state, std::move(statement), options, std::nullopt, std::forward<Args>(args)...);
     }
     static auto exec = [fn] (query_processor& qp, Args... args, service::query_state& query_state, ::shared_ptr<cql_statement> statement, const query_options& options, std::optional<service::group0_guard> guard) {

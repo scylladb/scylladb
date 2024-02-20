@@ -402,6 +402,11 @@ future<> service_level_controller::do_add_service_level(sstring name, service_le
     return make_ready_future();
 }
 
+bool service_level_controller::is_v2() const {
+    //FIXME: return actual state (fixed with migration commit)
+    return false;
+}
+
 future<> service_level_controller::do_remove_service_level(sstring name, bool remove_static) {
     auto service_level_it = _service_levels_db.find(name);
     if (service_level_it != _service_levels_db.end()) {

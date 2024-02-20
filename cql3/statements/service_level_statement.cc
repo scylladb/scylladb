@@ -24,5 +24,9 @@ future<> service_level_statement::check_access(query_processor& qp, const servic
     return make_ready_future<>();
 }
 
+bool service_level_statement::needs_guard(query_processor&, service::query_state& state) const {
+    return state.get_service_level_controller().is_v2();
+}
+
 }
 }

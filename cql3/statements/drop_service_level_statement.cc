@@ -18,8 +18,7 @@ namespace cql3 {
 namespace statements {
 
 drop_service_level_statement::drop_service_level_statement(sstring service_level, bool if_exists) :
-    _service_level(service_level), _if_exists(if_exists) {
-}
+    _service_level(service_level), _if_exists(if_exists) {}
 
 std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::drop_service_level_statement::prepare(
