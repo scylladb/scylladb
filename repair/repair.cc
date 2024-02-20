@@ -1039,6 +1039,10 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
             // Get the range parallelism specified by user
             auto user_permit = _user_ranges_parallelism ? co_await seastar::get_units(*_user_ranges_parallelism, 1) : semaphore_units<>();
             co_await repair_range(range, table_info);
+            if (2 * (_ranges_complete + 1) > ranges_size()) {
+                co_await utils::get_local_injector().inject_with_handler("repair_shard_repair_task_impl_do_repair_ranges",
+                [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+            }
             ++_ranges_complete;
             if (_reason == streaming::stream_reason::bootstrap) {
                 rs.get_metrics().bootstrap_finished_ranges++;
@@ -1062,11 +1066,6 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
                 rs.get_metrics().decommission_finished_percentage(),
                 rs.get_metrics().removenode_finished_percentage(),
                 rs.get_metrics().repair_finished_percentage());
-
-            if (2 * (_ranges_complete + 1) > ranges_size()) {
-                co_await utils::get_local_injector().inject_with_handler("repair_shard_repair_task_impl_do_repair_ranges",
-                [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
-            }
         });
 
         if (_reason != streaming::stream_reason::repair) {
