@@ -209,8 +209,7 @@ std::ostream& operator<<(std::ostream& os, const mutation& m) {
         ++column_iterator;
     }
 
-    fmt::print(os, "token: {}}}, ", dk._token);
-    os << mutation_partition::printer(s, m.partition()) << "\n}";
+    fmt::print(os, "token: {}}}, {}\n}}", dk._token, mutation_partition::printer(s, m.partition()));
     return os;
 }
 
