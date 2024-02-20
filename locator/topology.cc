@@ -364,8 +364,6 @@ void topology::index_node(node* node, const endpoint_dc_rack& dr) {
     _dc_racks[dc][rack].insert(endpoint);
     _datacenters.insert(dc);
 
-    node->_dc_rack = std::move(loc);
-
     if (node->is_this_node()) {
         _this_node = node;
     }
@@ -514,7 +512,7 @@ bool topology::has_endpoint(inet_address ep) const
     return has_node(ep);
 }
 
-const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
+endpoint_dc_rack topology::get_location(const inet_address& ep) const {
     if (auto node = find_node(ep)) {
         return node->dc_rack();
     }
@@ -541,9 +539,9 @@ void topology::sort_by_proximity(inet_address address, inet_address_vector_repli
 }
 
 std::weak_ordering topology::compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
-    const auto& loc = get_location(address);
-    const auto& loc1 = get_location(a1);
-    const auto& loc2 = get_location(a2);
+    const auto loc = get_location(address);
+    const auto loc1 = get_location(a1);
+    const auto loc2 = get_location(a2);
 
     // The farthest nodes from a given node are:
     // 1. Nodes in other DCs then the reference node
@@ -608,6 +606,13 @@ location topology_registry::find_or_create_location(sstring_view dc_name, sstrin
     auto* rack = rack_it->second.get();
 
     return {dc, rack};
+}
+
+endpoint_dc_rack location::get_dc_rack() const {
+    return endpoint_dc_rack{
+        .dc = dc ? dc->name : endpoint_dc_rack::default_location.dc,
+        .rack = rack ? rack->name : endpoint_dc_rack::default_location.rack
+    };
 }
 
 } // namespace locator

@@ -213,7 +213,7 @@ public:
     }
 
     bool add_endpoint_and_check_if_done(host_id ep) {
-        auto& loc = _tp.get_location(ep);
+        auto loc = _tp.get_location(ep);
         auto i = _dcs.find(loc.dc);
         if (i != _dcs.end() && i->second.add_endpoint_and_check_if_done(ep, loc)) {
             --_dcs_to_fill;

@@ -759,9 +759,9 @@ namespace locator {
 
 void topology::test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
     std::optional<std::partial_ordering> expected;
-    const auto& loc = get_location(address);
-    const auto& loc1 = get_location(a1);
-    const auto& loc2 = get_location(a2);
+    const auto loc = get_location(address);
+    const auto loc1 = get_location(a1);
+    const auto loc2 = get_location(a2);
     if (a1 == a2) {
         expected = std::partial_ordering::equivalent;
     } else {

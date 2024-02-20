@@ -60,6 +60,8 @@ struct datacenter {
 struct location {
     const datacenter* dc = nullptr;
     const rack* rack = nullptr;
+
+    endpoint_dc_rack get_dc_rack() const;
 };
 
 // A global service that manages datacenters and racks by name
@@ -105,7 +107,6 @@ private:
     locator::host_id _host_id;
     inet_address _endpoint;
     location _location;
-    endpoint_dc_rack _dc_rack;
     state _state;
     shard_id _shard_count = 0;
     bool _excluded = false;
@@ -138,8 +139,12 @@ public:
         return _endpoint;
     }
 
-    const endpoint_dc_rack& dc_rack() const noexcept {
-        return _dc_rack;
+    const locator::location& location() const noexcept {
+        return _location;
+    }
+
+    endpoint_dc_rack dc_rack() const {
+        return _location.get_dc_rack();
     }
 
     const datacenter* dc() const noexcept {
@@ -354,45 +359,45 @@ public:
     }
 
     // Get dc/rack location of this node
-    const endpoint_dc_rack& get_location() const noexcept {
+    endpoint_dc_rack get_location() const noexcept {
         return _this_node ? _this_node->dc_rack() : _cfg.local_dc_rack;
     }
     // Get dc/rack location of a node identified by host_id
     // The specified node must exist.
-    const endpoint_dc_rack& get_location(host_id id) const {
+    endpoint_dc_rack get_location(host_id id) const {
         return find_node(id)->dc_rack();
     }
     // Get dc/rack location of a node identified by endpoint
     // The specified node must exist.
-    const endpoint_dc_rack& get_location(const inet_address& ep) const;
+    endpoint_dc_rack get_location(const inet_address& ep) const;
 
     // Get datacenter of this node
-    const sstring& get_datacenter() const noexcept {
+    sstring get_datacenter() const noexcept {
         return get_location().dc;
     }
     // Get datacenter of a node identified by host_id
     // The specified node must exist.
-    const sstring& get_datacenter(host_id id) const {
+    sstring get_datacenter(host_id id) const {
         return get_location(id).dc;
     }
     // Get datacenter of a node identified by endpoint
     // The specified node must exist.
-    const sstring& get_datacenter(inet_address ep) const {
+    sstring get_datacenter(inet_address ep) const {
         return get_location(ep).dc;
     }
 
     // Get rack of this node
-    const sstring& get_rack() const noexcept {
+    sstring get_rack() const noexcept {
         return get_location().rack;
     }
     // Get rack of a node identified by host_id
     // The specified node must exist.
-    const sstring& get_rack(host_id id) const {
+    sstring get_rack(host_id id) const {
         return get_location(id).rack;
     }
     // Get rack of a node identified by endpoint
     // The specified node must exist.
-    const sstring& get_rack(inet_address ep) const {
+    sstring get_rack(inet_address ep) const {
         return get_location(ep).rack;
     }
 
@@ -533,8 +538,8 @@ struct fmt::formatter<locator::node> : fmt::formatter<std::string_view> {
                     node.idx(),
                     node.host_id(),
                     node.endpoint(),
-                    node.dc_rack().dc,
-                    node.dc_rack().rack,
+                    node.location().dc ? node.location().dc->name : "",
+                    node.location().rack ? node.location().rack->name : "",
                     locator::node::to_string(node.get_state()),
                     node.get_shard_count(),
                     bool(node.is_this_node()));
