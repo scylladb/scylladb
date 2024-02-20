@@ -261,6 +261,8 @@ void simple_test() {
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
+    auto tmptr = stm.get();
+    const auto& topology = tmptr->get_topology();
 
     /////////////////////////////////////
     // Create the replication strategy
@@ -271,8 +273,6 @@ void simple_test() {
     };
     locator::replication_strategy_params params323(options323, std::nullopt);
 
-    locator::topology_registry registry;
-    locator::topology topology(registry, locator::topology::config{});
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", topology, params323);
 
@@ -371,10 +371,11 @@ void heavy_origin_test() {
             co_await tm.update_normal_tokens(tokens[endpoint], id);
         }
     }).get();
+    auto tmptr = stm.get();
+    const auto& topology = tmptr->get_topology();
 
     locator::replication_strategy_params params(config_options, std::nullopt);
-    locator::topology_registry registry;
-    locator::topology topology(registry, locator::topology::config{});
+
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", topology, params);
 
@@ -434,6 +435,8 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
+    auto tmptr = stm.get();
+    const auto& topology = tmptr->get_topology();
 
     /////////////////////////////////////
     // Create the replication strategy
@@ -444,8 +447,6 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     };
     locator::replication_strategy_params params323(options323, 100);
 
-    locator::topology_registry registry;
-    locator::topology topology(registry, locator::topology::config{});
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", topology, params323);
 

@@ -71,8 +71,8 @@ size_t block_for_each_quorum(const locator::effective_replication_map& erm) {
             static_cast<const network_topology_strategy*>(&rs);
         size_t n = 0;
 
-        for (auto& dc : nrs->get_datacenters()) {
-            n += local_quorum_for(erm, dc);
+        for (const auto& [dc, rf] : nrs->get_dc_rep_factor()) {
+            n += local_quorum_for(erm, dc->name);
         }
 
         return n;
@@ -128,14 +128,14 @@ std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
             static_cast<const network_topology_strategy*>(&rs);
 
     std::unordered_map<sstring, dc_node_count> dc_endpoints;
-    for (auto& dc : nrs->get_datacenters()) {
-        dc_endpoints.emplace(dc, dc_node_count());
+        for (const auto& [dc, rf] : nrs->get_dc_rep_factor()) {
+        dc_endpoints.emplace(dc->name, dc_node_count());
     }
 
     //
     // Since live_endpoints are a subset of a get_natural_endpoints() output we
     // will never get any endpoints outside the dataceters from
-    // nrs->get_datacenters().
+    // nrs->get_dc_rep_factor().
     //
 
     for (auto& endpoint : live_endpoints) {

@@ -25,20 +25,24 @@ struct network_topology_strategy_traits : public abstract_replication_strategy_t
 class network_topology_strategy : public abstract_replication_strategy
                                 , public tablet_aware_replication_strategy {
 public:
+    using dc_rep_factor = std::unordered_map<const datacenter*, size_t>;
+
     network_topology_strategy(const topology&, replication_strategy_params params);
 
     virtual size_t get_replication_factor(const token_metadata&) const override {
         return _rep_factor;
     }
 
-    size_t get_replication_factor(const sstring& dc) const {
+    const dc_rep_factor& get_dc_rep_factor() const noexcept {
+        return _dc_rep_factor;
+    }
+
+    size_t get_replication_factor(const datacenter* dc) const noexcept {
         auto dc_factor = _dc_rep_factor.find(dc);
         return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second;
     }
 
-    const std::vector<sstring>& get_datacenters() const {
-        return _datacenteres;
-    }
+    size_t get_replication_factor(const sstring& dc_name) const;
 
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const override {
         return true;
@@ -60,10 +64,10 @@ protected:
     virtual std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const override;
 
 private:
+    const topology_registry& _topology_registry;
     // map: data centers -> replication factor
-    std::unordered_map<sstring, size_t> _dc_rep_factor;
+    dc_rep_factor _dc_rep_factor;
 
-    std::vector<sstring> _datacenteres;
     size_t _rep_factor;
 };
 } // namespace locator
