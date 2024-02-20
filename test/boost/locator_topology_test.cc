@@ -131,14 +131,14 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     auto dc_rack1 = endpoint_dc_rack{"DC1", "RACK1"};
     node = topo.update_node(mutable_node, std::nullopt, std::nullopt, dc_rack1, std::nullopt);
     mutable_node = const_cast<locator::node*>(node);
-    BOOST_REQUIRE(topo.get_location(id1) == dc_rack1);
-    BOOST_REQUIRE(topo.get_location(ep1) == dc_rack1);
+    BOOST_REQUIRE(topo.get_location(id1).get_dc_rack() == dc_rack1);
+    BOOST_REQUIRE(topo.get_location(ep1).get_dc_rack() == dc_rack1);
 
     auto dc_rack2 = endpoint_dc_rack{"DC2", "RACK2"};
     node = topo.update_node(mutable_node, std::nullopt, std::nullopt, dc_rack2, std::nullopt);
     mutable_node = const_cast<locator::node*>(node);
-    BOOST_REQUIRE(topo.get_location(id1) == dc_rack2);
-    BOOST_REQUIRE(topo.get_location(ep1) == dc_rack2);
+    BOOST_REQUIRE(topo.get_location(id1).get_dc_rack() == dc_rack2);
+    BOOST_REQUIRE(topo.get_location(ep1).get_dc_rack() == dc_rack2);
 
     BOOST_REQUIRE_NE(node->get_state(), locator::node::state::being_decommissioned);
     node = topo.update_node(mutable_node, std::nullopt, std::nullopt, std::nullopt, locator::node::state::being_decommissioned);
@@ -154,9 +154,9 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     BOOST_REQUIRE_EQUAL(topo.find_node(ep1), nullptr);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep2), nullptr);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep3), node);
-    BOOST_REQUIRE(topo.get_location(id1) == dc_rack3);
-    BOOST_REQUIRE(topo.get_location(ep2) == endpoint_dc_rack::default_location);
-    BOOST_REQUIRE(topo.get_location(ep3) == dc_rack3);
+    BOOST_REQUIRE(topo.get_location(id1).get_dc_rack() == dc_rack3);
+    BOOST_REQUIRE(topo.get_location(ep2).get_dc_rack() == endpoint_dc_rack::default_location);
+    BOOST_REQUIRE(topo.get_location(ep3).get_dc_rack() == dc_rack3);
     BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::being_decommissioned);
 
     // In state::left the node will remain indexed only by its host_id
@@ -165,9 +165,9 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     BOOST_REQUIRE_EQUAL(topo.find_node(ep1), nullptr);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep2), nullptr);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep3), nullptr);
-    BOOST_REQUIRE(topo.get_location(id1) == dc_rack3);
-    BOOST_REQUIRE(topo.get_location(ep2) == endpoint_dc_rack::default_location);
-    BOOST_REQUIRE(topo.get_location(ep3) == endpoint_dc_rack::default_location);
+    BOOST_REQUIRE(topo.get_location(id1).get_dc_rack() == dc_rack3);
+    BOOST_REQUIRE(topo.get_location(ep2).get_dc_rack() == endpoint_dc_rack::default_location);
+    BOOST_REQUIRE(topo.get_location(ep3).get_dc_rack() == endpoint_dc_rack::default_location);
     BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::left);
 }
 

@@ -72,7 +72,7 @@ public:
             : _source_dc(source_dc) {
         }
         virtual bool should_include(const locator::topology& topo, inet_address endpoint) override {
-            return topo.get_datacenter(endpoint) == _source_dc;
+            return topo.get_datacenter(endpoint)->name == _source_dc;
         }
     };
 

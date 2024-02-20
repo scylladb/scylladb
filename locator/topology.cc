@@ -533,9 +533,9 @@ std::unordered_set<sstring> topology::get_datacenter_names() const noexcept {
     }));
 }
 
-endpoint_dc_rack topology::get_location(const inet_address& ep) const {
+location topology::get_location(const inet_address& ep) const {
     if (auto node = find_node(ep)) {
-        return node->dc_rack();
+        return node->location();
     }
     // We should do the following check after lookup in nodes.
     // In tests, there may be no config for local node, so fall back to get_location()
@@ -548,7 +548,7 @@ endpoint_dc_rack topology::get_location(const inet_address& ep) const {
     // correctly populated with endpoints, this should be replaced with
     // on_internal_error()
     tlogger.warn("Requested location for node {} not in topology. backtrace {}", ep, lazy_backtrace());
-    return endpoint_dc_rack::default_location;
+    return _topology_registry.find_location(_cfg.local_dc_rack.dc, _cfg.local_dc_rack.rack);
 }
 
 void topology::sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const {

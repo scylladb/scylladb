@@ -84,7 +84,7 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
             // info about just-left node and not handle it nicely
             return locator::endpoint_dc_rack::default_location.dc;
         }
-        return topology.get_datacenter(ep);
+        return topology.get_datacenter(ep)->name;
     });
 
     httpd::endpoint_snitch_info_json::get_rack.set(r, [&tm](const_req req) {
@@ -95,7 +95,7 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
             // info about just-left node and not handle it nicely
             return locator::endpoint_dc_rack::default_location.rack;
         }
-        return topology.get_rack(ep);
+        return topology.get_rack(ep)->name;
     });
 }
 

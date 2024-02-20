@@ -4517,7 +4517,7 @@ static std::map<sstring, sstring> get_network_topology_options(service::storage_
     sstring rf_str = std::to_string(rf);
     auto& topology = sp.get_token_metadata_ptr()->get_topology();
     for (const gms::inet_address& addr : gossiper.get_live_members()) {
-        options.emplace(topology.get_datacenter(addr), rf_str);
+        options.emplace(topology.get_datacenter(addr)->name, rf_str);
     };
     return options;
 }

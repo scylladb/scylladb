@@ -131,6 +131,7 @@ SEASTAR_THREAD_TEST_CASE(test_split_stats) {
     // Point being is that either the above should not happen, or 
     // split_stats should be resilient to being called from different
     // scheduling group.
-    stats1->register_metrics_for("DC1", ep1);
-    stats2->register_metrics_for("DC1", ep1);
+    auto dc1 = locator::datacenter("DC1");
+    stats1->register_metrics_for(&dc1, ep1);
+    stats2->register_metrics_for(&dc1, ep1);
 }

@@ -207,14 +207,13 @@ protected:
         // using _gossiper().get_live_members(). But getting
         // just the list of live nodes in this DC needs more elaborate code:
         auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
-        sstring local_dc = topology.get_datacenter();
-        auto dc_endpoints_map = topology.get_datacenter_endpoints();
-        const auto& local_dc_nodes = dc_endpoints_map.at(local_dc);
-        for (auto& ip : local_dc_nodes) {
+        const auto* local_dc = topology.get_datacenter();
+        topology.for_each_node(local_dc, [&] (const locator::node* node) {
+            const auto& ip = node->endpoint();
             if (_gossiper.is_alive(ip)) {
                 rjson::push_back(results, rjson::from_string(ip.to_sstring()));
             }
-        }
+        });
         rep->set_status(reply::status_type::ok);
         rep->set_content_type("json");
         rep->_content = rjson::print(results);
