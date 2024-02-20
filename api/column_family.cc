@@ -327,8 +327,9 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::get_column_family_name_keyspace.set(r, [&ctx] (const_req req){
         std::vector<sstring> res;
-        for (auto i = ctx.db.local().get_keyspaces().cbegin(); i!=  ctx.db.local().get_keyspaces().cend(); i++) {
-            res.push_back(i->first);
+        const flat_hash_map<sstring, replica::keyspace>& keyspaces = ctx.db.local().get_keyspaces();
+        for (const auto& i : keyspaces) {
+            res.push_back(i.first);
         }
         return res;
     });
