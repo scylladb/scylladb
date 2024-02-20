@@ -175,7 +175,7 @@ const node* topology::add_node(node_holder nptr) {
     }
 
     if (node->idx() > 0) {
-        on_internal_error(tlogger, format("topology[{}]: {}: has assigned idx", fmt::ptr(this), nptr));
+        on_internal_error(tlogger, format("topology[{}]: {}: has assigned idx", fmt::ptr(this), node_printer(nptr.get())));
     }
 
     // Note that _nodes contains also the this_node()
@@ -194,7 +194,7 @@ const node* topology::add_node(node_holder nptr) {
             }
         }
 
-        tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), nptr, lazy_backtrace());
+        tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), node_printer(nptr.get()), lazy_backtrace());
 
         index_node(node);
     } catch (...) {
