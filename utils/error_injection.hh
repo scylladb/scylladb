@@ -27,6 +27,7 @@
 
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include <boost/lexical_cast.hpp>
 
 
 namespace utils {
@@ -104,6 +105,14 @@ using error_injection_parameters = std::unordered_map<sstring, sstring>;
  *    Requires func to be a function taking an injection_handler reference and
  *    returning a future<>.
  *    Expected use case: wait for an event from tests.
+ * 5. inject_parameter(name)
+ *    Enables tests to inject parameters into the system, like lowering timeouts or limits, to
+ *    make the tests run faster.
+ *    Logically it is the same as
+ *      T value{}
+ *      co_await inject(name, [&value](auto& handler) { value = handler.get("value"); }
+ *    The function simply returns the 'value' parameter.
+ *    Expected use case: adjusting system parameters for tests.
  */
 
 template <bool injection_enabled>
@@ -125,6 +134,22 @@ class error_injection {
             : parameters(std::move(parameters))
             , injection_name(injection_name)
             {}
+
+        template <typename T>
+        std::optional<T> get(sstring name) const {
+            const auto it = parameters.find(name);
+            if (it == parameters.end()) {
+                return std::nullopt;
+            }
+            const auto& s = it->second;
+            errinj_logger.debug("Injected value [{}] for parameter [{}], injection [{}]",
+                s, name, injection_name);
+            if constexpr (std::is_same_v<T, std::string_view>) {
+                return s;
+            } else {
+                return boost::lexical_cast<T>(s.data(), s.size());
+            }
+        }
     };
 
     class injection_data;
@@ -173,16 +198,12 @@ public:
             return false;
         }
 
-        std::optional<std::string_view> get(std::string_view key) {
+        template <typename T = std::string_view>
+        std::optional<T> get(std::string_view key) {
             if (!_shared_data) {
                 on_internal_error(errinj_logger, "injection_shared_data is not initialized");
             }
-
-            auto it = _shared_data->parameters.find(std::string(key));
-            if (it == _shared_data->parameters.end()) {
-                return std::nullopt;
-            }
-            return it->second;
+            return _shared_data->template get<T>(std::string(key));
         }
 
         friend class error_injection;
@@ -407,6 +428,15 @@ public:
         co_await func(handler);
     }
 
+    template <typename T = std::string_view>
+    std::optional<T> inject_parameter(const std::string_view& name) {
+        auto* data = get_data(name);
+        if (!data) {
+            return std::nullopt;
+        }
+        return data->shared_data->template get<T>("value");
+    }
+
     future<> enable_on_all(const std::string_view& injection_name, bool one_shot = false, error_injection_parameters parameters = {}) {
         return smp::invoke_on_all([injection_name = sstring(injection_name), one_shot, parameters = std::move(parameters)] {
             auto& errinj = _local;
@@ -525,6 +555,12 @@ public:
     [[gnu::always_inline]]
     future<> inject(const std::string_view& name, waiting_handler_fun func) {
         return make_ready_future<>();
+    }
+
+    template <typename T>
+    [[gnu::always_inline]]
+    std::optional<T> inject_parameter(const std::string_view& name) {
+        return std::nullopt;
     }
 
     [[gnu::always_inline]]
