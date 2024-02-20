@@ -325,14 +325,8 @@ position_in_partition_view mutation_fragment_v2::position() const
 
 std::ostream& operator<<(std::ostream& os, mutation_fragment_v2::kind k)
 {
-    switch (k) {
-    case mutation_fragment_v2::kind::static_row: return os << "static row";
-    case mutation_fragment_v2::kind::clustering_row: return os << "clustering row";
-    case mutation_fragment_v2::kind::range_tombstone_change: return os << "range tombstone change";
-    case mutation_fragment_v2::kind::partition_start: return os << "partition start";
-    case mutation_fragment_v2::kind::partition_end: return os << "partition end";
-    }
-    abort();
+    fmt::print(os, "{}", k);
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation_fragment_v2::printer& p) {
