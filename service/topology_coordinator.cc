@@ -1079,8 +1079,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             .build());
                     }
                     break;
-                case locator::tablet_transition_stage::write_both_read_new:
-                    transition_to_with_barrier(locator::tablet_transition_stage::use_new);
+                case locator::tablet_transition_stage::write_both_read_new: {
+                    auto next_stage = locator::tablet_transition_stage::use_new;
+                    if (action_failed(tablet_state.barriers[trinfo.stage])) {
+                        auto& tinfo = tmap.get_tablet_info(gid.tablet);
+                        unsigned excluded_old = 0;
+                        for (auto r : tinfo.replicas) {
+                            if (is_excluded(raft::server_id(r.host.uuid()))) {
+                                excluded_old++;
+                            }
+                        }
+                        unsigned excluded_new = 0;
+                        for (auto r : trinfo.next) {
+                            if (is_excluded(raft::server_id(r.host.uuid()))) {
+                                excluded_new++;
+                            }
+                        }
+                        if (excluded_new > excluded_old) {
+                            rtlogger.debug("During {} stage of {} {} new nodes and {} old nodes were excluded", trinfo.stage, gid, excluded_new, excluded_old);
+                            next_stage = locator::tablet_transition_stage::cleanup_target;
+                        }
+                    }
+                    transition_to_with_barrier(next_stage);
+                }
                     break;
                 case locator::tablet_transition_stage::use_new:
                     transition_to_with_barrier(locator::tablet_transition_stage::cleanup);
