@@ -20,7 +20,7 @@ from cassandra.policies import RoundRobinPolicy
 
 # Use the util.py library from ../cql-pytest:
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
-from util import unique_name
+from util import unique_name, new_test_keyspace, keyspace_has_tablets, is_scylla
 
 # By default, tests run against a Scylla server listening
 # on localhost:9042 for CQL and localhost:10000 for the REST API.
@@ -114,3 +114,27 @@ def cql(request):
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
+@pytest.fixture(scope="session")
+def has_tablets(cql):
+    with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1}") as keyspace:
+        return keyspace_has_tablets(cql, keyspace)
+
+@pytest.fixture(scope="function")
+def skip_with_tablets(has_tablets):
+    if has_tablets:
+        pytest.skip("Test may crash with tablets experimental feature on")
+
+# The "scylla_only" fixture can be used by tests for Scylla-only features,
+# which do not exist on Apache Cassandra. A test using this fixture will be
+# skipped if running with "run-cassandra".
+@pytest.fixture(scope="session")
+def scylla_only(cql):
+    # We recognize Scylla by checking if there is any system table whose name
+    # contains the word "scylla":
+    if not is_scylla(cql):
+        pytest.skip('Scylla-only test skipped')
+
+@pytest.fixture(scope="function")
+def skip_without_tablets(scylla_only, has_tablets):
+    if not has_tablets:
+        pytest.skip("Test needs tablets experimental feature on")
