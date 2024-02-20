@@ -1263,9 +1263,10 @@ public:
         printer(const printer&) = delete;
         printer(printer&&) = delete;
 
-        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+        friend ::fmt::formatter<printer>;
     };
-    friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    friend ::fmt::formatter<printer>;
+
 public:
     // Makes sure there is a dummy entry after all clustered rows. Doesn't affect continuity.
     // Doesn't invalidate iterators.
@@ -1503,3 +1504,7 @@ mutation_partition& mutation_partition::container_of(rows_type& rows) {
 
 bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb = tombstone(),
                        gc_clock::time_point now = gc_clock::time_point::min());
+
+template <> struct fmt::formatter<mutation_partition::printer> : fmt::formatter<string_view> {
+    auto format(const mutation_partition::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
