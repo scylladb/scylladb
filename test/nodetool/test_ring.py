@@ -14,6 +14,8 @@ class Host(NamedTuple):
     dc: str
     rack: str
     endpoint: str
+    status: str
+    state: str
     load: float
     ownership: float
 
@@ -46,9 +48,18 @@ def format_size(v):
     return f'{v} bytes'
 
 
-def test_ring(nodetool):
+@pytest.mark.parametrize("host_status,host_state",
+                         [
+                             ('live', 'joining'),
+                             ('live', 'normal'),
+                             ('live', 'leaving'),
+                             ('live', 'moving'),
+                             ('down', 'n/a')
+                         ])
+def test_ring(nodetool, host_status, host_state):
     keyspace = 'ks'
-    host = Host('dc0', 'rack0', '127.0.0.1', 6414780.0, 1.0)
+    host = Host('dc0', 'rack0', '127.0.0.1', host_status, host_state,
+                6414780.0, 1.0)
     token_to_endpoint = {
         "-9217327499541836964": host.endpoint,
         "9066719992055809912": host.endpoint,
@@ -57,18 +68,21 @@ def test_ring(nodetool):
     endpoint_to_ownership = {
         host.endpoint: host.ownership,
     }
-    status_to_endpoints = {
-        'live': ['127.0.0.1'],
-        'down': [],
-    }
-    state_to_endpoints = {
-        'joining': [],
-        'leaving': [],
-        'moving': [],
-    }
-    load_map = {
-        host.endpoint: host.load,
-    }
+
+    all_hosts = [host]
+
+    def hosts_in_status(status):
+        return list(h.endpoint for h in all_hosts if h.status == status)
+
+    def hosts_in_state(state):
+        return list(h.endpoint for h in all_hosts if h.state == state)
+
+    status_to_endpoints = dict(
+        (status, hosts_in_status(status)) for status in ['live', 'down'])
+    state_to_endpoints = dict(
+        (state, hosts_in_state(state)) for state in ['joining', 'leaving', 'moving'])
+    load_map = dict((h.endpoint, h.load) for h in all_hosts)
+
     expected_requests = [
         expected_request('GET', '/storage_service/tokens_endpoint',
                          response=map_to_json(token_to_endpoint)),
@@ -76,6 +90,7 @@ def test_ring(nodetool):
                          response=map_to_json(endpoint_to_ownership, str)),
         expected_request('GET', '/snitch/datacenter',
                          params={'host': host.endpoint},
+                         multiple=expected_request.ANY,
                          response=host.dc),
         expected_request('GET', '/gossiper/endpoint/live',
                          response=status_to_endpoints['live']),
@@ -91,6 +106,7 @@ def test_ring(nodetool):
                          response=map_to_json(load_map)),
         expected_request('GET', '/snitch/rack',
                          params={'host': host.endpoint},
+                         multiple=expected_request.ANY,
                          response=host.rack),
     ]
     actual_output = nodetool('ring', keyspace, expected_requests=expected_requests)
