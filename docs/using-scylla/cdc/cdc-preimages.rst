@@ -48,8 +48,6 @@ The preimage row is created if and only if the read returned the corresponding b
 
 The deletion columns (``cdc$deleted_X``) are set to ``true`` for columns that have a ``null`` value in the preimage, but only for those columns that the write modified or for all columns if the ``full`` option for preimages is enabled. The deleted elements columns (``cdc$deleted_elements_X``, for non-frozen collections and UDTs) are not used by preimage rows and are set to ``null``.
 
-.. note:: Prior to Scylla 4.6, the deletion columns (``cdc$deleted_X``) and deleted elements columns (``cdc$deleted_elements_X``, for non-frozen collections and UDTs) were always ``null``.
-
 Consider the following example:
 
 .. code-block:: cql

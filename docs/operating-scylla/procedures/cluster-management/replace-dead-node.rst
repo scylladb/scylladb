@@ -46,15 +46,6 @@ Prerequisites
 ---------
 Procedure
 ---------
-.. note::
-   If your Scylla version is earlier than Scylla Open Source 4.3 or Scylla Enterprise 2021.1, check if 
-   the dead node is a seed node by running ``cat /etc/scylla/scylla.yaml | grep seeds:``.
-   
-   * If the dead node’s IP address is listed, the dead node is a seed node. Replace the seed node following the instructions in :doc:`Replacing a Dead Seed Node </operating-scylla/procedures/cluster-management/replace-seed-node>`.
-   * If the dead node’s IP address is not listed, the dead node is not a seed node. Replace it according to the procedure below.
-
-   We recommend checking the seed nodes configuration of all nodes. Refer to :doc:`Seed Nodes</kb/seed-nodes>` for details
-
 
 #. Install Scylla on a new node, see :doc:`Getting Started</getting-started/index>` for further instructions. Follow the Scylla install procedure up to ``scylla.yaml`` configuration phase. Ensure that the Scylla version of the new node is identical to the other nodes in the cluster. 
 

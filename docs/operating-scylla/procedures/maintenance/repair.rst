@@ -37,7 +37,7 @@ In most cases, the proportion of data that is out of sync is very small.  In a f
 Row-level Repair
 ----------------
 
-In previous versions of Scylla (prior to 3.1), repairs were done on the partition level. Scylla 3.1 introduced row-level repair where the repair process only transferred the mismatched rows, instead of the entire partition.   
+ScyllaDB uses row-level repair.
 
 Row-level repair improves Scylla in two ways:
 

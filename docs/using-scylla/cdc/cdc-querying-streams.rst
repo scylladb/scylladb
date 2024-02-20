@@ -2,8 +2,6 @@
 Querying CDC Streams
 ====================
 
-.. include:: /using-scylla/cdc/_common/cdc-experimental.rst 
-
 Some use cases for CDC may require querying the log table periodically in short intervals. One way to do that would be to perform **partition scans**, where you don't specify the partition (in this case, the stream) which you want to query, for example:
 
 .. code-block:: cql

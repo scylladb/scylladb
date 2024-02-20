@@ -16,7 +16,7 @@ Possible cause: The Scylla process is managed by systemd, and systemd expects it
    systemd[1]: scylla-server.service start operation timed out. Terminating.
 
 
-The timeout in systemd should be enough to always start the server, but some versions of Scylla prior to 3.0 suffered from an issue in which the startup process could be slowed down. Even in the absence of issues since the timeout is just a number, there may be extreme cases in which it is not enough.
+The timeout in systemd should be enough to always start the server. However, there may be extreme cases in which it is not enough.
 
 Solution
 ^^^^^^^^

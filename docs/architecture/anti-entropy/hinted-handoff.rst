@@ -43,7 +43,4 @@ Hinted handoff is enabled and managed by these settings in :code:`scylla.yaml`:
 
 Storing of the hint can also fail. Enabling hinted handoff therefore does not eliminate the need for repair; a user must recurrently :doc:`run a full repair </operating-scylla/procedures/maintenance/repair/>` to ensure data consistency across the cluster nodes.
 
-Hinted handoff was released as production-ready in Scylla Open Source 3.0 and Scylla Enterprise 2019.1.
-
-
 .. include:: /rst_include/apache-copyrights.rst

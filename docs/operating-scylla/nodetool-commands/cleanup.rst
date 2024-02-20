@@ -22,10 +22,4 @@ To clean up the data of a specific node and specific keyspace, use this command:
 
    Make sure there are no topology changes before running cleanup. To validate, run ``nodetool status``, all nodes should be in status Up Normal (``UN``).
 
-.. note::
-
-   If using Scylla Enterprise 2018.1.5, Scylla Open Source 2.2.0, 2.3.0 or lower version **Do not** run the ``nodetool cleanup`` command before upgrading to the latest release of your branch, see this issue_ for further information.
-
-.. _issue: https://github.com/scylladb/scylla/issues/3872
-
 .. include:: nodetool-index.rst

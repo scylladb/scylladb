@@ -47,9 +47,7 @@ For example:
 Using system tables to detect large partitions, rows, or cells
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Starting from scylla 2.3, large partitions are listed in the ``system.large_partitions`` table.  See :doc:`Scylla Large Partitions Table </troubleshooting/large-partition-table/>` for more information.
-
-Starting from scylla 3.1, large rows and large cells are listed similarly in the ``system.large_rows`` and ``system.large_cells`` tables, respectively.  See :doc:`Scylla Large Rows and Cells Tables </troubleshooting/large-rows-large-cells-tables/>` for more information.
+Large rows and large cells are listed in the ``system.large_rows`` and ``system.large_cells`` tables, respectively.  See :doc:`Scylla Large Rows and Cells Tables </troubleshooting/large-rows-large-cells-tables/>` for more information.
 
 
 When Compaction Creates an Error

@@ -72,17 +72,6 @@ Gossip Configuration
 
    Use :code:`NetworkTopologyStrategy` replication-strategy as it supports multi-DC for your keyspaces.
 
-Seed Node Redundancy
-====================
-Scylla Open Source 4.3 and later and Scylla Enterprise 2021.1 and later are seedless. See `Seedless NoSQL: Getting Rid of Seed Nodes in ScyllaDB <https://www.scylladb.com/2020/09/22/seedless-nosql-getting-rid-of-seed-nodes-in-scylla/>`_.
-
-If you are using an earlier Scylla version:
-
-* Each DC needs to have multiple seed nodes.
-* We recommend having **2-3 seed nodes per DC**.
-
-See :doc:`Scylla Seed Nodes </kb/seed-nodes/>` for details.
-
 Performance
 -----------
 
