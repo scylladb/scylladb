@@ -39,7 +39,7 @@ create_service_level_statement::execute(query_processor& qp,
         const query_options &,
         std::optional<service::group0_guard> guard) const {
     qos::service_level_options slo = _slo.replace_defaults(qos::service_level_options{});
-    return state.get_service_level_controller().add_distributed_service_level(_service_level, slo, _if_not_exists).then([] {
+    return state.get_service_level_controller().add_distributed_service_level(_service_level, slo, _if_not_exists, std::move(guard)).then([] {
         using void_result_msg = cql_transport::messages::result_message::void_message;
         using result_msg = cql_transport::messages::result_message;
         return ::static_pointer_cast<result_msg>(make_shared<void_result_msg>());

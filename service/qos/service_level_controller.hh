@@ -19,6 +19,7 @@
 #include "qos_common.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "qos_configuration_change_subscriber.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace db {
     class system_distributed_keyspace;
@@ -49,8 +50,8 @@ public:
     public:
         virtual future<qos::service_levels_info> get_service_levels() const = 0;
         virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const = 0;
-        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const = 0;
-        virtual future<> drop_service_level(sstring service_level_name) const = 0;
+        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard) const = 0;
+        virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard) const = 0;
     };
     using service_level_distributed_data_accessor_ptr = ::shared_ptr<service_level_distributed_data_accessor>;
 
@@ -141,9 +142,9 @@ public:
     future<> update_service_levels_from_distributed_data();
 
 
-    future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists);
-    future<> alter_distributed_service_level(sstring name, service_level_options slo);
-    future<> drop_distributed_service_level(sstring name, bool if_exists);
+    future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists, std::optional<service::group0_guard> guard);
+    future<> alter_distributed_service_level(sstring name, service_level_options slo, std::optional<service::group0_guard> guard);
+    future<> drop_distributed_service_level(sstring name, bool if_exists, std::optional<service::group0_guard> guard);
     future<service_levels_info> get_distributed_service_levels();
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
 
@@ -214,7 +215,7 @@ private:
         alter
     };
 
-    future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type);
+    future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, std::optional<service::group0_guard> guard);
 public:
 
     /**

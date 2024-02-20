@@ -9,6 +9,7 @@
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/qos_common.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "service/raft/raft_group0_client.hh"
 #pragma once
 
 namespace qos {
@@ -33,13 +34,13 @@ public:
         virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const override {
             return _sys_dist_ks.local().get_service_level(service_level_name);
         }
-        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const override {
+        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard>) const override {
             return _sys_dist_ks.local().set_service_level(service_level_name, slo).then([this] () {
                 return _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
             });
 
         }
-        virtual future<> drop_service_level(sstring service_level_name) const override {
+        virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard>) const override {
             return _sys_dist_ks.local().drop_service_level(service_level_name).then([this] () {
                 return _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
             });
