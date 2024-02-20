@@ -835,6 +835,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     seastar::gate _async_gate;
 
+    bool action_failed(background_action_holder& holder) const {
+        return holder && holder->failed();
+    }
+
     // This function drives background_action_holder towards "executed successfully"
     // by starting the action if it is not already running or if the previous instance
     // of the action failed. If the action is already running, it does nothing.
@@ -842,7 +846,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     bool advance_in_background(locator::global_tablet_id gid, background_action_holder& holder, const char* name,
                                std::function<future<>()> action) {
         if (!holder || holder->failed()) {
-            if (holder && holder->failed()) {
+            if (action_failed(holder)) {
                 // Prevent warnings about abandoned failed future. Logged below.
                 holder->ignore_ready_future();
             }
@@ -1043,7 +1047,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
                     }
 
-                    if (tablet_state.streaming && tablet_state.streaming->failed()) {
+                    if (action_failed(tablet_state.streaming)) {
                         if (check_excluded_replicas()) {
                             transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
                             break;
