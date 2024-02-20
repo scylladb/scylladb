@@ -12,7 +12,7 @@
 
 #include "sstables/sstables.hh"
 #include "size_tiered_compaction_strategy.hh"
-#include "range.hh"
+#include "interval.hh"
 #include "log.hh"
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/partial_sort.hpp>
@@ -290,9 +290,9 @@ private:
             // uncompacting sstables and parallel compaction is also disabled for lcs.
             Set<SSTableReader> compacting = cfs.getDataTracker().getCompacting();
 #endif
-            auto boundaries = ::range<dht::decorated_key>::make(*min, *max);
+            auto boundaries = ::wrapping_interval<dht::decorated_key>::make(*min, *max);
             for (auto& sstable : get_level(i)) {
-                auto r = ::range<dht::decorated_key>::make(sstable->get_first_decorated_key(), sstable->get_last_decorated_key());
+                auto r = ::wrapping_interval<dht::decorated_key>::make(sstable->get_first_decorated_key(), sstable->get_last_decorated_key());
                 if (boundaries.contains(r, dht::ring_position_comparator(*_schema))) {
                     logger.info("Adding high-level (L{}) {} to candidates", sstable->get_sstable_level(), sstable->get_filename());
                     candidates.push_back(sstable);
@@ -353,10 +353,10 @@ public:
         assert(start <= end);
 
         std::vector<sstables::shared_sstable> overlapped;
-        auto range = ::range<dht::token>::make(start, end);
+        auto range = ::wrapping_interval<dht::token>::make(start, end);
 
         for (auto& candidate : sstables) {
-            auto candidate_range = ::range<dht::token>::make(candidate->get_first_decorated_key()._token, candidate->get_last_decorated_key()._token);
+            auto candidate_range = ::wrapping_interval<dht::token>::make(candidate->get_first_decorated_key()._token, candidate->get_last_decorated_key()._token);
 
             if (range.overlaps(candidate_range, dht::token_comparator())) {
                 overlapped.push_back(candidate);

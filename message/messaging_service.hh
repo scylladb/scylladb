@@ -18,7 +18,7 @@
 #include <seastar/rpc/rpc_types.hh>
 #include <unordered_map>
 #include "gc_clock.hh"
-#include "range.hh"
+#include "interval.hh"
 #include "schema/schema_fwd.hh"
 #include "streaming/stream_fwd.hh"
 #include "locator/host_id.hh"
@@ -79,7 +79,7 @@ namespace query {
 
 namespace compat {
 
-using wrapping_partition_range = wrapping_range<dht::ring_position>;
+using wrapping_partition_range = wrapping_interval<dht::ring_position>;
 
 }
 

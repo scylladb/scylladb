@@ -19,7 +19,7 @@
 #include "db/system_keyspace.hh"
 #include "dht/i_partitioner.hh"
 #include "partition_range_compat.hh"
-#include "range.hh"
+#include "interval.hh"
 #include "mutation/mutation_fragment.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
@@ -146,7 +146,7 @@ static std::vector<sstring> get_keyspaces(const schema& s, const replica::databa
  * Makes a wrapping range of ring_position from a nonwrapping range of token, used to select sstables.
  */
 static dht::partition_range as_ring_position_range(dht::token_range& r) {
-    std::optional<range<dht::ring_position>::bound> start_bound, end_bound;
+    std::optional<wrapping_interval<dht::ring_position>::bound> start_bound, end_bound;
     if (r.start()) {
         start_bound = {{ dht::ring_position(r.start()->value(), dht::ring_position::token_bound::start), r.start()->is_inclusive() }};
     }
@@ -167,7 +167,7 @@ static system_keyspace::range_estimates estimate(const replica::column_family& c
     };
     dht::token_range_vector ranges;
     ::compat::unwrap_into(
-        wrapping_range<dht::token>({{ from_bytes(r.start), false }}, {{ from_bytes(r.end) }}),
+        wrapping_interval<dht::token>({{ from_bytes(r.start), false }}, {{ from_bytes(r.end) }}),
         dht::token_comparator(),
         [&] (auto&& rng) { ranges.push_back(std::move(rng)); });
     for (auto&& r : ranges) {

@@ -5707,7 +5707,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                     }
 
                     // Implementing a proper contiguity check is hard, because it requires
-                    // is_successor(range_bound<dht::ring_position> a, range_bound<dht::ring_position> b)
+                    // is_successor(interval_bound<dht::ring_position> a, interval_bound<dht::ring_position> b)
                     // relation to be defined. It is needed for intervals for which their possibly adjacent
                     // bounds are either both exclusive or inclusive.
                     // For example: is_adjacent([a, b], [c, d]) requires checking is_successor(b, c).

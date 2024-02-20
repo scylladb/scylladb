@@ -233,8 +233,8 @@ public:
     dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens) const;
 
     dht::token_range_vector get_primary_ranges_for(token right) const;
-    static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
-    static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
+    static boost::icl::interval<token>::interval_type range_to_interval(wrapping_interval<dht::token> r);
+    static wrapping_interval<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
 public:
     future<> update_topology_change_info(dc_rack_fn& get_dc_rack);
@@ -659,7 +659,7 @@ dht::token_range_vector token_metadata_impl::get_primary_ranges_for(std::unorder
     for (auto right : tokens) {
         auto left = get_predecessor(right);
         ::compat::unwrap_into(
-                wrapping_range<token>(range_bound<token>(left, false), range_bound<token>(right)),
+                wrapping_interval<token>(interval_bound<token>(left, false), interval_bound<token>(right)),
                 dht::token_comparator(),
                 [&] (auto&& rng) { ranges.push_back(std::move(rng)); });
     }
@@ -671,7 +671,7 @@ dht::token_range_vector token_metadata_impl::get_primary_ranges_for(token right)
 }
 
 boost::icl::interval<token>::interval_type
-token_metadata_impl::range_to_interval(range<dht::token> r) {
+token_metadata_impl::range_to_interval(wrapping_interval<dht::token> r) {
     bool start_inclusive = false;
     bool end_inclusive = false;
     token start = dht::minimum_token();
@@ -698,7 +698,7 @@ token_metadata_impl::range_to_interval(range<dht::token> r) {
     }
 }
 
-range<dht::token>
+wrapping_interval<dht::token>
 token_metadata_impl::interval_to_range(boost::icl::interval<token>::interval_type i) {
     bool start_inclusive;
     bool end_inclusive;
@@ -718,7 +718,7 @@ token_metadata_impl::interval_to_range(boost::icl::interval<token>::interval_typ
     } else {
         throw std::runtime_error("Invalid boost::icl::interval<token> bounds");
     }
-    return range<dht::token>({{i.lower(), start_inclusive}}, {{i.upper(), end_inclusive}});
+    return wrapping_interval<dht::token>({{i.lower(), start_inclusive}}, {{i.upper(), end_inclusive}});
 }
 
 future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rack) {
@@ -1074,11 +1074,11 @@ token_metadata::get_primary_ranges_for(token right) const {
 }
 
 boost::icl::interval<token>::interval_type
-token_metadata::range_to_interval(range<dht::token> r) {
+token_metadata::range_to_interval(wrapping_interval<dht::token> r) {
     return token_metadata_impl::range_to_interval(std::move(r));
 }
 
-range<dht::token>
+wrapping_interval<dht::token>
 token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) {
     return token_metadata_impl::interval_to_range(std::move(i));
 }

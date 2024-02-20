@@ -22,7 +22,7 @@
 #include "mutation/frozen_mutation.hh"
 #include "mutation/mutation.hh"
 #include "message/messaging_service.hh"
-#include "range.hh"
+#include "interval.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
 #include <boost/range/irange.hpp>
@@ -273,7 +273,7 @@ void stream_transfer_task::sort_and_merge_ranges() {
     _ranges.swap(ranges);
     for (auto& range : ranges) {
         // TODO: We should convert range_to_interval and interval_to_range to
-        // take nonwrapping_range ranges.
+        // take nonwrapping_interval ranges.
         myset += locator::token_metadata::range_to_interval(std::move(range));
     }
     ranges.clear();

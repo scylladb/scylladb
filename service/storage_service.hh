@@ -607,7 +607,7 @@ public:
      */
     std::vector<std::pair<dht::token_range, uint64_t>> get_splits(const sstring& ks_name,
             const sstring& cf_name,
-            range<dht::token> range,
+            wrapping_interval<dht::token> range,
             uint32_t keys_per_split);
 public:
     future<> decommission();

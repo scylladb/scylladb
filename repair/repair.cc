@@ -976,9 +976,9 @@ private:
             }
             auto tok_start = dht::token::from_sstring(token_strings[0]);
             auto tok_end = dht::token::from_sstring(token_strings[1]);
-            auto rng = wrapping_range<dht::token>(
-                    ::range<dht::token>::bound(tok_start, false),
-                    ::range<dht::token>::bound(tok_end, true));
+            auto rng = wrapping_interval<dht::token>(
+                    ::wrapping_interval<dht::token>::bound(tok_start, false),
+                    ::wrapping_interval<dht::token>::bound(tok_end, true));
             ::compat::unwrap_into(std::move(rng), dht::token_comparator(), [&] (dht::token_range&& x) {
                 var.push_back(std::move(x));
             });
@@ -1256,19 +1256,19 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
     if (!options.start_token.empty() || !options.end_token.empty()) {
         // Intersect the list of local ranges with the given token range,
         // dropping ranges with no intersection.
-        std::optional<::range<dht::token>::bound> tok_start;
-        std::optional<::range<dht::token>::bound> tok_end;
+        std::optional<::wrapping_interval<dht::token>::bound> tok_start;
+        std::optional<::wrapping_interval<dht::token>::bound> tok_end;
         if (!options.start_token.empty()) {
-            tok_start = ::range<dht::token>::bound(
+            tok_start = ::wrapping_interval<dht::token>::bound(
                 dht::token::from_sstring(options.start_token),
                 false);
         }
         if (!options.end_token.empty()) {
-            tok_end = ::range<dht::token>::bound(
+            tok_end = ::wrapping_interval<dht::token>::bound(
                 dht::token::from_sstring(options.end_token),
                 true);
         }
-        auto wrange = wrapping_range<dht::token>(tok_start, tok_end);
+        auto wrange = wrapping_interval<dht::token>(tok_start, tok_end);
         dht::token_range_vector given_ranges;
         ::compat::unwrap_into(std::move(wrange), dht::token_comparator(), [&] (dht::token_range&& x) {
             given_ranges.push_back(std::move(x));
@@ -1593,7 +1593,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             rlogger.info("bootstrap_with_repair: started with keyspace={}, nr_ranges={}", keyspace_name, desired_ranges.size() * nr_tables);
             for (auto& desired_range : desired_ranges) {
                 for (auto& x : range_addresses) {
-                    const range<dht::token>& src_range = x.first;
+                    const wrapping_interval<dht::token>& src_range = x.first;
                     seastar::thread::maybe_yield();
                     if (src_range.contains(desired_range, dht::operator<=>)) {
                         std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());

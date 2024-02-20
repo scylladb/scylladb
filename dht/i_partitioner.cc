@@ -142,10 +142,10 @@ selective_token_range_sharder::next() {
     while (_range.overlaps(dht::token_range(_start_boundary, {}), dht::token_comparator())
             && !(_start_boundary && _start_boundary->value() == maximum_token())) {
         auto end_token = _sharder.token_for_next_shard(_start_token, _next_shard);
-        auto candidate = dht::token_range(std::move(_start_boundary), range_bound<dht::token>(end_token, false));
+        auto candidate = dht::token_range(std::move(_start_boundary), interval_bound<dht::token>(end_token, false));
         auto intersection = _range.intersection(std::move(candidate), dht::token_comparator());
         _start_token = _sharder.token_for_next_shard(end_token, _shard);
-        _start_boundary = range_bound<dht::token>(_start_token);
+        _start_boundary = interval_bound<dht::token>(_start_token);
         if (intersection) {
             return *intersection;
         }
@@ -173,9 +173,9 @@ ring_position_range_sharder::next(const schema& s) {
             && shard_boundary_token != maximum_token()) {
         // split the range at end_of_shard
         auto start = _range.start();
-        auto end = range_bound<ring_position>(shard_boundary, false);
+        auto end = interval_bound<ring_position>(shard_boundary, false);
         _range = dht::partition_range(
-                range_bound<ring_position>(std::move(shard_boundary), true),
+                interval_bound<ring_position>(std::move(shard_boundary), true),
                 std::move(_range.end()));
         return ring_position_range_and_shard{dht::partition_range(std::move(start), std::move(end)), shard};
     }
@@ -211,7 +211,7 @@ future<utils::chunked_vector<partition_range>>
 split_range_to_single_shard(const schema& s, const sharder& sharder, const partition_range& pr, shard_id shard) {
     auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
     auto start_shard = sharder.shard_of(start_token);
-    auto start_boundary = start_shard == shard ? pr.start() : range_bound<ring_position>(ring_position::starting_at(sharder.token_for_next_shard(start_token, shard)));
+    auto start_boundary = start_shard == shard ? pr.start() : interval_bound<ring_position>(ring_position::starting_at(sharder.token_for_next_shard(start_token, shard)));
     start_token = start_shard == shard ? start_token : sharder.token_for_next_shard(start_token, shard);
     return repeat_until_value([&sharder,
             &pr,
@@ -227,7 +227,7 @@ split_range_to_single_shard(const schema& s, const sharder& sharder, const parti
             if (s_a_t) {
                 end_token = s_a_t->token;
             }
-            auto candidate = partition_range(std::move(start_boundary), range_bound<ring_position>(ring_position::starting_at(end_token), false));
+            auto candidate = partition_range(std::move(start_boundary), interval_bound<ring_position>(ring_position::starting_at(end_token), false));
             auto intersection = pr.intersection(std::move(candidate), cmp);
             if (intersection) {
                 ret.push_back(std::move(*intersection));
@@ -240,7 +240,7 @@ split_range_to_single_shard(const schema& s, const sharder& sharder, const parti
             } else {
                 start_token = sharder.token_for_next_shard(end_token, shard);
             }
-            start_boundary = range_bound<ring_position>(ring_position::starting_at(start_token));
+            start_boundary = interval_bound<ring_position>(ring_position::starting_at(start_token));
             return make_ready_future<std::optional<utils::chunked_vector<partition_range>>>();
         }
         return make_ready_future<std::optional<utils::chunked_vector<partition_range>>>(std::move(ret));

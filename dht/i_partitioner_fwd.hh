@@ -9,7 +9,7 @@
 
 #pragma once
 #include <vector>
-#include "range.hh"
+#include "interval.hh"
 
 namespace sstables {
 
@@ -25,8 +25,8 @@ class ring_position;
 class token;
 class sharder;
 
-using partition_range = nonwrapping_range<ring_position>;
-using token_range = nonwrapping_range<token>;
+using partition_range = nonwrapping_interval<ring_position>;
+using token_range = nonwrapping_interval<token>;
 
 using partition_range_vector = std::vector<partition_range>;
 using token_range_vector = std::vector<token_range>;

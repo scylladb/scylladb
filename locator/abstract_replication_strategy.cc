@@ -114,7 +114,7 @@ static const std::unordered_set<locator::host_id>* find_token(const ring_mapping
     if (ring_mapping.empty()) {
         return nullptr;
     }
-    const auto interval = token_metadata::range_to_interval(range<dht::token>(token));
+    const auto interval = token_metadata::range_to_interval(wrapping_interval<dht::token>(token));
     const auto it = ring_mapping.find(interval);
     return it != ring_mapping.end() ? &it->second : nullptr;
 }

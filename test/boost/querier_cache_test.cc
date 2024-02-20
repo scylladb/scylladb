@@ -62,7 +62,7 @@ public:
 
 class test_querier_cache {
 public:
-    using bound = range_bound<std::size_t>;
+    using bound = interval_bound<std::size_t>;
 
     static const size_t max_reader_buffer_size = 8 * 1024;
 

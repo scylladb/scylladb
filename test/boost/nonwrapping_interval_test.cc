@@ -89,51 +89,51 @@ BOOST_AUTO_TEST_CASE(test_range_with_equal_value_but_opposite_inclusiveness_is_a
 BOOST_AUTO_TEST_CASE(test_range_contains) {
     auto cmp = [] (int i1, int i2) -> std::strong_ordering { return i1 <=> i2; };
 
-    auto check_contains = [&] (nonwrapping_range<int> enclosing, nonwrapping_range<int> enclosed) {
+    auto check_contains = [&] (nonwrapping_interval<int> enclosing, nonwrapping_interval<int> enclosed) {
         BOOST_REQUIRE(enclosing.contains(enclosed, cmp));
         BOOST_REQUIRE(!enclosed.contains(enclosing, cmp));
     };
 
-    BOOST_REQUIRE(nonwrapping_range<int>({}, {}).contains(nonwrapping_range<int>({}, {}), cmp));
-    check_contains(nonwrapping_range<int>({}, {}), nonwrapping_range<int>({1}, {2}));
-    check_contains(nonwrapping_range<int>({}, {}), nonwrapping_range<int>({}, {2}));
-    check_contains(nonwrapping_range<int>({}, {}), nonwrapping_range<int>({1}, {}));
-    check_contains(nonwrapping_range<int>({}, {}), nonwrapping_range<int>({2}, {1}));
+    BOOST_REQUIRE(nonwrapping_interval<int>({}, {}).contains(nonwrapping_interval<int>({}, {}), cmp));
+    check_contains(nonwrapping_interval<int>({}, {}), nonwrapping_interval<int>({1}, {2}));
+    check_contains(nonwrapping_interval<int>({}, {}), nonwrapping_interval<int>({}, {2}));
+    check_contains(nonwrapping_interval<int>({}, {}), nonwrapping_interval<int>({1}, {}));
+    check_contains(nonwrapping_interval<int>({}, {}), nonwrapping_interval<int>({2}, {1}));
 
-    BOOST_REQUIRE(nonwrapping_range<int>({}, {3}).contains(nonwrapping_range<int>({}, {3}), cmp));
-    BOOST_REQUIRE(nonwrapping_range<int>({3}, {}).contains(nonwrapping_range<int>({3}, {}), cmp));
-    BOOST_REQUIRE(nonwrapping_range<int>({}, {{3, false}}).contains(nonwrapping_range<int>({}, {{3, false}}), cmp));
-    BOOST_REQUIRE(nonwrapping_range<int>({{3, false}}, {}).contains(nonwrapping_range<int>({{3, false}}, {}), cmp));
-    BOOST_REQUIRE(nonwrapping_range<int>({1}, {3}).contains(nonwrapping_range<int>({1}, {3}), cmp));
-    BOOST_REQUIRE(nonwrapping_range<int>({3}, {1}).contains(nonwrapping_range<int>({3}, {1}), cmp));
+    BOOST_REQUIRE(nonwrapping_interval<int>({}, {3}).contains(nonwrapping_interval<int>({}, {3}), cmp));
+    BOOST_REQUIRE(nonwrapping_interval<int>({3}, {}).contains(nonwrapping_interval<int>({3}, {}), cmp));
+    BOOST_REQUIRE(nonwrapping_interval<int>({}, {{3, false}}).contains(nonwrapping_interval<int>({}, {{3, false}}), cmp));
+    BOOST_REQUIRE(nonwrapping_interval<int>({{3, false}}, {}).contains(nonwrapping_interval<int>({{3, false}}, {}), cmp));
+    BOOST_REQUIRE(nonwrapping_interval<int>({1}, {3}).contains(nonwrapping_interval<int>({1}, {3}), cmp));
+    BOOST_REQUIRE(nonwrapping_interval<int>({3}, {1}).contains(nonwrapping_interval<int>({3}, {1}), cmp));
 
-    check_contains(nonwrapping_range<int>({}, {3}), nonwrapping_range<int>({}, {2}));
-    check_contains(nonwrapping_range<int>({}, {3}), nonwrapping_range<int>({2}, {{3, false}}));
-    BOOST_REQUIRE(!nonwrapping_range<int>({}, {3}).contains(nonwrapping_range<int>({}, {4}), cmp));
-    BOOST_REQUIRE(!nonwrapping_range<int>({}, {3}).contains(nonwrapping_range<int>({2}, {{4, false}}), cmp));
-    BOOST_REQUIRE(!nonwrapping_range<int>({}, {3}).contains(nonwrapping_range<int>({}, {}), cmp));
+    check_contains(nonwrapping_interval<int>({}, {3}), nonwrapping_interval<int>({}, {2}));
+    check_contains(nonwrapping_interval<int>({}, {3}), nonwrapping_interval<int>({2}, {{3, false}}));
+    BOOST_REQUIRE(!nonwrapping_interval<int>({}, {3}).contains(nonwrapping_interval<int>({}, {4}), cmp));
+    BOOST_REQUIRE(!nonwrapping_interval<int>({}, {3}).contains(nonwrapping_interval<int>({2}, {{4, false}}), cmp));
+    BOOST_REQUIRE(!nonwrapping_interval<int>({}, {3}).contains(nonwrapping_interval<int>({}, {}), cmp));
 
-    check_contains(nonwrapping_range<int>({3}, {}), nonwrapping_range<int>({4}, {}));
-    check_contains(nonwrapping_range<int>({3}, {}), nonwrapping_range<int>({{3, false}}, {}));
-    check_contains(nonwrapping_range<int>({3}, {}), nonwrapping_range<int>({3}, {4}));
-    check_contains(nonwrapping_range<int>({3}, {}), nonwrapping_range<int>({4}, {5}));
-    BOOST_REQUIRE(!nonwrapping_range<int>({3}, {}).contains(nonwrapping_range<int>({2}, {4}), cmp));
-    BOOST_REQUIRE(!nonwrapping_range<int>({3}, {}).contains(nonwrapping_range<int>({}, {}), cmp));
+    check_contains(nonwrapping_interval<int>({3}, {}), nonwrapping_interval<int>({4}, {}));
+    check_contains(nonwrapping_interval<int>({3}, {}), nonwrapping_interval<int>({{3, false}}, {}));
+    check_contains(nonwrapping_interval<int>({3}, {}), nonwrapping_interval<int>({3}, {4}));
+    check_contains(nonwrapping_interval<int>({3}, {}), nonwrapping_interval<int>({4}, {5}));
+    BOOST_REQUIRE(!nonwrapping_interval<int>({3}, {}).contains(nonwrapping_interval<int>({2}, {4}), cmp));
+    BOOST_REQUIRE(!nonwrapping_interval<int>({3}, {}).contains(nonwrapping_interval<int>({}, {}), cmp));
 
-    check_contains(nonwrapping_range<int>({}, {{3, false}}), nonwrapping_range<int>({}, {2}));
-    BOOST_REQUIRE(!nonwrapping_range<int>({}, {{3, false}}).contains(nonwrapping_range<int>({}, {3}), cmp));
-    BOOST_REQUIRE(!nonwrapping_range<int>({}, {{3, false}}).contains(nonwrapping_range<int>({}, {4}), cmp));
+    check_contains(nonwrapping_interval<int>({}, {{3, false}}), nonwrapping_interval<int>({}, {2}));
+    BOOST_REQUIRE(!nonwrapping_interval<int>({}, {{3, false}}).contains(nonwrapping_interval<int>({}, {3}), cmp));
+    BOOST_REQUIRE(!nonwrapping_interval<int>({}, {{3, false}}).contains(nonwrapping_interval<int>({}, {4}), cmp));
 
-    check_contains(nonwrapping_range<int>({1}, {3}), nonwrapping_range<int>({1}, {2}));
-    check_contains(nonwrapping_range<int>({1}, {3}), nonwrapping_range<int>({1}, {1}));
-    BOOST_REQUIRE(!nonwrapping_range<int>({1}, {3}).contains(nonwrapping_range<int>({2}, {4}), cmp));
-    BOOST_REQUIRE(!nonwrapping_range<int>({1}, {3}).contains(nonwrapping_range<int>({0}, {1}), cmp));
-    BOOST_REQUIRE(!nonwrapping_range<int>({1}, {3}).contains(nonwrapping_range<int>({0}, {4}), cmp));
+    check_contains(nonwrapping_interval<int>({1}, {3}), nonwrapping_interval<int>({1}, {2}));
+    check_contains(nonwrapping_interval<int>({1}, {3}), nonwrapping_interval<int>({1}, {1}));
+    BOOST_REQUIRE(!nonwrapping_interval<int>({1}, {3}).contains(nonwrapping_interval<int>({2}, {4}), cmp));
+    BOOST_REQUIRE(!nonwrapping_interval<int>({1}, {3}).contains(nonwrapping_interval<int>({0}, {1}), cmp));
+    BOOST_REQUIRE(!nonwrapping_interval<int>({1}, {3}).contains(nonwrapping_interval<int>({0}, {4}), cmp));
 }
 
 BOOST_AUTO_TEST_CASE(test_range_subtract) {
     auto cmp = [] (int i1, int i2) -> std::strong_ordering { return i1 <=> i2; };
-    using r = nonwrapping_range<int>;
+    using r = nonwrapping_interval<int>;
     using vec = std::vector<r>;
 
     BOOST_REQUIRE_EQUAL(r({2}, {4}).subtract(r({0}, {1}), cmp), vec({r({2}, {4})}));
@@ -184,50 +184,50 @@ BOOST_AUTO_TEST_CASE(range_overlap_tests) {
     unsigned min = 0;
     unsigned max = std::numeric_limits<unsigned>::max();
 
-    auto range0 = nonwrapping_range<unsigned>({max}, {max});
-    auto range1 = nonwrapping_range<unsigned>({min}, {max});
+    auto range0 = nonwrapping_interval<unsigned>({max}, {max});
+    auto range1 = nonwrapping_interval<unsigned>({min}, {max});
     BOOST_REQUIRE(range0.overlaps(range1, unsigned_comparator()) == true);
     BOOST_REQUIRE(range1.overlaps(range1, unsigned_comparator()) == true);
     BOOST_REQUIRE(range1.overlaps(range0, unsigned_comparator()) == true);
 
-    auto range2 = nonwrapping_range<unsigned>({1}, {max});
+    auto range2 = nonwrapping_interval<unsigned>({1}, {max});
     BOOST_REQUIRE(range1.overlaps(range2, unsigned_comparator()) == true);
 
-    auto range3 = nonwrapping_range<unsigned>({min}, {max-2});
+    auto range3 = nonwrapping_interval<unsigned>({min}, {max-2});
     BOOST_REQUIRE(range2.overlaps(range3, unsigned_comparator()) == true);
 
-    auto range4 = nonwrapping_range<unsigned>({2}, {10});
-    auto range5 = nonwrapping_range<unsigned>({12}, {20});
-    auto range6 = nonwrapping_range<unsigned>({22}, {40});
+    auto range4 = nonwrapping_interval<unsigned>({2}, {10});
+    auto range5 = nonwrapping_interval<unsigned>({12}, {20});
+    auto range6 = nonwrapping_interval<unsigned>({22}, {40});
     BOOST_REQUIRE(range4.overlaps(range5, unsigned_comparator()) == false);
     BOOST_REQUIRE(range5.overlaps(range4, unsigned_comparator()) == false);
     BOOST_REQUIRE(range4.overlaps(range6, unsigned_comparator()) == false);
 
-    auto range7 = nonwrapping_range<unsigned>({2}, {10});
-    auto range8 = nonwrapping_range<unsigned>({10}, {20});
-    auto range9 = nonwrapping_range<unsigned>({min}, {100});
+    auto range7 = nonwrapping_interval<unsigned>({2}, {10});
+    auto range8 = nonwrapping_interval<unsigned>({10}, {20});
+    auto range9 = nonwrapping_interval<unsigned>({min}, {100});
     BOOST_REQUIRE(range7.overlaps(range8, unsigned_comparator()) == true);
     BOOST_REQUIRE(range6.overlaps(range8, unsigned_comparator()) == false);
     BOOST_REQUIRE(range8.overlaps(range9, unsigned_comparator()) == true);
 
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({1}, {{2, false}}).overlaps(nonwrapping_range<unsigned>({2}, {3}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({1}, {{2, false}}).overlaps(nonwrapping_interval<unsigned>({2}, {3}), unsigned_comparator()) == false);
 
     // open and infinite bound checks
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({1}, {}).overlaps(nonwrapping_range<unsigned>({2}, {3}), unsigned_comparator()) == true);
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({5}, {}).overlaps(nonwrapping_range<unsigned>({2}, {3}), unsigned_comparator()) == false);
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({}, {{3, false}}).overlaps(nonwrapping_range<unsigned>({2}, {3}), unsigned_comparator()) == true);
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({}, {{2, false}}).overlaps(nonwrapping_range<unsigned>({2}, {3}), unsigned_comparator()) == false);
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({}, {2}).overlaps(nonwrapping_range<unsigned>({2}, {}), unsigned_comparator()) == true);
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({}, {2}).overlaps(nonwrapping_range<unsigned>({3}, {4}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({1}, {}).overlaps(nonwrapping_interval<unsigned>({2}, {3}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({5}, {}).overlaps(nonwrapping_interval<unsigned>({2}, {3}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({}, {{3, false}}).overlaps(nonwrapping_interval<unsigned>({2}, {3}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({}, {{2, false}}).overlaps(nonwrapping_interval<unsigned>({2}, {3}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({}, {2}).overlaps(nonwrapping_interval<unsigned>({2}, {}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({}, {2}).overlaps(nonwrapping_interval<unsigned>({3}, {4}), unsigned_comparator()) == false);
 
     // [3,4] and [4,5]
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({3}, {4}).overlaps(nonwrapping_range<unsigned>({4}, {5}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({3}, {4}).overlaps(nonwrapping_interval<unsigned>({4}, {5}), unsigned_comparator()) == true);
     // [3,4) and [4,5]
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({3}, {{4, false}}).overlaps(nonwrapping_range<unsigned>({4}, {5}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({3}, {{4, false}}).overlaps(nonwrapping_interval<unsigned>({4}, {5}), unsigned_comparator()) == false);
     // [3,4] and (4,5]
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({3}, {4}).overlaps(nonwrapping_range<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({3}, {4}).overlaps(nonwrapping_interval<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
     // [3,4) and (4,5]
-    BOOST_REQUIRE(nonwrapping_range<unsigned>({3}, {{4, false}}).overlaps(nonwrapping_range<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(nonwrapping_interval<unsigned>({3}, {{4, false}}).overlaps(nonwrapping_interval<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
 }
 
 auto get_item(std::string left, std::string right, std::string val) {
@@ -284,86 +284,86 @@ BOOST_AUTO_TEST_CASE(test_range_interval_map) {
 }
 
 BOOST_AUTO_TEST_CASE(range_deoverlap_tests) {
-    using ranges = std::vector<nonwrapping_range<unsigned>>;
+    using ranges = std::vector<nonwrapping_interval<unsigned>>;
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({1}, {4}), nonwrapping_range<unsigned>({2}, {5}) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({1}, {4}), nonwrapping_interval<unsigned>({2}, {5}) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({1}, {5}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({1}, {5}), deoverlapped[0]);
     }
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({1}, {4}), nonwrapping_range<unsigned>({4}, {5}) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({1}, {4}), nonwrapping_interval<unsigned>({4}, {5}) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({1}, {5}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({1}, {5}), deoverlapped[0]);
     }
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({2}, {4}), nonwrapping_range<unsigned>({1}, {3}) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({2}, {4}), nonwrapping_interval<unsigned>({1}, {3}) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({1}, {4}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({1}, {4}), deoverlapped[0]);
     }
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({1}, {4}), nonwrapping_range<unsigned>({0}, {5}), nonwrapping_range<unsigned>({7}, {12}), nonwrapping_range<unsigned>({8}, {10}) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({1}, {4}), nonwrapping_interval<unsigned>({0}, {5}), nonwrapping_interval<unsigned>({7}, {12}), nonwrapping_interval<unsigned>({8}, {10}) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({0}, {5}), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({7}, {12}), deoverlapped[1]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({0}, {5}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({7}, {12}), deoverlapped[1]);
     }
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({1}, {4}), nonwrapping_range<unsigned>({2}, { }) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({1}, {4}), nonwrapping_interval<unsigned>({2}, { }) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({1}, { }), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({1}, { }), deoverlapped[0]);
     }
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({ }, {4}), nonwrapping_range<unsigned>({3}, {5}) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({ }, {4}), nonwrapping_interval<unsigned>({3}, {5}) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({ }, {5}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({ }, {5}), deoverlapped[0]);
     }
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({14}, { }), nonwrapping_range<unsigned>({2}, { }) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({14}, { }), nonwrapping_interval<unsigned>({2}, { }) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({2}, { }), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({2}, { }), deoverlapped[0]);
     }
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({2}, { }), nonwrapping_range<unsigned>({12}, { }) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({2}, { }), nonwrapping_interval<unsigned>({12}, { }) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({2}, { }), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({2}, { }), deoverlapped[0]);
     }
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({3}, {{4, false}}), nonwrapping_range<unsigned>({{4, false}}, {5}) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({3}, {{4, false}}), nonwrapping_interval<unsigned>({{4, false}}, {5}) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({3}, {{4, false}}), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({{4, false}}, {5}), deoverlapped[1]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({3}, {{4, false}}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({{4, false}}, {5}), deoverlapped[1]);
     }
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({3}, {{4, false}}), nonwrapping_range<unsigned>({4}, {5}) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({3}, {{4, false}}), nonwrapping_interval<unsigned>({4}, {5}) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({3}, {{4, false}}), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({4}, {5}), deoverlapped[1]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({3}, {{4, false}}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({4}, {5}), deoverlapped[1]);
     }
 
     {
-        ranges rs = { nonwrapping_range<unsigned>({3}, {4}), nonwrapping_range<unsigned>({{4, false}}, {5}) };
-        auto deoverlapped = nonwrapping_range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        ranges rs = { nonwrapping_interval<unsigned>({3}, {4}), nonwrapping_interval<unsigned>({{4, false}}, {5}) };
+        auto deoverlapped = nonwrapping_interval<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
         BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({3}, {4}), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(nonwrapping_range<unsigned>({{4, false}}, {5}), deoverlapped[1]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({3}, {4}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(nonwrapping_interval<unsigned>({{4, false}}, {5}), deoverlapped[1]);
     }
 }

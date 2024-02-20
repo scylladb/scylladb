@@ -8,12 +8,12 @@
 
 #pragma once
 
-#include "range.hh"
+#include "interval.hh"
 #include <seastar/core/print.hh>
 
 #include "seastarx.hh"
 
-using int_range = nonwrapping_range<int>;
+using int_range = nonwrapping_interval<int>;
 
 inline
 unsigned cardinality(const int_range& r) {

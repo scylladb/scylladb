@@ -19,7 +19,7 @@
 #include "keys.hh"
 #include "dht/ring_position.hh"
 #include "enum_set.hh"
-#include "range.hh"
+#include "interval.hh"
 #include "tracing/tracing.hh"
 #include "utils/small_vector.hh"
 #include "db/per_partition_rate_limit_info.hh"
@@ -43,7 +43,7 @@ namespace query {
 using column_id_vector = utils::small_vector<column_id, 8>;
 
 template <typename T>
-using range = wrapping_range<T>;
+using range = wrapping_interval<T>;
 
 using ring_position = dht::ring_position;
 
@@ -52,7 +52,7 @@ using ring_position = dht::ring_position;
 // key prefixes. Inclusiveness of the range's bounds must be taken into account during comparisons.
 // For example, consider clustering key type consisting of two ints. Then [0:1, 0:] is a valid non-empty range
 // (e.g. it includes the key 0:2) even though 0: < 0:1 w.r.t the clustering prefix order.
-using clustering_range = nonwrapping_range<clustering_key_prefix>;
+using clustering_range = nonwrapping_interval<clustering_key_prefix>;
 
 // If `range` was supposed to be used with a comparator `cmp`, then
 // `reverse(range)` is supposed to be used with a reversed comparator `c`.

@@ -93,65 +93,65 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
 BOOST_AUTO_TEST_CASE(test_range_contains) {
     auto cmp = [] (int i1, int i2) -> std::strong_ordering { return i1 <=> i2; };
 
-    auto check_contains = [&] (range<int> enclosing, range<int> enclosed) {
+    auto check_contains = [&] (wrapping_interval<int> enclosing, wrapping_interval<int> enclosed) {
         BOOST_REQUIRE(enclosing.contains(enclosed, cmp));
         BOOST_REQUIRE(!enclosed.contains(enclosing, cmp));
     };
 
-    BOOST_REQUIRE(range<int>({}, {}).contains(range<int>({}, {}), cmp));
-    check_contains(range<int>({}, {}), range<int>({1}, {2}));
-    check_contains(range<int>({}, {}), range<int>({}, {2}));
-    check_contains(range<int>({}, {}), range<int>({1}, {}));
-    check_contains(range<int>({}, {}), range<int>({2}, {1}));
+    BOOST_REQUIRE(wrapping_interval<int>({}, {}).contains(wrapping_interval<int>({}, {}), cmp));
+    check_contains(wrapping_interval<int>({}, {}), wrapping_interval<int>({1}, {2}));
+    check_contains(wrapping_interval<int>({}, {}), wrapping_interval<int>({}, {2}));
+    check_contains(wrapping_interval<int>({}, {}), wrapping_interval<int>({1}, {}));
+    check_contains(wrapping_interval<int>({}, {}), wrapping_interval<int>({2}, {1}));
 
-    BOOST_REQUIRE(range<int>({}, {3}).contains(range<int>({}, {3}), cmp));
-    BOOST_REQUIRE(range<int>({3}, {}).contains(range<int>({3}, {}), cmp));
-    BOOST_REQUIRE(range<int>({}, {{3, false}}).contains(range<int>({}, {{3, false}}), cmp));
-    BOOST_REQUIRE(range<int>({{3, false}}, {}).contains(range<int>({{3, false}}, {}), cmp));
-    BOOST_REQUIRE(range<int>({1}, {3}).contains(range<int>({1}, {3}), cmp));
-    BOOST_REQUIRE(range<int>({3}, {1}).contains(range<int>({3}, {1}), cmp));
+    BOOST_REQUIRE(wrapping_interval<int>({}, {3}).contains(wrapping_interval<int>({}, {3}), cmp));
+    BOOST_REQUIRE(wrapping_interval<int>({3}, {}).contains(wrapping_interval<int>({3}, {}), cmp));
+    BOOST_REQUIRE(wrapping_interval<int>({}, {{3, false}}).contains(wrapping_interval<int>({}, {{3, false}}), cmp));
+    BOOST_REQUIRE(wrapping_interval<int>({{3, false}}, {}).contains(wrapping_interval<int>({{3, false}}, {}), cmp));
+    BOOST_REQUIRE(wrapping_interval<int>({1}, {3}).contains(wrapping_interval<int>({1}, {3}), cmp));
+    BOOST_REQUIRE(wrapping_interval<int>({3}, {1}).contains(wrapping_interval<int>({3}, {1}), cmp));
 
-    check_contains(range<int>({}, {3}), range<int>({}, {2}));
-    check_contains(range<int>({}, {3}), range<int>({2}, {{3, false}}));
-    BOOST_REQUIRE(!range<int>({}, {3}).contains(range<int>({}, {4}), cmp));
-    BOOST_REQUIRE(!range<int>({}, {3}).contains(range<int>({2}, {{4, false}}), cmp));
-    BOOST_REQUIRE(!range<int>({}, {3}).contains(range<int>({}, {}), cmp));
+    check_contains(wrapping_interval<int>({}, {3}), wrapping_interval<int>({}, {2}));
+    check_contains(wrapping_interval<int>({}, {3}), wrapping_interval<int>({2}, {{3, false}}));
+    BOOST_REQUIRE(!wrapping_interval<int>({}, {3}).contains(wrapping_interval<int>({}, {4}), cmp));
+    BOOST_REQUIRE(!wrapping_interval<int>({}, {3}).contains(wrapping_interval<int>({2}, {{4, false}}), cmp));
+    BOOST_REQUIRE(!wrapping_interval<int>({}, {3}).contains(wrapping_interval<int>({}, {}), cmp));
 
-    check_contains(range<int>({3}, {}), range<int>({4}, {}));
-    check_contains(range<int>({3}, {}), range<int>({{3, false}}, {}));
-    check_contains(range<int>({3}, {}), range<int>({3}, {4}));
-    check_contains(range<int>({3}, {}), range<int>({4}, {5}));
-    BOOST_REQUIRE(!range<int>({3}, {}).contains(range<int>({2}, {4}), cmp));
-    BOOST_REQUIRE(!range<int>({3}, {}).contains(range<int>({}, {}), cmp));
+    check_contains(wrapping_interval<int>({3}, {}), wrapping_interval<int>({4}, {}));
+    check_contains(wrapping_interval<int>({3}, {}), wrapping_interval<int>({{3, false}}, {}));
+    check_contains(wrapping_interval<int>({3}, {}), wrapping_interval<int>({3}, {4}));
+    check_contains(wrapping_interval<int>({3}, {}), wrapping_interval<int>({4}, {5}));
+    BOOST_REQUIRE(!wrapping_interval<int>({3}, {}).contains(wrapping_interval<int>({2}, {4}), cmp));
+    BOOST_REQUIRE(!wrapping_interval<int>({3}, {}).contains(wrapping_interval<int>({}, {}), cmp));
 
-    check_contains(range<int>({}, {{3, false}}), range<int>({}, {2}));
-    BOOST_REQUIRE(!range<int>({}, {{3, false}}).contains(range<int>({}, {3}), cmp));
-    BOOST_REQUIRE(!range<int>({}, {{3, false}}).contains(range<int>({}, {4}), cmp));
+    check_contains(wrapping_interval<int>({}, {{3, false}}), wrapping_interval<int>({}, {2}));
+    BOOST_REQUIRE(!wrapping_interval<int>({}, {{3, false}}).contains(wrapping_interval<int>({}, {3}), cmp));
+    BOOST_REQUIRE(!wrapping_interval<int>({}, {{3, false}}).contains(wrapping_interval<int>({}, {4}), cmp));
 
-    check_contains(range<int>({1}, {3}), range<int>({1}, {2}));
-    check_contains(range<int>({1}, {3}), range<int>({1}, {1}));
-    BOOST_REQUIRE(!range<int>({1}, {3}).contains(range<int>({2}, {4}), cmp));
-    BOOST_REQUIRE(!range<int>({1}, {3}).contains(range<int>({0}, {1}), cmp));
-    BOOST_REQUIRE(!range<int>({1}, {3}).contains(range<int>({0}, {4}), cmp));
+    check_contains(wrapping_interval<int>({1}, {3}), wrapping_interval<int>({1}, {2}));
+    check_contains(wrapping_interval<int>({1}, {3}), wrapping_interval<int>({1}, {1}));
+    BOOST_REQUIRE(!wrapping_interval<int>({1}, {3}).contains(wrapping_interval<int>({2}, {4}), cmp));
+    BOOST_REQUIRE(!wrapping_interval<int>({1}, {3}).contains(wrapping_interval<int>({0}, {1}), cmp));
+    BOOST_REQUIRE(!wrapping_interval<int>({1}, {3}).contains(wrapping_interval<int>({0}, {4}), cmp));
 
-    check_contains(range<int>({3}, {1}), range<int>({0}, {1}));
-    check_contains(range<int>({3}, {1}), range<int>({3}, {4}));
-    check_contains(range<int>({3}, {1}), range<int>({}, {1}));
-    check_contains(range<int>({3}, {1}), range<int>({}, {{1, false}}));
-    check_contains(range<int>({3}, {1}), range<int>({3}, {}));
-    check_contains(range<int>({3}, {1}), range<int>({{3, false}}, {}));
-    check_contains(range<int>({3}, {1}), range<int>({{3, false}}, {{1, false}}));
-    check_contains(range<int>({3}, {1}), range<int>({{3, false}}, {1}));
-    check_contains(range<int>({3}, {1}), range<int>({3}, {{1, false}}));
-    BOOST_REQUIRE(!range<int>({3}, {1}).contains(range<int>({2}, {2}), cmp));
-    BOOST_REQUIRE(!range<int>({3}, {1}).contains(range<int>({2}, {{3, false}}), cmp));
-    BOOST_REQUIRE(!range<int>({3}, {1}).contains(range<int>({{1, false}}, {{3, false}}), cmp));
-    BOOST_REQUIRE(!range<int>({3}, {1}).contains(range<int>({{1, false}}, {3}), cmp));
+    check_contains(wrapping_interval<int>({3}, {1}), wrapping_interval<int>({0}, {1}));
+    check_contains(wrapping_interval<int>({3}, {1}), wrapping_interval<int>({3}, {4}));
+    check_contains(wrapping_interval<int>({3}, {1}), wrapping_interval<int>({}, {1}));
+    check_contains(wrapping_interval<int>({3}, {1}), wrapping_interval<int>({}, {{1, false}}));
+    check_contains(wrapping_interval<int>({3}, {1}), wrapping_interval<int>({3}, {}));
+    check_contains(wrapping_interval<int>({3}, {1}), wrapping_interval<int>({{3, false}}, {}));
+    check_contains(wrapping_interval<int>({3}, {1}), wrapping_interval<int>({{3, false}}, {{1, false}}));
+    check_contains(wrapping_interval<int>({3}, {1}), wrapping_interval<int>({{3, false}}, {1}));
+    check_contains(wrapping_interval<int>({3}, {1}), wrapping_interval<int>({3}, {{1, false}}));
+    BOOST_REQUIRE(!wrapping_interval<int>({3}, {1}).contains(wrapping_interval<int>({2}, {2}), cmp));
+    BOOST_REQUIRE(!wrapping_interval<int>({3}, {1}).contains(wrapping_interval<int>({2}, {{3, false}}), cmp));
+    BOOST_REQUIRE(!wrapping_interval<int>({3}, {1}).contains(wrapping_interval<int>({{1, false}}, {{3, false}}), cmp));
+    BOOST_REQUIRE(!wrapping_interval<int>({3}, {1}).contains(wrapping_interval<int>({{1, false}}, {3}), cmp));
 }
 
 BOOST_AUTO_TEST_CASE(test_range_subtract) {
     auto cmp = [] (int i1, int i2) -> std::strong_ordering { return i1 <=> i2; };
-    using r = range<int>;
+    using r = wrapping_interval<int>;
     using vec = std::vector<r>;
 
     BOOST_REQUIRE_EQUAL(r({2}, {4}).subtract(r({0}, {1}), cmp), vec({r({2}, {4})}));
@@ -210,66 +210,66 @@ BOOST_AUTO_TEST_CASE(range_overlap_tests) {
     unsigned min = 0;
     unsigned max = std::numeric_limits<unsigned>::max();
 
-    auto range0 = range<unsigned>::make(max, max);
-    auto range1 = range<unsigned>::make(min, max);
+    auto range0 = wrapping_interval<unsigned>::make(max, max);
+    auto range1 = wrapping_interval<unsigned>::make(min, max);
     BOOST_REQUIRE(range0.overlaps(range1, unsigned_comparator()) == true);
     BOOST_REQUIRE(range1.overlaps(range1, unsigned_comparator()) == true);
     BOOST_REQUIRE(range1.overlaps(range0, unsigned_comparator()) == true);
 
-    auto range2 = range<unsigned>::make(1, max);
+    auto range2 = wrapping_interval<unsigned>::make(1, max);
     BOOST_REQUIRE(range1.overlaps(range2, unsigned_comparator()) == true);
 
-    auto range3 = range<unsigned>::make(min, max-2);
+    auto range3 = wrapping_interval<unsigned>::make(min, max-2);
     BOOST_REQUIRE(range2.overlaps(range3, unsigned_comparator()) == true);
 
-    auto range4 = range<unsigned>::make(2, 10);
-    auto range5 = range<unsigned>::make(12, 20);
-    auto range6 = range<unsigned>::make(22, 40);
+    auto range4 = wrapping_interval<unsigned>::make(2, 10);
+    auto range5 = wrapping_interval<unsigned>::make(12, 20);
+    auto range6 = wrapping_interval<unsigned>::make(22, 40);
     BOOST_REQUIRE(range4.overlaps(range5, unsigned_comparator()) == false);
     BOOST_REQUIRE(range5.overlaps(range4, unsigned_comparator()) == false);
     BOOST_REQUIRE(range4.overlaps(range6, unsigned_comparator()) == false);
 
-    auto range7 = range<unsigned>::make(2, 10);
-    auto range8 = range<unsigned>::make(10, 20);
-    auto range9 = range<unsigned>::make(min, 100);
+    auto range7 = wrapping_interval<unsigned>::make(2, 10);
+    auto range8 = wrapping_interval<unsigned>::make(10, 20);
+    auto range9 = wrapping_interval<unsigned>::make(min, 100);
     BOOST_REQUIRE(range7.overlaps(range8, unsigned_comparator()) == true);
     BOOST_REQUIRE(range6.overlaps(range8, unsigned_comparator()) == false);
     BOOST_REQUIRE(range8.overlaps(range9, unsigned_comparator()) == true);
 
     // wrap around checks
-    auto range10 = range<unsigned>::make(25, 15);
+    auto range10 = wrapping_interval<unsigned>::make(25, 15);
     BOOST_REQUIRE(range9.overlaps(range10, unsigned_comparator()) == true);
-    BOOST_REQUIRE(range10.overlaps(range<unsigned>({20}, {18}), unsigned_comparator()) == true);
-    auto range11 = range<unsigned>({}, {2});
+    BOOST_REQUIRE(range10.overlaps(wrapping_interval<unsigned>({20}, {18}), unsigned_comparator()) == true);
+    auto range11 = wrapping_interval<unsigned>({}, {2});
     BOOST_REQUIRE(range11.overlaps(range10, unsigned_comparator()) == true);
-    auto range12 = range<unsigned>::make(18, 20);
+    auto range12 = wrapping_interval<unsigned>::make(18, 20);
     BOOST_REQUIRE(range12.overlaps(range10, unsigned_comparator()) == false);
 
-    BOOST_REQUIRE(range<unsigned>({1}, {{2, false}}).overlaps(range<unsigned>({2}, {3}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({1}, {{2, false}}).overlaps(wrapping_interval<unsigned>({2}, {3}), unsigned_comparator()) == false);
 
     // open and infinite bound checks
-    BOOST_REQUIRE(range<unsigned>({1}, {}).overlaps(range<unsigned>({2}, {3}), unsigned_comparator()) == true);
-    BOOST_REQUIRE(range<unsigned>({5}, {}).overlaps(range<unsigned>({2}, {3}), unsigned_comparator()) == false);
-    BOOST_REQUIRE(range<unsigned>({}, {{3, false}}).overlaps(range<unsigned>({2}, {3}), unsigned_comparator()) == true);
-    BOOST_REQUIRE(range<unsigned>({}, {{2, false}}).overlaps(range<unsigned>({2}, {3}), unsigned_comparator()) == false);
-    BOOST_REQUIRE(range<unsigned>({}, {2}).overlaps(range<unsigned>({2}, {}), unsigned_comparator()) == true);
-    BOOST_REQUIRE(range<unsigned>({}, {2}).overlaps(range<unsigned>({3}, {4}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({1}, {}).overlaps(wrapping_interval<unsigned>({2}, {3}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({5}, {}).overlaps(wrapping_interval<unsigned>({2}, {3}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({}, {{3, false}}).overlaps(wrapping_interval<unsigned>({2}, {3}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({}, {{2, false}}).overlaps(wrapping_interval<unsigned>({2}, {3}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({}, {2}).overlaps(wrapping_interval<unsigned>({2}, {}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({}, {2}).overlaps(wrapping_interval<unsigned>({3}, {4}), unsigned_comparator()) == false);
 
     // [3,4] and [4,5]
-    BOOST_REQUIRE(range<unsigned>({3}, {4}).overlaps(range<unsigned>({4}, {5}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({3}, {4}).overlaps(wrapping_interval<unsigned>({4}, {5}), unsigned_comparator()) == true);
     // [3,4) and [4,5]
-    BOOST_REQUIRE(range<unsigned>({3}, {{4, false}}).overlaps(range<unsigned>({4}, {5}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({3}, {{4, false}}).overlaps(wrapping_interval<unsigned>({4}, {5}), unsigned_comparator()) == false);
     // [3,4] and (4,5]
-    BOOST_REQUIRE(range<unsigned>({3}, {4}).overlaps(range<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({3}, {4}).overlaps(wrapping_interval<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
     // [3,4) and (4,5]
-    BOOST_REQUIRE(range<unsigned>({3}, {{4, false}}).overlaps(range<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(wrapping_interval<unsigned>({3}, {{4, false}}).overlaps(wrapping_interval<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
 }
 
 auto get_item(std::string left, std::string right, std::string val) {
     using value_type = std::unordered_set<std::string>;
     auto l = dht::token::from_sstring(left);
     auto r = dht::token::from_sstring(right);
-    auto rg = range<dht::token>({{l, false}}, {r});
+    auto rg = wrapping_interval<dht::token>({{l, false}}, {r});
     value_type v{val};
     return std::make_pair(locator::token_metadata::range_to_interval(rg), v);
 }
@@ -295,7 +295,7 @@ BOOST_AUTO_TEST_CASE(test_range_interval_map) {
 
     auto search_item = [&mymap] (std::string val) {
         auto tok = dht::token::from_sstring(val);
-        auto search = range<token>(tok);
+        auto search = wrapping_interval<token>(tok);
         auto it = mymap.find(locator::token_metadata::range_to_interval(search));
         if (it != mymap.end()) {
             std::cout << "Found OK:" << " token = " << tok << " in range: " << it->first << "\n";
@@ -319,9 +319,9 @@ BOOST_AUTO_TEST_CASE(test_range_interval_map) {
 }
 
 BOOST_AUTO_TEST_CASE(test_split_after) {
-    using b = range_bound<unsigned>;
-    using wr = wrapping_range<unsigned>;
-    using nwr = nonwrapping_range<unsigned>;
+    using b = interval_bound<unsigned>;
+    using wr = wrapping_interval<unsigned>;
+    using nwr = nonwrapping_interval<unsigned>;
     auto cmp = unsigned_comparator();
 
     auto nwr1 = nwr(b(5), b(8));
@@ -378,8 +378,8 @@ BOOST_AUTO_TEST_CASE(test_split_after) {
 }
 
 BOOST_AUTO_TEST_CASE(test_intersection) {
-    using b = range_bound<unsigned>;
-    using nwr = nonwrapping_range<unsigned>;
+    using b = interval_bound<unsigned>;
+    using nwr = nonwrapping_interval<unsigned>;
     auto cmp = unsigned_comparator();
 
     auto r1 = nwr(b(5), b(10));

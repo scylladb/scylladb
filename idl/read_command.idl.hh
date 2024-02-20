@@ -20,7 +20,7 @@ namespace query {
 
 class specific_ranges {
     partition_key pk();
-    std::vector<nonwrapping_range<clustering_key_prefix>> ranges();
+    std::vector<nonwrapping_interval<clustering_key_prefix>> ranges();
 };
 
 // COMPATIBILITY NOTE: the partition-slice for reverse queries has two different
@@ -30,7 +30,7 @@ class specific_ranges {
 // The wire format uses the legacy format. See docs/dev/reverse-reads.md
 // for more details on the formats.
 class partition_slice {
-    std::vector<nonwrapping_range<clustering_key_prefix>> default_row_ranges();
+    std::vector<nonwrapping_interval<clustering_key_prefix>> default_row_ranges();
     utils::small_vector<uint32_t, 8> static_columns;
     utils::small_vector<uint32_t, 8> regular_columns;
     query::partition_slice::option_set options;

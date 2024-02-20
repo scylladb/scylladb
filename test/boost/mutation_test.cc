@@ -661,7 +661,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
         return do_with(std::move(result), [&cf, s, &env, &r1_col, shadow] (auto& result) {
             return cf.for_all_partitions_slow(s, env.make_reader_permit(), [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
                 auto p1 = value_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
-                for (const rows_entry& re : mp.range(*s, nonwrapping_range<clustering_key_prefix>())) {
+                for (const rows_entry& re : mp.range(*s, nonwrapping_interval<clustering_key_prefix>())) {
                     auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
                     auto cell = re.row().cells().find_cell(r1_col.id);
                     if (cell) {

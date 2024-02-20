@@ -4523,7 +4523,7 @@ future<> storage_service::unbootstrap() {
         for (const auto& [keyspace_name, erm] : ks_erms) {
             auto ranges_mm = co_await get_changed_ranges_for_leaving(erm, get_broadcast_address());
             if (slogger.is_enabled(logging::log_level::debug)) {
-                std::vector<range<token>> ranges;
+                std::vector<wrapping_interval<token>> ranges;
                 for (auto& x : ranges_mm) {
                     ranges.push_back(x.first);
                 }
@@ -6301,7 +6301,7 @@ calculate_splits(std::vector<dht::token> tokens, uint64_t split_count, replica::
 };
 
 std::vector<std::pair<dht::token_range, uint64_t>>
-storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, range<dht::token> range, uint32_t keys_per_split) {
+storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, wrapping_interval<dht::token> range, uint32_t keys_per_split) {
     using range_type = dht::token_range;
     auto& cf = _db.local().find_column_family(ks_name, cf_name);
     auto schema = cf.schema();
@@ -6350,14 +6350,14 @@ storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
     int size = sorted_tokens.size();
     dht::token_range_vector ranges;
     ranges.reserve(size + 1);
-    ranges.push_back(dht::token_range::make_ending_with(range_bound<token>(sorted_tokens[0], true)));
+    ranges.push_back(dht::token_range::make_ending_with(interval_bound<token>(sorted_tokens[0], true)));
     co_await coroutine::maybe_yield();
     for (int i = 1; i < size; ++i) {
-        dht::token_range r(range<token>::bound(sorted_tokens[i - 1], false), range<token>::bound(sorted_tokens[i], true));
+        dht::token_range r(wrapping_interval<token>::bound(sorted_tokens[i - 1], false), wrapping_interval<token>::bound(sorted_tokens[i], true));
         ranges.push_back(r);
         co_await coroutine::maybe_yield();
     }
-    ranges.push_back(dht::token_range::make_starting_with(range_bound<token>(sorted_tokens[size-1], false)));
+    ranges.push_back(dht::token_range::make_starting_with(interval_bound<token>(sorted_tokens[size-1], false)));
 
     co_return ranges;
 }

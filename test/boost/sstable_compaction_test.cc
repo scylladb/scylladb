@@ -32,7 +32,7 @@
 #include <seastar/core/do_with.hh>
 #include "compaction/compaction_manager.hh"
 #include "test/lib/tmpdir.hh"
-#include "range.hh"
+#include "interval.hh"
 #include "partition_slice_builder.hh"
 #include "compaction/time_window_compaction_strategy.hh"
 #include "compaction/leveled_compaction_strategy.hh"
@@ -526,8 +526,8 @@ static bool key_range_overlaps(table_for_tests& cf, const dht::decorated_key& a,
 }
 
 static bool sstable_overlaps(const lw_shared_ptr<replica::column_family>& cf, sstables::shared_sstable candidate1, sstables::shared_sstable candidate2) {
-    auto range1 = range<dht::token>::make(candidate1->get_first_decorated_key()._token, candidate1->get_last_decorated_key()._token);
-    auto range2 = range<dht::token>::make(candidate2->get_first_decorated_key()._token, candidate2->get_last_decorated_key()._token);
+    auto range1 = wrapping_interval<dht::token>::make(candidate1->get_first_decorated_key()._token, candidate1->get_last_decorated_key()._token);
+    auto range2 = wrapping_interval<dht::token>::make(candidate2->get_first_decorated_key()._token, candidate2->get_last_decorated_key()._token);
     return range1.overlaps(range2, dht::token_comparator());
 }
 

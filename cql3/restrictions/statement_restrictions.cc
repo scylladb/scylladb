@@ -1498,7 +1498,7 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
     token_column_bigint.type = long_type;
     expression new_token_restrictions = replace_column_def(token_restriction, &token_column_bigint);
 
-    std::variant<value_list, nonwrapping_range<managed_bytes>> values =
+    std::variant<value_list, nonwrapping_interval<managed_bytes>> values =
         possible_column_values(&token_column_bigint, new_token_restrictions, options);
 
     return std::visit(overloaded_functor {

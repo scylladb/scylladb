@@ -212,7 +212,7 @@ add_scylla_test(network_topology_strategy_test
   KIND SEASTAR)
 add_scylla_test(token_metadata_test
   KIND SEASTAR)
-add_scylla_test(nonwrapping_range_test
+add_scylla_test(nonwrapping_interval_test
   KIND BOOST)
 add_scylla_test(observable_test
   KIND BOOST)
@@ -226,7 +226,7 @@ add_scylla_test(query_processor_test
   KIND SEASTAR)
 add_scylla_test(radix_tree_test
   KIND SEASTAR)
-add_scylla_test(range_test
+add_scylla_test(interval_test
   KIND BOOST)
 add_scylla_test(range_tombstone_list_test
   KIND BOOST)

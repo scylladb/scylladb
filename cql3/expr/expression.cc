@@ -510,7 +510,7 @@ bool is_not_null(const expression& lhs, const expression& rhs, const evaluation_
 }
 
 const value_set empty_value_set = value_list{};
-const value_set unbounded_value_set = nonwrapping_range<managed_bytes>::make_open_ended_both_sides();
+const value_set unbounded_value_set = nonwrapping_interval<managed_bytes>::make_open_ended_both_sides();
 
 struct intersection_visitor {
     const abstract_type* type;
@@ -521,16 +521,16 @@ struct intersection_visitor {
         return std::move(common);
     }
 
-    value_set operator()(const nonwrapping_range<managed_bytes>& a, const value_list& b) const {
+    value_set operator()(const nonwrapping_interval<managed_bytes>& a, const value_list& b) const {
         const auto common = b | filtered([&] (const managed_bytes& el) { return a.contains(el, type->as_tri_comparator()); });
         return value_list(common.begin(), common.end());
     }
 
-    value_set operator()(const value_list& a, const nonwrapping_range<managed_bytes>& b) const {
+    value_set operator()(const value_list& a, const nonwrapping_interval<managed_bytes>& b) const {
         return (*this)(b, a);
     }
 
-    value_set operator()(const nonwrapping_range<managed_bytes>& a, const nonwrapping_range<managed_bytes>& b) const {
+    value_set operator()(const nonwrapping_interval<managed_bytes>& a, const nonwrapping_interval<managed_bytes>& b) const {
         const auto common_range = a.intersection(b, type->as_tri_comparator());
         return common_range ? *common_range : empty_value_set;
     }
@@ -642,26 +642,26 @@ void for_each_boolean_factor(const expression& e, const noncopyable_function<voi
 }
 
 template<typename T>
-nonwrapping_range<std::remove_cvref_t<T>> to_range(oper_t op, T&& val) {
+nonwrapping_interval<std::remove_cvref_t<T>> to_range(oper_t op, T&& val) {
     using U = std::remove_cvref_t<T>;
     static constexpr bool inclusive = true, exclusive = false;
     switch (op) {
     case oper_t::EQ:
-        return nonwrapping_range<U>::make_singular(std::forward<T>(val));
+        return nonwrapping_interval<U>::make_singular(std::forward<T>(val));
     case oper_t::GT:
-        return nonwrapping_range<U>::make_starting_with(interval_bound(std::forward<T>(val), exclusive));
+        return nonwrapping_interval<U>::make_starting_with(interval_bound(std::forward<T>(val), exclusive));
     case oper_t::GTE:
-        return nonwrapping_range<U>::make_starting_with(interval_bound(std::forward<T>(val), inclusive));
+        return nonwrapping_interval<U>::make_starting_with(interval_bound(std::forward<T>(val), inclusive));
     case oper_t::LT:
-        return nonwrapping_range<U>::make_ending_with(interval_bound(std::forward<T>(val), exclusive));
+        return nonwrapping_interval<U>::make_ending_with(interval_bound(std::forward<T>(val), exclusive));
     case oper_t::LTE:
-        return nonwrapping_range<U>::make_ending_with(interval_bound(std::forward<T>(val), inclusive));
+        return nonwrapping_interval<U>::make_ending_with(interval_bound(std::forward<T>(val), inclusive));
     default:
         throw std::logic_error(format("to_range: unknown comparison operator {}", op));
     }
 }
 
-nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix& val) {
+nonwrapping_interval<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix& val) {
     return to_range<const clustering_key_prefix&>(op, val);
 }
 
@@ -784,9 +784,9 @@ static value_set possible_lhs_values(const column_definition* cdef,
                             if (oper.op == oper_t::EQ) {
                                 return value_list{*val};
                             } else if (oper.op == oper_t::GT) {
-                                return nonwrapping_range<managed_bytes>::make_starting_with(interval_bound(std::move(*val), exclusive));
+                                return nonwrapping_interval<managed_bytes>::make_starting_with(interval_bound(std::move(*val), exclusive));
                             } else if (oper.op == oper_t::GTE) {
-                                return nonwrapping_range<managed_bytes>::make_starting_with(interval_bound(std::move(*val), inclusive));
+                                return nonwrapping_interval<managed_bytes>::make_starting_with(interval_bound(std::move(*val), inclusive));
                             }
                             static const managed_bytes MININT = managed_bytes(serialized(std::numeric_limits<int64_t>::min())),
                                     MAXINT = managed_bytes(serialized(std::numeric_limits<int64_t>::max()));
@@ -794,9 +794,9 @@ static value_set possible_lhs_values(const column_definition* cdef,
                             // that as MAXINT for some reason.
                             const auto adjusted_val = (*val == MININT) ? MAXINT : *val;
                             if (oper.op == oper_t::LT) {
-                                return nonwrapping_range<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), exclusive));
+                                return nonwrapping_interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), exclusive));
                             } else if (oper.op == oper_t::LTE) {
-                                return nonwrapping_range<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), inclusive));
+                                return nonwrapping_interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), inclusive));
                             }
                             throw std::logic_error(format("get_token_interval invalid operator {}", oper.op));
                         },
@@ -888,14 +888,14 @@ value_set possible_partition_token_values(const expression& e, const query_optio
     return possible_lhs_values(nullptr, e, options, &table_schema);
 }
 
-nonwrapping_range<managed_bytes> to_range(const value_set& s) {
+nonwrapping_interval<managed_bytes> to_range(const value_set& s) {
     return std::visit(overloaded_functor{
-            [] (const nonwrapping_range<managed_bytes>& r) { return r; },
+            [] (const nonwrapping_interval<managed_bytes>& r) { return r; },
             [] (const value_list& lst) {
                 if (lst.size() != 1) {
                     throw std::logic_error(format("to_range called on list of size {}", lst.size()));
                 }
-                return nonwrapping_range<managed_bytes>::make_singular(lst[0]);
+                return nonwrapping_interval<managed_bytes>::make_singular(lst[0]);
             },
         }, s);
 }
@@ -2554,7 +2554,7 @@ bytes_opt value_for(const column_definition& cdef, const expression& e, const qu
 
             return to_bytes(val_list.front());
         },
-        [&](const nonwrapping_range<managed_bytes>&) -> bytes_opt {
+        [&](const nonwrapping_interval<managed_bytes>&) -> bytes_opt {
             on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", e));
         }
     }, possible_vals);

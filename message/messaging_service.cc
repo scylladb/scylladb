@@ -25,7 +25,7 @@
 #include "db/config.hh"
 #include "db/view/view_update_backlog.hh"
 #include "dht/i_partitioner.hh"
-#include "range.hh"
+#include "interval.hh"
 #include "frozen_schema.hh"
 #include "repair/repair.hh"
 #include "node_ops/node_ops_ctl.hh"
@@ -1129,7 +1129,7 @@ void messaging_service::register_stream_mutation_done(std::function<future<> (co
         streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION_DONE,
             [func = std::move(func)] (const rpc::client_info& cinfo,
-                    streaming::plan_id plan_id, std::vector<wrapping_range<dht::token>> ranges,
+                    streaming::plan_id plan_id, std::vector<wrapping_interval<dht::token>> ranges,
                     table_id cf_id, unsigned dst_cpu_id) mutable {
         return func(cinfo, plan_id, ::compat::unwrap(std::move(ranges)), cf_id, dst_cpu_id);
     });
