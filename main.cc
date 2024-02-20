@@ -1792,6 +1792,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             group0_service.start().get();
             auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
+                sl_controller.local().abort_group0_operations();
                 group0_service.abort().get();
             });
 

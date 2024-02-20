@@ -46,10 +46,7 @@ future<qos::service_levels_info> raft_service_level_distributed_data_accessor::g
     return qos::get_service_level(_qp, db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2, std::move(service_level_name), db::consistency_level::LOCAL_ONE);
 }
 
-future<> raft_service_level_distributed_data_accessor::do_raft_command(service::group0_guard guard, std::vector<mutation> mutations, std::string_view description) const {    
-    //NOTE: abort_source here is temporary. It's fixed and passed as an argument in a later commit
-    abort_source as;
-
+future<> raft_service_level_distributed_data_accessor::do_raft_command(service::group0_guard guard, abort_source& as, std::vector<mutation> mutations, std::string_view description) const {    
     service::write_mutations change {
         .mutations{mutations.begin(), mutations.end()},
     };
@@ -58,7 +55,7 @@ future<> raft_service_level_distributed_data_accessor::do_raft_command(service::
     co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &as);
 }
 
-future<> raft_service_level_distributed_data_accessor::set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard) const {
+future<> raft_service_level_distributed_data_accessor::set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const {   
     if (this_shard_id() != 0) {
         on_internal_error(logger, "raft_service_level_distributed_data_accessor: must be executed on shard 0");
     }
@@ -75,13 +72,12 @@ future<> raft_service_level_distributed_data_accessor::set_service_level(sstring
     auto timestamp = guard->write_timestamp();
     auto muts = co_await _qp.get_mutations_internal(insert_query, qos_query_state(), timestamp, {service_level_name, timeout_to_data_value(slo.timeout), workload});
 
-    co_await do_raft_command(std::move(*guard), std::move(muts), "set service level");
+    co_await do_raft_command(std::move(*guard), as, std::move(muts), "set service level");
 }
 
-future<> raft_service_level_distributed_data_accessor::drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard) const {
+future<> raft_service_level_distributed_data_accessor::drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard, abort_source& as) const {
     //FIXME: remove this when `role_manager::remove_attribute()` will be done in one raft command
     if (!guard) {
-        abort_source as;
         guard = co_await _group0_client.start_operation(&as);
     }
 
@@ -98,7 +94,7 @@ future<> raft_service_level_distributed_data_accessor::drop_service_level(sstrin
     auto timestamp = guard->write_timestamp();
     auto muts = co_await _qp.get_mutations_internal(delete_query, qos_query_state(), timestamp, {service_level_name});
 
-    co_await do_raft_command(std::move(*guard), std::move(muts), "drop service level");
+    co_await do_raft_command(std::move(*guard), as, std::move(muts), "drop service level");
 }
 
 }

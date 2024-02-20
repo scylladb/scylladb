@@ -84,10 +84,14 @@ future<> service_level_controller::drain() {
     if (this_shard_id() != global_controller) {
         co_return;
     }
+
     // abort the loop of the distributed data checking if it is running
     if (!_global_controller_db->dist_data_update_aborter.abort_requested()) {
         _global_controller_db->dist_data_update_aborter.request_abort();
     }
+
+    abort_group0_operations();
+    
     _global_controller_db->notifications_serializer.broken();
     try {
         co_await std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>());
@@ -100,6 +104,13 @@ future<> service_level_controller::drain() {
 
 future<> service_level_controller::stop() {
     return drain();
+}
+
+void service_level_controller::abort_group0_operations() {
+    // abort group0 operations
+    if (!_global_controller_db->group0_aborter.abort_requested()) {
+        _global_controller_db->group0_aborter.request_abort();
+    }
 }
 
 future<> service_level_controller::update_service_levels_from_distributed_data() {
@@ -355,7 +366,7 @@ future<> service_level_controller::drop_distributed_service_level(sstring name, 
         }
     });
 
-    co_return co_await _sl_data_accessor->drop_service_level(name, std::move(guard));
+    co_return co_await _sl_data_accessor->drop_service_level(name, std::move(guard), _global_controller_db->group0_aborter);
 }
 
 future<service_levels_info> service_level_controller::get_distributed_service_levels() {
@@ -381,7 +392,7 @@ future<> service_level_controller::set_distributed_service_level(sstring name, s
             co_return;
         }
     }
-    co_return co_await _sl_data_accessor->set_service_level(name, slo, std::move(guard));
+    co_return co_await _sl_data_accessor->set_service_level(name, slo, std::move(guard), _global_controller_db->group0_aborter);
 }
 
 future<> service_level_controller::do_add_service_level(sstring name, service_level_options slo, bool is_static) {
@@ -445,6 +456,7 @@ void service_level_controller::on_leave_cluster(const gms::inet_address& endpoin
     auto my_address = _auth_service.local().query_processor().proxy().local_db().get_token_metadata().get_topology().my_address();
     if (this_shard_id() == global_controller && endpoint == my_address) {
         _global_controller_db->dist_data_update_aborter.request_abort();
+        _global_controller_db->group0_aborter.request_abort();
     }
 }
 

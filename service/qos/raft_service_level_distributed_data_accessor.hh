@@ -32,6 +32,7 @@ private:
     
     future<> do_raft_command(
             service::group0_guard guard, 
+            abort_source& as,
             std::vector<mutation> mutations,
             std::string_view description) const;
 
@@ -40,8 +41,8 @@ public:
 
     virtual future<qos::service_levels_info> get_service_levels() const override;
     virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const override;
-    virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard) const override;
-    virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard) const override;
+    virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const override;
+    virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard, abort_source& as) const override;
 };
 
 }

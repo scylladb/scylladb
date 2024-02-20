@@ -50,8 +50,8 @@ public:
     public:
         virtual future<qos::service_levels_info> get_service_levels() const = 0;
         virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const = 0;
-        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard) const = 0;
-        virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard) const = 0;
+        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const = 0;
+        virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard, abort_source& as) const = 0;
     };
     using service_level_distributed_data_accessor_ptr = ::shared_ptr<service_level_distributed_data_accessor>;
 
@@ -68,6 +68,7 @@ private:
         semaphore notifications_serializer = semaphore(1);
         future<> distributed_data_update = make_ready_future();
         abort_source dist_data_update_aborter;
+        abort_source group0_aborter;
     };
 
     std::unique_ptr<global_controller_data> _global_controller_db;
@@ -124,6 +125,8 @@ public:
      * @return a future that is resolved when all operations has stopped
      */
     future<> stop();
+
+    void abort_group0_operations();
 
     /**
      * Check the distributed data for changes in a constant interval and updates
