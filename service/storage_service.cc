@@ -89,6 +89,7 @@
 #include "node_ops/node_ops_ctl.hh"
 #include "service/topology_mutation.hh"
 #include "service/topology_coordinator.hh"
+#include "cql3/query_processor.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -593,6 +594,12 @@ future<> storage_service::topology_state_load() {
     if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::done) {
         co_return;
     }
+
+    co_await _qp.container().invoke_on_all([] (cql3::query_processor& qp) {
+        // auth-v2 gets enabled when consistent topology changes are enabled
+        // (see topology::upgrade_state_type::done above) as we use the same migration procedure
+        qp.auth_version = db::system_auth_keyspace::version_t::v2;
+    });
 
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
         return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.enabled_features));

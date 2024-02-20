@@ -22,6 +22,7 @@
 #include "auth/permission.hh"
 #include "auth/permissions_cache.hh"
 #include "auth/role_manager.hh"
+#include "auth/common.hh"
 #include "seastarx.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "utils/observable.hh"
@@ -313,5 +314,8 @@ future<std::vector<permission_details>> list_filtered_permissions(
         permission_set,
         std::optional<std::string_view> role_name,
         const std::optional<std::pair<resource, recursive_permissions>>& resource_filter);
+
+// Migrates data from old keyspace to new one which supports linearizable writes via raft.
+future<> migrate_to_auth_v2(cql3::query_processor& qp, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as);
 
 }

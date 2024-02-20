@@ -609,6 +609,9 @@ public:
     const replica::database& local_db() const noexcept {
         return _db;
     }
+    cql3::query_processor& query_processor() const noexcept {
+        return _qp;
+    }
 }; // class system_keyspace
 
 } // namespace db
