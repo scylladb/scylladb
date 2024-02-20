@@ -22,9 +22,6 @@
 Global Secondary Indexes
 ------------------------
 
-Global Secondary Indexes is production ready in Scylla Open Source 3.0 and Scylla Enterprise 2019.1.x
-
-
 CQL supports creating secondary indexes on tables, allowing queries on the table to use those indexes. A secondary index
 is identified by a name defined by:
 

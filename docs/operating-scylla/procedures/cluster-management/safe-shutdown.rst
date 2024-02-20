@@ -6,8 +6,7 @@ In cases where you need to physically move hardware, or you have no other choice
 
 **Before you begin**
 
-* Confirm no applications are running that are using the cluster as backend storage.
-* (Only for versions prior to Scylla Open Source 4.3 and Scylla Enterprise 2021.1) Confirm that you know which nodes are the seed nodes. Seed nodes are specified in the ``scylla.yaml`` file.
+Confirm no applications are running that are using the cluster as backend storage.
 
 **Procedure**
 

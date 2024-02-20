@@ -94,7 +94,7 @@ columns effects of both statements are preserved:
 
 Also note that ``INSERT`` does not support counters, while ``UPDATE`` does.
 
-.. note:: New in Scylla Open Source 3.2, you can use the ``IF NOT EXISTS`` condition with the ``INSERT`` statement. When this is used, the insert is only made if the row does not exist prior to the insertion. Each such ``INSERT`` gets a globally unique timestamp. Using ``IF NOT EXISTS`` incurs a non-negligible performance cost (internally, as Paxos will be used), so use ``IF NOT EXISTS`` wisely.
+.. note:: You can use the ``IF NOT EXISTS`` condition with the ``INSERT`` statement. When this is used, the insert is only made if the row does not exist prior to the insertion. Each such ``INSERT`` gets a globally unique timestamp. Using ``IF NOT EXISTS`` incurs a non-negligible performance cost (internally, as Paxos will be used), so use ``IF NOT EXISTS`` wisely.
 
 
 If :ref:`enabled <cdc-options>` on a table, you can use UPDATE, INSERT, and DELETE statements with Change Data Capture (CDC) tables.

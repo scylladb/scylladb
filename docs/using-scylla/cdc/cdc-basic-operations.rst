@@ -2,8 +2,6 @@
 Basic operations in CDC
 =======================
 
-.. include:: /using-scylla/cdc/_common/cdc-experimental.rst 
-
 The CDC log table reflects operations that are performed on the base table. Different types of operations give different corresponding entries in the CDC log. These operations are:
 
 * inserts,

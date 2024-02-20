@@ -35,9 +35,6 @@ i3en instances
 ^^^^^^^^^^^^^^
 i3en instances have up to 4x the networking bandwidth of i3 instances, enabling up to 100 Gbps of sustained network bandwidth. 
 
-i3en support is available for ScyllaDB Enterprise 2019.1.1 and higher and ScyllaDB Open Source 3.1 and higher. 
-
-
 ===========================  ===========  ============  =====================
 Model	                     vCPU         Mem (GB)      Storage (NVMe SSD)
 ===========================  ===========  ============  =====================
@@ -70,8 +67,6 @@ See `Amazon EC2 I3en Instances <https://aws.amazon.com/ec2/instance-types/i3en/>
 
 i4i instances
 ^^^^^^^^^^^^^^
-i4i support is available for ScyllaDB Open Source 5.0 and later and ScyllaDB Enterprise 2021.1.10 and later.
-
 ===========================  ===========  ============  =====================
 Model	                     vCPU         Mem (GB)      Storage (NVMe SSD)
 ===========================  ===========  ============  =====================

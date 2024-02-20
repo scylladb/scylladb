@@ -83,8 +83,6 @@ To save bandwidth, add the ``prefer_local=true`` parameter. Scylla will use the 
 5. Verify that the node added to the cluster
 ``nodetool status``
 
-6. If you are running a Scylla version earlier than Scylla Open Source 4.3 or Scylla Enterprise 2021.1, you need to update the seeds parameter in each node's scylla.yaml file to include the IP of at least one more seed node. See :ref:`Older Version Of Scylla <seeds-older-versions>` for details. You should specify at least two seed nodes per DC. Remember to use public IPs.
-
 **For Example:**
 
 In this example, we will show how to install a nine nodes cluster.

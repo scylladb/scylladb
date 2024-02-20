@@ -19,8 +19,6 @@ Change Data Capture (CDC)
 
 :abbr:`CDC (Change Data Capture)` is a feature that allows you to not only query the current state of a database's table, but also query the history of all changes made to the table.
 
-.. include:: /using-scylla/cdc/_common/cdc-experimental.rst 
-
 .. panel-box::
   :title: Change Data Capture
   :id: "getting-started"
