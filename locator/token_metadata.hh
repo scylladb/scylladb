@@ -72,6 +72,52 @@ struct host_id_or_endpoint {
 class token_metadata_impl;
 struct topology_change_info;
 
+struct version_tracker {
+public:
+    friend class shared_token_metadata;
+
+    using link_base = boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>;
+    struct link_type : link_base {
+        link_type() noexcept = default;
+        link_type(link_type&& o) noexcept { swap_nodes(o); }
+        link_type& operator=(link_type&& o) noexcept {
+            if (this != &o) {
+                unlink();
+                swap_nodes(o);
+            }
+            return *this;
+        }
+    };
+private:
+    utils::phased_barrier::operation _op;
+    service::topology::version_t _version;
+    link_type _link;
+
+    // When engaged it means the version is no longer latest and should be released soon as to
+    // not block barriers. If this version dies past _log_threshold, it should self-report.
+    std::optional<std::chrono::steady_clock::time_point> _expired_at;
+    std::chrono::steady_clock::duration _log_threshold;
+public:
+    version_tracker() = default;
+    version_tracker(utils::phased_barrier::operation op, service::topology::version_t version)
+        : _op(std::move(op)), _version(version) {}
+    version_tracker(version_tracker&&) noexcept = default;
+    version_tracker& operator=(version_tracker&&) noexcept = default;
+    version_tracker(const version_tracker&) = delete;
+    ~version_tracker();
+
+    service::topology::version_t version() const {
+        return _version;
+    }
+
+    void mark_expired(std::chrono::steady_clock::duration log_threshold) {
+        if (!_expired_at) {
+            _expired_at = std::chrono::steady_clock::now();
+            _log_threshold = log_threshold;
+        }
+    }
+};
+
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
 private:
@@ -103,7 +149,7 @@ public:
     };
     using inet_address = gms::inet_address;
     using version_t = service::topology::version_t;
-    using version_tracker_t = utils::phased_barrier::operation;
+    using version_tracker_t = version_tracker;
 
     token_metadata(config cfg);
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
@@ -310,6 +356,7 @@ mutable_token_metadata_ptr make_token_metadata_ptr(Args... args) {
 class shared_token_metadata {
     mutable_token_metadata_ptr _shared;
     token_metadata_lock_func _lock_func;
+    std::chrono::steady_clock::duration _stall_detector_threshold = std::chrono::seconds(2);
 
     // We use this barrier during the transition to a new token_metadata version to ensure that the
     // system stops using previous versions. Here are the key points:
@@ -328,7 +375,12 @@ class shared_token_metadata {
     utils::phased_barrier _versions_barrier;
     shared_future<> _stale_versions_in_use{make_ready_future<>()};
     token_metadata::version_t _fence_version = 0;
-
+    using version_tracker_list_type = boost::intrusive::list<version_tracker,
+            boost::intrusive::member_hook<version_tracker, version_tracker::link_type, &version_tracker::_link>,
+            boost::intrusive::constant_time_size<false>>;
+    version_tracker_list_type _trackers;
+private:
+    version_tracker new_tracker(token_metadata::version_t);
 public:
     // used to construct the shared object as a sharded<> instance
     // lock_func returns semaphore_units<>
@@ -336,7 +388,7 @@ public:
         : _shared(make_token_metadata_ptr(std::move(cfg)))
         , _lock_func(std::move(lock_func))
     {
-        _shared->set_version_tracker(_versions_barrier.start());
+        _shared->set_version_tracker(new_tracker(_shared->get_version()));
     }
 
     shared_token_metadata(const shared_token_metadata& x) = delete;
@@ -347,6 +399,10 @@ public:
     }
 
     void set(mutable_token_metadata_ptr tmptr) noexcept;
+
+    void set_stall_detector_threshold(std::chrono::steady_clock::duration threshold) {
+        _stall_detector_threshold = threshold;
+    }
 
     future<> stale_versions_in_use() const {
         return _stale_versions_in_use.get_future();

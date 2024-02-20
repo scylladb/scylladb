@@ -932,6 +932,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tm_cfg.topo_cfg.disable_proximity_sorting = true;
             }
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
+            token_metadata.invoke_on_all([&] (auto& stm) {
+                stm.set_stall_detector_threshold(
+                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                std::chrono::duration<double>(cfg->topology_barrier_stall_detector_threshold_seconds())));
+            }).get();
             // storage_proxy holds a reference on it and is not yet stopped.
             // what's worse is that the calltrace
             //   storage_proxy::do_query 
