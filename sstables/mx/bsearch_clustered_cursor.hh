@@ -18,6 +18,7 @@
 #include <seastar/core/on_internal_error.hh>
 
 #include <optional>
+#include <fmt/std.h>
 
 namespace sstables {
 
@@ -62,16 +63,6 @@ public:
 
         bool operator<(const promoted_index_block& other) const { return index < other.index; }
         bool operator==(const promoted_index_block& other) const { return index == other.index; }
-
-        friend std::ostream& operator<<(std::ostream& out, const promoted_index_block& b) {
-            return out << "{idx=" << b.index
-                << ", offset=" << b.offset
-                << ", start=" << b.start
-                << ", end=" << b.end
-                << ", end_open_marker=" << b.end_open_marker
-                << ", datafile_offset=" << b.data_file_offset
-                << ", width=" << b.width << "}";
-        }
 
         /// \brief Returns the amount of memory occupied by this object and all its contents.
         size_t memory_usage() const {
@@ -342,7 +333,21 @@ public:
 
     cached_file& file() { return _cached_file; }
 };
+} // namespace sstables::mc
 
+template <>
+struct fmt::formatter<sstables::mc::cached_promoted_index::promoted_index_block> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const sstables::mc::cached_promoted_index::promoted_index_block& b, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+        return fmt::format_to(
+            ctx.out(),
+            "{{idx={}, offset={}, start={}, end={}, end_open_marker={}, datafile_offset={}, width={}}}",
+            b.index, b.offset, b.start, b.end, b.end_open_marker, b.data_file_offset, b.width);
+    }
+};
+
+namespace sstables::mc {
 /// Cursor implementation which does binary search over index entries.
 ///
 /// Memory consumption: O(log(N))
