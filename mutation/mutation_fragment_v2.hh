@@ -370,6 +370,31 @@ private:
 
 std::ostream& operator<<(std::ostream&, mutation_fragment_v2::kind);
 
+template <> struct fmt::formatter<mutation_fragment_v2::kind> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(mutation_fragment_v2::kind k, FormatContext& ctx) const {
+        string_view name = "UNEXPECTED";
+        switch (k) {
+        case mutation_fragment_v2::kind::static_row:
+            name = "static row";
+            break;
+        case mutation_fragment_v2::kind::clustering_row:
+            name = "clustering row";
+            break;
+       case mutation_fragment_v2::kind::range_tombstone_change:
+            name = "range tombstone change";
+            break;
+        case mutation_fragment_v2::kind::partition_start:
+            name = "partition start";
+            break;
+        case mutation_fragment_v2::kind::partition_end:
+            name = "partition end";
+            break;
+        }
+        return formatter<string_view>::format(name, ctx);
+    }
+};
+
 // F gets a stream element as an argument and returns the new value which replaces that element
 // in the transformed stream.
 template<typename F>
