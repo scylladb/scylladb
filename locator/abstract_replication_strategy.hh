@@ -60,6 +60,11 @@ using strategy_class_registry = class_registry<
     abstract_replication_strategy,
     replication_strategy_params>;
 
+class abstract_replication_strategy_traits;
+using strategy_class_traits_registry = class_registry<
+    abstract_replication_strategy_traits,
+    const replication_strategy_params&>;
+
 using replication_map = std::unordered_map<token, host_id_vector_replica_set>;
 
 using endpoint_set = utils::basic_sequenced_set<inet_address, inet_address_vector_replica_set>;
@@ -70,16 +75,43 @@ class effective_replication_map_factory;
 class per_table_replication_strategy;
 class tablet_aware_replication_strategy;
 
+class abstract_replication_strategy_traits {
+public:
+    using ptr_type = std::unique_ptr<abstract_replication_strategy_traits>;
+    using local = bool_class<struct local_tag>;
+    using per_table = bool_class<struct per_table_tag>;
+    using tablets = bool_class<struct tablets_tag>;
+
+protected:
+    replication_strategy_type _type;
+    local _is_local;
+    per_table _is_per_table;
+    tablets _uses_tablets;
+
+public:
+    abstract_replication_strategy_traits(replication_strategy_type t,
+            local l = local::no,
+            per_table pt = per_table::no,
+            tablets ut = tablets::no)
+        : _type(t)
+        , _is_local(l)
+        , _is_per_table(pt)
+        , _uses_tablets(ut)
+    {}
+
+    replication_strategy_type get_type() const noexcept { return _type; }
+    bool is_local() const noexcept { return bool(_is_local); }
+    bool is_per_table() const noexcept { return bool(_is_per_table); }
+    bool uses_tablets() const noexcept { return bool(_uses_tablets); }
+};
 
 class abstract_replication_strategy : public seastar::enable_shared_from_this<abstract_replication_strategy> {
     friend class vnode_effective_replication_map;
     friend class per_table_replication_strategy;
     friend class tablet_aware_replication_strategy;
 protected:
+    abstract_replication_strategy_traits _traits;
     replication_strategy_config_options _config_options;
-    replication_strategy_type _my_type;
-    bool _per_table = false;
-    bool _uses_tablets = false;
     bool _natural_endpoints_depend_on_token = true;
 
     template <typename... Args>
@@ -101,8 +133,8 @@ public:
     using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
 
     abstract_replication_strategy(
-        replication_strategy_params params,
-        replication_strategy_type my_type);
+        abstract_replication_strategy_traits traits,
+        replication_strategy_params params);
 
     // Evaluates to true iff calculate_natural_endpoints
     // returns different results for different tokens.
@@ -124,6 +156,7 @@ public:
                                               const gms::feature_service& fs,
                                               const topology& topology);
     static long parse_replication_factor(sstring rf);
+    static abstract_replication_strategy_traits::ptr_type create_replication_strategy_traits(const sstring& strategy_name, const replication_strategy_params& params);
 
     static sstring to_qualified_class_name(std::string_view strategy_class_name);
 
@@ -136,7 +169,7 @@ public:
     // returns the node itself as the natural_endpoints and the node will not
     // appear in the pending_endpoints.
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const = 0;
-    replication_strategy_type get_type() const noexcept { return _my_type; }
+    replication_strategy_type get_type() const noexcept { return _traits.get_type(); }
     const replication_strategy_config_options get_config_options() const noexcept { return _config_options; }
 
     // If returns true then tables governed by this replication strategy have separate
@@ -145,7 +178,7 @@ public:
     // If returns true, then this replication strategy extends per_table_replication_strategy.
     // Note, a replication strategy may extend per_table_replication_strategy while !is_per_table(),
     // depending on actual strategy options.
-    bool is_per_table() const { return _per_table; }
+    bool is_per_table() const { return bool(_traits.is_per_table()); }
     const per_table_replication_strategy* maybe_as_per_table() const;
 
     // Returns true iff this replication strategy is based on vnodes.
@@ -154,7 +187,7 @@ public:
         return !is_per_table();
     }
 
-    bool uses_tablets() const { return _uses_tablets; }
+    bool uses_tablets() const { return bool(_traits.uses_tablets()); }
     const tablet_aware_replication_strategy* maybe_as_tablet_aware() const;
 
     // Use the token_metadata provided by the caller instead of _token_metadata
@@ -256,13 +289,9 @@ using mutable_effective_replication_map_ptr = seastar::shared_ptr<effective_repl
 /// Replication strategies which support per-table replication extend this trait.
 ///
 /// It will be accessed only if the replication strategy actually works in per-table mode,
-/// that is after mark_as_per_table() is called, and as a result
+/// that is the abstract_replication_strategy_traits.is_per_table is set to true, and
 /// abstract_replication_strategy::is_per_table() returns true.
 class per_table_replication_strategy {
-protected:
-    void mark_as_per_table(abstract_replication_strategy& self) {
-        self._per_table = true;
-    }
 public:
     virtual ~per_table_replication_strategy() = default;
     virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const = 0;

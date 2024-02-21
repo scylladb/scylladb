@@ -8,6 +8,7 @@
 
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
+#include "locator/topology.hh"
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm/remove_if.hpp>
@@ -35,14 +36,23 @@ static ResultSet resolve_endpoints(const SourceSet& host_ids, const token_metada
 logging::logger rslogger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
-    replication_strategy_params params,
-    replication_strategy_type my_type)
-        : _config_options(params.options)
-        , _my_type(my_type) {}
+    abstract_replication_strategy_traits traits,
+    replication_strategy_params params)
+        : _traits(traits)
+        , _config_options(params.options)
+{}
 
 abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params) {
     try {
         return strategy_class_registry::create(strategy_name, std::move(params));
+    } catch (const no_such_class& e) {
+        throw exceptions::configuration_exception(e.what());
+    }
+}
+
+abstract_replication_strategy_traits::ptr_type abstract_replication_strategy::create_replication_strategy_traits(const sstring& strategy_name, const replication_strategy_params& params) {
+    try {
+        return strategy_class_traits_registry::create(strategy_name, params);
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
     }
@@ -165,14 +175,14 @@ const dht::sharder& vnode_effective_replication_map::get_sharder(const schema& s
 }
 
 const per_table_replication_strategy* abstract_replication_strategy::maybe_as_per_table() const {
-    if (!_per_table) {
+    if (!is_per_table()) {
         return nullptr;
     }
     return dynamic_cast<const per_table_replication_strategy*>(this);
 }
 
 const tablet_aware_replication_strategy* abstract_replication_strategy::maybe_as_tablet_aware() const {
-    if (!_uses_tablets) {
+    if (!uses_tablets()) {
         return nullptr;
     }
     return dynamic_cast<const tablet_aware_replication_strategy*>(this);

@@ -1145,7 +1145,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
         if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
             locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets());
-            auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params);
+            auto rs = locator::abstract_replication_strategy::create_replication_strategy_traits(ksm->strategy_name(), params);
             if (rs->uses_tablets()) {
                 co_return api_error::validation("Streams not yet supported on a table using tablets (issue #16317). "
                 "If you want to use streams, create a table with vnodes by setting the tag 'experimental:initial_tablets' set to 'none'.");

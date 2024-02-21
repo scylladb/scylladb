@@ -62,7 +62,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 
             auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
             locator::replication_strategy_params params(new_ks->strategy_options(), new_ks->initial_tablets());
-            auto new_rs = locator::abstract_replication_strategy::create_replication_strategy(new_ks->strategy_name(), params);
+            auto new_rs = locator::abstract_replication_strategy::create_replication_strategy_traits(new_ks->strategy_name(), params);
             if (new_rs->is_per_table() != ks.get_replication_strategy().is_per_table()) {
                 throw exceptions::invalid_request_exception(format("Cannot alter replication strategy vnode/tablets flavor"));
             }

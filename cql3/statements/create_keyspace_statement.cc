@@ -148,7 +148,7 @@ std::vector<sstring> check_against_restricted_replication_strategies(
     std::vector<sstring> warnings;
     locator::replication_strategy_config_options opts;
     locator::replication_strategy_params params(opts, std::nullopt);
-    auto replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(
+    auto replication_strategy = locator::abstract_replication_strategy::create_replication_strategy_traits(
             locator::abstract_replication_strategy::to_qualified_class_name(
                     *attrs.get_replication_strategy_class()), params)->get_type();
     auto rs_warn_list = qp.db().get_config().replication_strategy_warn_list();

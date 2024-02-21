@@ -708,18 +708,14 @@ public:
 void tablet_aware_replication_strategy::validate_tablet_options(const abstract_replication_strategy& ars,
                                                                 const gms::feature_service& fs,
                                                                 const replication_strategy_config_options& opts) const {
-    if (ars._uses_tablets && !fs.tablets) {
+    if (ars.uses_tablets() && !fs.tablets) {
         throw exceptions::configuration_exception("Tablet replication is not enabled");
     }
 }
 
-void tablet_aware_replication_strategy::process_tablet_options(abstract_replication_strategy& ars,
-                                                               replication_strategy_config_options& opts,
-                                                               replication_strategy_params params) {
+void tablet_aware_replication_strategy::process_tablet_options(const replication_strategy_params& params) {
     if (params.initial_tablets.has_value()) {
         _initial_tablets = *params.initial_tablets;
-        ars._uses_tablets = true;
-        mark_as_per_table(ars);
     }
 }
 

@@ -14,6 +14,11 @@
 #include <optional>
 
 namespace locator {
+
+struct everywhere_replication_strategy_traits : public abstract_replication_strategy_traits {
+    everywhere_replication_strategy_traits(const replication_strategy_params&);
+};
+
 class everywhere_replication_strategy : public abstract_replication_strategy {
 public:
     everywhere_replication_strategy(replication_strategy_params params);

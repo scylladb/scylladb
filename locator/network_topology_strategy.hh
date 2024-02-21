@@ -18,6 +18,10 @@
 
 namespace locator {
 
+struct network_topology_strategy_traits : public abstract_replication_strategy_traits {
+    network_topology_strategy_traits(const replication_strategy_params&);
+};
+
 class network_topology_strategy : public abstract_replication_strategy
                                 , public tablet_aware_replication_strategy {
 public:

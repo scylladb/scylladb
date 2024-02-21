@@ -20,6 +20,10 @@ namespace locator {
 using inet_address = gms::inet_address;
 using token = dht::token;
 
+struct local_strategy_traits : public abstract_replication_strategy_traits {
+    local_strategy_traits(const replication_strategy_params&);
+};
+
 class local_strategy : public abstract_replication_strategy {
 public:
     local_strategy(replication_strategy_params params);

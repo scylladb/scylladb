@@ -31,11 +31,20 @@ struct hash<locator::endpoint_dc_rack> {
 
 namespace locator {
 
+network_topology_strategy_traits::network_topology_strategy_traits(const replication_strategy_params& params)
+    : abstract_replication_strategy_traits(params.initial_tablets.has_value() ?
+        abstract_replication_strategy_traits(replication_strategy_type::network_topology,
+                abstract_replication_strategy_traits::local::no,
+                abstract_replication_strategy_traits::per_table::yes,
+                abstract_replication_strategy_traits::tablets::yes) :
+        abstract_replication_strategy_traits(replication_strategy_type::network_topology)
+    )
+{}
+
 network_topology_strategy::network_topology_strategy(replication_strategy_params params) :
-        abstract_replication_strategy(params,
-                                      replication_strategy_type::network_topology) {
+        abstract_replication_strategy(network_topology_strategy_traits(params), params) {
     auto opts = _config_options;
-    process_tablet_options(*this, opts, params);
+    process_tablet_options(params);
 
     size_t rep_factor = 0;
     for (auto& config_pair : opts) {
@@ -377,4 +386,9 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
 using registry = strategy_class_registry::registrator<network_topology_strategy>;
 static registry registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
 static registry registrator_short_name("NetworkTopologyStrategy");
+
+using traits_registry = strategy_class_traits_registry::registrator<network_topology_strategy_traits>;
+static traits_registry traits_registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
+static traits_registry traits_registrator_short_name("NetworkTopologyStrategy");
+
 }

@@ -14,6 +14,10 @@
 
 namespace locator {
 
+struct simple_strategy_traits : public abstract_replication_strategy_traits {
+    simple_strategy_traits(const replication_strategy_params&);
+};
+
 class simple_strategy : public abstract_replication_strategy {
 public:
     simple_strategy(replication_strategy_params params);
