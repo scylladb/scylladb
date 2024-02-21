@@ -1400,7 +1400,7 @@ std::vector<query::clustering_range> get_multi_column_clustering_bounds(
     return acc.ranges;
 }
 
-/// Reverses the range if the type is reversed.  Why don't we have nonwrapping_interval::reverse()??
+/// Reverses the range if the type is reversed.  Why don't we have interval::reverse()??
 query::clustering_range reverse_if_reqd(query::clustering_range r, const abstract_type& t) {
     return t.is_reversed() ? query::clustering_range(r.end(), r.start()) : std::move(r);
 }
@@ -1428,7 +1428,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
             product_size *= list->size();
             prior_column_values.push_back(std::move(*list));
             error_if_exceeds_clustering_key_limit(product_size, size_limit);
-        } else if (auto last_range = std::get_if<nonwrapping_interval<managed_bytes>>(&values)) {
+        } else if (auto last_range = std::get_if<interval<managed_bytes>>(&values)) {
             // Must be the last column in the prefix, since it's neither EQ nor IN.
             std::vector<query::clustering_range> ck_ranges;
             if (prior_column_values.empty()) {
@@ -1498,7 +1498,7 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
     token_column_bigint.type = long_type;
     expression new_token_restrictions = replace_column_def(token_restriction, &token_column_bigint);
 
-    std::variant<value_list, nonwrapping_interval<managed_bytes>> values =
+    std::variant<value_list, interval<managed_bytes>> values =
         possible_column_values(&token_column_bigint, new_token_restrictions, options);
 
     return std::visit(overloaded_functor {
@@ -1512,7 +1512,7 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
 
             return ck_ranges;
         },
-        [](const nonwrapping_interval<managed_bytes>& range) {
+        [](const interval<managed_bytes>& range) {
             auto int64_from_be_bytes = [](const managed_bytes& int_bytes) -> int64_t {
                 if (int_bytes.size() != 8) {
                     throw std::runtime_error("token restriction value should be 8 bytes");

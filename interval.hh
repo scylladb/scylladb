@@ -64,10 +64,7 @@ public:
 };
 
 template<typename T>
-class nonwrapping_interval;
-
-template <typename T>
-using interval = nonwrapping_interval<T>;
+class interval;
 
 // An interval which can have inclusive, exclusive or open-ended bounds on each end.
 // The end bound can be smaller than the start bound.
@@ -432,7 +429,7 @@ public:
     template<typename U>
     friend std::ostream& operator<<(std::ostream& out, const wrapping_interval<U>& r);
 private:
-    friend class nonwrapping_interval<T>;
+    friend class interval<T>;
 };
 
 template<typename U>
@@ -470,7 +467,7 @@ std::ostream& operator<<(std::ostream& out, const wrapping_interval<U>& r) {
 // An interval which can have inclusive, exclusive or open-ended bounds on each end.
 // The end bound can never be smaller than the start bound.
 template<typename T>
-class nonwrapping_interval {
+class interval {
     template <typename U>
     using optional = std::optional<U>;
 public:
@@ -481,20 +478,20 @@ public:
 private:
     wrapping_interval<T> _interval;
 public:
-    nonwrapping_interval(T value)
+    interval(T value)
         : _interval(std::move(value))
     { }
-    constexpr nonwrapping_interval() : nonwrapping_interval({}, {}) { }
+    constexpr interval() : interval({}, {}) { }
     // Can only be called if start <= end. IDL ctor.
-    nonwrapping_interval(optional<bound> start, optional<bound> end, bool singular = false)
+    interval(optional<bound> start, optional<bound> end, bool singular = false)
         : _interval(std::move(start), std::move(end), singular)
     { }
     // Can only be called if !r.is_wrap_around().
-    explicit nonwrapping_interval(wrapping_interval<T>&& r)
+    explicit interval(wrapping_interval<T>&& r)
         : _interval(std::move(r))
     { }
     // Can only be called if !r.is_wrap_around().
-    explicit nonwrapping_interval(const wrapping_interval<T>& r)
+    explicit interval(const wrapping_interval<T>& r)
         : _interval(r)
     { }
     operator wrapping_interval<T>() const & {
@@ -511,7 +508,7 @@ public:
     }
     // the other interval is before this interval.
     // Comparator must define a total ordering on T.
-    bool other_is_before(const nonwrapping_interval<T>& o, IntervalComparatorFor<T> auto&& cmp) const {
+    bool other_is_before(const interval<T>& o, IntervalComparatorFor<T> auto&& cmp) const {
         return _interval.other_is_before(o, std::forward<decltype(cmp)>(cmp));
     }
     // the point is after the interval.
@@ -521,7 +518,7 @@ public:
     }
     // check if two intervals overlap.
     // Comparator must define a total ordering on T.
-    bool overlaps(const nonwrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
+    bool overlaps(const interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         // if both this and other have an open start, the two intervals will overlap.
         if (!start() && !other.start()) {
             return true;
@@ -530,19 +527,19 @@ public:
         return wrapping_interval<T>::greater_than_or_equal(_interval.end_bound(), other._interval.start_bound(), cmp)
             && wrapping_interval<T>::greater_than_or_equal(other._interval.end_bound(), _interval.start_bound(), cmp);
     }
-    static nonwrapping_interval make(bound start, bound end) {
-        return nonwrapping_interval({std::move(start)}, {std::move(end)});
+    static interval make(bound start, bound end) {
+        return interval({std::move(start)}, {std::move(end)});
     }
-    static constexpr nonwrapping_interval make_open_ended_both_sides() {
+    static constexpr interval make_open_ended_both_sides() {
         return {{}, {}};
     }
-    static nonwrapping_interval make_singular(T value) {
+    static interval make_singular(T value) {
         return {std::move(value)};
     }
-    static nonwrapping_interval make_starting_with(bound b) {
+    static interval make_starting_with(bound b) {
         return {{std::move(b)}, {}};
     }
-    static nonwrapping_interval make_ending_with(bound b) {
+    static interval make_ending_with(bound b) {
         return {{}, {std::move(b)}};
     }
     bool is_singular() const {
@@ -564,58 +561,58 @@ public:
     }
     // Returns true iff all values contained by other are also contained by this.
     // Comparator must define a total ordering on T.
-    bool contains(const nonwrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
+    bool contains(const interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         return wrapping_interval<T>::less_than_or_equal(_interval.start_bound(), other._interval.start_bound(), cmp)
                 && wrapping_interval<T>::greater_than_or_equal(_interval.end_bound(), other._interval.end_bound(), cmp);
     }
     // Returns intervals which cover all values covered by this interval but not covered by the other interval.
     // Ranges are not overlapping and ordered.
     // Comparator must define a total ordering on T.
-    std::vector<nonwrapping_interval> subtract(const nonwrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
+    std::vector<interval> subtract(const interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         auto subtracted = _interval.subtract(other._interval, std::forward<decltype(cmp)>(cmp));
-        return boost::copy_range<std::vector<nonwrapping_interval>>(subtracted | boost::adaptors::transformed([](auto&& r) {
-            return nonwrapping_interval(std::move(r));
+        return boost::copy_range<std::vector<interval>>(subtracted | boost::adaptors::transformed([](auto&& r) {
+            return interval(std::move(r));
         }));
     }
     // split interval in two around a split_point. split_point has to be inside the interval
     // split_point will belong to first interval
     // Comparator must define a total ordering on T.
-    std::pair<nonwrapping_interval<T>, nonwrapping_interval<T>> split(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
+    std::pair<interval<T>, interval<T>> split(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
         assert(contains(split_point, std::forward<decltype(cmp)>(cmp)));
-        nonwrapping_interval left(start(), bound(split_point));
-        nonwrapping_interval right(bound(split_point, false), end());
+        interval left(start(), bound(split_point));
+        interval right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));
     }
     // Create a sub-interval including values greater than the split_point. If split_point is after
     // the end, returns std::nullopt.
-    std::optional<nonwrapping_interval> split_after(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
+    std::optional<interval> split_after(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
         if (end() && cmp(split_point, end()->value()) >= 0) {
             return std::nullopt;
         } else if (start() && cmp(split_point, start()->value()) < 0) {
             return *this;
         } else {
-            return nonwrapping_interval(interval_bound<T>(split_point, false), end());
+            return interval(interval_bound<T>(split_point, false), end());
         }
     }
     // Creates a new sub-interval which is the intersection of this interval and an interval starting with "start".
     // If there is no overlap, returns std::nullopt.
-    std::optional<nonwrapping_interval> trim_front(std::optional<bound>&& start, IntervalComparatorFor<T> auto&& cmp) const {
-        return intersection(nonwrapping_interval(std::move(start), {}), cmp);
+    std::optional<interval> trim_front(std::optional<bound>&& start, IntervalComparatorFor<T> auto&& cmp) const {
+        return intersection(interval(std::move(start), {}), cmp);
     }
     // Transforms this interval into a new interval of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
     template<typename Transformer, typename U = transformed_type<Transformer>>
-    nonwrapping_interval<U> transform(Transformer&& transformer) && {
-        return nonwrapping_interval<U>(std::move(_interval).transform(std::forward<Transformer>(transformer)));
+    interval<U> transform(Transformer&& transformer) && {
+        return interval<U>(std::move(_interval).transform(std::forward<Transformer>(transformer)));
     }
     template<typename Transformer, typename U = transformed_type<Transformer>>
-    nonwrapping_interval<U> transform(Transformer&& transformer) const & {
-        return nonwrapping_interval<U>(_interval.transform(std::forward<Transformer>(transformer)));
+    interval<U> transform(Transformer&& transformer) const & {
+        return interval<U>(_interval.transform(std::forward<Transformer>(transformer)));
     }
-    bool equal(const nonwrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
+    bool equal(const interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         return _interval.equal(other._interval, std::forward<decltype(cmp)>(cmp));
     }
-    bool operator==(const nonwrapping_interval& other) const {
+    bool operator==(const interval& other) const {
         return _interval == other._interval;
     }
     // Takes a vector of possibly overlapping intervals and returns a vector containing
@@ -625,7 +622,7 @@ public:
         { vec.begin() } -> std::random_access_iterator;
         { vec.end() } -> std::random_access_iterator;
         { vec.reserve(1) };
-        { vec.front() } -> std::same_as<nonwrapping_interval&>;
+        { vec.front() } -> std::same_as<interval&>;
     }
     static IntervalVec deoverlap(IntervalVec intervals, Comparator&& cmp) {
         auto size = intervals.size();
@@ -649,7 +646,7 @@ public:
             }
             bool includes_start = wrapping_interval<T>::greater_than_or_equal(current._interval.end_bound(), r._interval.start_bound(), cmp);
             if (includes_start) {
-                current = nonwrapping_interval(std::move(current.start()), std::move(r.end()));
+                current = interval(std::move(current.start()), std::move(r.end()));
             } else {
                 deoverlapped_intervals.emplace_back(std::move(current));
                 current = std::move(r);
@@ -717,7 +714,7 @@ public:
     }
 
     // Returns the intersection between this interval and other.
-    std::optional<nonwrapping_interval> intersection(const nonwrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
+    std::optional<interval> intersection(const interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         auto p = std::minmax(_interval, other._interval, [&cmp] (auto&& a, auto&& b) {
             return wrapping_interval<T>::less_than(a.start_bound(), b.start_bound(), cmp);
         });
@@ -725,22 +722,22 @@ public:
             auto end = std::min(p.first.end_bound(), p.second.end_bound(), [&cmp] (auto&& a, auto&& b) {
                 return !wrapping_interval<T>::greater_than_or_equal(a, b, cmp);
             });
-            return nonwrapping_interval(p.second.start(), end.b);
+            return interval(p.second.start(), end.b);
         }
         return {};
     }
 
     template<typename U>
-    friend std::ostream& operator<<(std::ostream& out, const nonwrapping_interval<U>& r);
+    friend std::ostream& operator<<(std::ostream& out, const interval<U>& r);
 };
 
 template<typename U>
-std::ostream& operator<<(std::ostream& out, const nonwrapping_interval<U>& r) {
+std::ostream& operator<<(std::ostream& out, const interval<U>& r) {
     return out << r._interval;
 }
 
 template<template<typename> typename T, typename U>
-concept Interval = std::is_same<T<U>, wrapping_interval<U>>::value || std::is_same<T<U>, nonwrapping_interval<U>>::value;
+concept Interval = std::is_same<T<U>, wrapping_interval<U>>::value || std::is_same<T<U>, interval<U>>::value;
 
 // Allow using interval<T> in a hash table. The hash function 31 * left +
 // right is the same one used by Cassandra's AbstractBounds.hashCode().
@@ -759,8 +756,8 @@ struct hash<wrapping_interval<T>> {
 };
 
 template<typename T>
-struct hash<nonwrapping_interval<T>> {
-    using argument_type = nonwrapping_interval<T>;
+struct hash<interval<T>> {
+    using argument_type = interval<T>;
     using result_type = decltype(std::hash<T>()(std::declval<T>()));
     result_type operator()(argument_type const& s) const {
         return hash<wrapping_interval<T>>()(s);

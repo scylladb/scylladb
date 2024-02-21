@@ -48,7 +48,7 @@ class ring_position_range_sharder {
     bool _done = false;
 public:
     // Initializes the ring_position_range_sharder with a given range to subdivide.
-    ring_position_range_sharder(const sharder& sharder, nonwrapping_interval<ring_position> rrp)
+    ring_position_range_sharder(const sharder& sharder, interval<ring_position> rrp)
             : _sharder(sharder), _range(std::move(rrp)) {}
     // Fetches the next range-shard mapping. When the input range is exhausted, std::nullopt is
     // returned. The returned ranges are contiguous and non-overlapping, and together span the

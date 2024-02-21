@@ -321,7 +321,7 @@ BOOST_AUTO_TEST_CASE(test_range_interval_map) {
 BOOST_AUTO_TEST_CASE(test_split_after) {
     using b = interval_bound<unsigned>;
     using wr = wrapping_interval<unsigned>;
-    using nwr = nonwrapping_interval<unsigned>;
+    using nwr = interval<unsigned>;
     auto cmp = unsigned_comparator();
 
     auto nwr1 = nwr(b(5), b(8));
@@ -379,7 +379,7 @@ BOOST_AUTO_TEST_CASE(test_split_after) {
 
 BOOST_AUTO_TEST_CASE(test_intersection) {
     using b = interval_bound<unsigned>;
-    using nwr = nonwrapping_interval<unsigned>;
+    using nwr = interval<unsigned>;
     auto cmp = unsigned_comparator();
 
     auto r1 = nwr(b(5), b(10));

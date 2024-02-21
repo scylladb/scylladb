@@ -1043,7 +1043,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
 
 SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
     using namespace tests::data_model;
-    using key_range = nonwrapping_interval<mutation_description::key>;
+    using key_range = interval<mutation_description::key>;
 
     std::mt19937 engine(tests::random::get_int<uint32_t>());
 

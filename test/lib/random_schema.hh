@@ -234,7 +234,7 @@ public:
     void delete_range(
             std::mt19937& engine,
             data_model::mutation_description& md,
-            nonwrapping_interval<data_model::mutation_description::key> range,
+            interval<data_model::mutation_description::key> range,
             timestamp_generator ts_gen = default_timestamp_generator(),
             expiry_generator exp_gen = no_expiry_expiry_generator());
 };

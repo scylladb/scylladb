@@ -1088,7 +1088,7 @@ class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
         return 'boost::intrusive::list of size {} = [{}] = [{}]'.format(len(items), ', '.join(ptrs), ', '.join(items))
 
 
-class nonwrapping_interval_printer(gdb.printing.PrettyPrinter):
+class interval_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
         try :
             self.val = val['_interval']
@@ -1150,8 +1150,8 @@ def build_pretty_printer():
     pp.add_printer('sstable_generation', r'^sstables::generation_type$', sstable_generation_printer)
     pp.add_printer('boost_intrusive_list', r'^boost::intrusive::list<.*>$', boost_intrusive_list_printer)
     pp.add_printer('inet_address_printer', r'^gms::inet_address$', inet_address_printer)
-    pp.add_printer('nonwrapping_interval', r'^nonwrapping_interval<.*$', nonwrapping_interval_printer)
-    pp.add_printer('nonwrapping_range', r'^nonwrapping_range<.*$', nonwrapping_interval_printer) # scylla < 4.3 calls it nonwrapping_range
+    pp.add_printer('interval', r'^interval<.*$', interval_printer)
+    pp.add_printer('nonwrapping_range', r'^nonwrapping_range<.*$', interval_printer) # scylla < 4.3 calls it nonwrapping_range
     pp.add_printer('ring_position', r'^dht::ring_position$', ring_position_printer)
     pp.add_printer('optional', r'^std::_Optional_base.*', optional_printer)
     return pp
