@@ -243,12 +243,13 @@ class ManagerClient():
         logger.debug("ManagerClient wiping sstables on %s, keyspace=%s, table=%s", server_id, keyspace, table)
         await self.client.put_json(f"/cluster/server/{server_id}/wipe_sstables", {"keyspace": keyspace, "table": table})
 
-    def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig] = None,
-                                cmdline: Optional[List[str]] = None,
-                                config: Optional[dict[str, Any]] = None,
-                                property_file: Optional[dict[str, Any]] = None,
-                                start: bool = True,
-                                expected_error: Optional[str] = None) -> dict[str, Any]:
+    def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig],
+                                cmdline: Optional[List[str]],
+                                config: Optional[dict[str, Any]],
+                                property_file: Optional[dict[str, Any]],
+                                start: bool,
+                                seeds: Optional[List[IPAddress]],
+                                expected_error: Optional[str]) -> dict[str, Any]:
         data: dict[str, Any] = {'start': start}
         if replace_cfg:
             data['replace_cfg'] = replace_cfg._asdict()
@@ -258,6 +259,8 @@ class ManagerClient():
             data['config'] = config
         if property_file:
             data['property_file'] = property_file
+        if seeds:
+            data['seeds'] = seeds
         if expected_error:
             data['expected_error'] = expected_error
         return data
@@ -268,10 +271,11 @@ class ManagerClient():
                          property_file: Optional[dict[str, Any]] = None,
                          start: bool = True,
                          expected_error: Optional[str] = None,
+                         seeds: Optional[List[IPAddress]] = None,
                          timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> ServerInfo:
         """Add a new server"""
         try:
-            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, expected_error)
+            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, seeds, expected_error)
 
             # If we replace, we should wait until other nodes see the node being
             # replaced as dead because the replace operation can be rejected if
@@ -304,6 +308,7 @@ class ManagerClient():
                           config: Optional[dict[str, Any]] = None,
                           property_file: Optional[dict[str, Any]] = None,
                           start: bool = True,
+                          seeds: Optional[List[IPAddress]] = None,
                           expected_error: Optional[str] = None) -> [ServerInfo]:
         """Add new servers concurrently.
         This function can be called only if the cluster uses consistent topology changes, which support
@@ -312,7 +317,7 @@ class ManagerClient():
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
 
         try:
-            data = self._create_server_add_data(None, cmdline, config, property_file, start, expected_error)
+            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error)
             data['servers_num'] = servers_num
             server_infos = await self.client.put_json("/cluster/addservers", data, response_type="json",
                                                       timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)

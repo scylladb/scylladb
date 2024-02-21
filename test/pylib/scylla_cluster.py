@@ -746,7 +746,7 @@ class ScyllaCluster:
             self.stopped.update(self.running)
             self.running.clear()
 
-    def _seeds(self) -> List[str]:
+    def _seeds(self) -> List[IPAddress]:
         # If the cluster is empty, all servers must use self.initial_seed to not start separate clusters.
         if not self.servers:
             return [self.initial_seed] if self.initial_seed else []
@@ -757,6 +757,7 @@ class ScyllaCluster:
                          config: Optional[dict[str, Any]] = None,
                          property_file: Optional[dict[str, Any]] = None,
                          start: bool = True,
+                         seeds: Optional[List[IPAddress]] = None,
                          expected_error: Optional[str] = None) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
@@ -800,9 +801,10 @@ class ScyllaCluster:
         if not self.initial_seed:
             self.initial_seed = ip_addr
 
-        seeds = self._seeds()
         if not seeds:
-            seeds = [ip_addr]
+            seeds = self._seeds()
+            if not seeds:
+                seeds = [ip_addr]
 
         params = ScyllaCluster.CreateServerParams(
             logger = self.logger,
@@ -1297,7 +1299,7 @@ class ScyllaClusterManager:
         replace_cfg = ReplaceConfig(**data["replace_cfg"]) if "replace_cfg" in data else None
         s_info = await self.cluster.add_server(replace_cfg, data.get('cmdline'), data.get('config'),
                                                data.get('property_file'), data.get('start', True),
-                                               data.get('expected_error', None))
+                                               data.get('seeds', None), data.get('expected_error', None))
         return {"server_id": s_info.server_id, "ip_addr": s_info.ip_addr, "rpc_address": s_info.rpc_address}
 
     async def _cluster_servers_add(self, request) -> list[dict[str, object]]:
