@@ -6006,10 +6006,17 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
         topology_change change{{std::move(mutation)}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 format("raft topology: placing join request for {}", params.host_id));
+
+        co_await utils::get_local_injector().inject("join-node-before-add-entry", [] (auto& handler) -> future<> {
+            rtlogger.info("join-node-before-add-entry injection hit");
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+            rtlogger.info("join-node-before-add-entry injection done");
+        });
+
         try {
             // Make replaced node and ignored nodes non voters earlier for better HA
-            co_await _group0->make_nonvoters(ignored_nodes_from_join_params(params), _group0_as);
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->make_nonvoters(ignored_nodes_from_join_params(params), _group0_as, raft_timeout{});
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
             break;
         } catch (group0_concurrent_modification&) {
             rtlogger.info("join_node_request: concurrent operation is detected, retrying.");

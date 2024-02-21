@@ -9,6 +9,7 @@ import pytest
 import asyncio
 from test.pylib.manager_client import ManagerClient
 from test.topology.conftest import skip_mode
+from test.pylib.rest_client import inject_error_one_shot
 
 logger = logging.getLogger(__name__)
 
@@ -68,3 +69,49 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
                              timeout=60)
 
     logger.info("done")
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+@skip_mode('debug', 'aarch64/debug is unpredictably slow', platform_key='aarch64')
+async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_timeout: int) -> None:
+    config = {
+        'error_injections_at_startup': [
+            {
+                'name': 'group0-raft-op-timeout-in-ms',
+                'value': raft_op_timeout
+            },
+            {
+                'name': 'raft-group-registry-fd-threshold-in-ms',
+                'value': '500'
+            }
+        ]
+    }
+    logger.info("starting a first node (the leader)")
+    servers = [await manager.server_add(config=config)]
+
+    logger.info("starting a second node (the follower)")
+    servers += [await manager.server_add()]
+
+    logger.info(f"injecting join-node-before-add-entry into the leader node {servers[0]}")
+    injection_handler = await inject_error_one_shot(manager.api, servers[0].ip_addr, 'join-node-before-add-entry')
+
+    logger.info("starting a third node")
+    third_node_future = asyncio.create_task(manager.server_add(
+        seeds=[servers[0].ip_addr],
+        expected_error="raft operation [add_entry] timed out, there is no raft quorum",
+        timeout=60))
+
+    logger.info(f"waiting for the leader node {servers[0]} to start handling the join request")
+    log_file = await manager.server_open_log(servers[0].server_id)
+    await log_file.wait_for("join-node-before-add-entry injection hit",
+                            timeout=60)
+
+    logger.info("stopping the second node")
+    await manager.server_stop_gracefully(servers[1].server_id)
+
+    logger.info("release join-node-before-add-entry injection")
+    await injection_handler.message()
+
+    logger.info("waiting for third node joining process to fail")
+    await third_node_future
