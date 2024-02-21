@@ -1156,9 +1156,6 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
         }
         if (is_tablet) {
             // Reject unsupported options for tablet repair
-            if (!options.ranges.empty()) {
-                throw std::runtime_error("The ranges option is not supported for tablet repair");
-            }
             if (!options.hosts.empty()) {
                 throw std::runtime_error("The hosts option is not supported for tablet repair");
             }
@@ -1186,7 +1183,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
                 co_return *ip;
             };
             bool primary_replica_only = options.primary_range;
-            co_await repair_tablets(id, keyspace, cfs, host2ip, primary_replica_only);
+            co_await repair_tablets(id, keyspace, cfs, host2ip, primary_replica_only, options.ranges);
             co_return id.id;
         }
     }
@@ -2045,7 +2042,7 @@ future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, 
 }
 
 // Repair all tablets belong to this node for the given table
-future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only) {
+future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only, dht::token_range_vector ranges_specified) {
     std::vector<tablet_repair_task_meta> task_metas;
     for (auto& table_name : table_names) {
         lw_shared_ptr<replica::table> t;
@@ -2084,7 +2081,11 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
                     found = true;
                     break;
                 }
-                if (primary_replica_only) {
+                // If users use both the primary_replica_only and the ranges
+                // option to select which ranges to repair, prefer the more
+                // sophisticated ranges option, since the ranges the requested
+                // explicitly.
+                if (primary_replica_only && ranges_specified.empty()) {
                     break;
                 }
             }
@@ -2102,6 +2103,35 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             std::vector<gms::inet_address> nodes;
             auto master_shard_id = m.master_shard_id;
             auto range = m.range;
+            dht::token_range_vector intersection_ranges;
+            if (!ranges_specified.empty()) {
+                for (auto& r : ranges_specified) {
+                    // When the management tool, e.g., scylla manager, uses
+                    // ranges option to select which ranges to repair for a
+                    // tablet table to schedule repair work, it needs to
+                    // disable tablet migration to make sure the node and token
+                    // range mapping does not change.
+                    //
+                    // If the migration is not disabled, the ranges provided by
+                    // the user might not match exactly with the token range of the
+                    // tablets. We do the intersection of the ranges to repair
+                    // as a best effort.
+                    auto intersection_opt = range.intersection(r, dht::token_comparator());
+                    if (intersection_opt) {
+                        intersection_ranges.push_back(intersection_opt.value());
+                        rlogger.debug("repair[{}] Select tablet table={}.{} tablet_id={} range={} replicas={} primary_replica_only={} ranges_specified={} intersection_ranges={}",
+                            rid.uuid(), keyspace_name, table_name, m.id, m.range, m.replicas, primary_replica_only, ranges_specified, intersection_opt.value());
+                    }
+                    co_await coroutine::maybe_yield();
+                }
+            } else {
+                intersection_ranges.push_back(range);
+            }
+            if (intersection_ranges.empty()) {
+                rlogger.debug("repair[{}] Skip tablet table={}.{} tablet_id={} range={} replicas={} primary_replica_only={} ranges_specified={}",
+                    rid.uuid(), keyspace_name, table_name, m.id, m.range, m.replicas, primary_replica_only, ranges_specified);
+                continue;
+            }
             std::vector<shard_id> shards;
             for (auto& r : m.replicas) {
                 auto shard = r.shard;
@@ -2113,7 +2143,10 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
                     nodes.push_back(ip);
                 }
             }
-            task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, master_shard_id, range, repair_neighbors(nodes, shards), m.replicas});
+            for (auto& r : intersection_ranges) {
+                task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, master_shard_id, r, repair_neighbors(nodes, shards), m.replicas});
+                co_await coroutine::maybe_yield();
+            }
         }
     }
     auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>({}, rid, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas));

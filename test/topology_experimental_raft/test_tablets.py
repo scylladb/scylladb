@@ -36,7 +36,7 @@ async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
     await asyncio.gather(*errs)
 
-async def repair_on_node(manager: ManagerClient, server: ServerInfo, servers: list[ServerInfo]):
+async def repair_on_node(manager: ManagerClient, server: ServerInfo, servers: list[ServerInfo], ranges: str = ''):
     node = server.ip_addr
     await manager.servers_see_each_other(servers)
     live_nodes_wanted = [s.ip_addr for s in servers]
@@ -45,7 +45,7 @@ async def repair_on_node(manager: ManagerClient, server: ServerInfo, servers: li
     live_nodes.sort()
     assert live_nodes == live_nodes_wanted
     logger.info(f"Repair table on node {node} live_nodes={live_nodes} live_nodes_wanted={live_nodes_wanted}")
-    await manager.api.repair(node, "test", "test")
+    await manager.api.repair(node, "test", "test", ranges)
 
 @pytest.mark.asyncio
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ManagerClient):
@@ -463,6 +463,55 @@ async def test_tablet_repair_history(manager: ManagerClient):
         for row in all_rows:
             logging.info(f"Got repair_history_entry={row}")
         assert len(all_rows) == rf * tablets
+
+    await check_repair_history()
+
+    await cql.run_async("DROP KEYSPACE test;")
+
+@pytest.mark.repair
+@pytest.mark.asyncio
+async def test_tablet_repair_ranges_selection(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    servers = [await manager.server_add(), await manager.server_add()]
+
+    rf = 2
+    tablets = 4
+    nr_ranges = 0;
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', "
+                  "'replication_factor': {}}} AND tablets = {{'initial': {}}};".format(rf, tablets))
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {'mode':'repair'};")
+
+    logger.info("Populating table")
+
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    logging.info(f'Got hosts={hosts}');
+
+    await repair_on_node(manager, servers[0], servers, ranges='-4611686018427387905:-1,4611686018427387903:9223372036854775807')
+    nr_ranges = nr_ranges + 2
+    await repair_on_node(manager, servers[0], servers, ranges='-2000:-1000,1000:2000')
+    nr_ranges = nr_ranges + 2
+    await repair_on_node(manager, servers[0], servers, ranges='3000:-3000')
+    # The wrap around range (3000, -3000] will produce the following intersection range
+    # range=(minimum token,-4611686018427387905] ranges_specified={(3000,+inf), (-inf, -3000]} intersection_ranges=(minimum token,-4611686018427387905]
+    # range=(-4611686018427387905,-1] ranges_specified={(3000,+inf), (-inf, -3000]} intersection_ranges=(-4611686018427387905,-3000]
+    # range=(-1,4611686018427387903] ranges_specified={(3000,+inf), (-inf, -3000]} intersection_ranges=(3000,4611686018427387903]
+    # range=(4611686018427387903,9223372036854775807] ranges_specified={(3000,+inf), (-inf, -3000]} intersection_ranges=(4611686018427387903,9223372036854775807]
+    nr_ranges = nr_ranges + 4
+
+    async def check_repair_history():
+        all_rows = []
+        for host in hosts:
+            logging.info(f'Query hosts={host}');
+            rows = await cql.run_async("SELECT * from system.repair_history", host=host)
+            all_rows += rows
+        for row in all_rows:
+            logging.info(f"Got repair_history_entry={row}")
+        assert len(all_rows) == rf * nr_ranges;
 
     await check_repair_history()
 

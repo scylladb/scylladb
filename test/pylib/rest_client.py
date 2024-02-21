@@ -313,9 +313,13 @@ class ScyllaRESTAPIClient():
         assert(type(data) == str)
         return data
 
-    async def repair(self, node_ip: str, keyspace: str, table: str) -> None:
+    async def repair(self, node_ip: str, keyspace: str, table: str, ranges: str = '') -> None:
         """Repair the given table and wait for it to complete"""
-        sequence_number = await self.client.post_json(f"/storage_service/repair_async/{keyspace}", host=node_ip, params={"columnFamilies": table})
+        if ranges:
+            params = {"columnFamilies": table, "ranges": ranges}
+        else:
+            params = {"columnFamilies": table}
+        sequence_number = await self.client.post_json(f"/storage_service/repair_async/{keyspace}", host=node_ip, params=params)
         status = await self.client.get_json(f"/storage_service/repair_status", host=node_ip, params={"id": str(sequence_number)})
         if status != 'SUCCESSFUL':
             raise Exception(f"Repair id {sequence_number} on node {node_ip} for table {keyspace}.{table} failed: status={status}")
