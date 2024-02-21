@@ -374,7 +374,7 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
     co_return tablets;
 }
 
-using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params>;
+using registry = strategy_class_registry::registrator<network_topology_strategy>;
 static registry registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
 static registry registrator_short_name("NetworkTopologyStrategy");
 }

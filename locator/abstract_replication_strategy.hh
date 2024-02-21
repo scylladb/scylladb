@@ -55,6 +55,11 @@ struct replication_strategy_params {
     explicit replication_strategy_params(const replication_strategy_config_options& o, std::optional<unsigned> it) noexcept : options(o), initial_tablets(it) {}
 };
 
+class abstract_replication_strategy;
+using strategy_class_registry = class_registry<
+    abstract_replication_strategy,
+    replication_strategy_params>;
+
 using replication_map = std::unordered_map<token, host_id_vector_replica_set>;
 
 using endpoint_set = utils::basic_sequenced_set<inet_address, inet_address_vector_replica_set>;

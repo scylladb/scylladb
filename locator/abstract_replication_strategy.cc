@@ -42,7 +42,7 @@ abstract_replication_strategy::abstract_replication_strategy(
 
 abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params) {
     try {
-        return create_object<abstract_replication_strategy, replication_strategy_params>(strategy_name, std::move(params));
+        return strategy_class_registry::create(strategy_name, std::move(params));
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
     }
@@ -71,10 +71,6 @@ future<endpoint_set> abstract_replication_strategy::calculate_natural_ips(const 
     const auto host_ids = co_await calculate_natural_endpoints(search_token, tm);
     co_return resolve_endpoints<endpoint_set>(host_ids, tm);
 }
-
-using strategy_class_registry = class_registry<
-    locator::abstract_replication_strategy,
-    replication_strategy_params>;
 
 sstring abstract_replication_strategy::to_qualified_class_name(std::string_view strategy_class_name) {
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);

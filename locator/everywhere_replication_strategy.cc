@@ -33,7 +33,7 @@ size_t everywhere_replication_strategy::get_replication_factor(const token_metad
     return tm.sorted_tokens().empty() ? 1 : tm.count_normal_token_owners();
 }
 
-using registry = class_registrator<abstract_replication_strategy, everywhere_replication_strategy, replication_strategy_params>;
+using registry = strategy_class_registry::registrator<everywhere_replication_strategy>;
 static registry registrator("org.apache.cassandra.locator.EverywhereStrategy");
 static registry registrator_short_name("EverywhereStrategy");
 }

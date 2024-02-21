@@ -75,7 +75,7 @@ std::optional<std::unordered_set<sstring>>simple_strategy::recognized_options(co
     return {{ "replication_factor" }};
 }
 
-using registry = class_registrator<abstract_replication_strategy, simple_strategy, replication_strategy_params>;
+using registry = strategy_class_registry::registrator<simple_strategy>;
 static registry registrator("org.apache.cassandra.locator.SimpleStrategy");
 static registry registrator_short_name("SimpleStrategy");
 
