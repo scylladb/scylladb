@@ -431,13 +431,19 @@ public:
         _ssts.emplace_back(to_string(sst, _include_origin));
         return *this;
     }
-    friend std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst);
+    friend fmt::formatter<formatted_sstables_list>;
 };
 
-std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst) {
-    fmt::print(os, "[{}]", fmt::join(lst._ssts, ","));
-    return os;
 }
+
+template <>
+struct fmt::formatter<sstables::formatted_sstables_list> : fmt::formatter<std::string_view> {
+    auto format(const sstables::formatted_sstables_list& lst, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "[{}]", fmt::join(lst._ssts, ","));
+    }
+};
+
+namespace sstables {
 
 class compaction {
 protected:
