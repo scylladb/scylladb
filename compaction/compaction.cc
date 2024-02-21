@@ -1291,6 +1291,11 @@ private:
     // Called in a seastar thread
     dht::partition_range_vector
     get_ranges_for_invalidation(const std::vector<shared_sstable>& sstables) {
+        if (!_owned_ranges) {
+            // return empty ranges for keyspaces with tablets whose owned_ranges is null
+            return {};
+        }
+
         auto owned_ranges = dht::to_partition_ranges(*_owned_ranges, utils::can_yield::yes);
 
         auto non_owned_ranges = boost::copy_range<dht::partition_range_vector>(sstables

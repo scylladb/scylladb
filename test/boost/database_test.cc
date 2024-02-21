@@ -1202,6 +1202,7 @@ SEASTAR_TEST_CASE(multipage_range_scan_semaphore_mismatch) {
 
 // Test `upgrade_sstables` on all keyspaces (including the system keyspace).
 // Refs: #9494 (https://github.com/scylladb/scylla/issues/9494)
+// Refs: #17452 (https://github.com/scylladb/scylla/issues/17452) - test nullptr for owned_ranges
 SEASTAR_TEST_CASE(upgrade_sstables) {
     return do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
         e.db().invoke_on_all([] (replica::database& db) -> future<> {
@@ -1211,9 +1212,12 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
                 for (auto& [cf_name, schema] : ks.metadata()->cf_meta_data()) {
                     auto& t = db.find_column_family(schema->id());
                     constexpr bool exclude_current_version = false;
-                    co_await t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
-                        return cm.perform_sstable_upgrade(owned_ranges_ptr, ts, exclude_current_version);
-                    });
+                    // Test perform_sstable_upgrade first with proper ranges and then with nullptr ranges
+                    for (auto owned_ranges : { owned_ranges_ptr, (compaction::owned_ranges_ptr)nullptr }) {
+                        co_await t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
+                            return cm.perform_sstable_upgrade(owned_ranges, ts, exclude_current_version);
+                        });
+                    }
                 }
             }
         }).get();
