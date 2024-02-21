@@ -30,7 +30,6 @@
 #include <seastar/net/inet_address.hh>
 
 #include <stdexcept>
-#include <yaml-cpp/yaml.h>
 #include <ranges>
 #include <unordered_map>
 
@@ -298,6 +297,29 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     }
 }
 
+std::string format_compacted_at(int64_t compacted_at) {
+    const auto compacted_at_time = std::time_t(compacted_at / 1000);
+    const auto milliseconds = compacted_at % 1000;
+    return fmt::format("{:%FT%T}.{}", fmt::localtime(compacted_at_time), milliseconds);
+}
+
+template<typename Writer, typename Entry>
+void print_compactionhistory(const std::vector<Entry>& history) {
+    Writer writer(std::cout);
+    auto root = writer.map();
+    auto seq = root.add_seq("CompactionHistory");
+    for (const auto& e : history) {
+        auto output = seq->add_map();
+        output->add_item("id", fmt::to_string(e.id));
+        output->add_item("columnfamily_name", e.table);
+        output->add_item("keyspace_name", e.keyspace);
+        output->add_item("compacted_at", format_compacted_at(e.compacted_at));
+        output->add_item("bytes_in", e.bytes_in);
+        output->add_item("bytes_out", e.bytes_out);
+        output->add_item("rows_merged", "");
+    }
+}
+
 void compactionhistory_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const auto format = vm["format"].as<sstring>();
 
@@ -332,12 +354,6 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
 
     std::ranges::sort(history, [] (const history_entry& a, const history_entry& b) { return a.compacted_at > b.compacted_at; });
 
-    const auto format_compacted_at = [] (int64_t compacted_at) {
-        const auto compacted_at_time = std::time_t(compacted_at / 1000);
-        const auto milliseconds = compacted_at % 1000;
-        return fmt::format("{:%FT%T}.{}", fmt::localtime(compacted_at_time), milliseconds);
-    };
-
     if (format == "text") {
         std::array<std::string, 7> header_row{"id", "keyspace_name", "columnfamily_name", "compacted_at", "bytes_in", "bytes_out", "rows_merged"};
         std::array<size_t, 7> max_column_length{};
@@ -367,61 +383,9 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
             fmt::print(std::cout, fmt::runtime(regular_row_format.c_str()), r[0], r[1], r[2], r[3], r[4], r[5], r[6]);
         }
     } else if (format == "json") {
-        rjson::streaming_writer writer;
-
-        writer.StartObject();
-        writer.Key("CompactionHistory");
-        writer.StartArray();
-
-        for (const auto& e : history) {
-            writer.StartObject();
-            writer.Key("id");
-            writer.String(fmt::to_string(e.id));
-            writer.Key("columnfamily_name");
-            writer.String(e.table);
-            writer.Key("keyspace_name");
-            writer.String(e.keyspace);
-            writer.Key("compacted_at");
-            writer.String(format_compacted_at(e.compacted_at));
-            writer.Key("bytes_in");
-            writer.Int64(e.bytes_in);
-            writer.Key("bytes_out");
-            writer.Int64(e.bytes_out);
-            writer.Key("rows_merged");
-            writer.String("");
-            writer.EndObject();
-        }
-
-        writer.EndArray();
-        writer.EndObject();
+        print_compactionhistory<json_writer>(history);
     } else if (format == "yaml") {
-        YAML::Emitter yout(std::cout);
-
-        yout << YAML::BeginMap;
-        yout << YAML::Key << "CompactionHistory";
-        yout << YAML::BeginSeq;
-
-        for (const auto& e : history) {
-            yout << YAML::BeginMap;
-            yout << YAML::Key << "id";
-            yout << YAML::Value << fmt::to_string(e.id);
-            yout << YAML::Key << "columnfamily_name";
-            yout << YAML::Value << e.table;
-            yout << YAML::Key << "keyspace_name";
-            yout << YAML::Value << e.keyspace;
-            yout << YAML::Key << "compacted_at";
-            yout << YAML::Value << YAML::SingleQuoted << format_compacted_at(e.compacted_at);
-            yout << YAML::Key << "bytes_in";
-            yout << YAML::Value << e.bytes_in;
-            yout << YAML::Key << "bytes_out";
-            yout << YAML::Value << e.bytes_out;
-            yout << YAML::Key << "rows_merged";
-            yout << YAML::Value << YAML::SingleQuoted << "";
-            yout << YAML::EndMap;
-        }
-
-        yout << YAML::EndSeq;
-        yout << YAML::EndMap;
+        print_compactionhistory<yaml_writer>(history);
     }
 }
 
