@@ -226,7 +226,7 @@ add_scylla_test(query_processor_test
   KIND SEASTAR)
 add_scylla_test(radix_tree_test
   KIND SEASTAR)
-add_scylla_test(interval_test
+add_scylla_test(wrapping_interval_test
   KIND BOOST)
 add_scylla_test(range_tombstone_list_test
   KIND BOOST)
