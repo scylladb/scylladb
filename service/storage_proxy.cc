@@ -1700,10 +1700,11 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
         size_t total_endpoints;
         size_t failures;
     };
-    std::unordered_map<sstring, dc_info> _dc_responses;
+    std::unordered_map<const locator::datacenter*, dc_info> _dc_responses;
     bool waited_for(gms::inet_address from) override {
         auto& topology = _effective_replication_map_ptr->get_topology();
-        sstring data_center = topology.get_datacenter(from);
+        const auto* node = topology.find_node(from);
+        const auto* data_center = node->dc();
         auto dc_resp = _dc_responses.find(data_center);
 
         if (dc_resp->second.acks < dc_resp->second.total_block_for) {
@@ -1722,14 +1723,17 @@ public:
         auto& topology = erm->get_topology();
 
         for (auto& target : targets) {
-            auto dc = topology.get_datacenter(target);
+            const auto* node = topology.find_node(target);
+            auto dc = node->dc();
 
             if (!_dc_responses.contains(dc)) {
                 auto pending_for_dc = boost::range::count_if(pending_endpoints, [&topology, &dc] (const gms::inet_address& ep){
-                    return topology.get_datacenter(ep) == dc;
+                    const auto* node = topology.find_node(ep);
+                    return node->dc() == dc;
                 });
                 size_t total_endpoints_for_dc = boost::range::count_if(targets, [&topology, &dc] (const gms::inet_address& ep){
-                    return topology.get_datacenter(ep) == dc;
+                    const auto* node = topology.find_node(ep);
+                    return node->dc() == dc;
                 });
                 _dc_responses.emplace(dc, dc_info{0, db::local_quorum_for(*erm, dc) + pending_for_dc, total_endpoints_for_dc, 0});
                 _total_block_for += pending_for_dc;
@@ -1738,7 +1742,8 @@ public:
     }
     bool failure(gms::inet_address from, size_t count, error err) override {
         auto& topology = _effective_replication_map_ptr->get_topology();
-        const sstring& dc = topology.get_datacenter(from);
+        const auto* node = topology.find_node(from);
+        const auto* dc = node->dc();
         auto dc_resp = _dc_responses.find(dc);
 
         dc_resp->second.failures += count;

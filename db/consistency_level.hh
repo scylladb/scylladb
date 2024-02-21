@@ -27,6 +27,7 @@ class gossiper;
 };
 
 namespace locator {
+class datacenter;
 class effective_replication_map;
 }
 
@@ -36,7 +37,7 @@ extern logging::logger cl_logger;
 
 size_t quorum_for(const locator::effective_replication_map& erm);
 
-size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc);
+size_t local_quorum_for(const locator::effective_replication_map& erm, const locator::datacenter* dc);
 
 size_t block_for_local_serial(const locator::effective_replication_map& erm);
 
