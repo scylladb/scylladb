@@ -132,7 +132,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     // Elements are popped off from the back of the vector, therefore we're sorting
     // it in descending order, to start from the smaller tokens.
     std::ranges::sort(sstables, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
-        return x->compare_by_first_key(*y) > 0;
+        return x->compare_by_first_key(*y) < 0;
     });
 
     size_t nr_sst_total = sstables.size();
