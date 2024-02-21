@@ -10,6 +10,7 @@
 
 
 #include <seastar/core/shared_ptr.hh>
+#include <fmt/ostream.h>
 #include "types/types.hh"
 #include "schema/schema.hh"
 
@@ -129,3 +130,6 @@ inline bool operator==(const result_set& x, const result_set& y) {
 }
 
 }
+
+template <> struct fmt::formatter<query::result_set> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::result_set_row> : fmt::ostream_formatter {};
