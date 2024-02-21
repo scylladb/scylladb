@@ -105,11 +105,6 @@ std::string_view to_string(compaction_type type) {
     return "(invalid)";
 }
 
-std::ostream& operator<<(std::ostream& os, compaction_type type) {
-    os << to_string(type);
-    return os;
-}
-
 std::string_view to_string(compaction_type_options::scrub::mode scrub_mode) {
     switch (scrub_mode) {
         case compaction_type_options::scrub::mode::abort:
@@ -125,10 +120,6 @@ std::string_view to_string(compaction_type_options::scrub::mode scrub_mode) {
     return "(invalid)";
 }
 
-std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::mode scrub_mode) {
-    return os << to_string(scrub_mode);
-}
-
 std::string_view to_string(compaction_type_options::scrub::quarantine_mode quarantine_mode) {
     switch (quarantine_mode) {
         case compaction_type_options::scrub::quarantine_mode::include:
@@ -140,10 +131,6 @@ std::string_view to_string(compaction_type_options::scrub::quarantine_mode quara
     }
     on_internal_error_noexcept(clogger, format("Invalid scrub quarantine mode {}", int(quarantine_mode)));
     return "(invalid)";
-}
-
-std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::quarantine_mode quarantine_mode) {
-    return os << to_string(quarantine_mode);
 }
 
 static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
@@ -1941,4 +1928,19 @@ uint64_t compaction_descriptor::sstables_size() const {
     return boost::accumulate(sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
 }
 
+}
+
+auto fmt::formatter<sstables::compaction_type>::format(sstables::compaction_type type, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", to_string(type));
+}
+
+auto fmt::formatter<sstables::compaction_type_options::scrub::mode>::format(sstables::compaction_type_options::scrub::mode mode, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", to_string(mode));
+}
+
+auto fmt::formatter<sstables::compaction_type_options::scrub::quarantine_mode>::format(sstables::compaction_type_options::scrub::quarantine_mode mode, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", to_string(mode));
 }
