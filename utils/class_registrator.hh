@@ -156,17 +156,20 @@ public:
     static sstring to_qualified_class_name(std::string_view class_name) {
         return registry().to_qualified_class_name(class_name);
     }
+
+    template <typename T>
+    struct registrator {
+        registrator(const sstring& name) {
+            register_class<T>(name);
+        }
+        registrator(const sstring& name, creator_type creator) {
+            register_class(name, std::move(creator));
+        }
+    };
 };
 
 template<typename BaseType, typename T, typename... Args>
-struct class_registrator {
-    class_registrator(const sstring& name) {
-        class_registry<BaseType, Args...>::template register_class<T>(name);
-    }
-    class_registrator(const sstring& name, typename class_registry<BaseType, Args...>::creator_type creator) {
-        class_registry<BaseType, Args...>::register_class(name, creator);
-    }
-};
+using class_registrator = class_registry<BaseType, Args...>::template registrator<T>;
 
 template<typename BaseType, typename... Args>
 typename nonstatic_class_registry<BaseType, Args...>::result_type nonstatic_class_registry<BaseType, Args...>::create(const sstring& name, Args&&... args) {
