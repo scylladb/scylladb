@@ -154,6 +154,33 @@ public:
         }
         return false;
     }
+    // the other inverval is before this interval (works only for non wrapped intervals)
+    // Comparator must define a total ordering on T.
+    bool other_is_before(const wrapping_interval<T>& o, IntervalComparatorFor<T> auto&& cmp) const {
+        assert(!is_wrap_around(cmp));
+        assert(!o.is_wrap_around(cmp));
+        if (!start() || !o.end()) {
+            return false;
+        }
+        auto r = cmp(o.end()->value(), start()->value());
+        if (r < 0) {
+            return true;
+        }
+        if (r > 0) {
+            return false;
+        }
+        // o.end()->value() == start()->value(), we decide based on inclusiveness
+        const auto ei = o.end()->is_inclusive();
+        const auto si = start()->is_inclusive();
+        if (!ei && !si) {
+            return true;
+        }
+        // At least one is inclusive, check that the other isn't
+        if (ei != si) {
+            return true;
+        }
+        return false;
+    }
     // the point is after the interval (works only for non wrapped intervals)
     // Comparator must define a total ordering on T.
     bool after(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
@@ -481,6 +508,11 @@ public:
     // Comparator must define a total ordering on T.
     bool before(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
         return _interval.before(point, std::forward<decltype(cmp)>(cmp));
+    }
+    // the other interval is before this interval.
+    // Comparator must define a total ordering on T.
+    bool other_is_before(const nonwrapping_interval<T>& o, IntervalComparatorFor<T> auto&& cmp) const {
+        return _interval.other_is_before(o, std::forward<decltype(cmp)>(cmp));
     }
     // the point is after the interval.
     // Comparator must define a total ordering on T.

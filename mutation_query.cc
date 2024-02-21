@@ -42,6 +42,15 @@ reconcilable_result::operator==(const reconcilable_result& other) const {
     return boost::equal(_partitions, other._partitions);
 }
 
+void
+reconcilable_result::merge_disjoint(schema_ptr schema, const reconcilable_result& other) {
+    std::copy(other._partitions.begin(), other._partitions.end(), std::back_inserter(_partitions));
+    _short_read = _short_read || other._short_read;
+    uint64_t row_count = this->row_count() + other.row_count();
+    _row_count_low_bits = static_cast<uint32_t>(row_count);
+    _row_count_high_bits = static_cast<uint32_t>(row_count >> 32);
+}
+
 auto fmt::formatter<reconcilable_result::printer>::format(
     const reconcilable_result::printer& pr,
     fmt::format_context& ctx) const -> decltype(ctx.out()) {

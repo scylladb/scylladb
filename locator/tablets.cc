@@ -444,6 +444,58 @@ load_stats& load_stats::operator+=(const load_stats& s) {
     return *this;
 }
 
+tablet_range_splitter::tablet_range_splitter(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges)
+    : _schema(std::move(schema))
+    , _ranges(ranges)
+    , _ranges_it(_ranges.begin())
+{
+    // Filter all tablets and save only those that have a replica on the specified host.
+    for (auto tid = std::optional(tablets.first_tablet()); tid; tid = tablets.next_tablet(*tid)) {
+        const auto& tablet_info = tablets.get_tablet_info(*tid);
+
+        auto replica_it = std::ranges::find_if(tablet_info.replicas, [&] (auto&& r) { return r.host == host; });
+        if (replica_it == tablet_info.replicas.end()) {
+            continue;
+        }
+
+        _tablet_ranges.emplace_back(range_split_result{replica_it->shard, dht::to_partition_range(tablets.get_token_range(*tid))});
+    }
+    _tablet_ranges_it = _tablet_ranges.begin();
+}
+
+std::optional<tablet_range_splitter::range_split_result> tablet_range_splitter::operator()() {
+    if (_ranges_it == _ranges.end() || _tablet_ranges_it == _tablet_ranges.end()) {
+        return {};
+    }
+
+    dht::ring_position_comparator cmp(*_schema);
+
+    while (_ranges_it != _ranges.end()) {
+        // First, skip all tablet-ranges that are completely before the current range.
+        while (_ranges_it->other_is_before(_tablet_ranges_it->range, cmp)) {
+            ++_tablet_ranges_it;
+        }
+        // Generate intersections with all tablet-ranges that overlap with the current range.
+        if (auto intersection = _ranges_it->intersection(_tablet_ranges_it->range, cmp)) {
+            const auto shard = _tablet_ranges_it->shard;
+            if (_ranges_it->end() && cmp(_ranges_it->end()->value(), _tablet_ranges_it->range.end()->value()) < 0) {
+                // The current tablet range extends beyond the current range,
+                // move to the next range.
+                ++_ranges_it;
+            } else {
+                // The current range extends beyond the current tablet range,
+                // move to the next tablet range.
+                ++_tablet_ranges_it;
+            }
+            return range_split_result{shard, std::move(*intersection)};
+        }
+        // Current tablet-range is completely after the current range, move to the next range.
+        ++_ranges_it;
+    }
+
+    return {};
+}
+
 // Estimates the external memory usage of std::unordered_map<>.
 // Does not include external memory usage of elements.
 template <typename K, typename V>

@@ -12,6 +12,7 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "query-result-writer.hh"
+#include "query_result_merger.hh"
 #include "readers/multishard.hh"
 
 #include <fmt/core.h>
@@ -716,7 +717,7 @@ future<page_consume_result<ResultBuilder>> read_page(
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        noncopyable_function<ResultBuilder(const compact_for_query_state_v2&)> result_builder_factory) {
+        noncopyable_function<ResultBuilder()> result_builder_factory) {
     auto compaction_state = make_lw_shared<compact_for_query_state_v2>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
@@ -727,11 +728,14 @@ future<page_consume_result<ResultBuilder>> read_page(
     }
 
     // Use coroutine::as_future to prevent exception on timesout.
-    auto f = co_await coroutine::as_future(query::consume_page(reader, compaction_state, cmd.slice, result_builder_factory(*compaction_state), cmd.get_row_limit(),
+    auto f = co_await coroutine::as_future(query::consume_page(reader, compaction_state, cmd.slice, result_builder_factory(), cmd.get_row_limit(),
                 cmd.partition_limit, cmd.timestamp));
     if (!f.failed()) {
         // no exceptions are thrown in this block
         auto result = std::move(f).get();
+        if (compaction_state->are_limits_reached() || result.is_short_read()) {
+            ResultBuilder::maybe_set_last_position(result, compaction_state->current_full_position());
+        }
         const auto& cstats = compaction_state->stats();
         tracing::trace(trace_state, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
                 cstats.partitions,
@@ -753,14 +757,14 @@ future<page_consume_result<ResultBuilder>> read_page(
 }
 
 template <typename ResultBuilder>
-future<typename ResultBuilder::result_type> do_query(
+future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query_vnodes(
         distributed<replica::database>& db,
         schema_ptr s,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
-        noncopyable_function<ResultBuilder(const compact_for_query_state_v2&)> result_builder_factory) {
+        noncopyable_function<ResultBuilder()> result_builder_factory) {
     auto& table = db.local().find_column_family(s);
     auto erm = table.get_effective_replication_map();
     auto ctx = seastar::make_shared<read_context>(db, s, erm, cmd, ranges, trace_state, timeout);
@@ -768,19 +772,57 @@ future<typename ResultBuilder::result_type> do_query(
     // Use coroutine::as_future to prevent exception on timesout.
     auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&, result_builder_factory = std::move(result_builder_factory)] () mutable {
         return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, std::move(result_builder_factory));
-    }).then([&] (page_consume_result<ResultBuilder> r) -> future<typename ResultBuilder::result_type> {
+    }).then([&] (page_consume_result<ResultBuilder> r) -> future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> {
         if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
             // Must call before calling `detach_state()`.
             auto last_pos = *r.compaction_state->current_full_position();
             co_await ctx->save_readers(std::move(r.unconsumed_fragments), std::move(*r.compaction_state).detach_state(), std::move(last_pos));
         }
-        co_return std::move(r.result);
+        co_return make_foreign(make_lw_shared<typename ResultBuilder::result_type>(std::move(r.result)));
     }));
     co_await ctx->stop();
     if (f.failed()) {
         co_return coroutine::exception(f.get_exception());
     }
     co_return f.get();
+}
+
+template <typename ResultBuilder>
+future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query_tablets(
+        distributed<replica::database>& db,
+        schema_ptr s,
+        const query::read_command& cmd,
+        const dht::partition_range_vector& ranges,
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout,
+        noncopyable_function<ResultBuilder()> result_builder_factory) {
+    auto& table = db.local().find_column_family(s);
+    auto erm = table.get_effective_replication_map();
+    const auto& token_metadata = erm->get_token_metadata();
+    const auto& tablets = token_metadata.tablets().get_tablet_map(s->id());
+    const auto this_node_id = token_metadata.get_topology().this_node()->host_id();
+
+    auto query_cmd = cmd;
+    auto result_builder = result_builder_factory();
+
+    std::vector<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> results;
+    locator::tablet_range_splitter range_splitter{s, tablets, this_node_id, ranges};
+    while (auto range_opt = range_splitter()) {
+        auto& r = *results.emplace_back(co_await db.invoke_on(range_opt->shard,
+                    [&result_builder, gs = global_schema_ptr(s), &query_cmd, &range_opt, gts = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) {
+            return result_builder.query(db, gs, query_cmd, range_opt->range, gts, timeout);
+        }));
+
+        // Substract result from limit, watch for underflow
+        query_cmd.partition_limit -= std::min(query_cmd.partition_limit, ResultBuilder::get_partition_count(r));
+        query_cmd.set_row_limit(query_cmd.get_row_limit() - std::min(query_cmd.get_row_limit(), ResultBuilder::get_row_count(r)));
+
+        if (!query_cmd.partition_limit || !query_cmd.get_row_limit() || r.is_short_read()) {
+            break;
+        }
+    }
+
+    co_return result_builder.merge(std::move(results));
 }
 
 template <typename ResultBuilder>
@@ -791,7 +833,7 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
-        std::function<ResultBuilder(query::result_memory_accounter&&, const compact_for_query_state_v2&)> result_builder_factory) {
+        std::function<ResultBuilder(query::result_memory_accounter&&)> result_builder_factory) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return std::tuple(
                 make_foreign(make_lw_shared<typename ResultBuilder::result_type>()),
@@ -802,18 +844,21 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
     auto& stats = local_db.get_stats();
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
 
+    const auto& keyspace = local_db.find_keyspace(s->ks_name());
+    auto query_method = keyspace.get_replication_strategy().uses_tablets() ? do_query_tablets<ResultBuilder> : do_query_vnodes<ResultBuilder>;
+
     try {
         auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
 
-        auto result = co_await do_query<ResultBuilder>(db, s, cmd, ranges, std::move(trace_state), timeout,
-                [result_builder_factory, accounter = std::move(accounter)] (const compact_for_query_state_v2& compaction_state) mutable {
-			return result_builder_factory(std::move(accounter), compaction_state);
+        auto result = co_await query_method(db, s, cmd, ranges, std::move(trace_state), timeout,
+                [result_builder_factory, accounter = std::move(accounter)] () mutable {
+			return result_builder_factory(std::move(accounter));
 		});
 
         ++stats.total_reads;
-        stats.short_mutation_queries += bool(result.is_short_read());
+        stats.short_mutation_queries += bool(result->is_short_read());
         auto hit_rate = local_db.find_column_family(s).get_global_cache_hit_rate();
-        co_return std::tuple(make_foreign(make_lw_shared<typename ResultBuilder::result_type>(std::move(result))), hit_rate);
+        co_return std::tuple(std::move(result), hit_rate);
     } catch (...) {
         ++stats.total_reads_failed;
         throw;
@@ -828,10 +873,13 @@ public:
 
 private:
     reconcilable_result_builder _builder;
+    schema_ptr _s;
 
 public:
     mutation_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_memory_accounter&& accounter)
-        : _builder(s, slice, std::move(accounter)) { }
+        : _builder(s, slice, std::move(accounter))
+        , _s(s.shared_from_this())
+     { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
     void consume(tombstone t) { _builder.consume(t); }
@@ -840,6 +888,32 @@ public:
     stop_iteration consume(range_tombstone_change&& rtc) { return _builder.consume(std::move(rtc)); }
     stop_iteration consume_end_of_partition()  { return _builder.consume_end_of_partition(); }
     result_type consume_end_of_stream() { return _builder.consume_end_of_stream(); }
+
+    future<foreign_ptr<lw_shared_ptr<result_type>>> query(
+            replica::database& db,
+            schema_ptr schema,
+            const query::read_command& cmd,
+            const dht::partition_range& range,
+            tracing::trace_state_ptr trace_state,
+            db::timeout_clock::time_point timeout) {
+        auto res = co_await db.query_mutations(std::move(schema), cmd, range, std::move(trace_state), timeout);
+        co_return make_foreign(make_lw_shared<result_type>(std::get<0>(std::move(res))));
+    }
+
+    foreign_ptr<lw_shared_ptr<result_type>> merge(std::vector<foreign_ptr<lw_shared_ptr<result_type>>> results) {
+        if (results.empty()) {
+            return make_foreign(make_lw_shared<result_type>());
+        }
+        auto& first = results.front();
+        for (auto it = results.begin() + 1; it != results.end(); ++it) {
+            first->merge_disjoint(_s, **it);
+        }
+        return std::move(first);
+    }
+
+    static void maybe_set_last_position(result_type& r, std::optional<full_position> full_position) { }
+    static uint32_t get_partition_count(result_type& r) { return r.partitions().size(); }
+    static uint64_t get_row_count(result_type& r) { return r.row_count(); }
 };
 
 class data_query_result_builder {
@@ -847,16 +921,17 @@ public:
     using result_type = query::result;
 
 private:
-    const compact_for_query_state_v2& _compaction_state;
     std::unique_ptr<query::result::builder> _res_builder;
     query_result_builder _builder;
+    query::result_options _opts;
 
 public:
     data_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_options opts,
-            query::result_memory_accounter&& accounter, const compact_for_query_state_v2& compaction_state, uint64_t tombstone_limit)
-        : _compaction_state(compaction_state)
-        , _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter), tombstone_limit))
-        , _builder(s, *_res_builder) { }
+            query::result_memory_accounter&& accounter, uint64_t tombstone_limit)
+        : _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter), tombstone_limit))
+        , _builder(s, *_res_builder)
+        , _opts(opts)
+    { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
     void consume(tombstone t) { _builder.consume(t); }
@@ -866,10 +941,44 @@ public:
     stop_iteration consume_end_of_partition()  { return _builder.consume_end_of_partition(); }
     result_type consume_end_of_stream() {
         _builder.consume_end_of_stream();
-        if (_compaction_state.are_limits_reached() || _res_builder->is_short_read()) {
-            return _res_builder->build(_compaction_state.current_full_position());
-        }
         return _res_builder->build();
+    }
+
+    future<foreign_ptr<lw_shared_ptr<result_type>>> query(
+            replica::database& db,
+            schema_ptr schema,
+            const query::read_command& cmd,
+            const dht::partition_range& range,
+            tracing::trace_state_ptr trace_state,
+            db::timeout_clock::time_point timeout) {
+        dht::partition_range_vector ranges;
+        ranges.emplace_back(range);
+        auto res = co_await db.query(std::move(schema), cmd, _opts, ranges, std::move(trace_state), timeout);
+        co_return std::get<0>(std::move(res));
+    }
+
+    foreign_ptr<lw_shared_ptr<result_type>> merge(std::vector<foreign_ptr<lw_shared_ptr<result_type>>> results) {
+        if (results.empty()) {
+            return make_foreign(make_lw_shared<result_type>());
+        }
+        query::result_merger merger(query::max_rows, query::max_partitions);
+        merger.reserve(results.size());
+        for (auto&& r: results) {
+            merger(std::move(r));
+        }
+        return merger.get();
+    }
+
+    static void maybe_set_last_position(result_type& r, std::optional<full_position> full_position) {
+        r.set_last_position(std::move(full_position));
+    }
+    static uint32_t get_partition_count(result_type& r) {
+        r.ensure_counts();
+        return *r.partition_count();
+    }
+    static uint64_t get_row_count(result_type& r) {
+        r.ensure_counts();
+        return *r.row_count();
     }
 };
 
@@ -885,7 +994,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
     schema_ptr query_schema = cmd.slice.is_reversed() ? table_schema->make_reversed() : table_schema;
 
     return do_query_on_all_shards<mutation_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
-            [table_schema, &cmd] (query::result_memory_accounter&& accounter, const compact_for_query_state_v2& compaction_state) {
+            [table_schema, &cmd] (query::result_memory_accounter&& accounter) {
         return mutation_query_result_builder(*table_schema, cmd.slice, std::move(accounter));
     });
 }
@@ -901,7 +1010,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
     schema_ptr query_schema = cmd.slice.is_reversed() ? table_schema->make_reversed() : table_schema;
 
     return do_query_on_all_shards<data_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
-            [table_schema, &cmd, opts] (query::result_memory_accounter&& accounter, const compact_for_query_state_v2& compaction_state) {
-        return data_query_result_builder(*table_schema, cmd.slice, opts, std::move(accounter), compaction_state, cmd.tombstone_limit);
+            [table_schema, &cmd, opts] (query::result_memory_accounter&& accounter) {
+        return data_query_result_builder(*table_schema, cmd.slice, opts, std::move(accounter), cmd.tombstone_limit);
     });
 }

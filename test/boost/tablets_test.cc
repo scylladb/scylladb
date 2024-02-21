@@ -13,6 +13,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
+#include "test/lib/simple_schema.hh"
 #include "db/config.hh"
 #include "schema/schema_builder.hh"
 
@@ -1737,4 +1738,139 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
         }
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter) {
+    simple_schema ss;
+
+    const auto dks = ss.make_pkeys(4);
+
+    auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+    auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_map tmap(4);
+    auto tb = tmap.first_tablet();
+    tmap.set_tablet(tb, tablet_info {
+        tablet_replica_set {
+            tablet_replica {h2, 0},
+            tablet_replica {h3, 0},
+        }
+    });
+    tb = *tmap.next_tablet(tb);
+    tmap.set_tablet(tb, tablet_info {
+        tablet_replica_set {
+            tablet_replica {h1, 3},
+        }
+    });
+    tb = *tmap.next_tablet(tb);
+    tmap.set_tablet(tb, tablet_info {
+        tablet_replica_set {
+            tablet_replica {h2, 2},
+        }
+    });
+    tb = *tmap.next_tablet(tb);
+    tmap.set_tablet(tb, tablet_info {
+        tablet_replica_set {
+            tablet_replica {h1, 1},
+            tablet_replica {h2, 1},
+        }
+    });
+
+    using result = tablet_range_splitter::range_split_result;
+    using bound = dht::partition_range::bound;
+
+    std::vector<result> included_ranges;
+    std::vector<dht::partition_range> excluded_ranges;
+    for (auto tid = std::optional(tmap.first_tablet()); tid; tid = tmap.next_tablet(*tid)) {
+        const auto& tablet_info = tmap.get_tablet_info(*tid);
+        auto replica_it = std::ranges::find_if(tablet_info.replicas, [&] (auto&& r) { return r.host == h1; });
+        auto token_range = tmap.get_token_range(*tid);
+        auto range = dht::to_partition_range(token_range);
+        if (replica_it == tablet_info.replicas.end()) {
+            testlog.info("tablet#{}: {} (no replica on h1)", *tid, token_range);
+            excluded_ranges.emplace_back(std::move(range));
+        } else {
+            testlog.info("tablet#{}: {} (shard {})", *tid, token_range, replica_it->shard);
+            included_ranges.emplace_back(result{replica_it->shard, std::move(range)});
+        }
+    }
+
+    dht::ring_position_comparator cmp(*ss.schema());
+
+    auto check = [&] (const dht::partition_range_vector& ranges, std::vector<result> expected_result,
+            std::source_location sl = std::source_location::current()) {
+        testlog.info("check() @ {}:{} ranges={}", sl.file_name(), sl.line(), ranges);
+        locator::tablet_range_splitter range_splitter{ss.schema(), tmap, h1, ranges};
+        auto it = expected_result.begin();
+        while (auto range_opt = range_splitter()) {
+            testlog.debug("result: shard={} range={}", range_opt->shard, range_opt->range);
+            BOOST_REQUIRE(it != expected_result.end());
+            testlog.debug("expected: shard={} range={}", it->shard, it->range);
+            BOOST_REQUIRE_EQUAL(it->shard, range_opt->shard);
+            BOOST_REQUIRE(it->range.equal(range_opt->range, cmp));
+            ++it;
+        }
+        if (it != expected_result.end()) {
+            while (it != expected_result.end()) {
+                testlog.error("missing expected result: shard={} range={}", it->shard, it->range);
+                ++it;
+            }
+            BOOST_FAIL("splitter didn't provide all expected ranges");
+        }
+    };
+    auto check_single = [&] (const dht::partition_range& range, std::vector<result> expected_result,
+            std::source_location sl = std::source_location::current()) {
+        dht::partition_range_vector ranges;
+        ranges.reserve(1);
+        ranges.push_back(std::move(range));
+        check(ranges, std::move(expected_result), sl);
+    };
+    auto intersect = [&] (const dht::partition_range& range) {
+        std::vector<result> intersecting_ranges;
+        for (const auto& included_range : included_ranges) {
+            if (auto intersection = included_range.range.intersection(range, cmp)) {
+                intersecting_ranges.push_back({included_range.shard, std::move(*intersection)});
+            }
+        }
+        return intersecting_ranges;
+    };
+    auto check_intersection_single = [&] (const dht::partition_range& range,
+            std::source_location sl = std::source_location::current()) {
+        check_single(range, intersect(range), sl);
+    };
+    auto check_intersection = [&] (const dht::partition_range_vector& ranges,
+            std::source_location sl = std::source_location::current()) {
+        std::vector<result> expected_ranges;
+        for (const auto& range : ranges) {
+            auto res = intersect(range);
+            std::move(res.begin(), res.end(), std::back_inserter(expected_ranges));
+        }
+        std::sort(expected_ranges.begin(), expected_ranges.end(), [&] (const auto& a, const auto& b) {
+            return !a.range.start() || b.range.before(a.range.start()->value(), cmp);
+        });
+        check(ranges, expected_ranges, sl);
+    };
+
+    check_single(dht::partition_range::make_open_ended_both_sides(), included_ranges);
+    check(boost::copy_range<dht::partition_range_vector>(included_ranges | boost::adaptors::transformed([&] (auto& r) { return r.range; })), included_ranges);
+    check(excluded_ranges, {});
+
+    check_intersection_single({bound{dks[0], true}, bound{dks[1], false}});
+    check_intersection_single({bound{dks[0], false}, bound{dks[2], true}});
+    check_intersection_single({bound{dks[2], true}, bound{dks[3], false}});
+    check_intersection_single({bound{dks[0], false}, bound{dks[3], false}});
+    check_intersection_single(dht::partition_range::make_starting_with(bound(dks[2], true)));
+    check_intersection_single(dht::partition_range::make_ending_with(bound(dks[1], false)));
+    check_intersection_single(dht::partition_range::make_singular(dks[3]));
+
+    check_intersection({
+            dht::partition_range::make_ending_with(bound(dks[0], false)),
+            {bound{dks[1], true}, bound{dks[2], false}},
+            dht::partition_range::make_starting_with(bound(dks[3], true))});
+
+    check_intersection({
+            {bound{dks[0], true}, bound{dks[1], false}},
+            {bound{dks[1], true}, bound{dks[2], false}},
+            {bound{dks[2], true}, bound{dks[3], false}}});
 }
