@@ -33,8 +33,6 @@ enum class compaction_type {
     Split = 8,
 };
 
-std::ostream& operator<<(std::ostream& os, compaction_type type);
-
 struct compaction_completion_desc {
     // Old, existing SSTables that should be deleted and removed from the SSTable set.
     std::vector<shared_sstable> old_sstables;
@@ -141,10 +139,8 @@ public:
 };
 
 std::string_view to_string(compaction_type_options::scrub::mode);
-std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::mode scrub_mode);
 
 std::string_view to_string(compaction_type_options::scrub::quarantine_mode);
-std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::quarantine_mode quarantine_mode);
 
 class dummy_tag {};
 using has_only_fully_expired = seastar::bool_class<dummy_tag>;
@@ -215,3 +211,16 @@ struct compaction_descriptor {
 };
 
 }
+
+template <>
+struct fmt::formatter<sstables::compaction_type> : fmt::formatter<std::string_view> {
+    auto format(sstables::compaction_type, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+template <>
+struct fmt::formatter<sstables::compaction_type_options::scrub::mode> : fmt::formatter<std::string_view> {
+    auto format(sstables::compaction_type_options::scrub::mode, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+template <>
+struct fmt::formatter<sstables::compaction_type_options::scrub::quarantine_mode> : fmt::formatter<std::string_view> {
+    auto format(sstables::compaction_type_options::scrub::quarantine_mode, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
