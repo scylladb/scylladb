@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <optional>
+#include <fmt/ostream.h>
 
 #include "db/functions/function_name.hh"
 #include "db/functions/function.hh"
@@ -517,3 +518,12 @@ struct forward_result {
 
 std::ostream& operator<<(std::ostream& out, const query::forward_result::printer&);
 }
+
+
+template <> struct fmt::formatter<query::specific_ranges> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::partition_slice> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::read_command> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::forward_request> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::forward_request::reduction_type> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::forward_request::aggregation_info> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::forward_result::printer> : fmt::ostream_formatter {};
