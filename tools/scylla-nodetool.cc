@@ -38,6 +38,7 @@
 #include "gms/application_state.hh"
 #include "db_clock.hh"
 #include "log.hh"
+#include "tools/format_printers.hh"
 #include "tools/utils.hh"
 #include "utils/http.hh"
 #include "utils/human_readable.hh"
@@ -1453,63 +1454,6 @@ std::map<sstring, std::vector<sstring>> get_ks_to_cfs(scylla_rest_client& client
     return keyspaces;
 }
 
-// inspired by http://wg21.link/p2098
-template<typename T, template<typename...> class C>
-struct is_specialization_of : std::false_type {};
-template<template<typename...> class C, typename... Args>
-struct is_specialization_of<C<Args...>, C> : std::true_type {};
-template<typename T, template<typename...> class C>
-inline constexpr bool is_specialization_of_v = is_specialization_of<T, C>::value;
-template<typename T>
-concept is_vector = is_specialization_of_v<T, std::vector>;
-
-using metrics_value = std::variant<bool,
-                                   double,
-                                   int64_t,
-                                   uint64_t,
-                                   std::string,
-                                   std::vector<std::string>>;
-void dump_map_to_yaml(YAML::Emitter& emitter,
-                      const std::map<std::string, metrics_value>& map) {
-    for (auto& [key, value] : map) {
-        emitter << YAML::Key << key;
-        emitter << YAML::Value;
-        std::visit([&] (auto&& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::convertible_to<T, std::string>) {
-                emitter << YAML::SingleQuoted << std::string(v);
-            } else if constexpr (is_vector<T>) {
-                emitter << YAML::BeginSeq;
-                for (auto& element : v) {
-                    emitter << element;
-                }
-                emitter << YAML::EndSeq;
-            } else {
-                emitter << v;
-            }
-        }, value);
-    }
-}
-
-void dump_map_to_json(rjson::streaming_writer& writer,
-                      const std::map<std::string, metrics_value>& map) {
-    for (auto& [key, value] : map) {
-        writer.Key(key);
-        std::visit([&] (auto&& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (is_vector<T>) {
-                writer.StartArray();
-                for (auto& element : v) {
-                    writer.Write(element);
-                }
-                writer.EndArray();
-            } else {
-                writer.Write(v);
-            }
-        }, value);
-    }
-}
-
 class table_metrics {
     scylla_rest_client& _client;
     std::string _ks_name;
@@ -1956,9 +1900,10 @@ void table_stats_print_plain(scylla_rest_client& client,
     }
 }
 
-void table_stats_print_json(scylla_rest_client& client,
-                            const table_filter& is_included,
-                            bool human_readable) {
+template<typename Writer>
+void table_stats_print(scylla_rest_client& client,
+                       const table_filter& is_included,
+                       bool human_readable) {
     // {
     //     'total_number_of_tables': ...,
     //     'keyspace1' : {
@@ -1974,63 +1919,28 @@ void table_stats_print_json(scylla_rest_client& client,
     //     }
     //     # ...
     // }
-    rjson::streaming_writer writer;
-    writer.StartObject();
-    writer.Key("total_number_of_tables");
-    writer.Write(client.get("/column_family/").GetArray().Size());
+    Writer writer(std::cout);
+    auto keyspaces_out = writer.map();
+    keyspaces_out.add_item("total_number_of_tables",
+                           client.get("/column_family/").GetArray().Size());
     for (auto& [keyspace_name, table_names] : get_ks_to_cfs(client)) {
         keyspace_stats keyspace;
         for (auto& table_name : table_names) {
             keyspace.add(table_metrics(client, keyspace_name, table_name),
                          is_included(keyspace_name, table_name));
         }
-        writer.Key(keyspace_name);
-        writer.StartObject();
-        dump_map_to_json(writer, keyspace.to_map());
-        writer.Key("tables");
-        writer.StartObject();
+        auto ks_out = keyspaces_out.add_map(keyspace_name);
+        for (auto& [key, value] : keyspace.to_map()) {
+            ks_out->add_item(key, value);
+        }
+        auto cfs_out = ks_out->add_map("tables");
         for (auto& table : keyspace.tables) {
-            writer.Key(table.name());
-            writer.StartObject();
-            dump_map_to_json(writer, table.to_map(human_readable));
-            writer.EndObject();
+            auto cf_out = cfs_out->add_map(table.name());
+            for (auto& [key, value] : table.to_map(human_readable)) {
+                cf_out->add_item(key, value);
+            }
         }
-        writer.EndObject();
-        writer.EndObject();
     }
-    writer.EndObject();
-}
-
-void table_stats_print_yaml(scylla_rest_client& client,
-                            const table_filter& is_included,
-                            bool human_readable) {
-    // the structure of generated yaml is identical to the one generated by
-    // table_stats_print_json()
-    YAML::Emitter emitter(std::cout);
-    emitter << YAML::BeginMap;
-    emitter << YAML::Key << "total_number_of_tables";
-    emitter << YAML::Value << client.get("/column_family/").GetArray().Size();
-    for (auto& [keyspace_name, table_names] : get_ks_to_cfs(client)) {
-        keyspace_stats keyspace;
-        for (auto& table_name : table_names) {
-            keyspace.add(table_metrics(client, keyspace_name, table_name),
-                         is_included(keyspace_name, table_name));
-        }
-        emitter << YAML::Key << keyspace_name;
-        emitter << YAML::BeginMap;
-        dump_map_to_yaml(emitter, keyspace.to_map());
-        emitter << YAML::Key << "tables";
-        emitter << YAML::BeginMap;
-        for (auto& table : keyspace.tables) {
-            emitter << YAML::Key << table.name();
-            emitter << YAML::BeginMap;
-            dump_map_to_yaml(emitter, table.to_map(human_readable));
-            emitter << YAML::EndMap;
-        }
-        emitter << YAML::EndMap;
-        emitter << YAML::EndMap;
-    }
-    emitter << YAML::EndMap;
 }
 
 void table_stats_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -2043,9 +1953,9 @@ void table_stats_operation(scylla_rest_client& client, const bpo::variables_map&
     const auto format = vm["format"].as<sstring>();
     const auto human_readable = vm["human-readable"].as<bool>();
     if (format == "json") {
-        table_stats_print_json(client, is_included, human_readable);
+        table_stats_print<json_writer>(client, is_included, human_readable);
     } else if (format == "yaml") {
-        table_stats_print_yaml(client, is_included, human_readable);
+        table_stats_print<yaml_writer>(client, is_included, human_readable);
     } else {
         table_stats_print_plain(client, is_included, human_readable);
     }
