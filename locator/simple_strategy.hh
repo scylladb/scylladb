@@ -20,7 +20,7 @@ struct simple_strategy_traits : public abstract_replication_strategy_traits {
 
 class simple_strategy : public abstract_replication_strategy {
 public:
-    simple_strategy(replication_strategy_params params);
+    simple_strategy(const topology&, replication_strategy_params params);
     virtual ~simple_strategy() {};
     virtual size_t get_replication_factor(const token_metadata& tm) const override;
     virtual void validate_options(const gms::feature_service&) const override;

@@ -41,7 +41,7 @@ network_topology_strategy_traits::network_topology_strategy_traits(const replica
     )
 {}
 
-network_topology_strategy::network_topology_strategy(replication_strategy_params params) :
+network_topology_strategy::network_topology_strategy(const topology& topology, replication_strategy_params params) :
         abstract_replication_strategy(network_topology_strategy_traits(params), params) {
     auto opts = _config_options;
     process_tablet_options(params);

@@ -20,7 +20,7 @@ simple_strategy_traits::simple_strategy_traits(const replication_strategy_params
     : abstract_replication_strategy_traits(replication_strategy_type::simple)
 {}
 
-simple_strategy::simple_strategy(replication_strategy_params params) :
+simple_strategy::simple_strategy(const topology&, replication_strategy_params params) :
         abstract_replication_strategy(simple_strategy_traits(params), params) {
     for (auto& config_pair : _config_options) {
         auto& key = config_pair.first;

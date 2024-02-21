@@ -17,7 +17,7 @@ local_strategy_traits::local_strategy_traits(const replication_strategy_params&)
     : abstract_replication_strategy_traits(replication_strategy_type::local, local::yes)
 {}
 
-local_strategy::local_strategy(replication_strategy_params params) :
+local_strategy::local_strategy(const topology&, replication_strategy_params params) :
         abstract_replication_strategy(local_strategy_traits(params), params) {
     _natural_endpoints_depend_on_token = false;
 }

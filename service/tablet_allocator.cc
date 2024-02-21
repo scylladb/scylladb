@@ -1145,9 +1145,9 @@ public:
 
     void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
         locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
-        auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
+        auto tm = _db.get_shared_token_metadata().get();
+        auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), tm->get_topology(), params);
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
-            auto tm = _db.get_shared_token_metadata().get();
             auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, _config.initial_tablets_scale).get();
             muts.emplace_back(tablet_map_to_mutation(map, s.id(), s.keypace_name(), s.cf_name(), ts).get());
         }

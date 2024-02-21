@@ -21,7 +21,7 @@ struct everywhere_replication_strategy_traits : public abstract_replication_stra
 
 class everywhere_replication_strategy : public abstract_replication_strategy {
 public:
-    everywhere_replication_strategy(replication_strategy_params params);
+    everywhere_replication_strategy(const topology&, replication_strategy_params params);
 
     virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
 

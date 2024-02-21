@@ -42,9 +42,9 @@ abstract_replication_strategy::abstract_replication_strategy(
         , _config_options(params.options)
 {}
 
-abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params) {
+abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, const topology& topology, replication_strategy_params params) {
     try {
-        return strategy_class_registry::create(strategy_name, std::move(params));
+        return strategy_class_registry::create(strategy_name, topology, std::move(params));
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
     }
@@ -64,7 +64,7 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
                                                                   const gms::feature_service& fs,
                                                                   const topology& topology)
 {
-    auto strategy = create_replication_strategy(strategy_name, params);
+    auto strategy = create_replication_strategy(strategy_name, topology, params);
     strategy->validate_options(fs);
     auto expected = strategy->recognized_options(topology);
     if (expected) {

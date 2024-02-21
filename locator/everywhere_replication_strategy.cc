@@ -19,7 +19,7 @@ everywhere_replication_strategy_traits::everywhere_replication_strategy_traits(c
     : abstract_replication_strategy_traits(replication_strategy_type::everywhere_topology)
 {}
 
-everywhere_replication_strategy::everywhere_replication_strategy(replication_strategy_params params) :
+everywhere_replication_strategy::everywhere_replication_strategy(const topology&, replication_strategy_params params) :
         abstract_replication_strategy(everywhere_replication_strategy_traits(params), params) {
     _natural_endpoints_depend_on_token = false;
 }
