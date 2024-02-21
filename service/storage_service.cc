@@ -6227,6 +6227,11 @@ future<sstring> storage_service::get_removal_status() {
 }
 
 future<> storage_service::force_remove_completion() {
+    if (raft_topology_change_enabled()) {
+        return make_exception_future<>(std::runtime_error("The unsafe nodetool removenode force is not supported anymore"));
+    }
+
+    slogger.warn("The unsafe nodetool removenode force is deprecated and will not be supported in future releases");
     return run_with_no_api_lock([] (storage_service& ss) -> future<> {
         while (!ss._operation_in_progress.empty()) {
             if (ss._operation_in_progress != sstring("removenode")) {
