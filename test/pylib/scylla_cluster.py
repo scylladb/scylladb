@@ -196,6 +196,24 @@ class CqlUpState(Enum):
     CONNECTED = 2,
     QUERIED = 3
 
+
+def merge_options(lhs, rhs):
+    # instead of overriding the options in lhs with the ones in rhs,
+    # try to merge options whose values are list
+
+    # the items in rhs overrides the ones in lhs
+    merged = lhs | rhs
+    for k, a in lhs.items():
+        b = rhs.get(k)
+        if b is None:
+            continue
+        # a was overriden
+        if isinstance(a, list):
+            assert isinstance(b, list), f"'{k}' should be a list, but it is '{b}'"
+            merged[k] = list(dict.fromkeys(a + b))
+    return merged
+
+
 class ScyllaServer:
     """Starts and handles a single Scylla server, managing logs, checking if responsive,
        and cleanup when finished."""
@@ -235,12 +253,12 @@ class ScyllaServer:
         self.config_filename = self.workdir / "conf/scylla.yaml"
         self.property_filename = self.workdir / "conf/cassandra-rackdc.properties"
         # Sum of basic server configuration and the user-provided config options.
-        self.config = make_scylla_conf(
+        default_options = make_scylla_conf(
                 workdir = self.workdir,
                 host_addr = self.ip_addr,
                 seed_addrs = self.seeds,
-                cluster_name = self.cluster_name) \
-            | config_options
+                cluster_name = self.cluster_name)
+        self.config = merge_options(default_options, config_options)
         self.property_file = property_file
         self.append_env = append_env
 
