@@ -471,7 +471,7 @@ struct tablet_routing_info {
 
 /// Split a list of ranges, such that conceptually each input range is
 /// intersected with each tablet range.
-/// Tablets are pre-filtered, slecting only tablets that have a replica on the
+/// Tablets are pre-filtered, selecting only tablets that have a replica on the
 /// given host.
 /// Return the resulting intersections, in order.
 /// The ranges are generated lazily (one at a time).
