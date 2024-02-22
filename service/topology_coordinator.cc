@@ -546,51 +546,62 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return std::tuple{gen_uuid, std::move(guard), std::move(updates.back())};
     }
 
-    // Deletes obsolete CDC generations if there is a clean-up candidate and it can be safely removed.
+    // Deletes obsolete CDC generations. These are the generations that stopped operating more than 24 hours ago.
     //
     // Appends necessary mutations to `updates` and updates the `reason` string.
     future<> clean_obsolete_cdc_generations(
             const group0_guard& guard,
             std::vector<canonical_mutation>& updates,
             sstring& reason) {
-        auto candidate = co_await _sys_ks.get_cdc_generations_cleanup_candidate();
-        if (!candidate) {
+        const auto& committed_gens = _topo_sm._topology.committed_cdc_generations;
+        if (committed_gens.empty()) {
             co_return;
         }
 
-        // We cannot delete the current CDC generation. We must also ensure that timestamps of all deleted
-        // generations are in the past compared to all nodes' clocks. Checking that the clean-up candidate's
-        // timestamp does not exceed now() - 24 h should suffice with a safe reserve. We don't have to check
-        // the timestamps of other CDC generations we are removing because the candidate's is the latest
-        // among them.
+        // If some node can still accept a write to a CDC generation, we cannot delete this generation.
+        // A request coordinator accepts a write to one of the previous generations (the ones that stopped
+        // operating before `now`) if the write's timestamp is higher than `now - 5s` where `now` is
+        // provided by the coordinator's local clock. So, we can safely delete a generation if it
+        // stopped operating more than 5 s ago on all nodes. Since their clocks can be desynchronized,
+        // we delete only generations that stopped operating more than 24 hours ago, which is a safe and
+        // sufficient choice.
         auto ts_upper_bound = db_clock::now() - std::chrono::days(1);
-        utils::get_local_injector().inject("clean_obsolete_cdc_generations_ignore_ts", [&] {
-            ts_upper_bound = candidate->ts;
+        utils::get_local_injector().inject("clean_obsolete_cdc_generations_change_ts_ub", [&] {
+            ts_upper_bound = db_clock::now();
         });
-        if (candidate == _topo_sm._topology.current_cdc_generation_id || candidate->ts > ts_upper_bound) {
+
+        std::optional<std::vector<cdc::generation_id_v2>::const_iterator> first_nonobsolete_gen_it;
+        for (auto it = committed_gens.begin(); it != committed_gens.end() && it->ts <= ts_upper_bound; it++) {
+            if (it + 1 == committed_gens.end() || (it + 1)->ts > ts_upper_bound) {
+                first_nonobsolete_gen_it = it;
+            }
+        }
+        if (!first_nonobsolete_gen_it || *first_nonobsolete_gen_it == committed_gens.begin()) {
             co_return;
         }
 
         auto mut_ts = guard.write_timestamp();
 
-        // Mark the lack of a new clean-up candidate. The current one will be deleted.
-        mutation m = _sys_ks.make_cleanup_candidate_mutation(std::nullopt, mut_ts);
-
-        // Insert a tombstone covering all generations that have time UUID not higher than the candidate.
+        // Insert a tombstone covering all obsolete generations.
         auto s = _db.find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
-        auto id_upper_bound = candidate->id;
+        auto id_upper_bound = (*first_nonobsolete_gen_it)->id;
+        mutation m(s, partition_key::from_singular(*s, cdc::CDC_GENERATIONS_V3_KEY));
         auto range = query::clustering_range::make_ending_with({
-                clustering_key_prefix::from_single_value(*s, timeuuid_type->decompose(id_upper_bound)), true});
+                clustering_key_prefix::from_single_value(*s, timeuuid_type->decompose(id_upper_bound)), false});
         auto bv = bound_view::from_range(range);
         m.partition().apply_delete(*s, range_tombstone{bv.first, bv.second, tombstone{mut_ts, gc_clock::now()}});
         updates.push_back(canonical_mutation(m));
+
+        std::vector<cdc::generation_id_v2> new_committed_gens(*first_nonobsolete_gen_it, committed_gens.end());
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.set_committed_cdc_generations(std::move(new_committed_gens));
+        updates.push_back(builder.build());
 
         reason += ::format("deleted data of CDC generations with time UUID not exceeding {}", id_upper_bound);
     }
 
     // If there are some unpublished CDC generations, publishes the one with the oldest timestamp
-    // to user-facing description tables. Additionally, if there is no clean-up candidate for the CDC
-    // generation data, marks the published generation as a new one.
+    // to user-facing description tables.
     //
     // Appends necessary mutations to `updates` and updates the `reason` string.
     future<> publish_oldest_cdc_generation(
@@ -614,12 +625,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_unpublished_cdc_generations(std::move(new_unpublished_gens));
         updates.push_back(builder.build());
-
-        // If there is no clean-up candidate, the published CDC generation becomes a new one.
-        if (!co_await _sys_ks.get_cdc_generations_cleanup_candidate()) {
-            auto candidate_mutation = _sys_ks.make_cleanup_candidate_mutation(gen_id, guard.write_timestamp());
-            updates.push_back(canonical_mutation(candidate_mutation));
-        }
 
         reason += ::format("published CDC generation with ID {}, ", gen_id);
     }
@@ -1418,7 +1423,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
 
                 // We don't need to add delay to the generation timestamp if this is the first generation.
-                bool add_ts_delay = bool(_topo_sm._topology.current_cdc_generation_id);
+                bool add_ts_delay = !_topo_sm._topology.committed_cdc_generations.empty();
 
                 // Begin the race.
                 // See the large FIXME below.
@@ -1434,14 +1439,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     .id = *cdc_gen_uuid,
                 };
 
-                {
+                if (!_topo_sm._topology.committed_cdc_generations.empty()) {
                     // Sanity check.
                     // This could happen if the topology coordinator's clock is broken.
-                    auto curr_gen_id = _topo_sm._topology.current_cdc_generation_id;
-                    if (curr_gen_id && curr_gen_id->ts >= cdc_gen_ts) {
+                    auto last_committed_gen_id = _topo_sm._topology.committed_cdc_generations.back();
+                    if (last_committed_gen_id.ts >= cdc_gen_ts) {
                         on_internal_error(rtlogger, ::format(
                             "new CDC generation has smaller timestamp than the previous one."
-                            " Old generation ID: {}, new generation ID: {}", *curr_gen_id, cdc_gen_id));
+                            " Old generation ID: {}, new generation ID: {}", last_committed_gen_id, cdc_gen_id));
                     }
                 }
 
@@ -1468,8 +1473,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // committed) - they won't coordinate CDC-enabled writes until they reconnect to the
                 // majority and commit.
                 topology_mutation_builder builder(guard.write_timestamp());
-                builder.set_current_cdc_generation_id(cdc_gen_id)
-                       .add_unpublished_cdc_generation(cdc_gen_id);
+                builder.add_new_committed_cdc_generation(cdc_gen_id);
                 if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation) {
                     builder.del_global_topology_request();
                     builder.del_transition_state();
@@ -2405,7 +2409,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
 
     builder.set_version(topology::initial_version)
             .set_fence_version(topology::initial_version)
-            .set_current_cdc_generation_id(cdc_gen_id)
+            .add_new_committed_cdc_generation(cdc_gen_id)
             .add_enabled_features(std::move(enabled_features));
 
     // Commit

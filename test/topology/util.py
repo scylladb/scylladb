@@ -200,8 +200,9 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
 
             assert len(row.tokens) == row.num_tokens
 
-        assert topo_res[0].current_cdc_generation_timestamp is not None
-        assert topo_res[0].current_cdc_generation_uuid is not None
+        assert topo_res[0].committed_cdc_generations is not None
+        committed_generations = frozenset(gen[1] for gen in topo_res[0].committed_cdc_generations)
+
         assert topo_res[0].fence_version is not None
         assert topo_res[0].upgrade_state == "done"
 
@@ -217,7 +218,7 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
         assert len(cdc_res) != 0
 
         all_generations = frozenset(row.id for row in cdc_res)
-        assert topo_res[0].current_cdc_generation_uuid in all_generations
+        assert committed_generations.issubset(all_generations)
 
         # Check that the contents fetched from the current host are the same as for other nodes
         assert topo_results[0] == topo_res

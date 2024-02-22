@@ -233,8 +233,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("version", long_type, column_kind::static_column)
             .with_column("fence_version", long_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
-            .with_column("current_cdc_generation_uuid", timeuuid_type, column_kind::static_column)
-            .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
+            .with_column("committed_cdc_generations", set_type_impl::get_instance(cdc_generation_ts_id_type, true), column_kind::static_column)
             .with_column("unpublished_cdc_generations", set_type_impl::get_instance(cdc_generation_ts_id_type, true), column_kind::static_column)
             .with_column("global_topology_request", utf8_type, column_kind::static_column)
             .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
@@ -297,11 +296,6 @@ schema_ptr system_keyspace::cdc_generations_v3() {
              * range when the generation was first created. Together with the set of streams above it fully
              * describes the mapping for this particular range. */
             .with_column("ignore_msb", byte_type)
-            /* The identifier and timestamp of the current clean-up candidate - the next generation to be
-             * removed. If set, the candidate will be removed together with all older generations when it
-             * becomes obsolete. Otherwise, the next published CDC generation will become a new candidate.
-             * This process prevents the CDC generation data from endlessly growing. */
-            .with_column("cleanup_candidate", cdc_generation_ts_id_type, column_kind::static_column)
             .with_version(system_keyspace::generate_schema_version(id))
             .build();
     }();
@@ -2851,36 +2845,28 @@ future<service::topology> system_keyspace::load_topology_state() {
             ret.new_cdc_generation_data_uuid = some_row.get_as<utils::UUID>("new_cdc_generation_data_uuid");
         }
 
-        if (some_row.has("current_cdc_generation_uuid")) {
-            auto gen_uuid = some_row.get_as<utils::UUID>("current_cdc_generation_uuid");
-            if (!some_row.has("current_cdc_generation_timestamp")) {
-                on_internal_error(slogger, format(
-                    "load_topology_state: current CDC generation time UUID ({}) present, but timestamp missing", gen_uuid));
-            }
-            auto gen_ts = some_row.get_as<db_clock::time_point>("current_cdc_generation_timestamp");
-            ret.current_cdc_generation_id = cdc::generation_id_v2 {
-                .ts = gen_ts,
-                .id = gen_uuid
-            };
+        if (some_row.has("committed_cdc_generations")) {
+            ret.committed_cdc_generations = decode_cdc_generations_ids(deserialize_set_column(*topology(), some_row, "committed_cdc_generations"));
+        }
 
+        if (!ret.committed_cdc_generations.empty()) {
             // Sanity check for CDC generation data consistency.
-            {
-                auto gen_rows = co_await execute_cql(
-                    format("SELECT count(range_end) as cnt FROM {}.{} WHERE key = '{}' AND id = ?",
-                           NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
-                    gen_uuid);
-                assert(gen_rows);
-                if (gen_rows->empty()) {
-                    on_internal_error(slogger, format(
-                        "load_topology_state: current CDC generation time UUID ({}) present, but data missing", gen_uuid));
-                }
-                auto cnt = gen_rows->one().get_as<int64_t>("cnt");
-                slogger.debug("load_topology_state: current CDC generation time UUID ({}), loaded {} ranges", gen_uuid, cnt);
+            auto gen_id = ret.committed_cdc_generations.back();
+            auto gen_rows = co_await execute_cql(
+                format("SELECT count(range_end) as cnt FROM {}.{} WHERE key = '{}' AND id = ?",
+                        NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
+                gen_id.id);
+            assert(gen_rows);
+            if (gen_rows->empty()) {
+                on_internal_error(slogger, format(
+                    "load_topology_state: last committed CDC generation time UUID ({}) present, but data missing", gen_id.id));
             }
+            auto cnt = gen_rows->one().get_as<int64_t>("cnt");
+            slogger.debug("load_topology_state: last committed CDC generation time UUID ({}), loaded {} ranges", gen_id.id, cnt);
         } else {
             if (!ret.normal_nodes.empty()) {
                 on_internal_error(slogger,
-                    "load_topology_state: normal nodes present but no current CDC generation ID");
+                    "load_topology_state: normal nodes present but no committed CDC generations");
             }
         }
 
@@ -2997,26 +2983,6 @@ system_keyspace::read_cdc_generation_opt(utils::UUID id) {
     }
 
     co_return cdc::topology_description{std::move(entries)};
-}
-
-future<std::optional<cdc::generation_id_v2>> system_keyspace::get_cdc_generations_cleanup_candidate() {
-    static const auto req = format("SELECT cleanup_candidate FROM {}.{} WHERE key = '{}' LIMIT 1", NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY);
-    auto gen_rows = co_await execute_cql(req);
-    if (!gen_rows->empty() && gen_rows->one().has("cleanup_candidate")) {
-        auto blob = gen_rows->one().get_blob("cleanup_candidate");
-        co_return decode_cdc_generation_id(cdc_generation_ts_id_type->deserialize(blob));
-    }
-    co_return std::nullopt;
-}
-
-mutation system_keyspace::make_cleanup_candidate_mutation(std::optional<cdc::generation_id_v2> value, api::timestamp_type ts) {
-    auto s = cdc_generations_v3();
-    mutation m(s, partition_key::from_singular(*s, cdc::CDC_GENERATIONS_V3_KEY));
-    data_value dv = value
-        ? make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({value->ts, timeuuid_native_type{value->id}}))
-        : data_value::make_null(db::cdc_generation_ts_id_type);
-    m.set_static_cell("cleanup_candidate", dv, ts);
-    return m;
 }
 
 future<> system_keyspace::sstables_registry_create_entry(sstring location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) {
