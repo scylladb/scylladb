@@ -189,7 +189,10 @@ class ManagerClient():
         data = {"expected_error": expected_error}
         await self.client.put_json(f"/cluster/server/{server_id}/start", data)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
-        self._driver_update()
+        if self.cql:
+            self._driver_update()
+        else:
+            await self.driver_connect()
 
     async def server_restart(self, server_id: ServerNum, wait_others: int = 0,
                              wait_interval: float = 45) -> None:
@@ -299,7 +302,7 @@ class ManagerClient():
         logger.debug("ManagerClient added %s", s_info)
         if self.cql:
             self._driver_update()
-        else:
+        elif start:
             await self.driver_connect()
         return s_info
 
@@ -339,7 +342,7 @@ class ManagerClient():
         logger.debug("ManagerClient added %s", s_infos)
         if self.cql:
             self._driver_update()
-        else:
+        elif start:
             await self.driver_connect()
         return s_infos
 
