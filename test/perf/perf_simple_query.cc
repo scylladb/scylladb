@@ -427,6 +427,12 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
                 .build();
     }).get();
 
+    std::cout << "Disabling auto compaction" << std::endl;
+    env.db().invoke_on_all([] (auto& db) {
+        auto& cf = db.find_column_family("ks", "cf");
+        return cf.disable_auto_compaction();
+    }).get();
+
     switch (cfg.mode) {
     case test_config::run_mode::read:
         return test_read(env, cfg);
