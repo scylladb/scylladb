@@ -597,31 +597,28 @@ public:
 
         std::unordered_map<host_id, node_load> nodes;
         std::unordered_set<host_id> nodes_to_drain;
-        topo.for_each_node([&] (const locator::node* node_ptr) {
-            if (node_ptr->dc() != dc) {
-                return;
-            }
-            bool is_drained = node_ptr->get_state() == locator::node::state::being_decommissioned
-                              || node_ptr->get_state() == locator::node::state::being_removed
-                              || node_ptr->get_state() == locator::node::state::being_replaced;
-            if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
-                node_load& load = nodes[node_ptr->host_id()];
-                load.id = node_ptr->host_id();
-                load.shard_count = node_ptr->get_shard_count();
+        for (const locator::node& node : topo.get_inventory().at(dc).nodes) {
+            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
+                              || node.get_state() == locator::node::state::being_removed
+                              || node.get_state() == locator::node::state::being_replaced;
+            if (node.get_state() == locator::node::state::normal || is_drained) {
+                node_load& load = nodes[node.host_id()];
+                load.id = node.host_id();
+                load.shard_count = node.get_shard_count();
                 load.shards.resize(load.shard_count);
                 if (!load.shard_count) {
-                    throw std::runtime_error(format("Shard count of {} not found in topology", node_ptr->host_id()));
+                    throw std::runtime_error(format("Shard count of {} not found in topology", node.host_id()));
                 }
                 if (is_drained) {
-                    lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc->name);
-                    nodes_to_drain.emplace(node_ptr->host_id());
-                } else if (node_ptr->is_excluded()) {
+                    lblogger.info("Will drain node {} ({}) from DC {}", node.host_id(), node.get_state(), dc->name);
+                    nodes_to_drain.emplace(node.host_id());
+                } else if (node.is_excluded()) {
                     // Excluded nodes should not be chosen as targets for migration.
-                    lblogger.debug("Ignoring excluded node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
-                    nodes.erase(node_ptr->host_id());
+                    lblogger.debug("Ignoring excluded node {}: state={}", node.host_id(), node.get_state());
+                    nodes.erase(node.host_id());
                 }
             }
-        });
+        }
 
         if (nodes.empty()) {
             lblogger.debug("No nodes to balance.");
