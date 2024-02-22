@@ -1694,6 +1694,21 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
 
     sstring kn_msg;
 
+    auto split_kt = [] (const std::string_view kt) -> std::optional<std::pair<sstring, sstring>> {
+        std::vector<sstring> components;
+        boost::split(components, kt, boost::algorithm::is_any_of("/"));
+        if (components.size() == 2) {
+            return std::pair(components[0], components[1]);
+        }
+        components.clear();
+        boost::split(components, kt, boost::algorithm::is_any_of("."));
+        if (components.size() == 2) {
+            return std::pair(components[0], components[1]);
+        }
+        return {};
+    };
+
+    std::vector<sstring> kt_list;
     if (vm.count("keyspace-table-list")) {
         if (vm.count("table")) {
             throw std::invalid_argument("when specifying the keyspace-table list for a snapshot, you should not specify table(s)");
@@ -1703,40 +1718,28 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
         }
 
         const auto kt_list_str = vm["keyspace-table-list"].as<sstring>();
-        std::vector<sstring> kt_list;
         boost::split(kt_list, kt_list_str, boost::algorithm::is_any_of(","));
+    } else if (vm.count("keyspaces")) {
+        kt_list = vm["keyspaces"].as<std::vector<sstring>>();
 
-        std::vector<sstring> components;
-        for (const auto& kt : kt_list) {
-            components.clear();
-            boost::split(components, kt, boost::algorithm::is_any_of("."));
-            if (components.size() != 2) {
-                throw std::invalid_argument(fmt::format("invalid keyspace.table: {}, keyspace and table must be separated by exactly one dot", kt));
-            }
+        if (kt_list.size() > 1 && vm.count("table")) {
+            throw std::invalid_argument("when specifying the table for the snapshot, you must specify one and only one keyspace");
         }
+    }
 
-        if (kt_list.size() == 1) {
-            params["kn"] = components[0];
-            params["cf"] = components[1];
-            kn_msg = format("{}.{}", params["kn"], params["cf"]);
-        } else {
-            params["kn"] = kt_list_str;
-        }
+    if (kt_list.empty()) {
+        kn_msg = "all keyspaces";
     } else {
-        if (vm.count("keyspaces")) {
-            const auto keyspaces = vm["keyspaces"].as<std::vector<sstring>>();
-
-            if (keyspaces.size() > 1 && vm.count("table")) {
-                throw std::invalid_argument("when specifying the table for the snapshot, you must specify one and only one keyspace");
-            }
-
-            params["kn"] = fmt::to_string(fmt::join(keyspaces.begin(), keyspaces.end(), ","));
+        if (kt_list.size() == 1 && split_kt(kt_list.front())) {
+            auto res = split_kt(kt_list.front());
+            params["kn"] = std::move(res->first);
+            params["cf"] = std::move(res->second);
+            kn_msg = kt_list.front();
         } else {
-            kn_msg = "all keyspaces";
-        }
-
-        if (vm.count("table")) {
-            params["cf"] = vm["table"].as<sstring>();
+            params["kn"] = fmt::to_string(fmt::join(kt_list.begin(), kt_list.end(), ","));
+            if (vm.count("table")) {
+                params["cf"] = vm["table"].as<sstring>();
+            }
         }
     }
 
