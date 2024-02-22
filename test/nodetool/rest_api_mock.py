@@ -45,7 +45,7 @@ class expected_request:
     def __init__(self, method: str, path: str, params: dict = {}, multiple: int = ONE,
                  response: Dict[str, Any] = None, response_status: int = 200, hit: int = 0):
         self.method = method
-        self.path = path
+        self.path = path.rstrip("/")
         self.params = params
         self.multiple = multiple
         self.response = response
@@ -106,7 +106,7 @@ class rest_server():
 
     @staticmethod
     def _request_key(method, path):
-        return f"{method}:{path}"
+        return f"{method}:{path.rstrip('/')}"
 
     async def get_expected_requests(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         return aiohttp.web.json_response([r.as_json() for rl in self.expected_requests.values() for r in rl])
