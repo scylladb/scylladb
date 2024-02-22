@@ -255,17 +255,20 @@ class RandomTable():
 
 class RandomTables():
     """A list of managed random tables"""
+
     def __init__(self, test_name: str, manager: ManagerClient, keyspace: str,
-                 replication_factor: int):
+                 replication_factor: int, dc_replication_factor: dict[str, int] = None):
+        keyspace_query = f"CREATE KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : {replication_factor}}}"
         self.test_name = test_name
         self.manager = manager
         self.keyspace = keyspace
         self.tables: List[RandomTable] = []
         self.removed_tables: List[RandomTable] = []
         assert self.manager.cql is not None
-        self.manager.cql.execute(f"CREATE KEYSPACE {keyspace} WITH REPLICATION = "
-                                 "{ 'class' : 'NetworkTopologyStrategy', "
-                                 f"'replication_factor' : {replication_factor} }}")
+        if dc_replication_factor is not None:
+            for key, val in dc_replication_factor.items():
+                keyspace_query = keyspace_query[:-1] + f",'{key}': {val}}}"
+        self.manager.cql.execute(keyspace_query)
 
     async def add_tables(self, ntables: int = 1, ncolumns: int = 5, if_not_exists: bool = False) -> None:
         """Add random tables to the list.
