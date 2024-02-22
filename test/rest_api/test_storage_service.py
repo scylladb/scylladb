@@ -453,10 +453,17 @@ def test_range_to_endpoint_map_tablets_disabled_keyspace_param_only(cql, this_dc
         resp = rest_api.send("GET", f"storage_service/range_to_endpoint_map/{keyspace}")
         resp.raise_for_status()
 
-def test_describe_ring(cql, this_dc, rest_api):
+def test_describe_ring(cql, this_dc, rest_api, has_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
-        resp = rest_api.send("GET", f"storage_service/describe_ring/{keyspace}")
-        resp.raise_for_status()
+        if not has_tablets: # For keyspaces with tablets table must be specified.
+            resp = rest_api.send("GET", f"storage_service/describe_ring/{keyspace}")
+            resp.raise_for_status()
+
+        schema = 'p int, v text, primary key (p)'
+        with new_test_table(cql, keyspace, schema) as t0:
+            table = t0.split('.')[1]
+            resp = rest_api.send("GET", f"storage_service/describe_ring/{keyspace}", params={ "table": table })
+            resp.raise_for_status()
 
 def test_storage_service_keyspace_cleanup(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
@@ -490,8 +497,9 @@ def test_storage_service_keyspace_cleanup(cql, this_dc, rest_api):
                 resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}")
                 resp.raise_for_status()
 
-def test_storage_service_keyspace_cleanup_with_no_owned_ranges(cql, this_dc, rest_api):
-    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+def test_storage_service_keyspace_cleanup_with_no_owned_ranges(cql, this_dc, rest_api, test_keyspace_vnodes):
+        # FIXME: Fix indentation.
+        keyspace = test_keyspace_vnodes
         schema = 'p int, v text, primary key (p)'
         with new_test_table(cql, keyspace, schema) as t0:
             stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
@@ -574,11 +582,12 @@ def test_storage_service_system_keyspace_repair(rest_api):
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
 def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
-        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
+        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as t0:
+            table = t0.split(".")[1]
             resp = rest_api.send("GET", f"storage_service/natural_endpoints/{keyspace}", params={"cf": table, "key": 1})
             resp.raise_for_status()
 
-            assert resp == [rest_api.host]
+            assert resp.json() == [rest_api.host]
 
 def test_range_to_endpoint_map_tablets_enabled_keyspace_param_only(cql,  rest_api, skip_without_tablets):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 } AND TABLETS = { 'enabled': true }") as keyspace:
