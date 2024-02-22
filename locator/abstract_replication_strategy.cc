@@ -233,7 +233,7 @@ insert_token_range_to_sorted_container_while_unwrapping(
 }
 
 dht::token_range_vector
-vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iteration(bool&, const inet_address&)> consider_range_for_endpoint) const {
+vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iteration(bool&, const node*)> consider_range_for_endpoint) const {
     dht::token_range_vector ret;
     const auto& tm = *_tmptr;
     const auto& sorted_tokens = tm.sorted_tokens();
@@ -243,7 +243,7 @@ vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iterati
     auto prev_tok = sorted_tokens.back();
     for (const auto& tok : sorted_tokens) {
         bool add_range = false;
-        for_each_natural_endpoint_until(tok, [&] (const inet_address& ep) {
+        for_each_natural_node_until(tok, [&] (const node* ep) {
             return consider_range_for_endpoint(add_range, ep);
         });
         if (add_range) {
@@ -259,8 +259,8 @@ vnode_effective_replication_map::get_ranges(inet_address ep) const {
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
     // Add the range if `ep` is found in the token's natural endpoints
-    return do_get_ranges([ep] (bool& add_range, const inet_address& e) {
-        if ((add_range = (e == ep))) {
+    return do_get_ranges([ep] (bool& add_range, const node* node) {
+        if ((add_range = (node->endpoint() == ep))) {
             // stop iteration a match is found
             return stop_iteration::yes;
         }
@@ -310,8 +310,8 @@ vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
     // in each token natural endpoints.
     // Add the range if `ep` is the primary replica in the token's natural endpoints.
     // The primary replica is first in the natural endpoints list.
-    return do_get_ranges([ep] (bool& add_range, const inet_address& e) {
-        add_range = (e == ep);
+    return do_get_ranges([ep] (bool& add_range, const node* node) {
+        add_range = (node->endpoint() == ep);
         // stop the iteration once the first node was considered.
         return stop_iteration::yes;
     });
@@ -320,21 +320,20 @@ vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
 dht::token_range_vector
 vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
     const topology& topo = _tmptr->get_topology();
-    sstring local_dc = topo.get_datacenter(ep);
-    auto dc_endpoints_map = topo.get_datacenter_endpoints();
-    const auto& local_dc_nodes = dc_endpoints_map.at(local_dc);
+    const auto* of_node = topo.find_node(ep);
+    const auto* local_dc = of_node->dc();
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
     // Add the range if `ep` is the datacenter primary replica in the token's natural endpoints.
     // The primary replica in each datacenter is determined by the natural endpoints list order.
-    return do_get_ranges([ep, local_dc_nodes = std::move(local_dc_nodes)] (bool& add_range, const inet_address& e) {
+    return do_get_ranges([local_dc, of_node] (bool& add_range, const auto* node) {
         // Unlike get_primary_ranges() which checks if ep is the first
         // owner of this range, here we check if ep is the first just
         // among nodes which belong to the local dc of ep.
-        if (!local_dc_nodes.contains(e)) {
+        if (node->dc() != local_dc) {
             return stop_iteration::no;
         }
-        add_range = (e == ep);
+        add_range = (node == of_node);
         // stop the iteration once the first node contained the local datacenter was considered.
         return stop_iteration::yes;
     });
@@ -497,6 +496,26 @@ auto vnode_effective_replication_map::clone_data_gently() const -> future<std::u
     result->dirty_endpoints = _dirty_endpoints;
 
     co_return std::move(result);
+}
+
+const host_id_vector_replica_set& vnode_effective_replication_map::do_get_natural_hosts(const token& tok,
+    bool is_vnode) const
+{
+    const token& key_token = _rs->natural_endpoints_depend_on_token()
+        ? (is_vnode ? tok : _tmptr->first_token(tok))
+        : default_replication_map_key;
+    const auto it = _replication_map.find(key_token);
+    return it->second;
+}
+
+stop_iteration vnode_effective_replication_map::for_each_natural_node_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const node*)>& func) const {
+    const auto& topology = _tmptr->get_topology();
+    for (const auto& host_id : do_get_natural_hosts(vnode_tok, true)) {
+        if (func(topology.find_node(host_id)) == stop_iteration::yes) {
+            return stop_iteration::yes;
+        }
+    }
+    return stop_iteration::no;
 }
 
 inet_address_vector_replica_set vnode_effective_replication_map::do_get_natural_endpoints(const token& tok,

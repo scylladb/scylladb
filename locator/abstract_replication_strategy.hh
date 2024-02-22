@@ -403,7 +403,10 @@ public:
     std::unordered_set<locator::host_id> get_all_pending_nodes() const;
 
 private:
-    dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
+    dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const node* natural_endpoint)> consider_range_for_endpoint) const;
+    const host_id_vector_replica_set& do_get_natural_hosts(const token& tok, bool is_vnode) const;
+    stop_iteration for_each_natural_node_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const node*)>& func) const;
+
     inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
     stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
 
