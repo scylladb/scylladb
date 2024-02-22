@@ -1740,7 +1740,7 @@ struct keyspace_stats {
     uint64_t pending_flushes = 0;
     std::vector<table_metrics> tables;
 
-    void add(table_metrics&& metrics, bool is_included) {
+    void add(table_metrics&& metrics) {
         auto write_hist = metrics.latency_histogram("write_latency");
         if (write_hist.count > 0) {
             write_count += write_hist.count;
@@ -1752,9 +1752,7 @@ struct keyspace_stats {
             total_read_time += metrics.read_latency();
         }
         pending_flushes += metrics.pending_flushes();
-        if (is_included) {
-            tables.push_back(std::move(metrics));
-        }
+        tables.push_back(std::move(metrics));
     }
     double read_latency() const {
         if (read_count == 0) {
@@ -1804,9 +1802,11 @@ class table_filter {
             }
             auto first = s.substr(0, delim);
             auto [ks, inserted] = filter.try_emplace(first);
-            auto second = s.substr(delim);
-            if (!second.empty()) {
-                ks->second.insert(second);
+            if (delim != s.npos) {
+                auto second = s.substr(++delim);
+                if (!second.empty()) {
+                    ks->second.insert(second);
+                }
             }
         }
         return filter;
@@ -1852,8 +1852,12 @@ void table_stats_print_plain(scylla_rest_client& client,
     for (auto& [keyspace_name, table_names] : get_ks_to_cfs(client)) {
         keyspace_stats keyspace;
         for (auto& table_name : table_names) {
-            keyspace.add(table_metrics(client, keyspace_name, table_name),
-                         is_included(keyspace_name, table_name));
+            if (is_included(keyspace_name, table_name)) {
+                keyspace.add(table_metrics(client, keyspace_name, table_name));
+            }
+        }
+        if (keyspace.tables.empty()) {
+            continue;
         }
         fmt::print("Keyspace : {}\n", keyspace_name);
         fmt::print("\tRead Count: {}\n", keyspace.read_count);
@@ -1895,8 +1899,9 @@ void table_stats_print(scylla_rest_client& client,
     for (auto& [keyspace_name, table_names] : get_ks_to_cfs(client)) {
         keyspace_stats keyspace;
         for (auto& table_name : table_names) {
-            keyspace.add(table_metrics(client, keyspace_name, table_name),
-                         is_included(keyspace_name, table_name));
+            if (is_included(keyspace_name, table_name)) {
+                keyspace.add(table_metrics(client, keyspace_name, table_name));
+            }
         }
         auto ks_out = keyspaces_out.add_map(keyspace_name);
         for (auto& [key, value] : keyspace.to_map()) {
