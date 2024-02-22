@@ -133,21 +133,6 @@ void path::check_depth_limit() {
     }
 }
 
-std::ostream& operator<<(std::ostream& os, const path& p) {
-    os << p.root();
-    for (const auto& op : p.operators()) {
-        std::visit(overloaded_functor {
-            [&] (const std::string& member) {
-                os << '.' << member;
-            },
-            [&] (unsigned index) {
-                os << '[' << index << ']';
-            }
-        }, op);
-    }
-    return os;
-}
-
 } // namespace parsed
 
 // The following resolve_*() functions resolve references in parsed
@@ -756,3 +741,20 @@ rjson::value calculate_value(const parsed::set_rhs& rhs,
 }
 
 } // namespace alternator
+
+auto fmt::formatter<alternator::parsed::path>::format(const alternator::parsed::path& p, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "{}", p.root());
+    for (const auto& op : p.operators()) {
+        std::visit(overloaded_functor {
+            [&] (const std::string& member) {
+                out = fmt::format_to(out, ".{}", member);
+            },
+            [&] (unsigned index) {
+                out = fmt::format_to(out, "[{}]", index);
+            }
+        }, op);
+    }
+    return out;
+}
