@@ -3111,7 +3111,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
         for (const auto& [dc, endpoints_map] : datacenter_endpoints) {
             for (auto endpoint : endpoints_map) {
                 // calculate the ownership with replication and add the endpoint to the final ownership map
-                try {
+                // FIXME: indentation
                     float ownership = 0.0f;
                     auto ranges = ss.get_ranges_for_endpoint(erm, endpoint);
                     for (auto& r : ranges) {
@@ -3130,10 +3130,6 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                         }
                     }
                     final_ownership[endpoint] = ownership;
-                }  catch (replica::no_such_keyspace&) {
-                    // In case ss.get_ranges_for_endpoint(keyspace_name, endpoint) is not found, just mark it as zero and continue
-                    final_ownership[endpoint] = 0;
-                }
             }
         }
         co_return final_ownership;
