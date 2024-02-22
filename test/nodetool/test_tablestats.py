@@ -408,8 +408,14 @@ class keyspace_stats:
         return m
 
 
-@pytest.mark.parametrize('command', ['tablestats', 'cfstats'])
-def test_plain_text_output(request, nodetool, command):
+@pytest.mark.parametrize('command,args,tables_to_print',
+                         [
+                             ('tablestats', [], ['keyspace1.standard1', 'system.local']),
+                             ('tablestats', ['keyspace1'], ['keyspace1.standard1']),
+                             ('tablestats', ['keyspace1.standard1'], ['keyspace1.standard1']),
+                             ('cfstats', [], ['keyspace1.standard1', 'system.local']),
+                         ])
+def test_plain_text_output(request, nodetool, command, args, tables_to_print):
     is_scylla = request.config.getoption("nodetool") == 'scylla'
 
     tables = [Table('keyspace1', 'standard1', 'ColumnFamilies'),
@@ -419,19 +425,23 @@ def test_plain_text_output(request, nodetool, command):
         multiple=expected_request.MULTIPLE,
         response=response_from_list(['ks', 'cf', 'type'], tables))]
 
+    total_nr_tables = 0
     keyspaces = defaultdict(lambda: keyspace_stats(is_scylla))
     for table in tables:
+        total_nr_tables += 1
         stats = table_stats(table.ks, table.cf)
-        if not is_scylla:
-            # scylla tallies the table stats afterwards
-            expected_requests += stats.expected_summary_requests(is_scylla)
-        keyspaces[table.ks].add_table(stats)
+        included = f'{stats.ks}.{stats.cf}' in tables_to_print
+        if included:
+            if not is_scylla:
+                # scylla tallies the table stats afterwards
+                expected_requests += stats.expected_summary_requests(is_scylla)
+            ks = keyspaces[table.ks]
+            ks.add_table(stats)
 
     if not is_scylla:
         expected_requests.append(expected_request(
             'GET', '/storage_service/keyspaces',
             response=sorted(keyspaces.keys())))
-    total_nr_tables = sum(len(ks.tables) for ks in keyspaces.values())
     expected_output = f'''\
 Total number of tables: {total_nr_tables}
 ----------------
@@ -455,7 +465,7 @@ Keyspace : {ks_name}
             expected_output += indent(table.format(), '\t\t')
         expected_output += '----------------\n'
 
-    actual_output = nodetool(command, expected_requests=expected_requests)
+    actual_output = nodetool(command, *args, expected_requests=expected_requests)
     assert actual_output == expected_output
 
 
