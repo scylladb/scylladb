@@ -10,14 +10,7 @@
 
 #include "streaming/stream_request.hh"
 
-namespace streaming {
-
-std::ostream& operator<<(std::ostream& os, const stream_request& sr) {
-    os << "[ ks = " << sr.keyspace << " cf =  ";
-    for (auto& cf : sr.column_families) {
-        os << cf << " ";
-    }
-    return os << "]";
+auto fmt::formatter<streaming::stream_request>::format(const streaming::stream_request& sr, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "[ ks = {} cf = {} ]", sr.keyspace, fmt::join(sr.column_families, " "));
 }
-
-} // namespace streaming;
