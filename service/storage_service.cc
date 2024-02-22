@@ -4420,7 +4420,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
 
     while (true) {
         rtlogger.info("request check_and_repair_cdc_streams, refreshing topology");
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
         auto curr_req = _topology_state_machine._topology.global_request;
         if (curr_req && *curr_req != global_topology_request::new_cdc_generation) {
             // FIXME: replace this with a queue
@@ -4446,7 +4446,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 ::format("request check+repair CDC generation from {}", _group0->group0_server().id()));
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("request check+repair CDC: concurrent operation is detected, retrying.");
             continue;
