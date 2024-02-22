@@ -15,6 +15,7 @@
 #include "schema/schema_builder.hh"
 #include "tools/utils.hh"
 #include "dht/i_partitioner.hh"
+#include "utils/managed_bytes.hh"
 
 using namespace seastar;
 using namespace tools::utils;
@@ -68,7 +69,7 @@ struct serializing_visitor {
 };
 
 void serialize_handler(type_variant type, std::vector<sstring> values, const bpo::variables_map& vm) {
-    fmt::print("{}\n", to_hex(serializing_visitor{values}(type)));
+    fmt::print("{}\n", managed_bytes_view(serializing_visitor{values}(type)));
 }
 
 sstring to_printable_string(const data_type& type, bytes_view value) {
