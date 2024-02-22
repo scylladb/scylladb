@@ -60,6 +60,8 @@ class ManagerClient():
         """Connect to cluster"""
         targets = [server] if server else await self.running_servers()
         servers = [s_info.rpc_address for s_info in targets]
+        # avoids leaking connections if driver wasn't closed before
+        self.driver_close()
         logger.debug("driver connecting to %s", servers)
         self.ccluster = self.con_gen(servers, self.port, self.use_ssl, self.auth_provider)
         self.cql = self.ccluster.connect()
