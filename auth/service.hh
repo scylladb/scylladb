@@ -169,7 +169,7 @@ public:
         return *_role_manager;
     }
 
-    const cql3::query_processor& query_processor() const noexcept {
+    cql3::query_processor& query_processor() const noexcept {
         return _qp;
     }
 
