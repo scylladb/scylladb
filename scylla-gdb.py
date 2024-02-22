@@ -83,7 +83,7 @@ def downcast_vptr(ptr):
     global vtable_symbol_pattern
     global vptr_type
     if vtable_symbol_pattern is None:
-        vtable_symbol_pattern = re.compile('vtable for (.*) \+ ([0-9]+).*')
+        vtable_symbol_pattern = re.compile(r'vtable for (.*) \+ ([0-9]+).*')
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
 
     if not isinstance(ptr, gdb.Value):
@@ -2414,7 +2414,7 @@ def print_tree(root_node,
 
     def print_node(node, is_last_history):
         stems = (" |   ", "     ")
-        branches = (" |-- ", " \-- ")
+        branches = (" |-- ", r" \-- ")
 
         label_lines = formatter(node).rstrip('\n').split('\n')
         prefix_without_branch = ''.join(map(stems.__getitem__, is_last_history[:-1]))
