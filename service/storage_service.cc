@@ -3111,25 +3111,24 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
         for (const auto& [dc, endpoints_map] : datacenter_endpoints) {
             for (auto endpoint : endpoints_map) {
                 // calculate the ownership with replication and add the endpoint to the final ownership map
-                // FIXME: indentation
-                    float ownership = 0.0f;
-                    auto ranges = ss.get_ranges_for_endpoint(erm, endpoint);
-                    for (auto& r : ranges) {
-                        // get_ranges_for_endpoint will unwrap the first range.
-                        // With t0 t1 t2 t3, the first range (t3,t0] will be split
-                        // as (min,t0] and (t3,max]. Skippping the range (t3,max]
-                        // we will get the correct ownership number as if the first
-                        // range were not split.
-                        if (!r.end()) {
-                            continue;
-                        }
-                        auto end_token = r.end()->value();
-                        auto loc = token_ownership.find(end_token);
-                        if (loc != token_ownership.end()) {
-                            ownership += loc->second;
-                        }
+                float ownership = 0.0f;
+                auto ranges = ss.get_ranges_for_endpoint(erm, endpoint);
+                for (auto& r : ranges) {
+                    // get_ranges_for_endpoint will unwrap the first range.
+                    // With t0 t1 t2 t3, the first range (t3,t0] will be split
+                    // as (min,t0] and (t3,max]. Skippping the range (t3,max]
+                    // we will get the correct ownership number as if the first
+                    // range were not split.
+                    if (!r.end()) {
+                        continue;
                     }
-                    final_ownership[endpoint] = ownership;
+                    auto end_token = r.end()->value();
+                    auto loc = token_ownership.find(end_token);
+                    if (loc != token_ownership.end()) {
+                        ownership += loc->second;
+                    }
+                }
+                final_ownership[endpoint] = ownership;
             }
         }
         co_return final_ownership;
