@@ -313,9 +313,9 @@ static size_t random_offset(size_t min, size_t max) {
 // a list of this node's secondary ranges - but also the primary owner of
 // each of those ranges.
 static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary_ranges(
-        const locator::effective_replication_map_ptr& erm,
-        gms::inet_address ep) {
+        const locator::effective_replication_map_ptr& erm) {
     const auto& tm = *erm->get_token_metadata_ptr();
+    const auto& ep = tm.get_topology().my_address();
     const auto& sorted_tokens = tm.sorted_tokens();
     std::vector<std::pair<dht::token_range, gms::inet_address>> ret;
     if (sorted_tokens.empty()) {
@@ -390,8 +390,8 @@ class token_ranges_owned_by_this_shard {
     class ranges_holder_primary {
         const dht::token_range_vector _token_ranges;
      public:
-        ranges_holder_primary(const locator::vnode_effective_replication_map_ptr& erm, gms::gossiper& g, gms::inet_address ep)
-            : _token_ranges(erm->get_primary_ranges(ep)) {}
+        ranges_holder_primary(const locator::vnode_effective_replication_map_ptr& erm, gms::gossiper& g)
+            : _token_ranges(erm->get_primary_ranges()) {}
         std::size_t size() const { return _token_ranges.size(); }
         const dht::token_range& operator[](std::size_t i) const {
             return _token_ranges[i];
@@ -406,8 +406,8 @@ class token_ranges_owned_by_this_shard {
         std::vector<std::pair<dht::token_range, gms::inet_address>> _token_ranges;
         gms::gossiper& _gossiper;
      public:
-        ranges_holder_secondary(const locator::effective_replication_map_ptr& erm, gms::gossiper& g, gms::inet_address ep)
-            : _token_ranges(get_secondary_ranges(erm, ep))
+        ranges_holder_secondary(const locator::effective_replication_map_ptr& erm, gms::gossiper& g)
+            : _token_ranges(get_secondary_ranges(erm))
             , _gossiper(g) {}
         std::size_t size() const { return _token_ranges.size(); }
         const dht::token_range& operator[](std::size_t i) const {
@@ -439,7 +439,7 @@ public:
         :  _s(s)
         , _erm(s->table().get_effective_replication_map())
         , _token_ranges(db.find_keyspace(s->ks_name()).get_vnode_effective_replication_map(),
-                g, _erm->get_topology().my_address())
+                g)
         , _range_idx(random_offset(0, _token_ranges.size() - 1))
         , _end_idx(_range_idx + _token_ranges.size())
     {

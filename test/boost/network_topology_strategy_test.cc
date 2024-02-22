@@ -66,9 +66,10 @@ static void verify_sorted(const dht::token_range_vector& trv) {
 }
 
 static void check_ranges_are_sorted(vnode_effective_replication_map_ptr erm, gms::inet_address ep) {
-    verify_sorted(erm->get_ranges(ep));
-    verify_sorted(erm->get_primary_ranges(ep));
-    verify_sorted(erm->get_primary_ranges_within_dc(ep));
+    const auto* node = erm->get_topology().find_node(ep);
+    verify_sorted(erm->get_ranges(node));
+    verify_sorted(erm->get_primary_ranges(node));
+    verify_sorted(erm->get_primary_ranges_within_dc(node));
 }
 
 void strategy_sanity_check(

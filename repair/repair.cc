@@ -1224,15 +1224,15 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
             // but instead of each range being assigned just one primary owner
             // across the entire cluster, here each range is assigned a primary
             // owner in each of the DCs.
-            ranges = erm.get_primary_ranges_within_dc(my_address);
+            ranges = erm.get_primary_ranges_within_dc();
         } else if (options.data_centers.size() > 0 || options.hosts.size() > 0) {
             throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
         } else {
-            ranges = erm.get_primary_ranges(my_address);
+            ranges = erm.get_primary_ranges();
         }
     } else {
         // get keyspace local ranges
-        ranges = erm.get_ranges(my_address);
+        ranges = erm.get_ranges();
     }
 
     if (!options.data_centers.empty() && !options.hosts.empty()) {
@@ -1715,17 +1715,18 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
     });
 }
 
-future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node_addr, shared_ptr<node_ops_info> ops) {
     assert(this_shard_id() == 0);
     using inet_address = gms::inet_address;
-    return seastar::async([this, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
+    return seastar::async([this, tmptr = std::move(tmptr), leaving_node_addr = std::move(leaving_node_addr), ops] () mutable {
         auto& db = get_db().local();
         auto& topology = tmptr->get_topology();
         auto myip = topology.my_address();
-        const auto leaving_node_id = tmptr->get_host_id(leaving_node);
+        const auto* leaving_node = topology.find_node(leaving_node_addr);
+        const auto leaving_node_id = leaving_node->host_id();
         auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
         auto local_dc = topology.get_datacenter();
-        bool is_removenode = myip != leaving_node;
+        bool is_removenode = topology.this_node() != leaving_node;
         auto op = is_removenode ? "removenode_with_repair" : "decommission_with_repair";
         streaming::stream_reason reason = is_removenode ? streaming::stream_reason::removenode : streaming::stream_reason::decommission;
         size_t nr_ranges_total = 0;
@@ -1749,7 +1750,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             static std::list<gms::inet_address> no_ignore_nodes;
             return ops ? ops->ignore_nodes : no_ignore_nodes;
         };
-        rlogger.info("{}: started with keyspaces={}, leaving_node={}, ignore_nodes={}", op, ks_erms | boost::adaptors::map_keys, leaving_node, get_ignore_nodes());
+        rlogger.info("{}: started with keyspaces={}, leaving_node={}, ignore_nodes={}", op, ks_erms | boost::adaptors::map_keys, *leaving_node, get_ignore_nodes());
         for (const auto& [keyspace_name, erm] : ks_erms) {
             if (!db.has_keyspace(keyspace_name)) {
                 rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
@@ -1759,7 +1760,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             // First get all ranges the leaving node is responsible for
             dht::token_range_vector ranges = erm->get_ranges(leaving_node);
             auto nr_tables = get_nr_tables(db, keyspace_name);
-            rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size() * nr_tables);
+            rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, *leaving_node, ranges.size() * nr_tables);
             size_t nr_ranges_total = ranges.size() * nr_tables;
             size_t nr_ranges_skipped = 0;
             std::unordered_map<dht::token_range, locator::endpoint_set> current_replica_endpoints;
@@ -1864,7 +1865,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                             op, keyspace_name, r, current_eps, new_eps, new_owner));
                 }
                 neighbors_set.erase(myip);
-                neighbors_set.erase(leaving_node);
+                neighbors_set.erase(leaving_node_addr);
                 // Remove nodes in ignore_nodes
                 for (const auto& node : get_ignore_nodes()) {
                     neighbors_set.erase(node);
@@ -1905,9 +1906,9 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             auto nr_ranges_synced = ranges.size();
             sync_data_using_repair(keyspace_name, erm, std::move(ranges), std::move(range_sources), reason, ops).get();
             rlogger.info("{}: finished with keyspace={}, leaving_node={}, nr_ranges={}, nr_ranges_synced={}, nr_ranges_skipped={}",
-                op, keyspace_name, leaving_node, nr_ranges_total, nr_ranges_synced, nr_ranges_skipped);
+                op, keyspace_name, *leaving_node, nr_ranges_total, nr_ranges_synced, nr_ranges_skipped);
         }
-        rlogger.info("{}: finished with keyspaces={}, leaving_node={}", op, ks_erms | boost::adaptors::map_keys, leaving_node);
+        rlogger.info("{}: finished with keyspaces={}, leaving_node={}", op, ks_erms | boost::adaptors::map_keys, *leaving_node);
     });
 }
 

@@ -255,12 +255,12 @@ vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iterati
 }
 
 dht::token_range_vector
-vnode_effective_replication_map::get_ranges(inet_address ep) const {
+vnode_effective_replication_map::get_ranges(const node* of_node) const {
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
     // Add the range if `ep` is found in the token's natural endpoints
-    return do_get_ranges([ep] (bool& add_range, const node* node) {
-        if ((add_range = (node->endpoint() == ep))) {
+    return do_get_ranges([of_node] (bool& add_range, const node* node) {
+        if ((add_range = (node == of_node))) {
             // stop iteration a match is found
             return stop_iteration::yes;
         }
@@ -305,22 +305,20 @@ abstract_replication_strategy::get_ranges(locator::host_id ep, const token_metad
 }
 
 dht::token_range_vector
-vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
+vnode_effective_replication_map::get_primary_ranges(const node* of_node) const {
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
     // Add the range if `ep` is the primary replica in the token's natural endpoints.
     // The primary replica is first in the natural endpoints list.
-    return do_get_ranges([ep] (bool& add_range, const node* node) {
-        add_range = (node->endpoint() == ep);
+    return do_get_ranges([of_node] (bool& add_range, const node* node) {
+        add_range = (node == of_node);
         // stop the iteration once the first node was considered.
         return stop_iteration::yes;
     });
 }
 
 dht::token_range_vector
-vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
-    const topology& topo = _tmptr->get_topology();
-    const auto* of_node = topo.find_node(ep);
+vnode_effective_replication_map::get_primary_ranges_within_dc(const node* of_node) const {
     const auto* local_dc = of_node->dc();
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
