@@ -1215,7 +1215,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     while (true) {
         rtlogger.info("refreshing topology to check if it's synchronized with local metadata");
 
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         if (synchronized()) {
             break;
@@ -1250,7 +1250,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
                 std::move(change), guard, ::format("{}: update topology with local metadata", raft_server.id()));
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("update topology with local metadata:"
                          " concurrent operation is detected, retrying.");
