@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include <ostream>
+#include <fmt/core.h>
 
 namespace streaming {
 
@@ -23,6 +23,8 @@ enum class stream_session_state {
     FAILED,
 };
 
-std::ostream& operator<<(std::ostream& os, const stream_session_state& s);
-
 } // namespace
+
+template <> struct fmt::formatter<streaming::stream_session_state> : fmt::formatter<std::string_view> {
+    auto format(streaming::stream_session_state, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

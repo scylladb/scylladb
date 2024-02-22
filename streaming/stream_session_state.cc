@@ -8,14 +8,12 @@
  */
 
 #include "streaming/stream_session_state.hh"
-#include <ostream>
 #include <map>
-#include <seastar/core/sstring.hh>
 #include "seastarx.hh"
 
 namespace streaming {
 
-static const std::map<stream_session_state, sstring> stream_session_state_names = {
+static const std::map<stream_session_state, std::string_view> stream_session_state_names = {
     {stream_session_state::INITIALIZED,     "INITIALIZED"},
     {stream_session_state::PREPARING,       "PREPARING"},
     {stream_session_state::STREAMING,       "STREAMING"},
@@ -24,9 +22,9 @@ static const std::map<stream_session_state, sstring> stream_session_state_names 
     {stream_session_state::FAILED,          "FAILED"},
 };
 
-std::ostream& operator<<(std::ostream& os, const stream_session_state& s) {
-    os << stream_session_state_names.at(s);
-    return os;
 }
 
+auto fmt::formatter<streaming::stream_session_state>::format(streaming::stream_session_state s, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", streaming::stream_session_state_names.at(s));
 }
