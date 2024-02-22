@@ -349,7 +349,8 @@ class ManagerClient():
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
                           ignore_dead: List[IPAddress] | List[HostID] = list[IPAddress](),
                           expected_error: str | None = None,
-                          wait_removed_dead: bool = True) -> None:
+                          wait_removed_dead: bool = True,
+                          timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Invoke remove node Scylla REST API for a specified server"""
         logger.debug("ManagerClient remove node %s on initiator %s", server_id, initiator_id)
 
@@ -364,25 +365,27 @@ class ManagerClient():
 
         data = {"server_id": server_id, "ignore_dead": ignore_dead, "expected_error": expected_error}
         await self.client.put_json(f"/cluster/remove-node/{initiator_id}", data,
-                                   timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+                                   timeout=timeout)
         self._driver_update()
 
     async def decommission_node(self, server_id: ServerNum,
-                                expected_error: str | None = None) -> None:
+                                expected_error: str | None = None,
+                                timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Tell a node to decommission with Scylla REST API"""
         logger.debug("ManagerClient decommission %s", server_id)
         data = {"expected_error": expected_error}
         await self.client.put_json(f"/cluster/decommission-node/{server_id}", data,
-                                   timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+                                   timeout=timeout)
         self._driver_update()
 
     async def rebuild_node(self, server_id: ServerNum,
-                           expected_error: str | None = None) -> None:
+                           expected_error: str | None = None,
+                           timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Tell a node to rebuild with Scylla REST API"""
         logger.debug("ManagerClient rebuild %s", server_id)
         data = {"expected_error": expected_error}
         await self.client.put_json(f"/cluster/rebuild-node/{server_id}", data,
-                                   timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+                                   timeout=timeout)
         self._driver_update()
 
     async def server_get_config(self, server_id: ServerNum) -> dict[str, object]:
