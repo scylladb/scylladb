@@ -4305,7 +4305,7 @@ future<> storage_service::do_cluster_cleanup() {
     auto& raft_server = _group0->group0_server();
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         auto curr_req = _topology_state_machine._topology.global_request;
         if (curr_req && *curr_req != global_topology_request::cleanup) {
@@ -4333,7 +4333,7 @@ future<> storage_service::do_cluster_cleanup() {
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("cleanup: cluster cleanup requested"));
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("cleanup: concurrent operation is detected, retrying.");
             continue;
