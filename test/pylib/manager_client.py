@@ -18,7 +18,9 @@ from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMe
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, Host
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
-from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import Session as CassandraSession, \
+    ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.auth import AuthProvider
 import aiohttp
@@ -100,6 +102,13 @@ class ManagerClient():
         await self.servers_see_each_other(servers)
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
         return cql, hosts
+
+    @staticmethod
+    def connect_to_node(server: ServerInfo) -> CassandraSession:
+        """Connect cql to the specific node in the cluster"""
+        logger.info(f"Establishing connection to {server.ip_addr}")
+        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([server.ip_addr]))
+        return CassandraCluster([server.ip_addr], execution_profiles={EXEC_PROFILE_DEFAULT: profile}).connect()
 
     # Make driver update endpoints from remote connection
     def _driver_update(self) -> None:

@@ -642,7 +642,8 @@ class ScyllaServer:
             yaml.dump(self.config, config_file)
         if self.property_file:
             with self.property_filename.open('w') as property_file:
-                yaml.dump(self.property_file, property_file)
+                for key, value in self.property_file.items():
+                    property_file.write(f'{key}={value}\n')
 
 
 class ScyllaCluster:
