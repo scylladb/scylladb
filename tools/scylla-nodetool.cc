@@ -1224,9 +1224,6 @@ void print_dc(scylla_rest_client& client,
 }
 
 void ring_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.contains("keyspace")) {
-        throw std::invalid_argument("required parameters are missing: keyspace");
-    }
     bool resolve_ip = vm["resolve-ip"].as<bool>();
 
     std::multimap<std::string_view, std::string_view> endpoints_to_tokens;
@@ -1243,11 +1240,11 @@ void ring_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     // Calculate per-token ownership of the ring
     std::string_view warnings;
     std::map<sstring, float> endpoint_to_ownership;
-    try {
+    if (vm.contains("keyspace")) {
         auto ownership_res = client.get(seastar::format("/storage_service/ownership/{}",
                                                         vm["keyspace"].as<sstring>()));
         endpoint_to_ownership = rjson_to_map<float>(ownership_res);
-    } catch (const api_request_failed&) {
+    } else {
         warnings = "Note: Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless\n";
     }
 
