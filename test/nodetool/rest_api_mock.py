@@ -75,7 +75,9 @@ class expected_request:
         return json.dumps(self.as_json())
 
     def exhausted(self):
-        return self.multiple == self.ANY or (self.multiple >= self.MULTIPLE and self.hit >= self.multiple)
+        return ((self.multiple == self.ONE and self.hit > 0)
+                or self.multiple == self.ANY
+                or (self.multiple >= self.MULTIPLE and self.hit >= self.multiple))
 
 
 def _make_param_value(value):
@@ -136,23 +138,21 @@ class rest_server():
             logger.error(f"unexpected request, expected no request, got {this_req}")
             return aiohttp.web.Response(status=500, text=f"Expected no requests, got {this_req}")
 
-        expected_req = expected_requests[0]
+        expected_req = None
+        expected_req_index = None
+        for i, req in enumerate(expected_requests):
+            if this_req == req:
+                expected_req = req
+                expected_req_index = i
+                break
 
-        while this_req != expected_req:
-            if expected_req.exhausted():
-                logger.info(f"popping multi request {expected_req}")
-                del expected_requests[0]
-                expected_req = expected_requests[0]
-
-                if len(expected_requests) > 0:
-                    expected_req = expected_requests[0]
-                    continue
-
-            logger.error(f"unexpected request\nexpected {expected_req}\ngot      {this_req}")
-            return aiohttp.web.Response(status=500, text=f"Expected {expected_req}, got {this_req}")
+        if expected_req is None:
+            reqs = '\n'.join([str(r) for r in expected_requests])
+            logger.error(f"unexpected request, request {this_req} matches none of the expected requests:\n{reqs}")
+            return aiohttp.web.Response(status=500, text=f"Request {this_req} doesn't match any expected request")
 
         if expected_req.multiple == expected_request.ONE:
-            del expected_requests[0]
+            del expected_requests[expected_req_index]
         else:
             expected_req.hit += 1
 
