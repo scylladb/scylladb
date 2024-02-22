@@ -277,11 +277,11 @@ async def test_misconfigured_storage(manager: ManagerClient, s3_server):
 
 
 @pytest.mark.asyncio
-async def test_memtable_flush_retries(manager: ManagerClient, test_tempdir, s3_server):
+async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, s3_server):
     '''verify that memtable flush doesn't crash in case storage access keys are incorrect'''
 
     print('Spoof the object-store config')
-    local_config = pathlib.Path(test_tempdir) / 'object_storage.yaml'
+    local_config = tmpdir / 'object_storage.yaml'
     MinioServer.create_conf_file(s3_server.address, s3_server.port, 'bad_key', 'bad_secret', 'bad_region', local_config)
 
     orig_config = s3_server.config_file
