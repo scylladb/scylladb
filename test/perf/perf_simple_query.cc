@@ -70,6 +70,7 @@ struct test_config {
     unsigned duration_in_seconds;
     bool counters;
     bool flush_memtables;
+    unsigned memtable_partitions = 0;
     unsigned operations_per_shard = 0;
     bool stop_on_error;
     sstring timeout;
@@ -106,11 +107,16 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
 
 static void create_partitions(cql_test_env& env, test_config& cfg) {
     std::cout << "Creating " << cfg.partitions << " partitions..." << std::endl;
+    unsigned next_flush = (cfg.memtable_partitions > 0 ? cfg.memtable_partitions : cfg.partitions);
     for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
         if (cfg.counters) {
             execute_counter_update_for_key(env, make_key(sequence));
         } else {
             execute_update_for_key(env, make_key(sequence));
+        }
+        if (sequence + 1 >= next_flush) {
+            env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+            next_flush += cfg.memtable_partitions;
         }
     }
 
@@ -527,6 +533,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("tablets", "use tablets")
         ("initial-tablets", bpo::value<unsigned>()->default_value(128), "initial number of tablets")
         ("flush", "flush memtables before test")
+        ("memtable-partitions", bpo::value<unsigned>(), "apply this number of partitions to memtable, then flush")
         ("json-result", bpo::value<std::string>(), "name of the json result file")
         ("enable-cache", bpo::value<bool>()->default_value(true), "enable row cache")
         ("alternator", bpo::value<std::string>(), "use alternator frontend instead of CQL with given write isolation")
@@ -582,6 +589,9 @@ int scylla_simple_query_main(int argc, char** argv) {
             }
             if (app.configuration().contains("operations-per-shard")) {
                 cfg.operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
+            }
+            if (app.configuration().contains("memtable-partitions")) {
+                cfg.memtable_partitions = app.configuration()["memtable-partitions"].as<unsigned>();
             }
             cfg.stop_on_error = app.configuration()["stop-on-error"].as<bool>();
             cfg.timeout = app.configuration()["timeout"].as<std::string>();
