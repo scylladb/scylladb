@@ -279,8 +279,13 @@ class TestSuite(ABC):
                     self.pending_test_count += 1
 
             for p in patterns:
-                if p in t:
-                    pending.add(asyncio.create_task(add_test(shortname, None)))
+                pn = p.split('::', 2)
+                if len(pn) == 1:
+                    if p in t:
+                        pending.add(asyncio.create_task(add_test(shortname, None)))
+                else:
+                    if pn[0] == t:
+                        pending.add(asyncio.create_task(add_test(shortname, pn[1])))
         if len(pending) == 0:
             return
         try:
@@ -923,7 +928,11 @@ class PythonTest(Test):
             # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
-        self.args.append(str(self.suite.suite_path / (self.shortname + ".py")))
+
+        arg = str(self.suite.suite_path / (self.shortname + ".py"))
+        if self.casename is not None:
+            arg += '::' + self.casename
+        self.args.append(arg)
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
