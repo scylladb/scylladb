@@ -3666,7 +3666,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
     utils::UUID request_id;
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         auto it = _topology_state_machine._topology.find(id);
 
@@ -3722,8 +3722,8 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         request_id = guard.new_group0_state_id();
         try {
             // Make non voter during request submission for better HA
-            co_await _group0->make_nonvoters(ignored_ids, _group0_as);
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->make_nonvoters(ignored_ids, _group0_as, raft_timeout{});
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("removenode: concurrent operation is detected, retrying.");
             continue;
