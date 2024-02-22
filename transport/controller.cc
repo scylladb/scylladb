@@ -71,10 +71,6 @@ static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_addres
     co_await cserver.invoke_on_all([addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions] (cql_server& server) {
         return server.listen(addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions);
     });
-
-    logger.info("Starting listening for CQL clients on {} ({}, {})"
-            , addr, creds ? "encrypted" : "unencrypted", is_shard_aware ? "shard-aware" : "non-shard-aware"
-    );
 }
 
 future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver) {
@@ -136,8 +132,12 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
         }
     }
 
-    return parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) {
-        return listen_on_all_shards(cserver, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive, std::nullopt);
+    co_await parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) -> future<> {
+        co_await listen_on_all_shards(cserver, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive, std::nullopt);
+
+        logger.info("Starting listening for CQL clients on {} ({}, {})"
+                , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
+        );
     });
 }
 
@@ -201,6 +201,10 @@ future<> controller::start_listening_on_maintenance_socket(sharded<cql_server>& 
             }
         }
     }
+
+    logger.info("Starting listening for maintenance CQL clients on {} (unencrypted, non-shard-aware)"
+            , addr
+    );
 }
 
 future<> controller::do_start_server() {
