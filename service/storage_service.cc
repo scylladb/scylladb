@@ -4367,7 +4367,7 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
     utils::UUID request_id;
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         auto it = _topology_state_machine._topology.find(raft_server.id());
         if (!it) {
@@ -4400,7 +4400,7 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
         request_id = guard.new_group0_state_id();
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("rebuild: concurrent operation is detected, retrying.");
             continue;
