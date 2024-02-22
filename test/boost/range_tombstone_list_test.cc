@@ -486,7 +486,7 @@ static std::vector<range_tombstone> make_random() {
              */
             start_b = bound_view(start_key, bound_kind::incl_start);
             if (less(end_b, start_b)) {
-                std::cout << "Unfixable slice " << start_b << " ... " << end_b << std::endl;
+                fmt::print("Unfixable slice {} ... {}\n", start_b, end_b);
                 std::abort();
             }
         }

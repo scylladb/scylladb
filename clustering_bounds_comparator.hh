@@ -152,8 +152,14 @@ public:
         bool inclusive = bv._kind != bound_kind::excl_end && bv._kind != bound_kind::excl_start;
         return {typename R<clustering_key_prefix_view>::bound(bv._prefix.get().view(), inclusive)};
     }
-    friend std::ostream& operator<<(std::ostream& out, const bound_view& b) {
-        fmt::print(out, "{{bound: prefix={}, kind={}}}", b._prefix.get(), b._kind);
-        return out;
+    friend fmt::formatter<bound_view>;
+};
+
+template <> struct fmt::formatter<bound_kind> : fmt::formatter<std::string_view> {
+    auto format(bound_kind, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+template <> struct fmt::formatter<bound_view> : fmt::formatter<std::string_view> {
+    auto format(const bound_view& b, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{bound: prefix={},kind={}}}", b._prefix.get(), b._kind);
     }
 };

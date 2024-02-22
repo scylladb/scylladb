@@ -53,17 +53,28 @@ partition_key partition_key::from_nodetool_style_string(const schema_ptr s, cons
 }
 
 std::ostream& operator<<(std::ostream& out, const bound_kind k) {
+    fmt::print(out, "{}", k);
+    return out;
+}
+
+auto fmt::formatter<bound_kind>::format(bound_kind k, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name;
     switch (k) {
     case bound_kind::excl_end:
-        return out << "excl end";
+        name = "excl end";
+        break;
     case bound_kind::incl_start:
-        return out << "incl start";
+        name = "incl start";
+        break;
     case bound_kind::incl_end:
-        return out << "incl end";
+        name = "incl end";
+        break;
     case bound_kind::excl_start:
-        return out << "excl start";
+        name = "excl start";
+        break;
     }
-    abort();
+    return fmt::format_to(ctx.out(), "{}", name);
 }
 
 bound_kind invert_kind(bound_kind k) {
