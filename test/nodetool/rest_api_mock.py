@@ -7,13 +7,14 @@
 import aiohttp
 import aiohttp.web
 import asyncio
+import collections
 import json
 import logging
 import requests
 import sys
 import traceback
 
-from typing import Any, Dict, Tuple
+from typing import Any, Callable, Dict
 
 
 logger = logging.getLogger(__name__)
@@ -97,94 +98,61 @@ def _make_expected_request(req_json):
             hit=req_json.get("hit", 0))
 
 
-class handler_match_info(aiohttp.abc.AbstractMatchInfo):
-    def __init__(self, handler):
-        self.handler = handler
-        self._apps = list()
-
-    async def handler(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        """Catch all exceptions and return them to the client.
-           Without this, the client would get an 'Internal server error' message
-           without any details. Thanks to this the test log shows the actual error.
-        """
-        try:
-            return await self.handler(request)
-        except Exception as e:
-            tb = traceback.format_exc()
-            logger.error(f'Exception when executing {self.handler.__name__}: {e}\n{tb}')
-            return aiohttp.web.Response(status=500, text=str(e))
-
-    async def expect_handler(self) -> None:
-        return None
-
-    async def http_exception(self) -> None:
-        return None
-
-    def get_info(self) -> Dict[str, Any]:
-        return {}
-
-    def apps(self) -> Tuple[aiohttp.web.Application, ...]:
-        return tuple(self._apps)
-
-    def add_app(self, app: aiohttp.web.Application):
-        self._apps.append(app)
-
-    def freeze(self) -> None:
-        pass
-
-
-class rest_server(aiohttp.abc.AbstractRouter):
+class rest_server():
     EXPECTED_REQUESTS_PATH = "__expected_requests__"
 
     def __init__(self):
-        self.expected_requests = []
+        self.expected_requests = collections.defaultdict(list)
 
-    async def resolve(self, request: aiohttp.web.Request) -> aiohttp.abc.AbstractMatchInfo:
-        if request.path == f"/{self.EXPECTED_REQUESTS_PATH}":
-            return handler_match_info(getattr(self, f"{request.method.lower()}_expected_requests"))
-
-        for req in self.expected_requests:
-            if req.path == request.path and req.method == request.method:
-                return handler_match_info(self.handle_generic_request)
-
-        raise aiohttp.web.HTTPNotFound()
+    @staticmethod
+    def _request_key(method, path):
+        return f"{method}:{path}"
 
     async def get_expected_requests(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        return aiohttp.web.json_response([r.as_json() for r in self.expected_requests])
+        return aiohttp.web.json_response([r.as_json() for rl in self.expected_requests.values() for r in rl])
 
     async def post_expected_requests(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         payload = await request.json()
-        self.expected_requests = list(map(_make_expected_request, payload))
-        logger.info(f"expected_requests: {list(map(str, self.expected_requests))}")
+        for request in map(_make_expected_request, payload):
+            self.expected_requests[self._request_key(request.method, request.path)].append(request)
+        logger.info(f"expected_requests: {self.expected_requests}")
         return aiohttp.web.json_response({})
 
     async def delete_expected_requests(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        self.expected_requests = []
+        self.expected_requests.clear()
         return aiohttp.web.json_response({})
 
     async def handle_generic_request(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        request_key = self._request_key(request.method, request.path)
+
+        try:
+            expected_requests = self.expected_requests[request_key]
+        except KeyError:
+            return aiohttp.web.Response(status=404, text=f"Request {request_key} not found in expected requests")
+
         this_req = expected_request(request.method, request.path, params=dict(request.query))
 
-        if len(self.expected_requests) == 0:
+        if len(expected_requests) == 0:
             logger.error(f"unexpected request, expected no request, got {this_req}")
-            return aiohttp.web.Response(status=500, text="Expected no requests, got {this_req}")
+            return aiohttp.web.Response(status=500, text=f"Expected no requests, got {this_req}")
 
-        expected_req = self.expected_requests[0]
+        expected_req = expected_requests[0]
+
         while this_req != expected_req:
             if expected_req.exhausted():
                 logger.info(f"popping multi request {expected_req}")
-                del self.expected_requests[0]
-                expected_req = self.expected_requests[0]
+                del expected_requests[0]
+                expected_req = expected_requests[0]
 
-                if len(self.expected_requests) > 0:
-                    expected_req = self.expected_requests[0]
+                if len(expected_requests) > 0:
+                    expected_req = expected_requests[0]
                     continue
 
             logger.error(f"unexpected request\nexpected {expected_req}\ngot      {this_req}")
             return aiohttp.web.Response(status=500, text=f"Expected {expected_req}, got {this_req}")
 
         if expected_req.multiple == expected_request.ONE:
-            del self.expected_requests[0]
+            del expected_requests[0]
         else:
             expected_req.hit += 1
 
@@ -204,7 +172,56 @@ async def run_server(ip, port):
     )
 
     server = rest_server()
-    app = aiohttp.web.Application(router=server)
+    app = aiohttp.web.Application()
+
+    def wrap_handler(handler: Callable) -> Callable:
+        async def catching_handler(request) -> aiohttp.web.Response:
+            """Catch all exceptions and return them to the client.
+               Without this, the client would get an 'Internal server error' message
+               without any details. Thanks to this the test log shows the actual error.
+            """
+            try:
+                ret = await handler(request)
+                if ret is not None:
+                    return ret
+                return aiohttp.web.Response()
+            except Exception as e:
+                tb = traceback.format_exc()
+                logger.error(f'Exception when executing {handler.__name__}: {e}\n{tb}')
+                return aiohttp.web.Response(status=500, text=str(e))
+        return catching_handler
+
+    app.router.add_routes([
+        aiohttp.web.get(f"/{server.EXPECTED_REQUESTS_PATH}", wrap_handler(server.get_expected_requests)),
+        aiohttp.web.post(f"/{server.EXPECTED_REQUESTS_PATH}", wrap_handler(server.post_expected_requests)),
+        aiohttp.web.delete(f"/{server.EXPECTED_REQUESTS_PATH}", wrap_handler(server.delete_expected_requests)),
+        # Register all required rest API paths.
+        # Unfortunately, we have to register here all the different routes, used by tests.
+        # Fortunately, aiohttp supports variable paths and with that, there is not that many paths to register.
+        aiohttp.web.route("*", "/cache_service/{part1}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/cache_service/{part1}/{part2}/{part3}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/column_family/", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/column_family/{part1}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/column_family/{part1}/{part2}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/column_family/{part1}/{part2}/{part3}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/column_family/{part1}/{part2}/{part3}/{part4}",
+                          wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/compaction_manager/{part1}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/compaction_manager/{part1}/{part2}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/failure_detector/{part1}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/gossiper/{part1}/{part2}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/messaging_service/{part1}/{part2}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/snitch/{part1}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/storage_proxy/{part1}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/storage_proxy/{part1}/{part2}/{part3}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/storage_service/{part1}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/storage_service/{part1}/", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/storage_service/{part1}/{part2}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/storage_service/{part1}/{part2}/{part3}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/stream_manager/", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/system/{part1}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/system/{part1}/{part2}", wrap_handler(server.handle_generic_request)),
+    ])
 
     logger.info("start serving")
 
