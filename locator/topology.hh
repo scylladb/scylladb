@@ -456,7 +456,7 @@ struct fmt::formatter<locator::node> : fmt::formatter<std::string_view> {
         if (!verbose) {
             return fmt::format_to(ctx.out(), "{}/{}", node.host_id(), node.endpoint());
         } else {
-            return fmt::format_to(ctx.out(), " idx={} host_id={} endpoint={} dc={} rack={} state={} shards={} this_node={}",
+            return fmt::format_to(ctx.out(), "idx={} host_id={} endpoint={} dc={} rack={} state={} shards={} this_node={}",
                     node.idx(),
                     node.host_id(),
                     node.endpoint(),
