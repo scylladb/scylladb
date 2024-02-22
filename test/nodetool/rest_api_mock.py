@@ -42,15 +42,14 @@ class expected_request:
     MULTIPLE = 1  # one or more request is allowed
 
     def __init__(self, method: str, path: str, params: dict = {}, multiple: int = ONE,
-                 response: Dict[str, Any] = None, response_status: int = 200):
+                 response: Dict[str, Any] = None, response_status: int = 200, hit: int = 0):
         self.method = method
         self.path = path
         self.params = params
         self.multiple = multiple
         self.response = response
         self.response_status = response_status
-
-        self.hit = 0
+        self.hit = hit
 
     def as_json(self):
         def param_to_json(v):
@@ -65,13 +64,17 @@ class expected_request:
                 "multiple": self.multiple,
                 "params": {k: param_to_json(v) for k, v in self.params.items()},
                 "response": self.response,
-                "response_status": self.response_status}
+                "response_status": self.response_status,
+                "hit": self.hit}
 
     def __eq__(self, o):
         return self.method == o.method and self.path == o.path and self.params == o.params
 
     def __str__(self):
         return json.dumps(self.as_json())
+
+    def exhausted(self):
+        return self.multiple == self.ANY or (self.multiple >= self.MULTIPLE and self.hit >= self.multiple)
 
 
 def _make_param_value(value):
@@ -90,7 +93,8 @@ def _make_expected_request(req_json):
             params={k: _make_param_value(v) for k, v in req_json.get("params", dict()).items()},
             multiple=req_json.get("multiple", expected_request.ONE),
             response=req_json.get("response"),
-            response_status=req_json.get("response_status", 200))
+            response_status=req_json.get("response_status", 200),
+            hit=req_json.get("hit", 0))
 
 
 class handler_match_info(aiohttp.abc.AbstractMatchInfo):
@@ -167,8 +171,7 @@ class rest_server(aiohttp.abc.AbstractRouter):
 
         expected_req = self.expected_requests[0]
         while this_req != expected_req:
-            if expected_req.multiple == expected_request.ANY or (
-                    expected_req.multiple >= expected_request.MULTIPLE and expected_req.hit >= expected_req.multiple):
+            if expected_req.exhausted():
                 logger.info(f"popping multi request {expected_req}")
                 del self.expected_requests[0]
                 expected_req = self.expected_requests[0]
