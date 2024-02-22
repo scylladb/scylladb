@@ -14,30 +14,6 @@
 #include "utils/hashing.hh"
 #include "utils/xx_hasher.hh"
 
-std::ostream&
-operator<<(std::ostream& os, const clustering_row::printer& p) {
-    auto& row = p._clustering_row;
-    return os << "{clustering_row: ck " << row._ck << " dr "
-              << deletable_row::printer(p._schema, row._row) << "}";
-}
-
-std::ostream&
-operator<<(std::ostream& os, const static_row::printer& p) {
-    return os << "{static_row: "<< row::printer(p._schema, column_kind::static_column, p._static_row._cells) << "}";
-}
-
-std::ostream&
-operator<<(std::ostream& os, const partition_start& ph) {
-    fmt::print(os, "{{partition_start: pk {} partition_tombstone {}}}",
-               ph._key, ph._partition_tombstone);
-    return os;
-}
-
-std::ostream&
-operator<<(std::ostream& os, const partition_end& eop) {
-    return os << "{partition_end}";
-}
-
 partition_region parse_partition_region(std::string_view s) {
     if (s == "partition_start") {
         return partition_region::partition_start;
@@ -274,16 +250,17 @@ std::ostream& operator<<(std::ostream& os, mutation_fragment::kind k)
     abort();
 }
 
-std::ostream& operator<<(std::ostream& os, const mutation_fragment::printer& p) {
+auto fmt::formatter<mutation_fragment::printer>::format(const mutation_fragment::printer& p, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     auto& mf = p._mutation_fragment;
-    os << "{mutation_fragment: " << mf._kind << " " << mf.position() << " ";
-    mf.visit(make_visitor(
-        [&] (const clustering_row& cr) { os << clustering_row::printer(p._schema, cr); },
-        [&] (const static_row& sr) { os << static_row::printer(p._schema, sr); },
-        [&] (const auto& what) -> void { fmt::print(os, "{}", what); }
+    auto out = ctx.out();
+    out = fmt::format_to(out, "{{mutation_fragment: {} {} ", mf._kind, mf.position());
+    out = mf.visit(make_visitor(
+        [&] (const clustering_row& cr) { return fmt::format_to(out, "{}", clustering_row::printer(p._schema, cr)); },
+        [&] (const static_row& sr) { return fmt::format_to(out, "{}", static_row::printer(p._schema, sr)); },
+        [&] (const auto& what) { return fmt::format_to(out, "{}", what); }
     ));
-    os << "}";
-    return os;
+    return fmt::format_to(out, "}}");
 }
 
 const clustering_key_prefix& mutation_fragment_v2::key() const
@@ -339,8 +316,8 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment_v2::printer& 
     auto& mf = p._mutation_fragment;
     os << "{mutation_fragment: " << mf._kind << " " << mf.position() << " ";
     mf.visit(make_visitor(
-        [&] (const clustering_row& cr) { os << clustering_row::printer(p._schema, cr); },
-        [&] (const static_row& sr) { os << static_row::printer(p._schema, sr); },
+        [&] (const clustering_row& cr) { fmt::print(os, "{}", clustering_row::printer(p._schema, cr)); },
+        [&] (const static_row& sr) { fmt::print(os, "{}", static_row::printer(p._schema, sr)); },
         [&] (const auto& what) -> void { fmt::print(os, "{}", what); }
     ));
     os << "}";
