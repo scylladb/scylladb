@@ -48,19 +48,19 @@ struct load_balancer_cluster_stats {
     uint64_t resizes_finalized = 0;
 };
 
-using dc_name = sstring;
+using dc_ptr = const datacenter*;
 
 class load_balancer_stats_manager {
-    std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
+    std::unordered_map<dc_ptr, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
     std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
     load_balancer_cluster_stats _cluster_stats;
     seastar::metrics::label dc_label{"target_dc"};
     seastar::metrics::label node_label{"target_node"};
     seastar::metrics::metric_groups _metrics;
 
-    void setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
+    void setup_metrics(const dc_ptr& dc, load_balancer_dc_stats& stats) {
         namespace sm = seastar::metrics;
-        auto dc_lb = dc_label(dc);
+        auto dc_lb = dc_label(dc->name);
         _metrics.add_group("load_balancer", {
             sm::make_counter("calls", sm::description("number of calls to the load balancer"),
                              stats.calls)(dc_lb),
@@ -71,9 +71,9 @@ class load_balancer_stats_manager {
         });
     }
 
-    void setup_metrics(const dc_name& dc, host_id node, load_balancer_node_stats& stats) {
+    void setup_metrics(const dc_ptr& dc, host_id node, load_balancer_node_stats& stats) {
         namespace sm = seastar::metrics;
-        auto dc_lb = dc_label(dc);
+        auto dc_lb = dc_label(dc->name);
         auto node_lb = node_label(node);
         _metrics.add_group("load_balancer", {
             sm::make_gauge("load", sm::description("node load during last load balancing"),
@@ -98,7 +98,7 @@ public:
         setup_metrics(_cluster_stats);
     }
 
-    load_balancer_dc_stats& for_dc(const dc_name& dc) {
+    load_balancer_dc_stats& for_dc(const dc_ptr& dc) {
         auto it = _dc_stats.find(dc);
         if (it == _dc_stats.end()) {
             auto stats = std::make_unique<load_balancer_dc_stats>();
@@ -108,7 +108,7 @@ public:
         return *it->second;
     }
 
-    load_balancer_node_stats& for_node(const dc_name& dc, host_id node) {
+    load_balancer_node_stats& for_node(const dc_ptr& dc, host_id node) {
         auto it = _node_stats.find(node);
         if (it == _node_stats.end()) {
             auto stats = std::make_unique<load_balancer_node_stats>();
@@ -448,9 +448,9 @@ public:
         migration_plan plan;
 
         // Prepare plans for each DC separately and combine them to be executed in parallel.
-        for (auto&& dc : topo.get_datacenter_names()) {
+        for (const auto& [dc, _] : topo.get_inventory()) {
             auto dc_plan = co_await make_plan(dc);
-            lblogger.info("Prepared {} migrations in DC {}", dc_plan.size(), dc);
+            lblogger.info("Prepared {} migrations in DC {}", dc_plan.size(), dc->name);
             plan.merge(std::move(dc_plan));
         }
         plan.set_resize_plan(co_await make_resize_plan());
@@ -579,11 +579,11 @@ public:
         co_return std::move(resize_plan);
     }
 
-    future<migration_plan> make_plan(dc_name dc) {
+    future<migration_plan> make_plan(dc_ptr dc) {
         migration_plan plan;
 
         _stats.for_dc(dc).calls++;
-        lblogger.info("Examining DC {}", dc);
+        lblogger.info("Examining DC {}", dc->name);
 
         // Causes load balancer to move some tablet even though load is balanced.
         auto shuffle = utils::get_local_injector().enter("tablet_allocator_shuffle");
@@ -598,7 +598,7 @@ public:
         std::unordered_map<host_id, node_load> nodes;
         std::unordered_set<host_id> nodes_to_drain;
         topo.for_each_node([&] (const locator::node* node_ptr) {
-            if (node_ptr->dc_rack().dc != dc) {
+            if (node_ptr->dc() != dc) {
                 return;
             }
             bool is_drained = node_ptr->get_state() == locator::node::state::being_decommissioned
@@ -613,7 +613,7 @@ public:
                     throw std::runtime_error(format("Shard count of {} not found in topology", node_ptr->host_id()));
                 }
                 if (is_drained) {
-                    lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc);
+                    lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc->name);
                     nodes_to_drain.emplace(node_ptr->host_id());
                 } else if (node_ptr->is_excluded()) {
                     // Excluded nodes should not be chosen as targets for migration.
@@ -691,7 +691,7 @@ public:
         for (auto&& [host, load] : nodes) {
             auto& node = topo.get_node(host);
             lblogger.info("Node {}: rack={} avg_load={}, tablets={}, shards={}, state={}",
-                          host, node.dc_rack().rack, load.avg_load, load.tablet_count, load.shard_count, node.get_state());
+                          host, node.rack()->name, load.avg_load, load.tablet_count, load.shard_count, node.get_state());
         }
 
         if (!min_load_node) {
@@ -895,14 +895,14 @@ public:
                 std::pop_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
             } else {
                 std::unordered_set<host_id> replicas;
-                std::unordered_map<sstring, int> rack_load;
+                std::unordered_map<const locator::rack*, int> rack_load;
                 int max_rack_load = 0;
                 for (auto&& r : tmap.get_tablet_info(source_tablet.tablet).replicas) {
                     replicas.insert(r.host);
                     if (nodes.contains(r.host)) {
                         const locator::node& node = topo.get_node(r.host);
-                        rack_load[node.dc_rack().rack] += 1;
-                        max_rack_load = std::max(max_rack_load, rack_load[node.dc_rack().rack]);
+                        rack_load[node.rack()] += 1;
+                        max_rack_load = std::max(max_rack_load, rack_load[node.rack()]);
                     }
                 }
 
@@ -925,12 +925,12 @@ public:
 
                     const locator::node& target_node = topo.get_node(new_target);
                     const locator::node& source_node = topo.get_node(src_host);
-                    if (target_node.dc_rack().rack != source_node.dc_rack().rack
-                            && (rack_load[target_node.dc_rack().rack] + 1 > max_rack_load)) {
+                    if (target_node.rack() != source_node.rack()
+                            && (rack_load[target_node.rack()] + 1 > max_rack_load)) {
                         lblogger.debug("next best target {} (avg_load={}) skipped because it would overload rack {} "
                                        "with {} replicas of {}, current max is {}",
-                                       new_target, nodes[new_target].avg_load, target_node.dc_rack().rack,
-                                       rack_load[target_node.dc_rack().rack] + 1, source_tablet, max_rack_load);
+                                       new_target, nodes[new_target].avg_load, target_node.rack()->name,
+                                       rack_load[target_node.rack()] + 1, source_tablet, max_rack_load);
                         continue;
                     }
 
@@ -996,10 +996,10 @@ public:
 
             bool check_rack_load = false;
             bool has_replica_on_target = false;
-            std::unordered_map<sstring, int> rack_load; // Will be built if check_rack_load
+            std::unordered_map<const locator::rack*, int> rack_load; // Will be built if check_rack_load
 
             if (nodes_to_drain.empty()) {
-                check_rack_load = target_node.dc_rack().rack != topo.get_node(src.host).dc_rack().rack;
+                check_rack_load = target_node.rack() != topo.get_node(src.host).rack();
                 for (auto&& r: tmap.get_tablet_info(source_tablet.tablet).replicas) {
                     if (r.host == target) {
                         has_replica_on_target = true;
@@ -1007,8 +1007,8 @@ public:
                     }
                     if (check_rack_load) {
                         const locator::node& node = topo.get_node(r.host);
-                        if (node.dc_rack().dc == dc) {
-                            rack_load[node.dc_rack().rack] += 1;
+                        if (node.dc() == dc) {
+                            rack_load[node.rack()] += 1;
                         }
                     }
                 }
@@ -1024,10 +1024,10 @@ public:
             if (check_rack_load) {
                 auto max_rack_load = std::max_element(rack_load.begin(), rack_load.end(),
                                                  [] (auto& a, auto& b) { return a.second < b.second; })->second;
-                auto new_rack_load = rack_load[target_node.dc_rack().rack] + 1;
+                auto new_rack_load = rack_load[target_node.rack()] + 1;
                 if (new_rack_load > max_rack_load) {
                     lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
-                                   source_tablet, target_node.dc_rack().rack, new_rack_load, max_rack_load);
+                                   source_tablet, target_node.rack()->name, new_rack_load, max_rack_load);
                     _stats.for_dc(dc).tablets_skipped_rack++;
                     continue;
                 }
