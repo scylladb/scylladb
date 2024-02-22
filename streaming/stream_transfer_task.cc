@@ -273,7 +273,7 @@ void stream_transfer_task::sort_and_merge_ranges() {
     _ranges.swap(ranges);
     for (auto& range : ranges) {
         // TODO: We should convert range_to_interval and interval_to_range to
-        // take nonwrapping_interval ranges.
+        // take interval ranges.
         myset += locator::token_metadata::range_to_interval(std::move(range));
     }
     ranges.clear();

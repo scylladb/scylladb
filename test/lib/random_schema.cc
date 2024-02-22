@@ -1072,7 +1072,7 @@ void random_schema::add_static_row(std::mt19937& engine, data_model::mutation_de
 void random_schema::delete_range(
         std::mt19937& engine,
         data_model::mutation_description& md,
-        nonwrapping_interval<data_model::mutation_description::key> range,
+        interval<data_model::mutation_description::key> range,
         timestamp_generator ts_gen,
         expiry_generator exp_gen) {
     auto expiry_opt = exp_gen(engine, timestamp_destination::range_tombstone);
@@ -1144,7 +1144,7 @@ future<std::vector<mutation>> generate_random_mutations(
             random_schema.delete_range(
                     engine,
                     mut,
-                    nonwrapping_interval<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
+                    interval<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
                     ts_gen,
                     exp_gen);
             co_await coroutine::maybe_yield();

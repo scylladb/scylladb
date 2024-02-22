@@ -82,10 +82,10 @@ void mutation_description::remove_regular_column(const sstring& name) {
 }
 
 void mutation_description::add_range_tombstone(const key& start, const key& end, tombstone tomb) {
-    add_range_tombstone(nonwrapping_interval<key>::make(start, end), tomb);
+    add_range_tombstone(interval<key>::make(start, end), tomb);
 }
 
-void mutation_description::add_range_tombstone(nonwrapping_interval<key> range, tombstone tomb) {
+void mutation_description::add_range_tombstone(interval<key> range, tombstone tomb) {
     _range_tombstones.emplace_back(range_tombstone { std::move(range), tomb });
 }
 
@@ -210,7 +210,7 @@ mutation mutation_description::build(schema_ptr s) const {
             auto start = clustering_range.start();
             auto end = clustering_range.end();
             if (start && end && cmp(end->value(), start->value())) {
-                clustering_range = nonwrapping_interval<clustering_key>(std::move(end), std::move(start));
+                clustering_range = interval<clustering_key>(std::move(end), std::move(start));
             }
         }
         auto rt = ::range_tombstone(

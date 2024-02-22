@@ -14,7 +14,7 @@ class flat_mutation_reader_v2;
 
 namespace dht {
 class ring_position;
-using partition_range = nonwrapping_interval<ring_position>;
+using partition_range = interval<ring_position>;
 }
 
 namespace query {

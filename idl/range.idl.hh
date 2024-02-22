@@ -20,7 +20,7 @@ class wrapping_interval {
 };
 
 template<typename T>
-class nonwrapping_interval {
+class interval {
     std::optional<interval_bound<T>> start();
     std::optional<interval_bound<T>> end();
     bool is_singular();

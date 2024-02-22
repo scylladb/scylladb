@@ -64,7 +64,7 @@ future<> test_no_clustered(sstables::test_env& env, bytes&& key, std::unordered_
               return read_mutation_from_flat_mutation_reader(rd).then([sstp, s, map = std::move(map)] (auto mutation) {
                 BOOST_REQUIRE(mutation);
                 auto& mp = mutation->partition();
-                for (auto&& e : mp.range(*s, nonwrapping_interval<clustering_key_prefix>())) {
+                for (auto&& e : mp.range(*s, interval<clustering_key_prefix>())) {
                     BOOST_REQUIRE(to_bytes(e.key()) == to_bytes(""));
                     BOOST_REQUIRE(e.row().cells().size() == map.size());
 

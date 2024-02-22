@@ -163,7 +163,7 @@ public:
         std::unique_ptr<incremental_selector_impl> _impl;
         dht::ring_position_comparator _cmp;
         mutable std::optional<dht::partition_range> _current_range;
-        mutable std::optional<nonwrapping_interval<dht::ring_position_view>> _current_range_view;
+        mutable std::optional<interval<dht::ring_position_view>> _current_range_view;
         mutable std::vector<shared_sstable> _current_sstables;
         mutable dht::ring_position_ext _current_next_position = dht::ring_position_view::min();
     public:

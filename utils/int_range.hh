@@ -13,7 +13,7 @@
 
 #include "seastarx.hh"
 
-using int_range = nonwrapping_interval<int>;
+using int_range = interval<int>;
 
 inline
 unsigned cardinality(const int_range& r) {

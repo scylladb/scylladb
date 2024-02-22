@@ -893,7 +893,7 @@ struct serializer<blob_header> {
 namespace {
 
 template <typename RandomEngine>
-static nonwrapping_interval<int> generate_range(RandomEngine& rnd_engine, int start, int end, bool allow_open_ended_start = true) {
+static interval<int> generate_range(RandomEngine& rnd_engine, int start, int end, bool allow_open_ended_start = true) {
     assert(start < end);
 
     std::uniform_int_distribution<int> defined_bound_dist(0, 7);
@@ -906,22 +906,22 @@ static nonwrapping_interval<int> generate_range(RandomEngine& rnd_engine, int st
     if (open_lower_bound || open_upper_bound) {
         const auto bound = bound_dist(rnd_engine);
         if (open_lower_bound) {
-            return nonwrapping_interval<int>::make_ending_with(
-                    nonwrapping_interval<int>::bound(bound, inclusive_dist(rnd_engine)));
+            return interval<int>::make_ending_with(
+                    interval<int>::bound(bound, inclusive_dist(rnd_engine)));
         }
-        return nonwrapping_interval<int>::make_starting_with(
-                nonwrapping_interval<int>::bound(bound, inclusive_dist(rnd_engine)));
+        return interval<int>::make_starting_with(
+                interval<int>::bound(bound, inclusive_dist(rnd_engine)));
     }
 
     const auto b1 = bound_dist(rnd_engine);
     const auto b2 = bound_dist(rnd_engine);
     if (b1 == b2) {
-        return nonwrapping_interval<int>::make_starting_with(
-                nonwrapping_interval<int>::bound(b1, inclusive_dist(rnd_engine)));
+        return interval<int>::make_starting_with(
+                interval<int>::bound(b1, inclusive_dist(rnd_engine)));
     }
-    return nonwrapping_interval<int>::make(
-                nonwrapping_interval<int>::bound(std::min(b1, b2), inclusive_dist(rnd_engine)),
-                nonwrapping_interval<int>::bound(std::max(b1, b2), inclusive_dist(rnd_engine)));
+    return interval<int>::make(
+                interval<int>::bound(std::min(b1, b2), inclusive_dist(rnd_engine)),
+                interval<int>::bound(std::max(b1, b2), inclusive_dist(rnd_engine)));
 }
 
 template <typename RandomEngine>
@@ -966,7 +966,7 @@ generate_clustering_ranges(RandomEngine& rnd_engine, const schema& schema, const
 
 static std::vector<mutation>
 slice_partitions(const schema& schema, const std::vector<mutation>& partitions,
-        const nonwrapping_interval<int>& partition_index_range, const query::partition_slice& slice) {
+        const interval<int>& partition_index_range, const query::partition_slice& slice) {
     const auto& sb = partition_index_range.start();
     const auto& eb = partition_index_range.end();
     auto it = sb ? partitions.cbegin() + sb->value() + !sb->is_inclusive() : partitions.cbegin();

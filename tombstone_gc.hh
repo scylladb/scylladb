@@ -18,7 +18,7 @@ namespace dht {
 
 class decorated_key;
 
-using token_range = nonwrapping_interval<token>;
+using token_range = interval<token>;
 
 }
 

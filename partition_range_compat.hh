@@ -21,14 +21,14 @@ using wrapping_partition_range = wrapping_interval<dht::ring_position>;
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
 // if the vector happens to be sorted by the left bound, it remains sorted
 template <typename T, typename Comparator>
-std::vector<nonwrapping_interval<T>>
+std::vector<interval<T>>
 unwrap(std::vector<wrapping_interval<T>>&& v, Comparator&& cmp) {
-    std::vector<nonwrapping_interval<T>> ret;
+    std::vector<interval<T>> ret;
     ret.reserve(v.size() + 1);
     for (auto&& wr : v) {
         if (wr.is_wrap_around(cmp)) {
             auto&& p = std::move(wr).unwrap();
-            ret.insert(ret.begin(), nonwrapping_interval<T>(std::move(p.first)));
+            ret.insert(ret.begin(), interval<T>(std::move(p.first)));
             ret.emplace_back(std::move(p.second));
         } else {
             ret.emplace_back(std::move(wr));
@@ -40,14 +40,14 @@ unwrap(std::vector<wrapping_interval<T>>&& v, Comparator&& cmp) {
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
 // if the vector happens to be sorted by the left bound, it remains sorted
 template <typename T, typename Comparator>
-std::vector<nonwrapping_interval<T>>
+std::vector<interval<T>>
 unwrap(const std::vector<wrapping_interval<T>>& v, Comparator&& cmp) {
-    std::vector<nonwrapping_interval<T>> ret;
+    std::vector<interval<T>> ret;
     ret.reserve(v.size() + 1);
     for (auto&& wr : v) {
         if (wr.is_wrap_around(cmp)) {
             auto&& p = wr.unwrap();
-            ret.insert(ret.begin(), nonwrapping_interval<T>(p.first));
+            ret.insert(ret.begin(), interval<T>(p.first));
             ret.emplace_back(p.second);
         } else {
             ret.emplace_back(wr);
@@ -58,7 +58,7 @@ unwrap(const std::vector<wrapping_interval<T>>& v, Comparator&& cmp) {
 
 template <typename T>
 std::vector<wrapping_interval<T>>
-wrap(const std::vector<nonwrapping_interval<T>>& v) {
+wrap(const std::vector<interval<T>>& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
     if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
         auto ret = std::vector<wrapping_interval<T>>();
@@ -72,7 +72,7 @@ wrap(const std::vector<nonwrapping_interval<T>>& v) {
 
 template <typename T>
 std::vector<wrapping_interval<T>>
-wrap(std::vector<nonwrapping_interval<T>>&& v) {
+wrap(std::vector<interval<T>>&& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
     if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
         auto ret = std::vector<wrapping_interval<T>>();
@@ -149,10 +149,10 @@ unwrap_into(wrapping_interval<T>&& range, const Comparator& cmp, Func&& func) {
     if (range.is_wrap_around(cmp)) {
         auto&& unw = range.unwrap();
         // Preserve ring order
-        func(nonwrapping_interval<T>(std::move(unw.second)));
-        func(nonwrapping_interval<T>(std::move(unw.first)));
+        func(interval<T>(std::move(unw.second)));
+        func(interval<T>(std::move(unw.first)));
     } else {
-        func(nonwrapping_interval<T>(std::move(range)));
+        func(interval<T>(std::move(range)));
     }
 }
 
