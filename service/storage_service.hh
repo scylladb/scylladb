@@ -815,7 +815,7 @@ private:
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
-    future<> raft_initialize_discovery_leader(raft::server&, const join_node_request_params& params);
+    future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> raft_decommission();
     future<> raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params);
     future<> raft_rebuild(sstring source_dc);

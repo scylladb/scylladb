@@ -1141,9 +1141,18 @@ public:
     }
 };
 
-future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_server, const join_node_request_params& params) {
+future<> storage_service::raft_initialize_discovery_leader(const join_node_request_params& params) {
+    // No other server can become a member of the cluster until
+    // we finish adding ourselves. This is ensured by
+    // waiting in join_node_request_handler for
+    // _topology_state_machine._topology.normal_nodes to be not empty.
+    // We cannot mark ourselves as dead during this process.
+    // This means there is no valid way we can lose quorum here,
+    // but some subsystems may just become unreasonably slow for various reasons,
+    // so we nonetheless use raft_timeout{} here.
+
     if (_topology_state_machine._topology.is_empty()) {
-        co_await raft_server.read_barrier(&_group0_as);
+        co_await _group0->group0_server_with_timeouts().read_barrier(&_group0_as, raft_timeout{});
     }
 
     while (_topology_state_machine._topology.is_empty()) {
@@ -1152,7 +1161,7 @@ future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_se
         }
 
         rtlogger.info("adding myself as the first node to the topology");
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         auto insert_join_request_mutations = build_mutation_from_join_params(params, guard);
 
@@ -1168,7 +1177,7 @@ future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_se
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 "bootstrap: adding myself as the first node to the topology");
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("bootstrap: concurrent operation is detected, retrying.");
         }
@@ -1621,7 +1630,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // on their behalf by an existing node in the cluster during the handshake.
         // Discovery leaders on the other need to insert the join request themselves,
         // we do that here.
-        co_await raft_initialize_discovery_leader(*raft_server, join_params);
+        co_await raft_initialize_discovery_leader(join_params);
 
         // start topology coordinator fiber
         _raft_state_monitor = raft_state_monitor_fiber(*raft_server, sys_dist_ks);
