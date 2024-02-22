@@ -27,7 +27,6 @@ constexpr const char* versioned_value::STATUS_NORMAL;
 constexpr const char* versioned_value::STATUS_LEFT;
 constexpr const char* versioned_value::REMOVED_TOKEN;
 constexpr const char* versioned_value::SHUTDOWN;
-constexpr const char* versioned_value::REMOVAL_COORDINATOR;
 
 versioned_value versioned_value::network_version() {
     return versioned_value(format("{}", netw::messaging_service::current_version));

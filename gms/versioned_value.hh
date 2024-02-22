@@ -54,9 +54,6 @@ public:
 
     static constexpr const char* SHUTDOWN = "shutdown";
 
-    // values for ApplicationState.REMOVAL_COORDINATOR
-    static constexpr const char* REMOVAL_COORDINATOR = "REMOVER";
-
     version_type version() const noexcept { return _version; };
     const sstring& value() const noexcept { return _value; };
 public:
@@ -146,11 +143,6 @@ public:
     static versioned_value removed_nonlocal(const locator::host_id& host_id, int64_t expire_time) {
         return versioned_value(sstring(REMOVED_TOKEN) + sstring(DELIMITER_STR) +
             host_id.to_sstring() + sstring(DELIMITER_STR) + to_sstring(expire_time));
-    }
-
-    static versioned_value removal_coordinator(const locator::host_id& host_id) {
-        return versioned_value(sstring(REMOVAL_COORDINATOR) +
-            sstring(DELIMITER_STR) + host_id.to_sstring());
     }
 
     static versioned_value shutdown(bool value) {

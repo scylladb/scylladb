@@ -8,6 +8,7 @@
 
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm.hpp>
+#include <boost/algorithm/string.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/json/json_elements.hh>
@@ -21,6 +22,7 @@
 #include "db/view/build_progress_virtual_reader.hh"
 #include "index/built_indexes_virtual_reader.hh"
 #include "gms/gossiper.hh"
+#include "mutation/frozen_mutation.hh"
 #include "protocol_server.hh"
 #include "release.hh"
 #include "replica/database.hh"
@@ -40,12 +42,13 @@ logging::logger vtlog("virtual_tables");
 
 class cluster_status_table : public memtable_filling_virtual_table {
 private:
-    service::storage_service& _ss;
-    gms::gossiper& _gossiper;
+    distributed<service::storage_service>& _dist_ss;
+    distributed<gms::gossiper>& _dist_gossiper;
+
 public:
-    cluster_status_table(service::storage_service& ss, gms::gossiper& g)
+    cluster_status_table(distributed<service::storage_service>& ss, distributed<gms::gossiper>& g)
             : memtable_filling_virtual_table(build_schema())
-            , _ss(ss), _gossiper(g) {}
+            , _dist_ss(ss), _dist_gossiper(g) {}
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "cluster_status");
@@ -63,19 +66,30 @@ public:
     }
 
     future<> execute(std::function<void(mutation)> mutation_sink) override {
-        return _ss.get_ownership().then([&, mutation_sink] (std::map<gms::inet_address, float> ownership) {
-            const locator::token_metadata& tm = _ss.get_token_metadata();
+        auto muts = co_await _dist_ss.invoke_on(0, [this] (service::storage_service& ss) -> future<std::vector<frozen_mutation>> {
+            auto& gossiper = _dist_gossiper.local();
+            auto ownership = co_await ss.get_ownership();
+            const locator::token_metadata& tm = ss.get_token_metadata();
 
-            _gossiper.for_each_endpoint_state([&] (const gms::inet_address& endpoint, const gms::endpoint_state&) {
-                mutation m(schema(), partition_key::from_single_value(*schema(), data_value(endpoint).serialize_nonnull()));
+            std::vector<frozen_mutation> muts;
+            muts.reserve(gossiper.num_endpoints());
+
+            gossiper.for_each_endpoint_state([&] (const gms::inet_address& endpoint, const gms::endpoint_state&) {
+                static thread_local auto s = build_schema();
+                mutation m(s, partition_key::from_single_value(*s, data_value(endpoint).serialize_nonnull()));
                 row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
 
-                set_cell(cr, "up", _gossiper.is_alive(endpoint));
-                set_cell(cr, "status", _gossiper.get_gossip_status(endpoint));
-                set_cell(cr, "load", _gossiper.get_application_state_value(endpoint, gms::application_state::LOAD));
+                set_cell(cr, "up", gossiper.is_alive(endpoint));
+                if (!ss.raft_topology_change_enabled() || gossiper.is_shutdown(endpoint)) {
+                    set_cell(cr, "status", gossiper.get_gossip_status(endpoint));
+                }
+                set_cell(cr, "load", gossiper.get_application_state_value(endpoint, gms::application_state::LOAD));
 
                 auto hostid = tm.get_host_id_if_known(endpoint);
                 if (hostid) {
+                    if (ss.raft_topology_change_enabled() && !gossiper.is_shutdown(endpoint)) {
+                        set_cell(cr, "status", boost::to_upper_copy<std::string>(fmt::format("{}", ss.get_node_state(*hostid))));
+                    }
                     set_cell(cr, "host_id", hostid->uuid());
                 }
 
@@ -90,9 +104,15 @@ public:
 
                 set_cell(cr, "tokens", int32_t(hostid ? tm.get_tokens(*hostid).size() : 0));
 
-                mutation_sink(std::move(m));
+                muts.push_back(freeze(std::move(m)));
             });
+
+            co_return muts;
         });
+
+        for (auto& m : muts) {
+            mutation_sink(m.unfreeze(schema()));
+        }
     }
 };
 
@@ -988,10 +1008,9 @@ static void register_virtual_tables(virtual_tables_registry_impl& virtual_tables
 
     auto& db = dist_db.local();
     auto& ss = dist_ss.local();
-    auto& gossiper = dist_gossiper.local();
 
     // Add built-in virtual tables here.
-    add_table(std::make_unique<cluster_status_table>(ss, gossiper));
+    add_table(std::make_unique<cluster_status_table>(dist_ss, dist_gossiper));
     add_table(std::make_unique<token_ring_table>(db, ss));
     add_table(std::make_unique<snapshots_table>(dist_db));
     add_table(std::make_unique<protocol_servers_table>(ss));
