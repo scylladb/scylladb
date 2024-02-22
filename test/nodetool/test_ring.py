@@ -48,16 +48,16 @@ def format_size(v):
     return f'{v} bytes'
 
 
-@pytest.mark.parametrize("host_status,host_state",
+@pytest.mark.parametrize("keyspace,host_status,host_state",
                          [
-                             ('live', 'joining'),
-                             ('live', 'normal'),
-                             ('live', 'leaving'),
-                             ('live', 'moving'),
-                             ('down', 'n/a')
+                             ('ks', 'live', 'joining'),
+                             ('ks', 'live', 'normal'),
+                             ('ks', 'live', 'leaving'),
+                             ('ks', 'live', 'moving'),
+                             ('ks', 'down', 'n/a'),
+                             ('', 'live', 'normal'),
                          ])
-def test_ring(nodetool, host_status, host_state):
-    keyspace = 'ks'
+def test_ring(request, nodetool, keyspace, host_status, host_state):
     host = Host('dc0', 'rack0', '127.0.0.1', host_status, host_state,
                 6414780.0, 1.0)
     token_to_endpoint = {
@@ -85,9 +85,21 @@ def test_ring(nodetool, host_status, host_state):
 
     expected_requests = [
         expected_request('GET', '/storage_service/tokens_endpoint',
-                         response=map_to_json(token_to_endpoint)),
-        expected_request('GET', f'/storage_service/ownership/{keyspace}',
-                         response=map_to_json(endpoint_to_ownership, str)),
+                         response=map_to_json(token_to_endpoint))
+    ]
+
+    is_scylla = request.config.getoption("nodetool") == "scylla"
+    print_all_keyspaces = keyspace == ''
+
+    if is_scylla and print_all_keyspaces:
+        # scylla nodetool does not bother getting ownership if keyspace is not
+        # specified
+        pass
+    else:
+        expected_requests.append(
+            expected_request('GET', f'/storage_service/ownership/{keyspace}',
+                             response=map_to_json(endpoint_to_ownership, str)))
+    expected_requests += [
         expected_request('GET', '/snitch/datacenter',
                          params={'host': host.endpoint},
                          multiple=expected_request.ANY,
@@ -109,7 +121,10 @@ def test_ring(nodetool, host_status, host_state):
                          multiple=expected_request.ANY,
                          response=host.rack),
     ]
-    actual_output = nodetool('ring', keyspace, expected_requests=expected_requests)
+    args = []
+    if keyspace:
+        args = [keyspace]
+    actual_output = nodetool('ring', *args, expected_requests=expected_requests)
 
     expected_output = f'''
 Datacenter: {host.dc}
@@ -148,8 +163,14 @@ Datacenter: {host.dc}
 
         load = format_size(host.load)
 
-        ownership_percent = host.ownership * 100
-        ownership = f'{ownership_percent:.2f}%'
+        if print_all_keyspaces:
+            ownership = '?'
+        else:
+            # scylla nodetool always prints out the ownership percentage,
+            # since it prints out the warning, so user is aware if the
+            # ownership is meaningless or not
+            ownership_percent = host.ownership * 100
+            ownership = f'{ownership_percent:.2f}%'
 
         expected_output += format_stat(max_width, endpoint, host.rack,
                                        status, state, load, ownership, token)
@@ -163,12 +184,9 @@ Datacenter: {host.dc}
 
 
 '''
-    expected_output += '  '
+    warning = ''
+    if print_all_keyspaces:
+        warning = '''Note: Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless\n'''
+    expected_output += f'''\
+  {warning}'''
     assert actual_output == expected_output
-
-
-def test_ring_no_args(nodetool, scylla_only):
-    with pytest.raises(subprocess.CalledProcessError) as e:
-        nodetool('ring')
-    assert e.value.returncode == 1
-    assert 'required parameters are missing: keyspace' in e.value.stderr
