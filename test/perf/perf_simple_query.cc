@@ -74,6 +74,7 @@ struct test_config {
     bool stop_on_error;
     sstring timeout;
     bool bypass_cache;
+    std::optional<unsigned> initial_tablets;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
@@ -450,6 +451,9 @@ void write_json_result(std::string result_file, const test_config& cfg, perf_res
     params["cpus"] = smp::count;
     params["duration"] = cfg.duration_in_seconds;
     params["concurrency,partitions,cpus,duration"] = fmt::format("{},{},{},{}", cfg.concurrency, cfg.partitions, smp::count, cfg.duration_in_seconds);
+    if (cfg.initial_tablets) {
+        params["initial_tablets"] = cfg.initial_tablets.value();
+    }
     results["parameters"] = std::move(params);
 
     Json::Value stats;
@@ -555,6 +559,9 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.query_single_key = app.configuration().contains("query-single-key");
             cfg.counters = app.configuration().contains("counters");
             cfg.flush_memtables = app.configuration().contains("flush");
+            if (app.configuration().contains("tablets")) {
+                cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
+            }
             if (app.configuration().contains("write")) {
                 cfg.mode = test_config::run_mode::write;
             } else if (app.configuration().contains("delete")) {
