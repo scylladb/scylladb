@@ -120,9 +120,9 @@ public:
         printer(const printer&) = delete;
         printer(printer&&) = delete;
 
-        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+        friend fmt::formatter<printer>;
     };
-    friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    friend fmt::formatter<printer>;
 
     deletable_row as_deletable_row() && { return std::move(_row); }
     const deletable_row& as_deletable_row() const & { return _row; }
@@ -179,9 +179,9 @@ public:
         printer(const printer&) = delete;
         printer(printer&&) = delete;
 
-        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+        friend fmt::formatter<printer>;
     };
-    friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    friend fmt::formatter<printer>;
 };
 
 class partition_start final {
@@ -212,7 +212,7 @@ public:
         return _key.equal(s, other._key) && _partition_tombstone == other._partition_tombstone;
     }
 
-    friend std::ostream& operator<<(std::ostream& is, const partition_start& row);
+    friend fmt::formatter<partition_start>;
 };
 
 class partition_end final {
@@ -230,8 +230,6 @@ public:
     bool equal(const schema& s, const partition_end& other) const {
         return true;
     }
-
-    friend std::ostream& operator<<(std::ostream& is, const partition_end& row);
 };
 
 template<typename T, typename ReturnType>
@@ -498,9 +496,9 @@ public:
         printer(const printer&) = delete;
         printer(printer&&) = delete;
 
-        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+        friend fmt::formatter<printer>;
     };
-    friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    friend fmt::formatter<printer>;
 
 private:
     size_t calculate_memory_usage(const schema& s) const {
@@ -590,3 +588,32 @@ struct appending_hash<mutation_fragment> {
     template<typename Hasher>
     void operator()(Hasher& h, const mutation_fragment& mf, const schema& s) const;
 };
+
+template <> struct fmt::formatter<clustering_row::printer> : fmt::formatter<std::string_view> {
+    auto format(const clustering_row::printer& p, fmt::format_context& ctx) const {
+        auto& row = p._clustering_row;
+        return fmt::format_to(ctx.out(), "{{clustering_row: ck {} dr {}}}",
+                              row._ck, deletable_row::printer(p._schema, row._row));
+    }
+};
+template <> struct fmt::formatter<static_row::printer> : fmt::formatter<std::string_view> {
+    auto format(const static_row::printer& p, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{static_row: {}}}",
+                              row::printer(p._schema, column_kind::static_column, p._static_row._cells));
+    }
+};
+template <> struct fmt::formatter<partition_start> : fmt::formatter<std::string_view> {
+    auto format(const partition_start& ph, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{partition_start: pk {} partition_tombstone {}}}",
+                              ph._key, ph._partition_tombstone);
+    }
+};
+template <> struct fmt::formatter<partition_end> : fmt::formatter<std::string_view> {
+    auto format(const partition_end&, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{partition_end}}");
+    }
+};
+template <> struct fmt::formatter<mutation_fragment::printer> : fmt::formatter<std::string_view> {
+    auto format(const mutation_fragment::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+

@@ -37,6 +37,11 @@ static tombstone new_tombstone() {
     return { new_timestamp(), gc_clock::now() };
 };
 
+std::ostream& operator<<(std::ostream& os, const mutation_fragment::printer& p) {
+    fmt::print(os, "{}", p);
+    return os;
+}
+
 template <typename UnfreezeFunc>
 requires std::same_as<std::invoke_result_t<UnfreezeFunc, const frozen_mutation&, schema_ptr>, mutation>
 static future<> _test_freeze_unfreeze(UnfreezeFunc&& unfreeze_func) {
