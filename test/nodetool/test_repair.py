@@ -467,7 +467,7 @@ Repair session 1 finished
 """
 
 
-@pytest.mark.parametrize("jobs", [None, ("-j", 2), ("--job-threads", 2)])
+@pytest.mark.parametrize("jobs", [None, ("-j", "2"), ("--job-threads", "2")])
 @pytest.mark.parametrize("full", [None, "-full", "--full"])
 def test_repair_unused_options(request, nodetool, jobs, full):
     args = ["repair", "ks"]
@@ -478,7 +478,7 @@ def test_repair_unused_options(request, nodetool, jobs, full):
     if full:
         args.append(full)
 
-    res = nodetool("repair", "ks", expected_requests=[
+    res = nodetool(*args, expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         JMX_COLUMN_FAMILIES_REQUEST,
         JMX_STREAM_MANAGER_REQUEST,
