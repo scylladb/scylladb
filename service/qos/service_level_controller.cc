@@ -8,6 +8,7 @@
 
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "seastar/core/timer.hh"
 #include "service_level_controller.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -80,22 +81,20 @@ void service_level_controller::set_distributed_data_accessor(service_level_distr
 
 future<> service_level_controller::drain() {
     if (this_shard_id() != global_controller) {
-        return make_ready_future();
+        co_return;
     }
     // abort the loop of the distributed data checking if it is running
     if (!_global_controller_db->dist_data_update_aborter.abort_requested()) {
         _global_controller_db->dist_data_update_aborter.request_abort();
     }
     _global_controller_db->notifications_serializer.broken();
-    return std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>()).then_wrapped([] (future<> f) {
         try {
-            f.get();
+            co_await std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>());
         } catch (const broken_semaphore& ignored) {
         } catch (const sleep_aborted& ignored) {
         } catch (const exceptions::unavailable_exception& ignored) {
         } catch (const exceptions::read_timeout_exception& ignored) {
         }
-    });
 }
 
 future<> service_level_controller::stop() {
@@ -327,29 +326,26 @@ future<> service_level_controller::alter_distributed_service_level(sstring name,
 }
 
 future<> service_level_controller::drop_distributed_service_level(sstring name, bool if_exists) {
-    return _sl_data_accessor->get_service_levels().then([this, name, if_exists] (qos::service_levels_info sl_info) {
+   auto sl_info = co_await _sl_data_accessor->get_service_levels();
         auto it = sl_info.find(name);
         if (it == sl_info.end()) {
             if (if_exists) {
-                return make_ready_future();
+                co_return;
             } else {
-                return make_exception_future(nonexistant_service_level_exception(name));
+                throw nonexistant_service_level_exception(name);
             }
-        } else {
+        } 
             auto& role_manager = _auth_service.local().underlying_role_manager();
-            return role_manager.query_attribute_for_all("service_level").then( [&role_manager, name] (auth::role_manager::attribute_vals attributes) {
-                return parallel_for_each(attributes.begin(), attributes.end(), [&role_manager, name] (auto&& attr) {
+            auto attributes = co_await role_manager.query_attribute_for_all("service_level");
+                co_await coroutine::parallel_for_each(attributes.begin(), attributes.end(), [&role_manager, name] (auto&& attr) {
                     if (attr.second == name) {
                         return do_with(attr.first, [&role_manager] (const sstring& role_name) {return role_manager.remove_attribute(role_name, "service_level");});
                     } else {
                         return make_ready_future();
                     }
                 });
-            }).then([this, name] {
-                return _sl_data_accessor->drop_service_level(name);
-            });
-        }
-    });
+            
+                co_return co_await _sl_data_accessor->drop_service_level(name);
 }
 
 future<service_levels_info> service_level_controller::get_distributed_service_levels() {
@@ -361,22 +357,22 @@ future<service_levels_info> service_level_controller::get_distributed_service_le
 }
 
 future<> service_level_controller::set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type) {
-    return _sl_data_accessor->get_service_levels().then([this, name, slo, op_type] (qos::service_levels_info sl_info) {
+    auto sl_info = co_await _sl_data_accessor->get_service_levels();
         auto it = sl_info.find(name);
         // test for illegal requests or requests that should terminate without any action
         if (it == sl_info.end()) {
             if (op_type == set_service_level_op_type::alter) {
-                return make_exception_future(exceptions::invalid_request_exception(format("The service level '{}' doesn't exist.", name)));
+                throw exceptions::invalid_request_exception(format("The service level '{}' doesn't exist.", name));
             }
         } else {
             if (op_type == set_service_level_op_type::add) {
-                return make_exception_future(exceptions::invalid_request_exception(format("The service level '{}' already exists.", name)));
+                throw exceptions::invalid_request_exception(format("The service level '{}' already exists.", name));
             } else if (op_type == set_service_level_op_type::add_if_not_exists) {
-                return make_ready_future();
+                co_return;
             }
         }
-        return _sl_data_accessor->set_service_level(name, slo);
-    });
+        co_return co_await _sl_data_accessor->set_service_level(name, slo);
+    
 }
 
 future<> service_level_controller::do_add_service_level(sstring name, service_level_options slo, bool is_static) {
