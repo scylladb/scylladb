@@ -36,7 +36,10 @@ public:
     stream_request(sstring _keyspace, std::vector<wrapping_interval<token>> _ranges, std::vector<sstring> _column_families)
         : stream_request(std::move(_keyspace), ::compat::unwrap(std::move(_ranges)), std::move(_column_families)) {
     }
-    friend std::ostream& operator<<(std::ostream& os, const stream_request& r);
 };
 
 } // namespace streaming
+
+template <> struct fmt::formatter<streaming::stream_request> : fmt::formatter<std::string_view> {
+    auto format(const streaming::stream_request&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
