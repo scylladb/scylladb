@@ -1296,7 +1296,7 @@ future<> storage_service::start_upgrade_to_raft_topology() {
     }
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::not_upgraded) {
             co_return;
@@ -1309,7 +1309,7 @@ future<> storage_service::start_upgrade_to_raft_topology() {
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, "upgrade: start");
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
             break;
         } catch (group0_concurrent_modification&) {
             rtlogger.info("upgrade: concurrent operation is detected, retrying.");
