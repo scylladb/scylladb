@@ -131,9 +131,11 @@ struct expected_row {
     position_in_partition key() const {
         return pos;
     }
+};
 
-    friend std::ostream& operator<<(std::ostream& out, const expected_row& e) {
-        return out << "{pos=" << e.key() << ", cont=" << bool(e.continuous) << ", dummy=" << bool(e.dummy) << "}";
+template <> struct fmt::formatter<expected_row> : fmt::formatter<std::string_view> {
+    auto format(const expected_row& e, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{pos={}, cont={}, dummy={}}}", e.key(), bool(e.continuous), bool(e.dummy));
     }
 };
 
