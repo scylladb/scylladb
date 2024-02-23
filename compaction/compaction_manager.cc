@@ -1851,6 +1851,9 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
     if (found_maintenance_sstables) {
         co_await perform_offstrategy(t, info);
     }
+    if (utils::get_local_injector().enter("major_compaction_before_cleanup")) {
+        co_await perform_major_compaction(t, info);
+    }
 
     // Called with compaction_disabled
     auto get_sstables = [this, &t] () -> future<std::vector<sstables::shared_sstable>> {
