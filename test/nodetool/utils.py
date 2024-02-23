@@ -74,3 +74,18 @@ def check_nodetool_fails_with_error_contains(
         assert match, f'none of expected errors is found in {out_lines=} and {err_lines}'
 
     _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, matcher)
+
+
+def format_size(v):
+    units = {
+        1 << 40: 'TB',
+        1 << 30: 'GB',
+        1 << 20: 'MB',
+        1 << 10: 'KB',
+    }
+
+    for n, unit in units.items():
+        if v > n:
+            d = v / n
+            return f'{d:.2f} {unit}'
+    return f'{v} bytes'
