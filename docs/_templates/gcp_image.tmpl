@@ -3,12 +3,15 @@
 {{version}}
 {{ '-' * version|length }}
 
-.. list-table::
-   :header-rows: 1
+.. collapse:: View image details
+  {% if latest %}:open:{% endif %}
 
-   * - Image Name
-     - Image ID
-{% for row in data[1:] %}
-   * - {{ row[0] }}
-     - {{ row[1] }}
-{% endfor %}
+  .. list-table::
+    :header-rows: 1
+
+    * - Image Name
+      - Image ID
+  {% for row in data[1:] %}
+    * - {{ row[0] }}
+      - {{ row[1] }}
+  {% endfor %}
