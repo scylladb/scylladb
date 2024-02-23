@@ -338,7 +338,7 @@ future<> default_authorizer::revoke_all(const resource& resource) {
         };
         co_await announce_mutations_with_batching(
                 _group0_client,
-                std::bind_front(&::service::raft_group0_client::start_operation, &_group0_client),
+                [this](abort_source* as) { return _group0_client.start_operation(as); },
                 std::move(gen),
                 &_as);
     } catch (exceptions::request_execution_exception& e) {

@@ -107,7 +107,7 @@ public:
     // Call after `system_keyspace` is initialized.
     future<> init();
 
-    future<> add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as);
+    future<> add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as, std::optional<raft_timeout> timeout = std::nullopt);
 
     future<> add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as);
 
@@ -131,7 +131,7 @@ public:
     // FIXME?: this is kind of annoying for the user.
     // we could forward the call to shard 0, have group0_guard keep a foreign_ptr to the internal data structures on shard 0,
     // and add_entry would again forward to shard 0.
-    future<group0_guard> start_operation(seastar::abort_source* as);
+    future<group0_guard> start_operation(seastar::abort_source* as, std::optional<raft_timeout> timeout = std::nullopt);
 
     template<typename Command>
     requires std::same_as<Command, broadcast_table_query> || std::same_as<Command, write_mutations>
