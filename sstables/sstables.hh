@@ -170,10 +170,6 @@ inline sstable_state state_from_dir(std::string_view dir) {
     throw std::runtime_error(format("Unknown sstable state dir {}", dir));
 }
 
-inline std::ostream& operator<<(std::ostream& o, sstable_state s) {
-    return o << state_to_dir(s);
-}
-
 // FIXME -- temporary, move to fs storage after patching the rest
 inline fs::path make_path(std::string_view table_dir, sstable_state state) {
     fs::path ret(table_dir);
@@ -1041,3 +1037,9 @@ struct sstable_files_snapshot {
 };
 
 } // namespace sstables
+
+template <> struct fmt::formatter<sstables::sstable_state> : fmt::formatter<std::string_view> {
+    auto format(sstables::sstable_state state, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", state_to_dir(state));
+    }
+};
