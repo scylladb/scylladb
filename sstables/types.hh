@@ -74,7 +74,6 @@ struct deletion_time {
     explicit operator tombstone() {
         return !live() ? tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time))) : tombstone();
     }
-    friend std::ostream& operator<<(std::ostream&, const deletion_time&);
 };
 
 struct option {
@@ -112,9 +111,8 @@ enum class indexable_element {
     cell
 };
 
-inline std::ostream& operator<<(std::ostream& o, indexable_element e) {
-    o << static_cast<std::underlying_type_t<indexable_element>>(e);
-    return o;
+inline auto format_as(indexable_element e) {
+    return fmt::underlying(e);
 }
 
 class summary_entry {
@@ -784,3 +782,12 @@ public:
 };
 }
 
+template <>
+struct fmt::formatter<sstables::deletion_time> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const sstables::deletion_time& dt, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(),
+                              "{{timestamp={}, deletion_time={}}}",
+                              dt.marked_for_delete_at, dt.marked_for_delete_at);
+    }
+};
