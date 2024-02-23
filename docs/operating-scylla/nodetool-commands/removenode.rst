@@ -1,12 +1,6 @@
 Nodetool removenode
 ===================
 
-This command allows you to remove a node from the cluster when the status of the node is Down Normal (DN) and all attempts to restore the node have failed.
-
-Provide the Host ID of the node to specify which node you want to remove.
-
-See :doc:`Remove a Node from a Scylla Cluster </operating-scylla/procedures/cluster-management/remove-node>` for more information.
-
 .. warning::
     You must never use the ``nodetool removenode`` command to remove a running node that can be reached by other nodes in the cluster.
     Before using the command, make sure the node is permanently down and cannot be recovered.
@@ -15,7 +9,26 @@ See :doc:`Remove a Node from a Scylla Cluster </operating-scylla/procedures/clus
     See :doc:`Remove a Node from a Scylla Cluster </operating-scylla/procedures/cluster-management/remove-node>` for more information.
 
 
-Usage:
+This command allows you to remove a node from the cluster when the status of the node is Down Normal (DN) and all attempts to restore the node have failed.
+
+The node you are removing, as well as the :ref:`ignored dead nodes <removenode-ignore-dead-nodes>`, 
+are permanently banned from the cluster at the beginning of the procedure. As a result, you 
+won't be able to bring them back, even if the ``removenode`` procedure fails.
+Once a node is banned, the only way forward is to remove or replace it - you won't be able to 
+perform other topology operations, such as decommission or bootstrap, until the banned node 
+is removed from the cluster or replaced.
+
+Prerequisites
+------------------------
+
+Using ``removenode`` requires at least a quorum of nodes in a cluster to be available. 
+If the quorum is lost, it must be restored before you change the cluster topology. 
+See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
+
+Usage
+--------
+
+Provide the Host ID of the node to specify which node you want to remove.
 
 .. code-block:: console
 
@@ -27,19 +40,16 @@ Example:
 
     nodetool removenode 675ed9f4-6564-6dbd-can8-43fddce952gy
 
-Note that all the nodes in the cluster participate in the ``removenode`` operation to sync data if needed. For this reason, the operation will fail if one or more nodes in the cluster are not available.
+
+.. _removenode-ignore-dead-nodes:
+
+Ignoring Dead Nodes
+---------------------
+
+All the nodes in the cluster participate in the ``removenode`` operation to sync data if needed. For this reason, the operation will fail if one or more nodes in the cluster are not available.
 In such a case, to ensure that the operation succeeds, you must explicitly specify a list of unavailable nodes with the ``--ignore-dead-nodes`` option.
 
 Use a comma-separated list to specify the Host IDs of all unavailable nodes in the cluster before specifying the node to remove.
-
-.. warning::
-    Instead of Host IDs, you can specify the IP addresses of all unavailable nodes. However, this feature is deprecated
-    with consistent topology updates enabled and will be removed in a future release. Using Host IDs is recommended.
-
-.. warning::
-    Before you use the ``nodetool removenode --ignore-dead-nodes`` command, you must make sure that both the node you want
-    to remove AND the nodes you want to ignore are permanently down and cannot be recovered. Ignoring a node that is running
-    or a node that is temporarily down and could be later restored in the cluster may result in data loss.
 
 Example:
 
