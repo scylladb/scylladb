@@ -153,6 +153,7 @@ public:
         return {typename R<clustering_key_prefix_view>::bound(bv._prefix.get().view(), inclusive)};
     }
     friend std::ostream& operator<<(std::ostream& out, const bound_view& b) {
-        return out << "{bound: prefix=" << b._prefix.get() << ", kind=" << b._kind << "}";
+        fmt::print(out, "{{bound: prefix={}, kind={}}}", b._prefix.get(), b._kind);
+        return out;
     }
 };

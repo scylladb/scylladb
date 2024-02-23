@@ -287,8 +287,6 @@ public:
     explicit operator bool() const noexcept {
         return _total_space > 0;
     }
-
-    friend std::ostream& operator<<(std::ostream&, const occupancy_stats&);
 };
 
 class basic_region_impl : public allocation_strategy {
@@ -540,3 +538,10 @@ future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 future<> use_standard_allocator_segment_pool_backend(size_t available_memory);
 
 }
+
+template <> struct fmt::formatter<logalloc::occupancy_stats> : fmt::formatter<std::string_view> {
+    auto format(const logalloc::occupancy_stats& stats, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{:.2f}%, {:d} / {:d} [B]",
+                              stats.used_fraction() * 100, stats.used_space(), stats.total_space());
+    }
+};

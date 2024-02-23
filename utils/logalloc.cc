@@ -2451,11 +2451,6 @@ std::unordered_map<std::string, uint64_t> region::collect_stats() const {
     return get_impl().collect_stats();
 }
 
-std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {
-    return out << format("{:.2f}%, {:d} / {:d} [B]",
-        stats.used_fraction() * 100, stats.used_space(), stats.total_space());
-}
-
 occupancy_stats tracker::impl::global_occupancy() const noexcept {
     return occupancy_stats(_segment_pool->total_free_memory(), _segment_pool->total_memory_in_use());
 }

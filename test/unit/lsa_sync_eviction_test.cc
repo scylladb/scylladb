@@ -67,8 +67,9 @@ int main(int argc, char** argv) {
                 });
 
                 auto print_region_stats = [&r] {
-                    std::cout << "Region occupancy: " << r.occupancy()
-                        << format(", {:.2f}% of all memory", (float)r.occupancy().total_space() * 100 / memory::stats().total_memory()) << std::endl;
+                    fmt::print("Region occupancy: {}, {:.2f}% of all memory\n",
+                               r.occupancy(),
+                               (float)r.occupancy().total_space() * 100 / memory::stats().total_memory());
                 };
 
                 std::cout << "Allocated " << refs.size() << " evictable objects" << std::endl;

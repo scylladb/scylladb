@@ -591,15 +591,36 @@ struct hash<managed_bytes> {
 sstring to_hex(const managed_bytes& b);
 sstring to_hex(const managed_bytes_opt& b);
 
-// The operators below are used only by tests.
-
-inline std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
-    for (bytes_view frag : fragment_range(v)) {
-        os << to_hex(frag);
+// The formatters below are used only by tests.
+template <> struct fmt::formatter<managed_bytes_view> : fmt::formatter<std::string_view> {
+    auto format(const managed_bytes_view& v, fmt::format_context& ctx) const {
+        auto out = ctx.out();
+        for (bytes_view frag : fragment_range(v)) {
+            out = fmt::format_to(out, "{}", fmt_hex(frag));
+        }
+        return out;
     }
+};
+inline std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
+    fmt::print(os, "{}", v);
     return os;
 }
+
+template <> struct fmt::formatter<managed_bytes> : fmt::formatter<std::string_view> {
+    auto format(const managed_bytes& b, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", managed_bytes_view(b));
+    }
+};
 inline std::ostream& operator<<(std::ostream& os, const managed_bytes& b) {
-    return (os << managed_bytes_view(b));
+    fmt::print(os, "{}", b);
+    return os;
 }
-std::ostream& operator<<(std::ostream& os, const managed_bytes_opt& b);
+
+template <> struct fmt::formatter<managed_bytes_opt> : fmt::formatter<std::string_view> {
+    auto format(const managed_bytes_opt& opt, fmt::format_context& ctx) const {
+        if (opt) {
+            return fmt::format_to(ctx.out(), "{}", *opt);
+        }
+        return fmt::format_to(ctx.out(), "null");
+    }
+};

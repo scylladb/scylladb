@@ -28,16 +28,9 @@ managed_bytes_opt to_managed_bytes_opt(const bytes_opt& bo) {
 }
 
 sstring to_hex(const managed_bytes& b) {
-    return fmt::to_string(managed_bytes_view(b));
+    return seastar::format("{}", managed_bytes_view(b));
 }
 
 sstring to_hex(const managed_bytes_opt& b) {
     return !b ? "null" : to_hex(*b);
-}
-
-std::ostream& operator<<(std::ostream& os, const managed_bytes_opt& b) {
-    if (b) {
-        return os << *b;
-    }
-    return os << "null";
 }

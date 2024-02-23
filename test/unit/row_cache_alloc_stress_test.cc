@@ -104,9 +104,9 @@ int main(int argc, char** argv) {
                 return memory::stats().free_memory() + logalloc::shard_tracker().occupancy().free_space();
             };
 
-            std::cout << "memtable occupancy: " << mt->occupancy() << "\n";
-            std::cout << "Cache occupancy: " << tracker.region().occupancy() << "\n";
-            std::cout << "Reclaimable memory: " << reclaimable_memory() << "\n";
+            fmt::print("memtable occupancy: {}\n", mt->occupancy());
+            fmt::print("Cache occupancy: {}\n", tracker.region().occupancy());
+            fmt::print("Reclaimable memory: {}\n", reclaimable_memory());
 
             // We need to have enough Free memory to copy memtable into cache
             // When this assertion fails, increase amount of memory
@@ -140,16 +140,16 @@ int main(int argc, char** argv) {
                 for (auto&& key : keys) {
                     cache.touch(key);
                 }
-                std::cout << "Reclaimable memory: " << reclaimable_memory() << "\n";
-                std::cout << "Cache occupancy: " << tracker.region().occupancy() << "\n";
+                fmt::print("Reclaimable memory: {}\n", reclaimable_memory());
+                fmt::print("Cache occupancy: {}\n", tracker.region().occupancy());
             };
 
             std::deque<std::unique_ptr<char[]>> stuffing;
             auto fragment_free_space = [&] {
                 stuffing.clear();
-                std::cout << "Reclaimable memory: " << reclaimable_memory() << "\n";
-                std::cout << "Free memory: " << memory::stats().free_memory() << "\n";
-                std::cout << "Cache occupancy: " << tracker.region().occupancy() << "\n";
+                fmt::print("Reclaimable memory: {}\n", reclaimable_memory());
+                fmt::print("Free memory: {}\n", memory::stats().free_memory());
+                fmt::print("Cache occupancy: {}\n", tracker.region().occupancy());
 
                 // Induce memory fragmentation by taking down cache segments,
                 // which should be evicted in random order, and inducing high
@@ -159,10 +159,10 @@ int main(int argc, char** argv) {
                     stuffing.emplace_back(std::make_unique<char[]>(logalloc::segment_size / 2 + 1));
                 }
 
-                std::cout << "After fragmenting:\n";
-                std::cout << "Reclaimable memory: " << reclaimable_memory() << "\n";
-                std::cout << "Free memory: " << memory::stats().free_memory() << "\n";
-                std::cout << "Cache occupancy: " << tracker.region().occupancy() << "\n";
+                fmt::print("After fragmenting:\n");
+                fmt::print("Reclaimable memory: {}\n", reclaimable_memory());
+                fmt::print("Free memory: {}\n", memory::stats().free_memory());
+                fmt::print("Cache occupancy: {}\n", tracker.region().occupancy());
             };
 
             fill_cache_to_the_top();
