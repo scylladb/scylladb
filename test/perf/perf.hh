@@ -23,6 +23,8 @@
 #include <chrono>
 #include <iosfwd>
 #include <boost/range/irange.hpp>
+#include <boost/range/adaptor/transformed.hpp>
+#include <vector>
 
 template <typename Func>
 static
@@ -158,6 +160,21 @@ struct perf_result {
 };
 
 std::ostream& operator<<(std::ostream& os, const perf_result& result);
+
+struct aggregated_perf_results {
+    struct throughput_t {
+        double median;
+        double median_absolute_deviation;
+        double min;
+        double max;
+    };
+    throughput_t throughput;
+    perf_result median_by_throughput; // Simplification, median element is considered based on throughput value
+
+    aggregated_perf_results(std::vector<perf_result>& results);
+};
+
+std::ostream& operator<<(std::ostream& os, const aggregated_perf_results& result);
 
 // Use to make a perf_result with aio_writes added. Need to give "update" as
 // update-func to time_parallel_ex to make it work.
