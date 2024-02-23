@@ -177,3 +177,19 @@ def test_toppartitions_invalid_sampler(nodetool):
         tuple(args),
         {},
         [f"{invalid_samplers} is not a valid sampler, choose one of: READS, WRITES"])
+
+
+@pytest.mark.parametrize("positional_args",
+                         [
+                             ("ks0",),
+                             ("ks0", "cf0"),
+                             ("ks0", "50000"),
+                         ])
+def test_toppartitions_missing_positional_args(nodetool, positional_args):
+    # toppartitions allows 3 positional args. either specify all of them,
+    # or none of them, but not some of them.
+    check_nodetool_fails_with_error_contains(
+        nodetool,
+        tuple(["toppartitions", *positional_args]),
+        {},
+        ["toppartitions requires either a keyspace, column family name and duration or no arguments at all"])

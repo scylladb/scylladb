@@ -2061,6 +2061,24 @@ void table_stats_operation(scylla_rest_client& client, const bpo::variables_map&
 
 void toppartitions_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     // sanity check the arguments
+    sstring table_filters;
+    int duration_in_milli = 0;
+    const auto positional_args = {"keyspace", "table", "duration-milli"};
+    if (std::ranges::all_of(positional_args,
+                            [&] (auto& arg) { return vm.count(arg); })) {
+        table_filters = seastar::format("{}:{}",
+                                        vm["keyspace"].as<sstring>(),
+                                        vm["table"].as<sstring>());
+        duration_in_milli = vm["duration-milli"].as<int>();
+    } else if (std::ranges::none_of(positional_args,
+                                    [&] (auto& arg) { return vm.count(arg); })) {
+        table_filters = vm["cf-filters"].as<sstring>();
+        duration_in_milli = vm["duration"].as<int>();
+    } else {
+        // either use positional args, or none of them. but not some of them.
+        throw std::invalid_argument("toppartitions requires either a keyspace, column family name and duration or no arguments at all");
+    }
+
     auto list_size = vm["size"].as<int>();
     auto capacity = vm["capacity"].as<int>();
     if (list_size >= capacity) {
@@ -2079,16 +2097,6 @@ void toppartitions_operation(scylla_rest_client& client, const bpo::variables_ma
         }
     }
     // prepare the query params
-    int duration_in_milli = vm["duration"].as<int>();
-    sstring table_filters = vm["cf-filters"].as<sstring>();
-    if (vm.contains("keyspace") && vm.contains("table") && vm.contains("duration-milli")) {
-        table_filters = seastar::format("{}:{}",
-                                        vm["keyspace"].as<sstring>(),
-                                        vm["table"].as<sstring>());
-        duration_in_milli = vm["duration-milli"].as<int>();
-    } else if (vm.contains("keyspace")) {
-        throw std::invalid_argument("toppartitions requires either a keyspace, column family name and duration or no arguments at all");
-    }
     std::unordered_map<sstring, sstring> params{
         {"duration", fmt::to_string(duration_in_milli)},
         {"capacity", fmt::to_string(capacity)},
