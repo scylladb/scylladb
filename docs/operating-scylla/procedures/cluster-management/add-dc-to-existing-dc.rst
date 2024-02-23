@@ -1,13 +1,14 @@
 Adding a New Data Center Into an Existing ScyllaDB Cluster
 ***********************************************************
 
+.. scylladb_include_flag:: upgrade-note-add-new-dc.rst
 
 The following procedure specifies how to add a Data Center (DC) to a live Scylla Cluster, in a single data center, :ref:`multi-availability zone <faq-best-scenario-node-multi-availability-zone>`, or multi-datacenter. Adding a DC out-scales the cluster and provides higher availability (HA).
 
 The procedure includes:
 
 * Install nodes on the new DC.
-* Add the new nodes one by one to the cluster.
+* Add the new nodes to the cluster.
 * Update the replication strategy of the selected keyspace/keyspaces to use with the new DC.
 * Rebuild new nodes
 * Run full cluster repair
@@ -33,6 +34,8 @@ Prerequisites
 #. Install the new **clean** Scylla nodes (See `Clean Data from Nodes`_ below) on the new datacenter, see :doc:`Getting Started </getting-started/index>` for further instructions, create as many nodes that you need.
    Follow the Scylla install procedure up to ``scylla.yaml`` configuration phase.
    In the case that the node starts during the installation process follow :doc:`these instructions </operating-scylla/procedures/cluster-management/clear-data>`.
+
+.. include:: /operating-scylla/procedures/cluster-management/_common/quorum-requirement.rst
 
 Clean Data from Nodes
 ---------------------
@@ -107,7 +110,7 @@ Add New DC
       # prefer_local=<false | true>
       # dc_suffix=<Data Center name suffix, used by EC2SnitchXXX snitches>
 
-#. In the **existing datacenter(s)** restart Scylla nodes one by one.
+#. In the **existing datacenter(s)**, restart the ScyllaDB nodes one by one.
 
    .. include:: /rst_include/scylla-commands-restart-index.rst
 
@@ -124,7 +127,7 @@ Add New DC
 
 #. In the **new datacenter**, set the DC and Rack Names (see step number **three** for more details).
 
-#. In the **new datacenter**, start Scylla nodes one by one using.
+#. In the **new datacenter**, start the ScyllaDB nodes one by one.
 
    .. include:: /rst_include/scylla-commands-start-index.rst
 
@@ -200,10 +203,6 @@ Add New DC
 
 #. If you are using Scylla Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using Scylla Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_ and Manager can access the new DC.
 
-Handling Failures
-=================
-
-If one of the new nodes starts bootstrapping but then fails in the middle e.g. due to a power loss, you can retry bootstrap (by restarting the node). If you don't want to retry, or the node refuses to boot on subsequent attempts, consult the :doc:`Handling Membership Change Failures document</operating-scylla/procedures/cluster-management/handling-membership-change-failures>`.
 
 Configure the Client not to Connect to the New DC
 -------------------------------------------------
@@ -232,3 +231,8 @@ Additional Resources for Java Clients
 
 * `DCAwareRoundRobinPolicy.Builder <https://java-driver.docs.scylladb.com/scylla-3.10.2.x/api/com/datastax/driver/core/policies/DCAwareRoundRobinPolicy.Builder.html>`_
 * `DCAwareRoundRobinPolicy <https://java-driver.docs.scylladb.com/scylla-3.10.2.x/api/com/datastax/driver/core/policies/DCAwareRoundRobinPolicy.html>`_
+
+
+.. _add-dc-upgrade-info:
+
+.. scylladb_include_flag:: upgrade-warning-add-new-node-or-dc.rst
