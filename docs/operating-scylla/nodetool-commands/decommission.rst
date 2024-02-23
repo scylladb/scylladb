@@ -3,6 +3,10 @@ nodetool decommission
 
 **decommission** - Deactivate a selected node by streaming its data to the next node in the ring.
 
+.. note::
+
+    You cannot decomission a node if any existing node is down.
+
 For example:
 
 ``nodetool decommission``
