@@ -151,7 +151,7 @@ public:
         }
         return false;
     }
-    // the other inverval is before this interval (works only for non wrapped intervals)
+    // the other interval is before this interval (works only for non wrapped intervals)
     // Comparator must define a total ordering on T.
     bool other_is_before(const wrapping_interval<T>& o, IntervalComparatorFor<T> auto&& cmp) const {
         assert(!is_wrap_around(cmp));
