@@ -147,14 +147,25 @@ std::pair<data_dictionary::database, std::unique_ptr<data_dictionary::impl>> mak
 
 raw_value evaluate_with_bind_variables(const expression& e, std::vector<raw_value> bind_variable_values);
 
-// FIXME: convert to formatter, but got into a template loop since fmt prefers the fallback formatter for
-// sstring rather than the actual formatter -> std::pair formatting fails -> loop.
-inline
-std::ostream&
-operator<<(std::ostream& os, const mutation_column_value& mcv) {
-    return os << fmt::format("{{{}/ts={}/ttl={}}}", mcv.value, mcv.timestamp, mcv.ttl);
-}
 
 }  // namespace test_utils
 }  // namespace expr
 }  // namespace cql3
+
+template <> struct fmt::formatter<cql3::expr::test_utils::mutation_column_value> : fmt::formatter<std::string_view> {
+    auto format(const cql3::expr::test_utils::mutation_column_value& mcv, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{{}/ts={}/ttl={}}}", mcv.value, mcv.timestamp, mcv.ttl);
+
+    }
+};
+
+namespace cql3::expr::test_utils {
+
+inline
+std::ostream&
+operator<<(std::ostream& os, const mutation_column_value& mcv) {
+    fmt::print(os, "{}", mcv);
+    return os;
+}
+
+}

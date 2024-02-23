@@ -30,11 +30,12 @@ void scheduling_latency_measurer::schedule_tick() {
     }));
 }
 
-std::ostream& operator<<(std::ostream& out, const scheduling_latency_measurer& slm) {
+auto fmt::formatter<scheduling_latency_measurer>::format(const scheduling_latency_measurer& slm, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     auto to_ms = [] (int64_t nanos) {
         return float(nanos) / 1e6;
     };
-    return out << fmt::format("{{count: {}, "
+    return fmt::format_to(ctx.out(), "{{count: {}, "
                          //"min: {:.6f} [ms], "
                          //"50%: {:.6f} [ms], "
                          //"90%: {:.6f} [ms], "
@@ -48,11 +49,10 @@ std::ostream& operator<<(std::ostream& out, const scheduling_latency_measurer& s
         to_ms(slm.max().count()));
 }
 
-std::ostream&
-operator<<(std::ostream& os, const perf_result& result) {
-    fmt::print(os, "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:8} errors)",
+auto fmt::formatter<perf_result>::format(const perf_result& result, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:8} errors)",
             result.throughput, result.mallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.errors);
-    return os;
 }
 
 aio_writes_result_mixin::aio_writes_result_mixin()
