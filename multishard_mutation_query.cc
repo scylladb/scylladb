@@ -813,7 +813,7 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
             return result_builder.query(db, gs, query_cmd, range_opt->range, gts, timeout);
         }));
 
-        // Substract result from limit, watch for underflow
+        // Subtract result from limit, watch for underflow
         query_cmd.partition_limit -= std::min(query_cmd.partition_limit, ResultBuilder::get_partition_count(r));
         query_cmd.set_row_limit(query_cmd.get_row_limit() - std::min(query_cmd.get_row_limit(), ResultBuilder::get_row_count(r)));
 
