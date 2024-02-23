@@ -36,7 +36,7 @@ def check_nodetool_fails_with(
             if expected_error in err_lines or expected_error in out_lines:
                 match = True
                 break
-        assert match
+        assert match, f'expected error not found in {err_lines=}, {out_lines}'
 
     _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, matcher)
 
@@ -52,7 +52,7 @@ def check_nodetool_fails_with_all(
         for expected_error in expected_errors:
             if expected_error in err_lines or expected_error in out_lines:
                 match += 1
-        assert match == len(expected_errors)
+        assert match == len(expected_errors), f'not all expected errors are found in {out_lines=} and {err_lines}'
 
     _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, matcher)
 
@@ -71,6 +71,6 @@ def check_nodetool_fails_with_error_contains(
                     match = True
                     break
 
-        assert match
+        assert match, f'none of expected errors is found in {out_lines=} and {err_lines}'
 
     _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, matcher)
