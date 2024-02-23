@@ -5962,7 +5962,7 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
     }
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         if (const auto *p = _topology_state_machine._topology.find(params.host_id)) {
             const auto& rs = p->second;

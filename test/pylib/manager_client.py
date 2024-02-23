@@ -267,7 +267,8 @@ class ManagerClient():
                          config: Optional[dict[str, Any]] = None,
                          property_file: Optional[dict[str, Any]] = None,
                          start: bool = True,
-                         expected_error: Optional[str] = None) -> ServerInfo:
+                         expected_error: Optional[str] = None,
+                         timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> ServerInfo:
         """Add a new server"""
         try:
             data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, expected_error)
@@ -282,7 +283,7 @@ class ManagerClient():
                 await self.others_not_see_server(replaced_ip)
 
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
-                                                     timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+                                                     timeout=timeout)
         except Exception as exc:
             raise Exception("Failed to add server") from exc
         try:
