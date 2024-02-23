@@ -2,52 +2,44 @@
 Adding a New Node Into an Existing ScyllaDB Cluster (Out Scale)
 =================================================================
 
+.. scylladb_include_flag:: upgrade-note-add-new-node.rst
+
 When you add a new node, other nodes in the cluster stream data to the new node. This operation is called bootstrapping and may
 be time-consuming, depending on the data size and network bandwidth. If using a :ref:`multi-availability-zone <faq-best-scenario-node-multi-availability-zone>`, make sure they are balanced.
-
-.. note::
-
-    Adding a new node requires at least a quorum of nodes in a cluster to be available. 
-    If the quorum is lost, it must be restored before a new node is added. 
-    See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
 
 Prerequisites
 -------------
 
-#. Before adding the new node, check the node's status in the cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status>` command. You cannot add new nodes to the cluster if any nodes are down.
+Check the Status of Nodes
+===========================
 
-    For example:
+You cannot add new nodes to the cluster if any existing node is down.
+Before adding new nodes, check the status of the nodes in the cluster using 
+:doc:`nodetool status </operating-scylla/nodetool-commands/status>` command. 
 
-    .. code-block:: shell
+Collect Cluster Information
+=============================
 
-       Datacenter: DC1
-       Status=Up/Down
-       State=Normal/Leaving/Joining/Moving
-       --  Address        Load       Tokens  Owns (effective)                         Host ID         Rack
-       UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
-       DN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
-
-    In the example above,  the node with the IP address 192.168.1.202 has a status of Down (DN). To proceed, you need to start the node that is down or :doc:`remove it from the cluster </operating-scylla/procedures/cluster-management/remove-node/>`.
-
-#. Login to one of the nodes in the cluster to collect the following information:
+Log into one of the nodes in the cluster to collect the following information:
 
     .. include:: /operating-scylla/procedures/cluster-management/_common/prereq.rst
 
-    .. _add-node-to-cluster-procedure:
+
+.. _add-node-to-cluster-procedure:
 
 
 Procedure
 ---------
 
-#. Install Scylla on a new node. See :doc:`Getting Started</getting-started/index>` for further instructions - follow the Scylla installation procedure up to ``scylla.yaml`` configuration phase. Make sure that the Scylla version of the new node is identical to the other nodes in the cluster. 
+#. Install ScyllaDB on the nodes you want to add to the cluster. See :doc:`Getting Started</getting-started/index>` for further instructions. Follow the Scylla installation procedure up to ``scylla.yaml`` configuration phase. Make sure that the Scylla version of the new node is identical to the other nodes in the cluster. 
 
-    If the node starts during the process, follow :doc:`What to do if a Node Starts Automatically </operating-scylla/procedures/cluster-management/clear-data>`.
+   If the node starts during the process, follow :doc:`What to do if a Node Starts Automatically </operating-scylla/procedures/cluster-management/clear-data>`.
 
-    .. include:: /operating-scylla/procedures/cluster-management/_common/match_version.rst
+   .. include:: /operating-scylla/procedures/cluster-management/_common/match_version.rst
 
-    .. include:: /getting-started/_common/note-io.rst
+   .. include:: /getting-started/_common/note-io.rst
 
-#. In the ``scylla.yaml`` file in ``/etc/scylla/``, edit the following parameters:
+#. On each node, edit the ``scylla.yaml`` file ``/etc/scylla/`` to configure the parameters listed below.
 
     * **cluster_name** - Specifies the name of the cluster.
 
@@ -59,18 +51,18 @@ Procedure
 
     * **seeds** - Specifies the IP address of an existing node in the cluster. The new node will use this IP to connect to the cluster and learn the cluster topology and state.
 
-#. Start the ScyllaDB node with the following command:
+#. Start the nodes with the following command:
 
     .. include:: /rst_include/scylla-commands-start-index.rst
 
-#. Verify that the node was added to the cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status>` command. Other nodes in the cluster will be streaming data to the new node, so the new node will be in Up Joining (UJ) status. Wait until the node's status changes to Up Normal (UN) - the time depends on the data size and network bandwidth.
+#. Verify that the nodes were added to the cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status>` command. Other nodes in the cluster will be streaming data to the new nodes, so the new nodes will be in Up Joining (UJ) status. Wait until the nodes' status changes to Up Normal (UN) - the time depends on the data size and network bandwidth.
 
-    **For example:**
+   **Example:**
 
-    Nodes in the cluster are streaming data to the new node:
+   Nodes in the cluster are streaming data to the new node:
 
-    .. code-block:: shell
-
+   .. code-block:: shell
+        
        Datacenter: DC1
        Status=Up/Down
        State=Normal/Leaving/Joining/Moving
@@ -93,8 +85,8 @@ Procedure
 
 #. When the new node status is Up Normal (UN), run the :doc:`nodetool cleanup </operating-scylla/nodetool-commands/cleanup>` command on all nodes in the cluster except for the new node that has just been added. Cleanup removes keys that were streamed to the newly added node and are no longer owned by the node.
 
-    .. note::
-
+   .. note::
+    
        To prevent data resurrection, it's essential to complete cleanup after adding nodes and before any node is decommissioned or removed.
        However, cleanup may consume significant resources. Use the following guideline to reduce cleanup impact:
 
@@ -108,7 +100,7 @@ Procedure
 
 #. If you are using Scylla Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using Scylla Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_, and Manager can access it.
 
-Handling Failures
-=================
 
-If the node starts bootstrapping but then fails in the middle e.g. due to a power loss, you can retry bootstrap (by restarting the node). If you don't want to retry, or the node refuses to boot on subsequent attempts, consult the :doc:`Handling Membership Change Failures document</operating-scylla/procedures/cluster-management/handling-membership-change-failures>`.
+.. _add-new-node-upgrade-info:
+
+.. scylladb_include_flag:: upgrade-warning-add-new-node-or-dc.rst
