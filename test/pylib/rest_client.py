@@ -162,6 +162,17 @@ class ScyllaRESTAPIClient():
         assert(type(data) == list)
         return data
 
+    async def get_ownership(self, dst_server_ip: IPAddress, keyspace: str = None, table: str = None) -> list:
+        """Retrieve the ownership"""
+        if keyspace is None and table is None:
+            api_path = f"/storage_service/ownership/"
+        elif table is None:
+            api_path = f"/storage_service/ownership/{keyspace}"
+        else:
+            api_path = f"/storage_service/ownership/{keyspace}?cf={table}"
+        data = await self.client.get_json(api_path, dst_server_ip)
+        return data
+
     async def get_down_endpoints(self, node_ip: IPAddress) -> list[IPAddress]:
         """Retrieve down endpoints from gossiper's point of view """
         data = await self.client.get_json("/gossiper/endpoint/down/", node_ip)
