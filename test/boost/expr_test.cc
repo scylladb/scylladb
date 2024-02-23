@@ -26,6 +26,14 @@ using namespace cql3;
 using namespace cql3::expr;
 using namespace cql3::expr::test_utils;
 
+namespace cql3::expr {
+// required by BOOST_REQUIRE_EQUAL
+std::ostream& boost_test_print_type(std::ostream& os, const std::vector<cql3::expr::expression>& v) {
+    fmt::print(os, "{{{}}}", fmt::join(v, ", "));
+    return os;
+}
+}
+
 bind_variable new_bind_variable(int bind_index, data_type type = int32_type) {
     return bind_variable {
         .bind_index = bind_index,
