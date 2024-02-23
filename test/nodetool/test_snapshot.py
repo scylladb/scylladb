@@ -104,6 +104,16 @@ Total TrueDiskSpaceUsed: 923 KiB
         assert res == cassandra_expected_output
 
 
+def test_listsnapshots_no_snapshots(nodetool, request):
+    res = nodetool("listsnapshots", expected_requests=[
+        expected_request("GET", "/storage_service/snapshots", response=[]),
+        ])
+    if request.config.getoption("nodetool") == "scylla":
+        assert res == "There are no snapshots\n"
+    else:
+        assert res == "Snapshot Details: \nThere are no snapshots\n"
+
+
 def check_snapshot_out(res, tag, ktlist, skip_flush):
     """Check that the output of nodetool snapshot contains the expected messages"""
 

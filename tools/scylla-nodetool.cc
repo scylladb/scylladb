@@ -732,6 +732,12 @@ void gossipinfo_operation(scylla_rest_client& client, const bpo::variables_map&)
 
 void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const auto snapshots = client.get("/storage_service/snapshots");
+
+    if (snapshots.GetArray().Empty()) {
+        fmt::print("There are no snapshots\n");
+        return;
+    }
+
     const auto true_size = client.get("/storage_service/snapshots/size/true").GetInt64();
 
     std::array<std::string, 5> header_row{"Snapshot name", "Keyspace name", "Column family name", "True size", "Size on disk"};
