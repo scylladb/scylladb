@@ -82,6 +82,8 @@ inline bound_kind boundary_to_end_bound(bound_kind_m kind) {
     return (kind == bound_kind_m::incl_end_excl_start) ? bound_kind::incl_end : bound_kind::excl_end;
 }
 
-std::ostream& operator<<(std::ostream& out, sstables::bound_kind_m kind);
-
 }
+
+template <> struct fmt::formatter<sstables::bound_kind_m> : fmt::formatter<std::string_view> {
+    auto format(sstables::bound_kind_m, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

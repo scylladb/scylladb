@@ -11,6 +11,7 @@
 #include "sstables/exceptions.hh"
 #include "sstables/random_access_reader.hh"
 #include "sstables/mx/types.hh"
+#include <fmt/format.h>
 
 namespace sstables {
 
@@ -45,36 +46,39 @@ future<int64_t> read_signed_vint(random_access_reader& in) {
     return read_vint_impl<int64_t>(in);
 }
 
-std::ostream& operator<<(std::ostream& out, sstables::bound_kind_m kind) {
+}  // namespace sstables
+
+auto fmt::formatter<sstables::bound_kind_m>::format(sstables::bound_kind_m kind, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name;
     switch (kind) {
-    case sstables::bound_kind_m::excl_end:
-        out << "excl_end";
+    using enum sstables::bound_kind_m;
+    case excl_end:
+        name = "excl_end";
         break;
-    case sstables::bound_kind_m::incl_start:
-        out << "incl_start";
+    case incl_start:
+        name = "incl_start";
         break;
-    case sstables::bound_kind_m::excl_end_incl_start:
-        out << "excl_end_incl_start";
+    case excl_end_incl_start:
+        name = "excl_end_incl_start";
         break;
-    case sstables::bound_kind_m::static_clustering:
-        out << "static_clustering";
+    case static_clustering:
+        name = "static_clustering";
         break;
-    case sstables::bound_kind_m::clustering:
-        out << "clustering";
+    case clustering:
+        name = "clustering";
         break;
-    case sstables::bound_kind_m::incl_end_excl_start:
-        out << "incl_end_excl_start";
+    case incl_end_excl_start:
+        name = "incl_end_excl_start";
         break;
-    case sstables::bound_kind_m::incl_end:
-        out << "incl_end";
+    case incl_end:
+        name = "incl_end";
         break;
-    case sstables::bound_kind_m::excl_start:
-        out << "excl_start";
+    case excl_start:
+        name = "excl_start";
         break;
     default:
-        out << static_cast<unsigned>(kind);
+        return fmt::format_to(ctx.out(), "{}", underlying(kind));
     }
-    return out;
+    return fmt::format_to(ctx.out(), "{}", name);
 }
-
-}  // namespace sstables
