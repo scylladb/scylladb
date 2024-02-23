@@ -426,41 +426,47 @@ public:
         return (_start == other._start) && (_end == other._end) && (_singular == other._singular);
     }
 
-    template<typename U>
-    friend std::ostream& operator<<(std::ostream& out, const wrapping_interval<U>& r);
 private:
     friend class interval<T>;
 };
 
 template<typename U>
-std::ostream& operator<<(std::ostream& out, const wrapping_interval<U>& r) {
-    if (r.is_singular()) {
-        fmt::print(out, "{{{}}}", r.start()->value());
+struct fmt::formatter<wrapping_interval<U>> : fmt::formatter<std::string_view> {
+    auto format(const wrapping_interval<U>& r, fmt::format_context& ctx) const {
+        auto out = ctx.out();
+        if (r.is_singular()) {
+            return fmt::format_to(out, "{{{}}}", r.start()->value());
+        }
+
+        if (!r.start()) {
+            out = fmt::format_to(out, "(-inf, ");
+        } else {
+            if (r.start()->is_inclusive()) {
+                out = fmt::format_to(out, "[");
+            } else {
+                out = fmt::format_to(out, "(");
+            }
+            out = fmt::format_to(out, "{},", r.start()->value());
+        }
+
+        if (!r.end()) {
+            out = fmt::format_to(out, "+inf)");
+        } else {
+            out = fmt::format_to(out, "{}", r.end()->value());
+            if (r.end()->is_inclusive()) {
+                out = fmt::format_to(out, "]");
+            } else {
+                out = fmt::format_to(out, ")");
+            }
+        }
+
         return out;
     }
+};
 
-    if (!r.start()) {
-        out << "(-inf, ";
-    } else {
-        if (r.start()->is_inclusive()) {
-            out << "[";
-        } else {
-            out << "(";
-        }
-        fmt::print(out, "{},", r.start()->value());
-    }
-
-    if (!r.end()) {
-        out << "+inf)";
-    } else {
-        fmt::print(out, "{}", r.end()->value());
-        if (r.end()->is_inclusive()) {
-            out << "]";
-        } else {
-            out << ")";
-        }
-    }
-
+template<typename U>
+std::ostream& operator<<(std::ostream& out, const wrapping_interval<U>& r) {
+    fmt::print(out, "{}", r);
     return out;
 }
 
@@ -727,13 +733,20 @@ public:
         return {};
     }
 
-    template<typename U>
-    friend std::ostream& operator<<(std::ostream& out, const interval<U>& r);
+    friend class fmt::formatter<interval<T>>;
+};
+
+template<typename U>
+struct fmt::formatter<interval<U>> : fmt::formatter<std::string_view> {
+    auto format(const interval<U>& r, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", r._interval);
+    }
 };
 
 template<typename U>
 std::ostream& operator<<(std::ostream& out, const interval<U>& r) {
-    return out << r._interval;
+    fmt::print(out, "{}", r);
+    return out;
 }
 
 template<template<typename> typename T, typename U>
