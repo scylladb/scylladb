@@ -30,7 +30,6 @@
 #include <seastar/net/inet_address.hh>
 
 #include <stdexcept>
-#include <yaml-cpp/yaml.h>
 #include <ranges>
 #include <unordered_map>
 
@@ -38,6 +37,7 @@
 #include "gms/application_state.hh"
 #include "db_clock.hh"
 #include "log.hh"
+#include "tools/format_printers.hh"
 #include "tools/utils.hh"
 #include "utils/http.hh"
 #include "utils/human_readable.hh"
@@ -305,6 +305,29 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     }
 }
 
+std::string format_compacted_at(int64_t compacted_at) {
+    const auto compacted_at_time = std::time_t(compacted_at / 1000);
+    const auto milliseconds = compacted_at % 1000;
+    return fmt::format("{:%FT%T}.{}", fmt::localtime(compacted_at_time), milliseconds);
+}
+
+template<typename Writer, typename Entry>
+void print_compactionhistory(const std::vector<Entry>& history) {
+    Writer writer(std::cout);
+    auto root = writer.map();
+    auto seq = root.add_seq("CompactionHistory");
+    for (const auto& e : history) {
+        auto output = seq->add_map();
+        output->add_item("id", fmt::to_string(e.id));
+        output->add_item("columnfamily_name", e.table);
+        output->add_item("keyspace_name", e.keyspace);
+        output->add_item("compacted_at", format_compacted_at(e.compacted_at));
+        output->add_item("bytes_in", e.bytes_in);
+        output->add_item("bytes_out", e.bytes_out);
+        output->add_item("rows_merged", "");
+    }
+}
+
 void compactionhistory_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const auto format = vm["format"].as<sstring>();
 
@@ -339,12 +362,6 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
 
     std::ranges::sort(history, [] (const history_entry& a, const history_entry& b) { return a.compacted_at > b.compacted_at; });
 
-    const auto format_compacted_at = [] (int64_t compacted_at) {
-        const auto compacted_at_time = std::time_t(compacted_at / 1000);
-        const auto milliseconds = compacted_at % 1000;
-        return fmt::format("{:%FT%T}.{}", fmt::localtime(compacted_at_time), milliseconds);
-    };
-
     if (format == "text") {
         std::array<std::string, 7> header_row{"id", "keyspace_name", "columnfamily_name", "compacted_at", "bytes_in", "bytes_out", "rows_merged"};
         std::array<size_t, 7> max_column_length{};
@@ -374,61 +391,9 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
             fmt::print(std::cout, fmt::runtime(regular_row_format.c_str()), r[0], r[1], r[2], r[3], r[4], r[5], r[6]);
         }
     } else if (format == "json") {
-        rjson::streaming_writer writer;
-
-        writer.StartObject();
-        writer.Key("CompactionHistory");
-        writer.StartArray();
-
-        for (const auto& e : history) {
-            writer.StartObject();
-            writer.Key("id");
-            writer.String(fmt::to_string(e.id));
-            writer.Key("columnfamily_name");
-            writer.String(e.table);
-            writer.Key("keyspace_name");
-            writer.String(e.keyspace);
-            writer.Key("compacted_at");
-            writer.String(format_compacted_at(e.compacted_at));
-            writer.Key("bytes_in");
-            writer.Int64(e.bytes_in);
-            writer.Key("bytes_out");
-            writer.Int64(e.bytes_out);
-            writer.Key("rows_merged");
-            writer.String("");
-            writer.EndObject();
-        }
-
-        writer.EndArray();
-        writer.EndObject();
+        print_compactionhistory<json_writer>(history);
     } else if (format == "yaml") {
-        YAML::Emitter yout(std::cout);
-
-        yout << YAML::BeginMap;
-        yout << YAML::Key << "CompactionHistory";
-        yout << YAML::BeginSeq;
-
-        for (const auto& e : history) {
-            yout << YAML::BeginMap;
-            yout << YAML::Key << "id";
-            yout << YAML::Value << fmt::to_string(e.id);
-            yout << YAML::Key << "columnfamily_name";
-            yout << YAML::Value << e.table;
-            yout << YAML::Key << "keyspace_name";
-            yout << YAML::Value << e.keyspace;
-            yout << YAML::Key << "compacted_at";
-            yout << YAML::Value << YAML::SingleQuoted << format_compacted_at(e.compacted_at);
-            yout << YAML::Key << "bytes_in";
-            yout << YAML::Value << e.bytes_in;
-            yout << YAML::Key << "bytes_out";
-            yout << YAML::Value << e.bytes_out;
-            yout << YAML::Key << "rows_merged";
-            yout << YAML::Value << YAML::SingleQuoted << "";
-            yout << YAML::EndMap;
-        }
-
-        yout << YAML::EndSeq;
-        yout << YAML::EndMap;
+        print_compactionhistory<yaml_writer>(history);
     }
 }
 
@@ -1461,63 +1426,6 @@ std::map<sstring, std::vector<sstring>> get_ks_to_cfs(scylla_rest_client& client
     return keyspaces;
 }
 
-// inspired by http://wg21.link/p2098
-template<typename T, template<typename...> class C>
-struct is_specialization_of : std::false_type {};
-template<template<typename...> class C, typename... Args>
-struct is_specialization_of<C<Args...>, C> : std::true_type {};
-template<typename T, template<typename...> class C>
-inline constexpr bool is_specialization_of_v = is_specialization_of<T, C>::value;
-template<typename T>
-concept is_vector = is_specialization_of_v<T, std::vector>;
-
-using metrics_value = std::variant<bool,
-                                   double,
-                                   int64_t,
-                                   uint64_t,
-                                   std::string,
-                                   std::vector<std::string>>;
-void dump_map_to_yaml(YAML::Emitter& emitter,
-                      const std::map<std::string, metrics_value>& map) {
-    for (auto& [key, value] : map) {
-        emitter << YAML::Key << key;
-        emitter << YAML::Value;
-        std::visit([&] (auto&& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::convertible_to<T, std::string>) {
-                emitter << YAML::SingleQuoted << std::string(v);
-            } else if constexpr (is_vector<T>) {
-                emitter << YAML::BeginSeq;
-                for (auto& element : v) {
-                    emitter << element;
-                }
-                emitter << YAML::EndSeq;
-            } else {
-                emitter << v;
-            }
-        }, value);
-    }
-}
-
-void dump_map_to_json(rjson::streaming_writer& writer,
-                      const std::map<std::string, metrics_value>& map) {
-    for (auto& [key, value] : map) {
-        writer.Key(key);
-        std::visit([&] (auto&& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (is_vector<T>) {
-                writer.StartArray();
-                for (auto& element : v) {
-                    writer.Write(element);
-                }
-                writer.EndArray();
-            } else {
-                writer.Write(v);
-            }
-        }, value);
-    }
-}
-
 class table_metrics {
     scylla_rest_client& _client;
     std::string _ks_name;
@@ -1964,9 +1872,10 @@ void table_stats_print_plain(scylla_rest_client& client,
     }
 }
 
-void table_stats_print_json(scylla_rest_client& client,
-                            const table_filter& is_included,
-                            bool human_readable) {
+template<typename Writer>
+void table_stats_print(scylla_rest_client& client,
+                       const table_filter& is_included,
+                       bool human_readable) {
     // {
     //     'total_number_of_tables': ...,
     //     'keyspace1' : {
@@ -1982,63 +1891,28 @@ void table_stats_print_json(scylla_rest_client& client,
     //     }
     //     # ...
     // }
-    rjson::streaming_writer writer;
-    writer.StartObject();
-    writer.Key("total_number_of_tables");
-    writer.Write(client.get("/column_family/").GetArray().Size());
+    Writer writer(std::cout);
+    auto keyspaces_out = writer.map();
+    keyspaces_out.add_item("total_number_of_tables",
+                           client.get("/column_family/").GetArray().Size());
     for (auto& [keyspace_name, table_names] : get_ks_to_cfs(client)) {
         keyspace_stats keyspace;
         for (auto& table_name : table_names) {
             keyspace.add(table_metrics(client, keyspace_name, table_name),
                          is_included(keyspace_name, table_name));
         }
-        writer.Key(keyspace_name);
-        writer.StartObject();
-        dump_map_to_json(writer, keyspace.to_map());
-        writer.Key("tables");
-        writer.StartObject();
+        auto ks_out = keyspaces_out.add_map(keyspace_name);
+        for (auto& [key, value] : keyspace.to_map()) {
+            ks_out->add_item(key, value);
+        }
+        auto cfs_out = ks_out->add_map("tables");
         for (auto& table : keyspace.tables) {
-            writer.Key(table.name());
-            writer.StartObject();
-            dump_map_to_json(writer, table.to_map(human_readable));
-            writer.EndObject();
+            auto cf_out = cfs_out->add_map(table.name());
+            for (auto& [key, value] : table.to_map(human_readable)) {
+                cf_out->add_item(key, value);
+            }
         }
-        writer.EndObject();
-        writer.EndObject();
     }
-    writer.EndObject();
-}
-
-void table_stats_print_yaml(scylla_rest_client& client,
-                            const table_filter& is_included,
-                            bool human_readable) {
-    // the structure of generated yaml is identical to the one generated by
-    // table_stats_print_json()
-    YAML::Emitter emitter(std::cout);
-    emitter << YAML::BeginMap;
-    emitter << YAML::Key << "total_number_of_tables";
-    emitter << YAML::Value << client.get("/column_family/").GetArray().Size();
-    for (auto& [keyspace_name, table_names] : get_ks_to_cfs(client)) {
-        keyspace_stats keyspace;
-        for (auto& table_name : table_names) {
-            keyspace.add(table_metrics(client, keyspace_name, table_name),
-                         is_included(keyspace_name, table_name));
-        }
-        emitter << YAML::Key << keyspace_name;
-        emitter << YAML::BeginMap;
-        dump_map_to_yaml(emitter, keyspace.to_map());
-        emitter << YAML::Key << "tables";
-        emitter << YAML::BeginMap;
-        for (auto& table : keyspace.tables) {
-            emitter << YAML::Key << table.name();
-            emitter << YAML::BeginMap;
-            dump_map_to_yaml(emitter, table.to_map(human_readable));
-            emitter << YAML::EndMap;
-        }
-        emitter << YAML::EndMap;
-        emitter << YAML::EndMap;
-    }
-    emitter << YAML::EndMap;
 }
 
 void table_stats_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -2051,9 +1925,9 @@ void table_stats_operation(scylla_rest_client& client, const bpo::variables_map&
     const auto format = vm["format"].as<sstring>();
     const auto human_readable = vm["human-readable"].as<bool>();
     if (format == "json") {
-        table_stats_print_json(client, is_included, human_readable);
+        table_stats_print<json_writer>(client, is_included, human_readable);
     } else if (format == "yaml") {
-        table_stats_print_yaml(client, is_included, human_readable);
+        table_stats_print<yaml_writer>(client, is_included, human_readable);
     } else {
         table_stats_print_plain(client, is_included, human_readable);
     }
