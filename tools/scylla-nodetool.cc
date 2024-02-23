@@ -1280,9 +1280,12 @@ void ring_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 }
 
 void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::vector<sstring> keyspaces;
     const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, false);
     if (keyspace.empty()) {
-        throw std::invalid_argument("missing mandatory positional argument: keyspace");
+        keyspaces = get_keyspaces(client);
+    } else {
+        keyspaces.push_back(std::move(keyspace));
     }
     if (vm.count("skip-corrupted") && vm.count("mode")) {
         throw std::invalid_argument("cannot use --skip-corrupted when --mode is used");
@@ -1308,16 +1311,21 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
         params["disable_snapshot"] = "true";
     }
 
-    auto res = client.get(format("/storage_service/keyspace_scrub/{}", keyspace), std::move(params)).GetInt();
+    std::vector<api::scrub_status> statuses;
+    for (const auto& keyspace : keyspaces) {
+        statuses.push_back(api::scrub_status(client.get(format("/storage_service/keyspace_scrub/{}", keyspace), params).GetInt()));
+    }
 
-    switch (api::scrub_status(res)) {
-        case api::scrub_status::successful:
-        case api::scrub_status::unable_to_cancel:
-            return;
-        case api::scrub_status::aborted:
-            throw operation_failed_on_scylladb("scrub failed: aborted");
-        case api::scrub_status::validation_errors:
-            throw operation_failed_on_scylladb("scrub failed: there are invalid sstables");
+    for (const auto status : statuses) {
+        switch (status) {
+            case api::scrub_status::successful:
+            case api::scrub_status::unable_to_cancel:
+                continue;
+            case api::scrub_status::aborted:
+                throw operation_failed_on_scylladb("scrub failed: aborted");
+            case api::scrub_status::validation_errors:
+                throw operation_failed_on_scylladb("scrub failed: there are invalid sstables");
+        }
     }
 }
 
