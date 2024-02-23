@@ -5655,7 +5655,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
     }
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         while (_topology_state_machine._topology.is_busy()) {
             const auto tstate = *_topology_state_machine._topology.tstate;
@@ -5666,7 +5666,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             rtlogger.debug("move_tablet(): topology state machine is busy: {}", tstate);
             release_guard(std::move(guard));
             co_await _topology_state_machine.event.wait();
-            guard = co_await _group0->client().start_operation(&_abort_source);
+            guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
         }
 
         std::vector<canonical_mutation> updates;
@@ -5733,7 +5733,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         topology_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
             break;
         } catch (group0_concurrent_modification&) {
             rtlogger.debug("move_tablet(): concurrent modification, retrying");
