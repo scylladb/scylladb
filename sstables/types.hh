@@ -112,9 +112,8 @@ enum class indexable_element {
     cell
 };
 
-inline std::ostream& operator<<(std::ostream& o, indexable_element e) {
-    o << static_cast<std::underlying_type_t<indexable_element>>(e);
-    return o;
+inline auto format_as(indexable_element e) {
+    return fmt::underlying(e);
 }
 
 class summary_entry {
