@@ -157,8 +157,6 @@ struct perf_result {
     uint64_t errors;
 };
 
-std::ostream& operator<<(std::ostream& os, const perf_result& result);
-
 // Use to make a perf_result with aio_writes added. Need to give "update" as
 // update-func to time_parallel_ex to make it work.
 struct aio_writes_result_mixin {
@@ -213,7 +211,7 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
 
         uf(result, stats);
 
-        std::cout << result << std::endl;
+        fmt::print("{}\n", result);
         results.emplace_back(result);
     }
     return results;
@@ -282,3 +280,11 @@ public:
 };
 
 } // namespace perf
+
+template <> struct fmt::formatter<scheduling_latency_measurer> : fmt::formatter<std::string_view> {
+    auto format(const scheduling_latency_measurer&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<perf_result> : fmt::formatter<std::string_view> {
+    auto format(const perf_result&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
