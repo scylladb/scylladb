@@ -453,6 +453,35 @@ def test_range_to_endpoint_map_tablets_disabled_keyspace_param_only(cql, this_dc
         resp = rest_api.send("GET", f"storage_service/range_to_endpoint_map/{keyspace}")
         resp.raise_for_status()
 
+def verify_ownership(resp, expected_ip, expected_ownership, delta):
+    resp.raise_for_status()
+
+    entries = resp.json()
+    assert len(entries) == 1
+
+    actual_ip = entries[0]["key"]
+    actual_ownership = entries[0]["value"]
+
+    assert actual_ip == expected_ip
+    assert float(actual_ownership) == pytest.approx(expected_ownership, abs=delta)
+
+def test_get_ownership_tablets_disabled(cql, this_dc, rest_api):
+    resp = rest_api.send("GET", f"storage_service/ownership")
+    verify_ownership(resp=resp, expected_ip=rest_api.host, expected_ownership=1.0, delta=0.001)
+
+def test_get_effective_ownership_tablets_disabled_null_keyspace(cql, this_dc, rest_api):
+    # 'null' triggers a special handler path - effective ownership of non-system keyspaces.
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': false }}") as keyspace:
+        resp = rest_api.send("GET", f"storage_service/ownership/null")
+        actual_error_reason = resp.json()["message"]
+        expected_error_reason = f"std::runtime_error (Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless)"
+        assert expected_error_reason == actual_error_reason
+
+def test_get_effective_ownership_tablets_disabled_keyspace_param_used(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': false }}") as keyspace:
+        resp = rest_api.send("GET", f"storage_service/ownership/{keyspace}")
+        verify_ownership(resp=resp, expected_ip=rest_api.host, expected_ownership=1.0, delta=0.001)
+
 def test_describe_ring(cql, this_dc, rest_api, has_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
         if not has_tablets: # For keyspaces with tablets table must be specified.
