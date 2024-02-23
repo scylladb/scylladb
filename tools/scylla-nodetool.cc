@@ -2150,9 +2150,9 @@ void toppartitions_operation(scylla_rest_client& client, const bpo::variables_ma
             for (auto& record : topk) {
                 fmt::print("\t{:<{}}{:>10}{:>10}\n", record.partition, width, record.count, record.error);
             }
-            if (std::exchange(first, false)) {
-                fmt::print("\n");
-            }
+        }
+        if (std::exchange(first, false)) {
+            fmt::print("\n");
         }
     }
 }
