@@ -499,6 +499,26 @@ private:
         cdata.compaction_fan_in = descriptor.fan_in();
         return cdata;
     }
+
+    // Called in a seastar thread
+    dht::partition_range_vector
+    get_ranges_for_invalidation(const std::vector<shared_sstable>& sstables) {
+        // If owned ranges is disengaged, it means no cleanup work was done and
+        // so nothing needs to be invalidated.
+        if (!_owned_ranges) {
+            return dht::partition_range_vector{};
+        }
+        auto owned_ranges = dht::to_partition_ranges(*_owned_ranges, utils::can_yield::yes);
+
+        auto non_owned_ranges = boost::copy_range<dht::partition_range_vector>(sstables
+                | boost::adaptors::transformed([] (const shared_sstable& sst) {
+            seastar::thread::maybe_yield();
+            return dht::partition_range::make({sst->get_first_decorated_key(), true},
+                                              {sst->get_last_decorated_key(), true});
+        }));
+
+        return dht::subtract_ranges(*_schema, non_owned_ranges, std::move(owned_ranges)).get();
+    }
 protected:
     compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor, use_backlog_tracker use_backlog_tracker)
         : _cdata(init_compaction_data(cdata, descriptor))
@@ -587,9 +607,10 @@ protected:
         return _stats_collector.get();
     }
 
-    virtual compaction_completion_desc
+    compaction_completion_desc
     get_compaction_completion_desc(std::vector<shared_sstable> input_sstables, std::vector<shared_sstable> output_sstables) {
-        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables)};
+        auto ranges_for_for_invalidation = get_ranges_for_invalidation(input_sstables);
+        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(ranges_for_for_invalidation)};
     }
 
     // Tombstone expiration is enabled based on the presence of sstable set.
@@ -1280,28 +1301,6 @@ public:
 };
 
 class cleanup_compaction final : public regular_compaction {
-private:
-    // Called in a seastar thread
-    dht::partition_range_vector
-    get_ranges_for_invalidation(const std::vector<shared_sstable>& sstables) {
-        auto owned_ranges = dht::to_partition_ranges(*_owned_ranges, utils::can_yield::yes);
-
-        auto non_owned_ranges = boost::copy_range<dht::partition_range_vector>(sstables
-                | boost::adaptors::transformed([] (const shared_sstable& sst) {
-            seastar::thread::maybe_yield();
-            return dht::partition_range::make({sst->get_first_decorated_key(), true},
-                                              {sst->get_last_decorated_key(), true});
-        }));
-
-        return dht::subtract_ranges(*_schema, non_owned_ranges, std::move(owned_ranges)).get();
-    }
-protected:
-    virtual compaction_completion_desc
-    get_compaction_completion_desc(std::vector<shared_sstable> input_sstables, std::vector<shared_sstable> output_sstables) override {
-        auto ranges_for_for_invalidation = get_ranges_for_invalidation(input_sstables);
-        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(ranges_for_for_invalidation)};
-    }
-
 public:
     cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
         : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor)
