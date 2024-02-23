@@ -114,3 +114,5 @@ struct test_key_tri_compare {
     std::strong_ordering operator()(const tree_test_key_base& a, const tree_test_key_base& b) const noexcept { return a.compare(b) <=> 0; }
     std::strong_ordering operator()(const int a, const tree_test_key_base& b) const noexcept { return -b.compare(a) <=> 0; }
 };
+
+template <std::derived_from<tree_test_key_base> T> struct fmt::formatter<T> : fmt::formatter<int> {};
