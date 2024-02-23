@@ -39,10 +39,12 @@ class FileDownloader:
 class BaseTemplateDirective(DataTemplateCSV):
     option_spec = DataTemplateCSV.option_spec.copy()
     option_spec["version"] = lambda x: x
+    option_spec["latest"] = lambda x: x
 
     def _make_context(self, data, config, env):
         context = super()._make_context(data, config, env)
         context["version"] = self.options.get("version")
+        context["latest"] = self.options.get("latest")
         return context
 
     def run(self):
@@ -78,7 +80,7 @@ class BaseVersionsTemplateDirective(Directive):
             reverse=True
         )
 
-    def _process_file(self, file, relative_path_from_current_rst):
+    def _process_file(self, file, relative_path_from_current_rst, is_latest=False):
         data_directive = BaseTemplateDirective(
             name=self.name,
             arguments=[os.path.join(relative_path_from_current_rst, file)],
@@ -92,6 +94,7 @@ class BaseVersionsTemplateDirective(Directive):
         )
         data_directive.options["template"] = self.TEMPLATE
         data_directive.options["version"] = self._extract_version_from_filename(file)
+        data_directive.options["latest"] = is_latest
         return data_directive.run()
 
     def _get_exclude_patterns(self):
@@ -155,7 +158,8 @@ class BaseVersionsTemplateDirective(Directive):
             files = [files[0]]
 
         output = []
-        for file in files:
-            output.extend(self._process_file(file, relative_path_from_current_rst))
+        for i, file in enumerate(files):
+            is_latest = i == 0
+            output.extend(self._process_file(file, relative_path_from_current_rst, is_latest))
         return output
 
