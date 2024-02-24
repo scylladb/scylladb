@@ -77,7 +77,10 @@ enum class node_ops_cmd_category {
 
 node_ops_cmd_category categorize_node_ops_cmd(node_ops_cmd cmd) noexcept;
 
-std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd);
+template <>
+struct fmt::formatter<node_ops_cmd> : fmt::formatter<std::string_view> {
+    auto format(node_ops_cmd, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
 
 // The cmd and ops_uuid are mandatory for each request.
 // The ignore_nodes and leaving_node are optional.
@@ -161,4 +164,9 @@ public:
     future<> abort_on_error(node_ops_cmd cmd, std::exception_ptr ex) noexcept;
     future<> send_to_all(node_ops_cmd cmd);
     future<> heartbeat_updater(node_ops_cmd cmd);
+};
+
+template <>
+struct fmt::formatter<node_ops_cmd_request> : fmt::formatter<std::string_view> {
+    auto format(const node_ops_cmd_request&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
