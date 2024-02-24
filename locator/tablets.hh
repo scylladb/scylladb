@@ -62,9 +62,6 @@ struct tablet_replica {
     bool operator==(const tablet_replica&) const = default;
 };
 
-std::ostream& operator<<(std::ostream&, tablet_id);
-std::ostream& operator<<(std::ostream&, const tablet_replica&);
-
 using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
 
 }
@@ -416,7 +413,7 @@ public:
     // Destroys gently.
     // The tablet map is not usable after this call and should be destroyed.
     future<> clear_gently();
-    friend std::ostream& operator<<(std::ostream&, const tablet_map&);
+    friend fmt::formatter<tablet_map>;
 private:
     void check_tablet_id(tablet_id) const;
 };
@@ -458,7 +455,7 @@ public:
     future<> clear_gently();
 public:
     bool operator==(const tablet_metadata&) const = default;
-    friend std::ostream& operator<<(std::ostream&, const tablet_metadata&);
+    friend fmt::formatter<tablet_metadata>;
 };
 
 // Check that all tablets which have replicas on this host, have a valid replica shard (< smp::count).
@@ -513,4 +510,28 @@ struct fmt::formatter<locator::tablet_transition_kind> : fmt::formatter<std::str
 template <>
 struct fmt::formatter<locator::global_tablet_id> : fmt::formatter<std::string_view> {
     auto format(const locator::global_tablet_id&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::tablet_id> : fmt::formatter<std::string_view> {
+    auto format(locator::tablet_id  id, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", id.value());
+    }
+};
+
+template <>
+struct fmt::formatter<locator::tablet_replica> : fmt::formatter<std::string_view> {
+    auto format(const locator::tablet_replica& r, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}:{}", r.host, r.shard);
+    }
+};
+
+template <>
+struct fmt::formatter<locator::tablet_map> : fmt::formatter<std::string_view> {
+    auto format(const locator::tablet_map&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::tablet_metadata> : fmt::formatter<std::string_view> {
+    auto format(const locator::tablet_metadata&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

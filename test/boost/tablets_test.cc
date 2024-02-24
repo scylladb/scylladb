@@ -30,6 +30,23 @@ using namespace locator;
 using namespace replica;
 using namespace service;
 
+namespace locator {
+static std::ostream& boost_test_print_type(std::ostream& out, tablet_id id) {
+    fmt::print(out, "{}", id);
+    return out;
+}
+
+static std::ostream& boost_test_print_type(std::ostream& out, const tablet_map& r) {
+    fmt::print(out, "{}", r);
+    return out;
+}
+
+static std::ostream& boost_test_print_type(std::ostream& out, const tablet_metadata& tm) {
+    fmt::print(out, "{}", tm);
+    return out;
+}
+}
+
 static api::timestamp_type current_timestamp(cql_test_env& e) {
     // Mutations in system.tablets got there via group0, so in order for new
     // mutations to take effect, their timestamp should be "later" than that
