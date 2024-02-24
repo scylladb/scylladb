@@ -2237,56 +2237,60 @@ node_ops_cmd_category categorize_node_ops_cmd(node_ops_cmd cmd) noexcept {
     }
 }
 
-std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd) {
+auto fmt::formatter<node_ops_cmd>::format(node_ops_cmd cmd, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name;
     switch (cmd) {
         case node_ops_cmd::removenode_prepare:
-            return out << "removenode_prepare";
+            name = "removenode_prepare"; break;
         case node_ops_cmd::removenode_heartbeat:
-            return out << "removenode_heartbeat";
+            name = "removenode_heartbeat"; break;
         case node_ops_cmd::removenode_sync_data:
-            return out << "removenode_sync_data";
+            name = "removenode_sync_data"; break;
         case node_ops_cmd::removenode_abort:
-            return out << "removenode_abort";
+            name = "removenode_abort"; break;
         case node_ops_cmd::removenode_done:
-            return out << "removenode_done";
+            name = "removenode_done"; break;
         case node_ops_cmd::replace_prepare:
-            return out << "replace_prepare";
+            name = "replace_prepare"; break;
         case node_ops_cmd::replace_prepare_mark_alive:
-            return out << "replace_prepare_mark_alive";
+            name = "replace_prepare_mark_alive"; break;
         case node_ops_cmd::replace_prepare_pending_ranges:
-            return out << "replace_prepare_pending_ranges";
+            name = "replace_prepare_pending_ranges"; break;
         case node_ops_cmd::replace_heartbeat:
-            return out << "replace_heartbeat";
+            name = "replace_heartbeat"; break;
         case node_ops_cmd::replace_abort:
-            return out << "replace_abort";
+            name = "replace_abort"; break;
         case node_ops_cmd::replace_done:
-            return out << "replace_done";
+            name = "replace_done"; break;
         case node_ops_cmd::decommission_prepare:
-            return out << "decommission_prepare";
+            name = "decommission_prepare"; break;
         case node_ops_cmd::decommission_heartbeat:
-            return out << "decommission_heartbeat";
+            name = "decommission_heartbeat"; break;
         case node_ops_cmd::decommission_abort:
-            return out << "decommission_abort";
+            name = "decommission_abort"; break;
         case node_ops_cmd::decommission_done:
-            return out << "decommission_done";
+            name = "decommission_done"; break;
         case node_ops_cmd::bootstrap_prepare:
-            return out << "bootstrap_prepare";
+            name = "bootstrap_prepare"; break;
         case node_ops_cmd::bootstrap_heartbeat:
-            return out << "bootstrap_heartbeat";
+            name = "bootstrap_heartbeat"; break;
         case node_ops_cmd::bootstrap_abort:
-            return out << "bootstrap_abort";
+            name = "bootstrap_abort"; break;
         case node_ops_cmd::bootstrap_done:
-            return out << "bootstrap_done";
+            name = "bootstrap_done"; break;
         case node_ops_cmd::query_pending_ops:
-            return out << "query_pending_ops";
+            name = "query_pending_ops"; break;
         case node_ops_cmd::repair_updater:
-            return out << "repair_updater";
+            name = "repair_updater"; break;
         default:
-            return out << "unknown cmd (" << static_cast<std::underlying_type_t<node_ops_cmd>>(cmd) << ")";
+            return fmt::format_to(ctx.out(), "unknown cmd ({})", fmt::underlying(cmd));
     }
+    return fmt::format_to(ctx.out(), "{}", name);
 }
 
-std::ostream& operator<<(std::ostream& out, const node_ops_cmd_request& req) {
-    return out << fmt::format("{}[{}]: ignore_nodes={}, leaving_nodes={}, replace_nodes={}, bootstrap_nodes={}, repair_tables={}",
+auto fmt::formatter<node_ops_cmd_request>::format(const node_ops_cmd_request& req, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return  fmt::format_to(ctx.out(), "{}[{}]: ignore_nodes={}, leaving_nodes={}, replace_nodes={}, bootstrap_nodes={}, repair_tables={}",
             req.cmd, req.ops_uuid, req.ignore_nodes, req.leaving_nodes, req.replace_nodes, req.bootstrap_nodes, req.repair_tables);
 }
