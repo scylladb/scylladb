@@ -334,51 +334,6 @@ tablet_transition_kind tablet_transition_kind_from_string(const sstring& name) {
     return tablet_transition_kind_from_name.at(name);
 }
 
-std::ostream& operator<<(std::ostream& out, tablet_id id) {
-    return out << size_t(id);
-}
-
-std::ostream& operator<<(std::ostream& out, const tablet_replica& r) {
-    return out << r.host << ":" << r.shard;
-}
-
-std::ostream& operator<<(std::ostream& out, const tablet_map& r) {
-    if (r.tablet_count() == 0) {
-        return out << "{}";
-    }
-    out << "{";
-    bool first = true;
-    tablet_id tid = r.first_tablet();
-    for (auto&& tablet : r._tablets) {
-        if (!first) {
-            out << ",";
-        }
-        out << format("\n    [{}]: last_token={}, replicas={}", tid, r.get_last_token(tid), tablet.replicas);
-        if (auto tr = r.get_tablet_transition_info(tid)) {
-            out << format(", stage={}, new_replicas={}, pending={}", tr->stage, tr->next, tr->pending_replica);
-            if (tr->session_id) {
-                out << format(", session={}", tr->session_id);
-            }
-        }
-        first = false;
-        tid = *r.next_tablet(tid);
-    }
-    return out << "\n  }";
-}
-
-std::ostream& operator<<(std::ostream& out, const tablet_metadata& tm) {
-    out << "{";
-    bool first = true;
-    for (auto&& [id, map] : tm._tablets) {
-        if (!first) {
-            out << ",";
-        }
-        out << "\n  " << id << ": " << map;
-        first = false;
-    }
-    return out << "\n}";
-}
-
 size_t tablet_map::external_memory_usage() const {
     size_t result = _tablets.external_memory_usage();
     for (auto&& tablet : _tablets) {
@@ -777,4 +732,45 @@ auto fmt::formatter<locator::tablet_transition_stage>::format(const locator::tab
 auto fmt::formatter<locator::tablet_transition_kind>::format(const locator::tablet_transition_kind& kind, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "{}", locator::tablet_transition_kind_to_string(kind));
+}
+
+auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    if (r.tablet_count() == 0) {
+        return fmt::format_to(out, "{{}}");
+    }
+    out = fmt::format_to(out, "{{");
+    bool first = true;
+    locator::tablet_id tid = r.first_tablet();
+    for (auto&& tablet : r._tablets) {
+        if (!first) {
+            out = fmt::format_to(out, ",");
+        }
+        out = fmt::format_to(out, "\n    [{}]: last_token={}, replicas={}", tid, r.get_last_token(tid), tablet.replicas);
+        if (auto tr = r.get_tablet_transition_info(tid)) {
+            out = fmt::format_to(out, ", stage={}, new_replicas={}, pending={}", tr->stage, tr->next, tr->pending_replica);
+            if (tr->session_id) {
+                out = fmt::format_to(out, ", session={}", tr->session_id);
+            }
+        }
+        first = false;
+        tid = *r.next_tablet(tid);
+    }
+    return fmt::format_to(out, "}}");
+}
+
+auto fmt::formatter<locator::tablet_metadata>::format(const locator::tablet_metadata& tm, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "{{");
+    bool first = true;
+    for (auto&& [id, map] : tm._tablets) {
+        if (!first) {
+            out = fmt::format_to(out, ",");
+        }
+        out = fmt::format_to(out, "\n  {}: {}", id, map);
+        first = false;
+    }
+    return fmt::format_to(out, "\n}}");
 }
