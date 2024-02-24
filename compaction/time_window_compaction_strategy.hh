@@ -39,6 +39,10 @@ public:
     enum class timestamp_resolutions {
         microsecond,
         millisecond,
+        seconds,
+        minutes,
+        hours,
+        days,
     };
     static const std::unordered_map<sstring, timestamp_resolutions> valid_timestamp_resolutions;
 private:
@@ -96,6 +100,14 @@ private:
             return api::timestamp_type(timestamp_from_sstable);
         case time_window_compaction_strategy_options::timestamp_resolutions::millisecond:
             return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::milliseconds(timestamp_from_sstable)).count();
+        case time_window_compaction_strategy_options::timestamp_resolutions::seconds:
+            return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::seconds(timestamp_from_sstable)).count();
+        case time_window_compaction_strategy_options::timestamp_resolutions::minutes:
+            return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::minutes(timestamp_from_sstable)).count();
+        case time_window_compaction_strategy_options::timestamp_resolutions::hours:
+            return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(timestamp_from_sstable)).count();
+        case time_window_compaction_strategy_options::timestamp_resolutions::days:
+            return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::days(timestamp_from_sstable)).count();
         default:
             throw std::runtime_error("Timestamp resolution invalid for TWCS");
         };

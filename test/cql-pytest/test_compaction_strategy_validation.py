@@ -40,7 +40,6 @@ def test_size_tiered_compaction_strategy_options(cql, table1):
 def test_time_window_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, "Invalid window unit SECONDS for compaction_window_unit|SECONDS is not valid for compaction_window_unit", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'compaction_window_unit' : 'SECONDS' }")
     assert_throws(cql, table1, r"compaction_window_size value \(-8\) must be greater than 1|-8 must be greater than 1 for compaction_window_size", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'compaction_window_size' : -8 }")
-    assert_throws(cql, table1, "Invalid timestamp resolution SECONDS for timestamp_resolution", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'timestamp_resolution' : 'SECONDS' }")
     assert_throws(cql, table1, r"enable_optimized_twcs_queries value \(no\) must be \"true\" or \"false\"", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'enable_optimized_twcs_queries' : 'no' }")
     assert_throws(cql, table1, r"max_threshold value \(1\) must be bigger or equal to 2", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'max_threshold' : 1 }")
 
@@ -51,3 +50,22 @@ def test_not_allowed_options(cql, table1):
     assert_throws(cql, table1, r"Invalid compaction strategy options {{abc, -54.54}} for chosen strategy type|Properties specified \[abc\] are not understood by SizeTieredCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'abc' : -54.54 }")
     assert_throws(cql, table1, r"Invalid compaction strategy options {{dog, 3}} for chosen strategy type|Properties specified \[dog\] are not understood by TimeWindowCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'dog' : 3 }")
     assert_throws(cql, table1, r"Invalid compaction strategy options {{compaction_window_size, 4}} for chosen strategy type|Properties specified \[compaction_window_size\] are not understood by LeveledCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'compaction_window_size' : 4 }")
+
+def test_alter_table_with_twcs_timestamp_resolution_options(cql, table1):
+    timestamp_resolutions = ["MICROSECONDS", "MILLISECONDS", "SECONDS", "MINUTES", "HOURS", "DAYS"]
+    for tr in timestamp_resolutions:
+        cql.execute(f"ALTER TABLE {table1} WITH compaction = {{ 'class' : 'TimeWindowCompactionStrategy', 'timestamp_resolution' : '{tr}' }}")
+
+    incorrect_timestamp_resolution = "YEARS"
+    assert_throws(cql, table1, f"Invalid timestamp resolution {incorrect_timestamp_resolution} for timestamp_resolution", f"ALTER TABLE %s WITH compaction = {{ 'class' : 'TimeWindowCompactionStrategy', 'timestamp_resolution' : '{incorrect_timestamp_resolution}' }}")
+
+def test_create_table_with_twcs_timestamp_resolution_options(cql, test_keyspace):
+    timestamp_resolutions = ["MICROSECONDS", "MILLISECONDS", "SECONDS", "MINUTES", "HOURS", "DAYS"]
+    for tr in timestamp_resolutions:
+        with new_test_table(cql, test_keyspace, "a int PRIMARY KEY, b int", f"WITH compaction = {{ 'class' : 'TimeWindowCompactionStrategy', 'timestamp_resolution' : '{tr}' }}") as table:
+            pass
+
+    incorrect_timestamp_resolution = "YEARS"
+    with pytest.raises(ConfigurationException, match=f"Invalid timestamp resolution {incorrect_timestamp_resolution} for timestamp_resolution"):
+        with new_test_table(cql, test_keyspace, "a int PRIMARY KEY, b int", f"WITH compaction = {{ 'class' : 'TimeWindowCompactionStrategy', 'timestamp_resolution' : '{incorrect_timestamp_resolution}' }}") as table:
+            pass

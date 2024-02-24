@@ -1380,9 +1380,13 @@ SEASTAR_TEST_CASE(time_window_strategy_time_window_tests) {
 
 SEASTAR_TEST_CASE(time_window_strategy_ts_resolution_check) {
   return test_env::do_with([] (test_env& env) {
-    auto ts = 1451001601000L; // 2015-12-25 @ 00:00:01, in milliseconds
-    auto ts_in_ms = std::chrono::milliseconds(ts);
-    auto ts_in_us = std::chrono::duration_cast<std::chrono::microseconds>(ts_in_ms);
+    const auto ts = 1451001601000L; // 2015-12-25 @ 00:00:01, in milliseconds
+    const auto ts_in_ms = std::chrono::milliseconds(ts);
+    const auto ts_in_us = std::chrono::duration_cast<std::chrono::microseconds>(ts_in_ms);
+    const auto ts_in_seconds = std::chrono::duration_cast<std::chrono::seconds>(ts_in_ms);
+    const auto ts_in_minutes = std::chrono::duration_cast<std::chrono::minutes>(ts_in_ms);
+    const auto ts_in_hours = std::chrono::duration_cast<std::chrono::hours>(ts_in_ms);
+    const auto ts_in_days = std::chrono::duration_cast<std::chrono::days>(ts_in_ms);
 
     auto s = schema_builder("tests", "time_window_strategy")
             .with_column("id", utf8_type, column_kind::partition_key)
@@ -1390,30 +1394,29 @@ SEASTAR_TEST_CASE(time_window_strategy_ts_resolution_check) {
 
     const auto key = tests::generate_partition_key(s);
 
+    const std::vector<std::pair<std::string, int64_t>> scenarios = {
+        { "MICROSECONDS", ts_in_us.count() },
+        { "MILLISECONDS", ts_in_ms.count() },
+        { "SECONDS", ts_in_seconds.count() },
+        { "MINUTES", ts_in_minutes.count() },
+        { "HOURS", ts_in_hours.count() },
+        { "DAYS", ts_in_days.count() },
+    };
+
+    for (const auto& [timestampResolution, timestamp] : scenarios)
     {
-        std::map<sstring, sstring> opts = { { time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY, "MILLISECONDS" }, };
+        std::map<sstring, sstring> opts = { { time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY, timestampResolution }, };
         time_window_compaction_strategy_options options(opts);
 
         auto sst = env.make_sstable(s);
-        sstables::test(sst).set_values(key.key(), key.key(), build_stats(ts_in_ms.count(), ts_in_ms.count(), std::numeric_limits<int32_t>::max()));
+        sstables::test(sst).set_values(key.key(), key.key(), build_stats(timestamp, timestamp, std::numeric_limits<int32_t>::max()));
 
         auto ret = time_window_compaction_strategy::get_buckets({ sst }, options);
         auto expected = time_window_compaction_strategy::get_window_lower_bound(options.get_sstable_window_size(), ts_in_us.count());
 
-        BOOST_REQUIRE(ret.second == expected);
-    }
-
-    {
-        std::map<sstring, sstring> opts = { { time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY, "MICROSECONDS" }, };
-        time_window_compaction_strategy_options options(opts);
-
-        auto sst = env.make_sstable(s);
-        sstables::test(sst).set_values(key.key(), key.key(), build_stats(ts_in_us.count(), ts_in_us.count(), std::numeric_limits<int32_t>::max()));
-
-        auto ret = time_window_compaction_strategy::get_buckets({ sst }, options);
-        auto expected = time_window_compaction_strategy::get_window_lower_bound(options.get_sstable_window_size(), ts_in_us.count());
-
-        BOOST_REQUIRE(ret.second == expected);
+        BOOST_REQUIRE_MESSAGE(ret.second == expected,
+            fmt::format("TWCS timestamp resolution check failed for the TIMESTAMP_RESOLUTION_KEY: `{}`. Returned: {} seconds, Expected: {} seconds",
+            timestampResolution, ret.second, expected));
     }
     return make_ready_future<>();
   });
