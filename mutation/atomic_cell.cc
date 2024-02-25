@@ -176,10 +176,10 @@ size_t atomic_cell_or_collection::external_memory_usage(const abstract_type& t) 
     return _data.external_memory_usage();
 }
 
-std::ostream&
-operator<<(std::ostream& os, const atomic_cell_view& acv) {
+auto fmt::formatter<atomic_cell_view>::format(const atomic_cell_view& acv, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     if (acv.is_live()) {
-        fmt::print(os, "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
+        return fmt::format_to(ctx.out(), "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
             acv.is_counter_update()
                     ? "counter_update_value=" + to_sstring(acv.counter_update_value())
                     : to_hex(to_bytes(acv.value())),
@@ -187,15 +187,9 @@ operator<<(std::ostream& os, const atomic_cell_view& acv) {
             acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
             acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);
     } else {
-        fmt::print(os, "atomic_cell{{DEAD,ts={:d},deletion_time={:d}}}",
+        return fmt::format_to(ctx.out(), "atomic_cell{{DEAD,ts={:d},deletion_time={:d}}}",
             acv.timestamp(), acv.deletion_time().time_since_epoch().count());
     }
-    return os;
-}
-
-std::ostream&
-operator<<(std::ostream& os, const atomic_cell& ac) {
-    return os << atomic_cell_view(ac);
 }
 
 auto fmt::formatter<atomic_cell_view::printer>::format(const atomic_cell_view::printer& acvp,

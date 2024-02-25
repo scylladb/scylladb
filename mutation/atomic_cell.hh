@@ -403,3 +403,14 @@ void merge_column(const abstract_type& def,
         atomic_cell_or_collection& old,
         const atomic_cell_or_collection& neww);
 
+template <>
+struct fmt::formatter<atomic_cell_view> : fmt::formatter<std::string_view> {
+    auto format(const atomic_cell_view&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<atomic_cell> : fmt::formatter<std::string_view> {
+    auto format(const atomic_cell& ac, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", atomic_cell_view(ac));
+    }
+};
