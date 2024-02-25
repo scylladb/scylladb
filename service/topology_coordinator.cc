@@ -1768,18 +1768,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // The barrier waits for all double writes started during the operation to complete. It allowed to fail
                 // since we will fence the requests later.
                 bool barrier_failed = false;
+                auto state = node.rs->state;
                 try {
                     node.guard = co_await exec_global_command(std::move(node.guard),raft_topology_cmd::command::barrier_and_drain, get_excluded_nodes(node), drop_guard_and_retake::yes);
                 } catch (term_changed_error&) {
                     throw;
                 } catch(...) {
                     rtlogger.warn("failed to run barrier_and_drain during rollback of {} after {} failure: {}",
-                            node.id, node.rs->state, std::current_exception());
+                            node.id, state, std::current_exception());
                     barrier_failed = true;
                 }
 
                 if (barrier_failed) {
-                    node.guard =co_await start_operation();
+                    node.guard = co_await start_operation();
                 }
 
                 node = retake_node(std::move(node.guard), node.id);
