@@ -306,16 +306,17 @@ std::ostream& operator<<(std::ostream& os, mutation_fragment_v2::kind k)
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const mutation_fragment_v2::printer& p) {
+auto fmt::formatter<mutation_fragment_v2::printer>::format(const mutation_fragment_v2::printer& p, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     auto& mf = p._mutation_fragment;
-    os << "{mutation_fragment: " << mf._kind << " " << mf.position() << " ";
-    mf.visit(make_visitor(
-        [&] (const clustering_row& cr) { fmt::print(os, "{}", clustering_row::printer(p._schema, cr)); },
-        [&] (const static_row& sr) { fmt::print(os, "{}", static_row::printer(p._schema, sr)); },
-        [&] (const auto& what) -> void { fmt::print(os, "{}", what); }
+    auto out = ctx.out();
+    out = fmt::format_to(out, "{{mutation_fragment: {} {} ", mf._kind, mf.position());
+    out = mf.visit(make_visitor(
+        [&] (const clustering_row& cr) { return fmt::format_to(out, "{}", clustering_row::printer(p._schema, cr)); },
+        [&] (const static_row& sr) { return fmt::format_to(out, "{}", static_row::printer(p._schema, sr)); },
+        [&] (const auto& what) { return fmt::format_to(out, "{}", what); }
     ));
-    os << "}";
-    return os;
+    return fmt::format_to(out, "}}");
 }
 
 mutation_fragment_opt range_tombstone_stream::do_get_next()

@@ -358,14 +358,18 @@ public:
         printer(const printer&) = delete;
         printer(printer&&) = delete;
 
-        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+        friend fmt::formatter<printer>;
     };
-    friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    friend fmt::formatter<printer>;
 
 private:
     size_t calculate_memory_usage(const schema& s) const {
         return sizeof(data) + visit([&s] (auto& mf) -> size_t { return mf.external_memory_usage(s); });
     }
+};
+
+template <> struct fmt::formatter<mutation_fragment_v2::printer> : fmt::formatter<std::string_view> {
+    auto format(const mutation_fragment_v2::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 std::ostream& operator<<(std::ostream&, mutation_fragment_v2::kind);
