@@ -226,17 +226,19 @@ auto fmt::formatter<atomic_cell_view::printer>::format(const atomic_cell_view::p
     }
 }
 
-std::ostream& operator<<(std::ostream& os, const atomic_cell_or_collection::printer& p) {
+auto fmt::formatter<atomic_cell_or_collection::printer>::format(const atomic_cell_or_collection::printer& p, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
     if (p._cell._data.empty()) {
-        return os << "{ null atomic_cell_or_collection }";
+        return fmt::format_to(out, "{{ null atomic_cell_or_collection }}");
     }
-    os << "{ ";
+    out = fmt::format_to(out, "{{");
     if (p._cdef.type->is_multi_cell()) {
-        os << "collection ";
+        out = fmt::format_to(out, "collection ");
         auto cmv = p._cell.as_collection_mutation();
-        fmt::print(os, "{}", collection_mutation_view::printer(*p._cdef.type, cmv));
+        out = fmt::format_to(out, "{}", collection_mutation_view::printer(*p._cdef.type, cmv));
     } else {
-        fmt::print(os, "{}", atomic_cell_view::printer(*p._cdef.type, p._cell.as_atomic_cell(p._cdef)));
+        out = fmt::format_to(out, "{}", atomic_cell_view::printer(*p._cdef.type, p._cell.as_atomic_cell(p._cdef)));
     }
-    return os << " }";
+    return fmt::format_to(out, "}}");
 }
