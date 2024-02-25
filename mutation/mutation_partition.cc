@@ -988,7 +988,7 @@ operator<<(std::ostream& os, const row::printer& p) {
     os << "{{row:";
     cells.walk([&] (column_id id, const cell_and_hash& cah) {
         auto& cdef = p._schema.column_at(p._kind, id);
-        os << "\n    " << cdef.name_as_text() << atomic_cell_or_collection::printer(cdef, cah.cell);
+        fmt::print(os, "\n    {}{}", cdef.name_as_text(), atomic_cell_or_collection::printer(cdef, cah.cell));
         return true;
     });
     return os << "}}";

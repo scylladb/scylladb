@@ -54,7 +54,12 @@ public:
         printer(const printer&) = delete;
         printer(printer&&) = delete;
 
-        friend std::ostream& operator<<(std::ostream&, const printer&);
+        friend fmt::formatter<printer>;
     };
-    friend std::ostream& operator<<(std::ostream&, const printer&);
+    friend fmt::formatter<printer>;
+};
+
+template <>
+struct fmt::formatter<atomic_cell_or_collection::printer> : fmt::formatter<std::string_view> {
+    auto format(const atomic_cell_or_collection::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

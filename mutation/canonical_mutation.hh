@@ -38,5 +38,14 @@ public:
 
     const bytes_ostream& representation() const { return _data; }
 
-    friend std::ostream& operator<<(std::ostream& os, const canonical_mutation& cm);
+    friend fmt::formatter<canonical_mutation>;
 };
+
+template <> struct fmt::formatter<canonical_mutation> : fmt::formatter<std::string_view> {
+    auto format(const canonical_mutation&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+static inline std::ostream& operator<<(std::ostream& os, const canonical_mutation& cm) {
+    fmt::print(os, "{}", cm);
+    return os;
+}

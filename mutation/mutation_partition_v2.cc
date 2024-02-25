@@ -762,9 +762,9 @@ operator<<(std::ostream& os, const mutation_partition_v2::printer& p) {
         const auto& srow = mp.static_row().get();
         srow.for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
             auto& column_def = p._schema.column_at(column_kind::static_column, c_id);
-            os << indent << indent <<  "'" << column_def.name_as_text() 
-               << "': " << atomic_cell_or_collection::printer(column_def, cell) << ",\n";
-        }); 
+            fmt::print(os, "{}{}'{}': {},\n",
+                       indent, indent, column_def.name_as_text(), atomic_cell_or_collection::printer(column_def, cell));
+        });
         os << indent << "},\n";
     }
 
@@ -808,8 +808,9 @@ operator<<(std::ostream& os, const mutation_partition_v2::printer& p) {
 
         row.cells().for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
             auto& column_def = p._schema.column_at(column_kind::regular_column, c_id);
-            os << indent << indent << indent <<  "'" << column_def.name_as_text() 
-               << "': " << atomic_cell_or_collection::printer(column_def, cell) << ",\n";
+            fmt::print(os, "{}{}{}'{}': {},\n",
+                       indent, indent, indent, column_def.name_as_text(),
+                       atomic_cell_or_collection::printer(column_def, cell));
         });
 
         os << indent << indent << "},\n";
