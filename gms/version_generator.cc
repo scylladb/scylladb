@@ -8,6 +8,11 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <seastar/core/on_internal_error.hh>
+#include <seastar/core/print.hh>
+#include <seastar/core/smp.hh>
+#include "log.hh"
+#include "seastarx.hh"
 #include "version_generator.hh"
 
 namespace gms {
@@ -16,8 +21,15 @@ namespace version_generator {
 // For us, we run the gossiper on a single CPU, and don't need to use atomics.
 static int version = 0;
 
+static logging::logger logger("version_generator");
+
 int get_next_version() noexcept
 {
+    if (this_shard_id() != 0) [[unlikely]] {
+        on_fatal_internal_error(logger, format(
+                "{} can only be called on shard 0, but it was called on shard {}",
+                __FUNCTION__, this_shard_id()));
+    }
     return ++version;
 }
 

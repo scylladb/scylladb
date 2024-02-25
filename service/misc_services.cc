@@ -208,8 +208,10 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
             llogger.debug("Send CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
             ++_published_nr;
             _published_time = now;
-            return _gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES,
-                    gms::versioned_value::cache_hitrates(_gstate)).then([this, recalculate_duration] {
+            return container().invoke_on(0, [&gstate = _gstate] (cache_hitrate_calculator& self) {
+                return self._gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES,
+                        gms::versioned_value::cache_hitrates(gstate));
+            }).then([recalculate_duration] {
                 return recalculate_duration;
             });
         } else {
