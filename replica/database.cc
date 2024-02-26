@@ -1660,7 +1660,7 @@ query::max_result_size database::get_query_max_result_size() const {
     switch (classify_request(_dbcfg)) {
         case request_class::user:
             return query::max_result_size(_cfg.max_memory_for_unlimited_query_soft_limit(), _cfg.max_memory_for_unlimited_query_hard_limit(),
-                    query::result_memory_limiter::maximum_result_size);
+                    _cfg.query_page_size_in_bytes());
         case request_class::system: [[fallthrough]];
         case request_class::maintenance:
             return query::max_result_size(query::result_memory_limiter::unlimited_result_size, query::result_memory_limiter::unlimited_result_size,
