@@ -8,6 +8,7 @@ our mailing-list at scylladb-dev@googlegroups.com or in our slack channel.
 Scylla version (or git commit hash):
 Cluster size:
 OS (RHEL/CentOS/Ubuntu/AWS AMI):
+ZenDesk ticket:
 
 *Hardware details (for performance issues)*          Delete if unneeded
 Platform (physical/VM/cloud instance type/docker):
