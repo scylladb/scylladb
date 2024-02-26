@@ -105,7 +105,7 @@ Example output:
 |           |                              |
 +-----------+------------------------------+
 | Data      |Within which Data Center the  |
-| Center    | node is located              |
+| Center    |node is located               |
 |           |                              |
 |           |                              |
 |           |                              |
