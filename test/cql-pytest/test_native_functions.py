@@ -11,11 +11,12 @@
 
 import pytest
 from util import new_test_table, unique_key_int
+from datetime import datetime
 from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "p int, i int, g bigint, b blob, s text, t timestamp, u timeuuid, PRIMARY KEY (p)") as table:
+    with new_test_table(cql, test_keyspace, "p int, i int, g bigint, b blob, s text, t timestamp, u timeuuid, d date, PRIMARY KEY (p)") as table:
         yield table
 
 # Check that a function that can take a column name as a parameter, can also
@@ -121,3 +122,42 @@ def test_mintimeuuid_extreme_from_totimestamp(cql, table1):
         cql.execute(f"SELECT * FROM {table1} WHERE p={p} and u < mintimeuuid(totimestamp(123)) ALLOW FILTERING")
     except:
         pass
+
+# According to the documentation, the toTimestamp() function can take either
+# a "timeuuid" or a "date" value and convert it to a "timestamp" type
+# (64-bit signed integer representing number of milliseconds since the UNIX
+# epoch). Let's test these conversions, and their error cases (especially,
+# the range dates covered by the different types isn't identical).
+# In test_type_date.py we have test coverage on the different ways a "date"
+# value can initialized, so we don't need to cover all of these here.
+def test_totimestamp_date(cql, table1):
+    p = unique_key_int()
+    # The date 2**31 is the day of the epoch, so 2**31+1 is one day later,
+    # Midnight January 2nd, 1970:
+    cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**31+1})")
+    assert [(datetime(1970,1,2,0,0),)] == list(cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}"))
+    # The day 2**31-1 is one day before the epoch, and this (negative
+    # timestamps) is allowed:
+    cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**31-1})")
+    assert [(datetime(1969,12,31,0,0),)] == list(cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}"))
+
+# Same as above test test_totimestame_date(), but use extreme dates
+# millions of years in the past. These tests cannot be run with the
+# current Python driver because of bugs it has in converting extreme
+# timestamps - https://github.com/scylladb/python-driver/issues/255 -
+# so the test is skipped.
+@pytest.mark.skip(reason="Python driver bug")
+def test_totimestamp_date_extreme(cql, table1):
+    p = unique_key_int()
+    # The day 2**31-2**29 is 2**29 days before the epoch - it's a useless date
+    # (more than a million years before our time), but at 4e16 milliseconds
+    # before the epoch, it should still fit nicely into 63 bits (9e18
+    # milliseconds), and should work fine.
+    cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**31-2**29})")
+    cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}")
+    # The day 2**30 is 2**30 days before the epoch - it's a useless date
+    # (almost 3 million years before our time), but at 10^17 milliseconds
+    # before the epoch, it should still fit 63 bits (10^19 milliseconds)
+    # and work fine.
+    cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**30})")
+    cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}")

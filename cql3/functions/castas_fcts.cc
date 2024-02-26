@@ -11,6 +11,7 @@
 #include "utils/UUID_gen.hh"
 #include "cql3/functions/native_scalar_function.hh"
 #include <boost/date_time/posix_time/posix_time.hpp>
+#include <chrono>
 
 namespace cql3 {
 namespace functions {
@@ -133,11 +134,11 @@ simple_date_native_type time_point_to_date(const db_clock::time_point& tp) {
 }
 
 db_clock::time_point date_to_time_point(const uint32_t date) {
-    const auto epoch = boost::posix_time::from_time_t(0);
-    const auto target_date = epoch + boost::gregorian::days(int64_t(date) - (1UL<<31));
-    boost::posix_time::time_duration duration = target_date - epoch;
-    const auto millis = std::chrono::milliseconds(duration.total_milliseconds());
-    return db_clock::time_point(std::chrono::duration_cast<db_clock::duration>(millis));
+    // "date" counts the number of days since the epoch, where the middle
+    // of the unsigned range, 2^31, signifies the epoch itself.
+    int64_t millis_since_epoch = (int64_t(date) - (1UL<<31)) * 24 * 60 * 60 * 1000;
+    return db_clock::time_point(std::chrono::duration_cast<db_clock::duration>(
+        std::chrono::milliseconds(millis_since_epoch)));
 }
 
 static data_value castas_fctn_from_timestamp_to_date(data_value from) {
