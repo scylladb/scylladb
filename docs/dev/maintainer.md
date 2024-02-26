@@ -262,7 +262,7 @@ This guideline is designed to be a quick checklist, rather
 than an exhaustive rulebook on what to accept/reject. One
 still has to rely on their judgemenet.
 
-0. Don't commit your own code.
+0. Don't commit your own code. See exceptions below.
 
 1. Verify that the author has signed the CLA. This is
    automatically true for ScyllaDB employees.
@@ -282,6 +282,14 @@ still has to rely on their judgemenet.
    GUI and their result is posted as a comment to the Github
    pull request. This has to be done manually by the
    contributor for patches posted to the mailing-list.
+
+### Exceptions for the don't commit your own code rule
+
+These exceptions are for commits that are administrative in nature.
+
+1. submodule updates (the submodule's commits will have been reviewed separately)
+
+2. frozen toolchain updates (changes to tools/toolchain/image; these only refresh external package versions)
 
 ## Guidelines for evaluating backports
 
