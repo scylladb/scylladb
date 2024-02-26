@@ -4,6 +4,7 @@ name: "Docs / Publish"
 
 env:
   FLAG: ${{ github.repository == 'scylladb/scylla-enterprise' && 'enterprise' || 'opensource' }}
+  DEFAULT_BRANCH: ${{ github.repository == 'scylladb/scylla-enterprise' && 'enterprise' || 'master' }}
 
 on:
   push:
@@ -22,6 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
+          ref: ${{ env.DEFAULT_BRANCH }}
           persist-credentials: false
           fetch-depth: 0
       - name: Set up Python
