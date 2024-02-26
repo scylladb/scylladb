@@ -97,8 +97,9 @@ delete_statement::delete_statement(cf_name name,
                                  std::vector<std::unique_ptr<operation::raw_deletion>> deletions,
                                  expr::expression where_clause,
                                  std::optional<expr::expression> conditions,
-                                 bool if_exists)
-    : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
+                                 bool if_exists,
+                                 bool is_local_replica)
+    : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists, is_local_replica)
     , _deletions(std::move(deletions))
     , _where_clause(std::move(where_clause))
 {

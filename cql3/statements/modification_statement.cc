@@ -763,12 +763,14 @@ const statement_type statement_type::SELECT = statement_type(statement_type::typ
 
 namespace raw {
 
-modification_statement::modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, std::optional<expr::expression> conditions, bool if_not_exists, bool if_exists)
+modification_statement::modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, std::optional<expr::expression> conditions,
+        bool if_not_exists, bool if_exists, bool is_local_replica)
     : cf_statement{std::move(name)}
     , _attrs{std::move(attrs)}
     , _conditions{std::move(conditions)}
     , _if_not_exists{if_not_exists}
     , _if_exists{if_exists}
+    , _is_local_replica{is_local_replica}
 { }
 
 }
