@@ -378,6 +378,10 @@ future<> raft_group0_client::wait_until_group0_upgraded(abort_source& as) {
     }
 }
 
+future<semaphore_units<>> raft_group0_client::hold_read_apply_mutex(abort_source& as) {
+    return get_units(_read_apply_mutex, 1, as);
+}
+
 db::system_keyspace& raft_group0_client::sys_ks() {
     return _sys_ks;
 }
