@@ -148,6 +148,9 @@ public:
         return _gcfg.partitioner;
     }
 
+    locator::host_id my_host_id() const noexcept {
+        return get_token_metadata_ptr()->get_topology().my_host_id();
+    }
     inet_address get_broadcast_address() const noexcept {
         return get_token_metadata_ptr()->get_topology().my_address();
     }
@@ -617,7 +620,7 @@ public:
     /**
      * Add an endpoint we knew about previously, but whose state is unknown
      */
-    future<> add_saved_endpoint(inet_address ep, permit_id);
+    future<> add_saved_endpoint(locator::host_id host_id, inet_address ep, permit_id);
 
     future<> add_local_application_state(application_state state, versioned_value value);
 

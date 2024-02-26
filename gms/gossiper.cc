@@ -2121,10 +2121,16 @@ void gossiper::build_seeds_list() {
     }
 }
 
-future<> gossiper::add_saved_endpoint(inet_address ep, permit_id pid) {
-    if (ep == get_broadcast_address()) {
+future<> gossiper::add_saved_endpoint(locator::host_id host_id, inet_address ep, permit_id pid) {
+    if (host_id == my_host_id()) {
         logger.debug("Attempt to add self as saved endpoint");
         co_return;
+    }
+    if (!host_id) {
+        on_internal_error(logger, format("Attempt to add {} with null host_id as saved endpoint", ep));
+    }
+    if (ep == get_broadcast_address()) {
+        on_internal_error(logger, format("Attempt to add {} with broadcast_address {} as saved endpoint", host_id, ep));
     }
 
     auto permit = co_await lock_endpoint(ep, pid);
@@ -2146,15 +2152,13 @@ future<> gossiper::add_saved_endpoint(inet_address ep, permit_id pid) {
     // It will get updated as a whole by handle_major_state_change
     // via do_apply_state_locally when (remote_generation > local_generation)
     const auto tmptr = get_token_metadata_ptr();
-    auto host_id = tmptr->get_host_id_if_known(ep);
-    if (host_id) {
-        ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id.value()));
-        auto tokens = tmptr->get_tokens(*host_id);
+        // FIXME: indentation
+        ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id));
+        auto tokens = tmptr->get_tokens(host_id);
         if (!tokens.empty()) {
             std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
             ep_state.add_application_state(gms::application_state::TOKENS, versioned_value::tokens(tokens_set));
         }
-    }
     auto generation = ep_state.get_heart_beat_state().get_generation();
     co_await replicate(ep, std::move(ep_state), permit.id());
     _unreachable_endpoints[ep] = now();

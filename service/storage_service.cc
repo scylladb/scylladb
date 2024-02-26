@@ -705,7 +705,7 @@ future<> storage_service::topology_state_load() {
         // since it is not loaded in join_cluster in the
         // raft_topology_change_enabled() case.
         if (!_gossiper.get_endpoint_state_ptr(ep)) {
-            co_await _gossiper.add_saved_endpoint(ep, permit.id());
+            co_await _gossiper.add_saved_endpoint(e, ep, permit.id());
         }
     }
 
@@ -1469,7 +1469,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         for (const auto& [host_id, st] : loaded_endpoints) {
             // gossiping hasn't started yet
             // so no need to lock the endpoint
-            co_await _gossiper.add_saved_endpoint(st.endpoint, gms::null_permit_id);
+            co_await _gossiper.add_saved_endpoint(host_id, st.endpoint, gms::null_permit_id);
         }
     }
     auto features = _feature_service.supported_feature_set();
@@ -2782,7 +2782,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
                 tmptr->update_host_id(host_id, st.endpoint);
                 // gossiping hasn't started yet
                 // so no need to lock the endpoint
-                co_await _gossiper.add_saved_endpoint(st.endpoint, gms::null_permit_id);
+                co_await _gossiper.add_saved_endpoint(host_id, st.endpoint, gms::null_permit_id);
             }
         }
         co_await replicate_to_all_cores(std::move(tmptr));
