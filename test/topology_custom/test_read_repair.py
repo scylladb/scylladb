@@ -212,7 +212,9 @@ async def test_incremental_read_repair(data_class, workdir, manager):
     seed = int(time.time())
     logger.info(f"random-seed: {seed}")
     random.seed(seed)
-    cmdline = ["--hinted-handoff-enabled", "0", "--query-tombstone-page-limit", "1000"]
+    cmdline = ["--hinted-handoff-enabled", "0",
+               "--query-tombstone-page-limit", "10",
+               "--query-page-size-in-bytes", "1024"]
     node1 = await manager.server_add(cmdline=cmdline)
     node2 = await manager.server_add(cmdline=cmdline)
 
@@ -231,8 +233,8 @@ async def test_incremental_read_repair(data_class, workdir, manager):
     dead_timestamp = int(time.time() * 1000)
     live_timestamp = dead_timestamp + 1
 
-    total_rows = 20000
-    max_live_rows = 32
+    total_rows = 100
+    max_live_rows = 8
     deletion_time = datetime.datetime.now()
 
     row_set: TypeAlias = set[int]
