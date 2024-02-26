@@ -2,7 +2,8 @@ add_library(repair STATIC)
 target_sources(repair
   PRIVATE
     repair.cc
-    row_level.cc)
+    row_level.cc
+    table_check.cc)
 target_include_directories(repair
   PUBLIC
     ${CMAKE_SOURCE_DIR})
