@@ -2,6 +2,8 @@ type: Topology
 pool_size: 2
 cluster:
   initial_size: 0
+skip_in_release:
+  - test_auth_v2_migration
 extra_scylla_config_options:
   authenticator: PasswordAuthenticator
   authorizer: CassandraAuthorizer
