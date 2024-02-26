@@ -240,6 +240,14 @@ public:
     /// The sharder is valid as long as this instance is kept alive.
     virtual const dht::sharder& get_sharder(const schema& s) const = 0;
 
+    // get_ranges() returns the list of ranges held by the given endpoint.
+    // The list is sorted, and its elements are non overlapping and non wrap-around.
+    // It the analogue of Origin's getAddressRanges().get(endpoint).
+    // This function is not efficient, and not meant for the fast path.
+    //
+    // Note: must be called after token_metadata has been initialized.
+    virtual dht::token_range_vector get_ranges(inet_address ep) const = 0;
+
     shard_id shard_of(const schema& s, dht::token t) const {
         return get_sharder(s).shard_of(t);
     }
@@ -307,6 +315,7 @@ public: // effective_replication_map
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
+    dht::token_range_vector get_ranges(inet_address ep) const override;
 public:
     explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
             ring_mapping pending_endpoints, ring_mapping read_endpoints, std::unordered_set<locator::host_id> dirty_endpoints, size_t replication_factor) noexcept
@@ -329,14 +338,6 @@ public:
     // boost::icl::interval_map is not no_throw_move_constructible -> can't return cloned_data by val,
     // since future_state requires T to be no_throw_move_constructible.
     future<std::unique_ptr<cloned_data>> clone_data_gently() const;
-
-    // get_ranges() returns the list of ranges held by the given endpoint.
-    // The list is sorted, and its elements are non overlapping and non wrap-around.
-    // It the analogue of Origin's getAddressRanges().get(endpoint).
-    // This function is not efficient, and not meant for the fast path.
-    //
-    // Note: must be called after token_metadata has been initialized.
-    dht::token_range_vector get_ranges(inet_address ep) const;
 
     // get_primary_ranges() returns the list of "primary ranges" for the given
     // endpoint. "Primary ranges" are the ranges that the node is responsible

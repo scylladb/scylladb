@@ -15,6 +15,9 @@
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
 
+#include <algorithm>
+#include <iterator>
+
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -550,6 +553,23 @@ public:
         auto result = get_natural_endpoints(search_token);
         maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
         return result;
+    }
+
+    // FIXME: return a future object.
+    virtual dht::token_range_vector get_ranges(inet_address ep) const override {
+        dht::token_range_vector ret;
+
+        auto& tablet_map = get_tablet_map();
+        for (auto tablet_id : tablet_map.tablet_ids()) {
+            auto endpoints = get_natural_endpoints(tablet_map.get_last_token(tablet_id));
+            auto should_add_range = std::find(std::begin(endpoints), std::end(endpoints), ep) != std::end(endpoints);
+
+            if (should_add_range) {
+                ret.push_back(tablet_map.get_token_range(tablet_id));
+            }
+        }
+
+        return ret;
     }
 
     virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {
