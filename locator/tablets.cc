@@ -220,6 +220,18 @@ dht::token_range tablet_map::get_token_range(tablet_id id) const {
     }
 }
 
+future<std::vector<token>> tablet_map::get_sorted_tokens() const {
+    std::vector<token> tokens;
+    tokens.reserve(tablet_count());
+
+    for (auto id : tablet_ids()) {
+        tokens.push_back(get_last_token(id));
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return tokens;
+}
+
 void tablet_map::set_tablet(tablet_id id, tablet_info info) {
     check_tablet_id(id);
     _tablets[size_t(id)] = std::move(info);
