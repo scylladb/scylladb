@@ -122,6 +122,10 @@ public:
     }
     position_range_iterator begin() const { return {_set.begin()}; }
     position_range_iterator end() const { return {_set.end()}; }
-    friend std::ostream& operator<<(std::ostream&, const clustering_interval_set&);
 };
 
+template <> struct fmt::formatter<clustering_interval_set> : fmt::formatter<std::string_view> {
+    auto format(const clustering_interval_set& set, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{{}}}", fmt::join(set, ",\n  "));
+    }
+};

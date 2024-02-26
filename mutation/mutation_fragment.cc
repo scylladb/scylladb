@@ -405,11 +405,6 @@ bool mutation_fragment_v2::relevant_for_range(const schema& s, position_in_parti
     return false;
 }
 
-std::ostream& operator<<(std::ostream& out, const clustering_interval_set& set) {
-    fmt::print(out, "{{{}}}", fmt::join(set, ",\n  "));
-    return out;
-}
-
 template<typename Hasher>
 void appending_hash<mutation_fragment>::operator()(Hasher& h, const mutation_fragment& mf, const schema& s) const {
     auto hash_cell = [&] (const column_definition& col, const atomic_cell_or_collection& cell) {
