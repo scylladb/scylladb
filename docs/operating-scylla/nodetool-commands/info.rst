@@ -48,9 +48,9 @@ Example output:
 | active    |                              |
 +-----------+------------------------------+
 | Native    |Native Transport status (CQL) |
-| Transp    |                              |
-| ort       |                              |
+| Transport |                              |
 | active    |                              |
+|           |                              |
 +-----------+------------------------------+
 | Load      |How much hard drive space is  |
 |           |used by SSTable               |
@@ -83,7 +83,7 @@ Example output:
 |           |                              |
 |           |                              |
 +-----------+------------------------------+
-| Heap      |Not applicabl e with Scylla   |
+| Heap      |Not applicable with Scylla    |
 | Memory    |                              |
 | (MB)      |                              |
 |           |                              |
@@ -116,8 +116,8 @@ Example output:
 |           |                              |
 |           |                              |
 +-----------+------------------------------+
-| Except    |Not applicable with Scylla    |
-| ions      |                              |
+| Exceptions|Not applicable with Scylla    |
+|           |                              |
 |           |                              |
 |           |                              |
 +-----------+------------------------------+
