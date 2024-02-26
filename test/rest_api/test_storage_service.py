@@ -653,6 +653,16 @@ def test_range_to_endpoint_map_with_table_param(cql,  rest_api, tablets_enabled,
 
                 assert endpoint == expected_endpoint, f"Unexpected endpoint={endpoint} for token_range={token_range}. Expected endpoint was {expected_endpoint}"
 
+def test_get_ownership_tablets_enabled(cql, this_dc, rest_api,  skip_without_tablets):
+    # If a keyspace that uses tablets exist, then 'storage_service/ownership' should return BAD_REQUEST.
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': true }}") as keyspace:
+        resp = rest_api.send("GET", "storage_service/ownership")
+        assert resp.status_code == requests.codes.bad_request
+
+        actual_error_reason = resp.json()["message"]
+        expected_error_reason = "storage_service/ownership cannot be used when a keyspace uses tablets"
+        assert expected_error_reason == actual_error_reason
+
 def test_get_effective_ownership_tablets_enabled_keyspace_param_used(cql, this_dc, rest_api, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': true }}") as keyspace:
         resp = rest_api.send("GET", f"storage_service/ownership/{keyspace}")
