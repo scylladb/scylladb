@@ -142,6 +142,7 @@ private:
     io_error_handler_gen _error_handler_gen;
     std::unique_ptr<storage> _storage;
     std::unique_ptr<components_lister> _lister;
+    std::unique_ptr<dht::sharder> _sharder_ptr;
     const dht::sharder& _sharder;
 
     generation_type _max_generation_seen;
@@ -189,6 +190,13 @@ private:
     // Retrieves sstables::foreign_sstable_open_info for a particular SSTable.
     future<foreign_sstable_open_info> get_open_info_for_this_sstable(const sstables::entry_descriptor& desc) const;
 
+    sstable_directory(sstables_manager& manager,
+          schema_ptr schema,
+          std::variant<std::unique_ptr<dht::sharder>, const dht::sharder*> sharder,
+          lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
+          sstring table_dir,
+          sstable_state state,
+          io_error_handler_gen error_handler_gen);
 public:
     sstable_directory(replica::table& table,
             sstable_state state,
