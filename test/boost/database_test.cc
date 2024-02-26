@@ -1091,7 +1091,7 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_selection_test) {
     }, std::move(cfg)).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(max_result_size_for_unlimited_query_selection_test) {
+SEASTAR_THREAD_TEST_CASE(max_result_size_for_query_selection_test) {
     cql_test_config cfg;
 
     cfg.db_config->max_memory_for_unlimited_query_soft_limit(1 * 1024 * 1024, utils::config_file::config_source::CommandLine);
@@ -1102,9 +1102,14 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_unlimited_query_selection_test) {
         destroy_scheduling_group(unknown_scheduling_group).get();
     });
 
-    const auto user_max_result_size = query::max_result_size(cfg.db_config->max_memory_for_unlimited_query_soft_limit(),
-            cfg.db_config->max_memory_for_unlimited_query_hard_limit());
-    const auto system_max_result_size = query::max_result_size(query::result_memory_limiter::unlimited_result_size);
+    const auto user_max_result_size = query::max_result_size(
+            cfg.db_config->max_memory_for_unlimited_query_soft_limit(),
+            cfg.db_config->max_memory_for_unlimited_query_hard_limit(),
+            query::result_memory_limiter::maximum_result_size);
+    const auto system_max_result_size = query::max_result_size(
+            query::result_memory_limiter::unlimited_result_size,
+            query::result_memory_limiter::unlimited_result_size,
+            query::result_memory_limiter::maximum_result_size);
     const auto maintenance_max_result_size = system_max_result_size;
 
     std::vector<std::pair<scheduling_group, query::max_result_size>> scheduling_group_and_expected_max_result_size{
@@ -1127,7 +1132,7 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_unlimited_query_selection_test) {
         database_test tdb(db);
         for (const auto& [sched_group, expected_max_size] : scheduling_group_and_expected_max_result_size) {
             with_scheduling_group(sched_group, [&db, sched_group = sched_group, expected_max_size = expected_max_size] {
-                const auto max_size = db.get_unlimited_query_max_result_size();
+                const auto max_size = db.get_query_max_result_size();
                 if (max_size != expected_max_size) {
                     BOOST_FAIL(fmt::format("Unexpected max_size for scheduling group {}, expected {{{}, {}}}, got {{{}, {}}}",
                                 sched_group.name(),
