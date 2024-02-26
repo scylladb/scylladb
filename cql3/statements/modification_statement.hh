@@ -41,6 +41,7 @@ class modification_statement : public cql_statement_opt_metadata {
 public:
     const statement_type type;
     bool _may_use_token_aware_routing;
+    bool _is_local_replica = false;
 private:
     const uint32_t _bound_terms;
     // If we have operation on list entries, such as adding or
