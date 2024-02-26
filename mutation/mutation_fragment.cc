@@ -28,20 +28,6 @@ partition_region parse_partition_region(std::string_view s) {
     }
 }
 
-std::ostream& operator<<(std::ostream& out, position_in_partition_view pos) {
-    fmt::print(out, "{}", pos);
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& out, const position_in_partition& pos) {
-    fmt::print(out, "{}", pos);
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& out, const position_range& range) {
-    return out << "{" << range.start() << ", " << range.end() << "}";
-}
-
 mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, static_row&& r)
     : _kind(kind::static_row), _data(std::make_unique<data>(std::move(permit)))
 {
