@@ -149,6 +149,10 @@ void migration_manager::init_messaging_service()
         auto features = self._feat.cluster_schema_features();
         auto& proxy = self._storage_proxy.container();
         auto& db = proxy.local().get_db();
+        semaphore_units<> guard;
+        if (options->group0_snapshot_transfer) {
+            guard = co_await self._group0_client.hold_read_apply_mutex(self._as);
+        }
         auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
         if (options->group0_snapshot_transfer) {
             // if `group0_snapshot_transfer` is `true`, the sender must also understand canonical mutations
