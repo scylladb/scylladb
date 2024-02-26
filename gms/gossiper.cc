@@ -2152,13 +2152,12 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, inet_address ep,
     // It will get updated as a whole by handle_major_state_change
     // via do_apply_state_locally when (remote_generation > local_generation)
     const auto tmptr = get_token_metadata_ptr();
-        // FIXME: indentation
-        ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id));
-        auto tokens = tmptr->get_tokens(host_id);
-        if (!tokens.empty()) {
-            std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
-            ep_state.add_application_state(gms::application_state::TOKENS, versioned_value::tokens(tokens_set));
-        }
+    ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id));
+    auto tokens = tmptr->get_tokens(host_id);
+    if (!tokens.empty()) {
+        std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
+        ep_state.add_application_state(gms::application_state::TOKENS, versioned_value::tokens(tokens_set));
+    }
     auto generation = ep_state.get_heart_beat_state().get_generation();
     co_await replicate(ep, std::move(ep_state), permit.id());
     _unreachable_endpoints[ep] = now();
