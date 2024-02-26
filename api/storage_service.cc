@@ -1368,7 +1368,17 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::get_effective_ownership.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) {
         auto keyspace_name = req->param["keyspace"] == "null" ? "" : validate_keyspace(ctx, req->param);
-        return ss.local().effective_ownership(keyspace_name).then([] (auto&& ownership) {
+        auto table_name = req->get_query_param("cf");
+
+        if (!keyspace_name.empty()) {
+            if (table_name.empty()) {
+                ensure_tablets_disabled(ctx, keyspace_name, "storage_service/ownership");
+            } else {
+                validate_table(ctx, keyspace_name, table_name);
+            }
+        }
+
+        return ss.local().effective_ownership(keyspace_name, table_name).then([] (auto&& ownership) {
             std::vector<storage_service_json::mapper> res;
             return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
         });

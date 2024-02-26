@@ -3079,9 +3079,9 @@ future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
     });
 }
 
-future<std::map<gms::inet_address, float>> storage_service::effective_ownership(sstring keyspace_name) {
-    return run_with_no_api_lock([keyspace_name] (storage_service& ss) mutable -> future<std::map<gms::inet_address, float>> {
-        locator::vnode_effective_replication_map_ptr erm;
+future<std::map<gms::inet_address, float>> storage_service::effective_ownership(sstring keyspace_name, sstring table_name) {
+    return run_with_no_api_lock([keyspace_name, table_name] (storage_service& ss) mutable -> future<std::map<gms::inet_address, float>> {
+        locator::effective_replication_map_ptr erm;
         if (keyspace_name != "") {
             //find throws no such keyspace if it is missing
             const replica::keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
@@ -3090,7 +3090,13 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             if (typeid(rs) == typeid(locator::local_strategy)) {
                 throw std::runtime_error("Ownership values for keyspaces with LocalStrategy are meaningless");
             }
-            erm = ks.get_vnode_effective_replication_map();
+
+            if (table_name.empty()) {
+                erm = ks.get_vnode_effective_replication_map();
+            } else {
+                auto& cf = ss._db.local().find_column_family(keyspace_name, table_name);
+                erm = cf.get_effective_replication_map();
+            }
         } else {
             auto non_system_keyspaces = ss._db.local().get_non_system_keyspaces();
 
@@ -3114,7 +3120,17 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
         //
         // The call for get_range_for_endpoint is done once per endpoint
         const auto& tm = *erm->get_token_metadata_ptr();
-        const auto token_ownership = dht::token::describe_ownership(tm.sorted_tokens());
+        const auto tokens = co_await std::invoke([&]() -> future<std::vector<token>> {
+            if (!erm->get_replication_strategy().uses_tablets()) {
+                return make_ready_future<std::vector<token>>(tm.sorted_tokens());
+            } else {
+                auto& cf = ss._db.local().find_column_family(keyspace_name, table_name);
+                const auto& tablets = tm.tablets().get_tablet_map(cf.schema()->id());
+                return tablets.get_sorted_tokens();
+            }
+        });
+
+        const auto token_ownership = dht::token::describe_ownership(tokens);
         const auto datacenter_endpoints = tm.get_topology().get_datacenter_endpoints();
         std::map<gms::inet_address, float> final_ownership;
 
@@ -6404,7 +6420,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, wrap
 };
 
 dht::token_range_vector
-storage_service::get_ranges_for_endpoint(const locator::vnode_effective_replication_map_ptr& erm, const gms::inet_address& ep) const {
+storage_service::get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const {
     return erm->get_ranges(ep);
 }
 
