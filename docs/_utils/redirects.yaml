@@ -1,6 +1,10 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Remove the Cluster membership changes and LWT consistency page
+
+/stable/operating-scylla/procedures/cluster-management/membership-changes.html: /stable/operating-scylla/index.html
+
 # Moving pages from the install-scylla folder
 
 /stable/getting-started/install-scylla/scylla-web-installer.html: /stable/getting-started/installation-common/scylla-web-installer.html
