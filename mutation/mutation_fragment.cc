@@ -238,16 +238,22 @@ position_range mutation_fragment::range(const schema& s) const {
     abort();
 }
 
-std::ostream& operator<<(std::ostream& os, mutation_fragment::kind k)
-{
+auto fmt::formatter<mutation_fragment::kind>::format(mutation_fragment::kind k, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name;
     switch (k) {
-    case mutation_fragment::kind::static_row: return os << "static row";
-    case mutation_fragment::kind::clustering_row: return os << "clustering row";
-    case mutation_fragment::kind::range_tombstone: return os << "range tombstone";
-    case mutation_fragment::kind::partition_start: return os << "partition start";
-    case mutation_fragment::kind::partition_end: return os << "partition end";
+    case mutation_fragment::kind::static_row:
+        name = "static row"; break;
+    case mutation_fragment::kind::clustering_row:
+        name = "clustering row"; break;
+    case mutation_fragment::kind::range_tombstone:
+        name = "range tombstone"; break;
+    case mutation_fragment::kind::partition_start:
+        name = "partition start"; break;
+    case mutation_fragment::kind::partition_end:
+        name = "partition end"; break;
     }
-    abort();
+    return fmt::format_to(ctx.out(), "{}", name);
 }
 
 auto fmt::formatter<mutation_fragment::printer>::format(const mutation_fragment::printer& p, fmt::format_context& ctx) const
@@ -411,11 +417,6 @@ bool mutation_fragment_v2::relevant_for_range(const schema& s, position_in_parti
         return true;
     }
     return false;
-}
-
-std::ostream& operator<<(std::ostream& out, const range_tombstone_stream& rtl) {
-    fmt::print(out, "{}", rtl._list);
-    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const clustering_interval_set& set) {
