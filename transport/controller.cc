@@ -238,12 +238,6 @@ future<> controller::do_start_server() {
             };
         });
 
-        struct listen_cfg {
-            socket_address addr;
-            bool is_shard_aware;
-            std::shared_ptr<seastar::tls::credentials_builder> cred;
-        };
-
         cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(cfg), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket).get();
         auto on_error = defer([&cserver] { cserver->stop().get(); });
 
