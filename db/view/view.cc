@@ -2425,6 +2425,9 @@ public:
 
     stop_iteration consume_new_partition(const dht::decorated_key& dk) {
         inject_failure("view_builder_consume_new_partition");
+        if (dk.key().is_empty()) {
+            on_internal_error(vlogger, format("Trying to consume empty partition key {}", dk));
+        }
         _step.current_key = std::move(dk);
         check_for_built_views();
         _views_to_build.clear();
@@ -2517,6 +2520,14 @@ public:
                           _step.base->schema()->cf_name(), _step.current_token(), view_names);
         }
         if (_step.reader.is_end_of_stream() && _step.reader.is_buffer_empty()) {
+            if (_step.current_key.key().is_empty()) {
+                // consumer got end-of-stream without consuming a single partition
+                vlogger.debug("Reader didn't produce anything, marking views as built");
+                while (!_step.build_status.empty()) {
+                    _built_views.views.push_back(std::move(_step.build_status.back()));
+                    _step.build_status.pop_back();
+                }
+            }
             _step.current_key = {dht::minimum_token(), partition_key::make_empty()};
             for (auto&& vs : _step.build_status) {
                 vs.next_token = dht::minimum_token();
