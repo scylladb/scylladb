@@ -153,7 +153,7 @@ future<> default_authorizer::stop() {
 future<permission_set>
 default_authorizer::authorize(const role_or_anonymous& maybe_role, const resource& r) const {
     if (is_anonymous(maybe_role)) {
-        return make_ready_future<permission_set>(permissions::NONE);
+        co_return permissions::NONE;
     }
 
     static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? AND {} = ?",
@@ -163,17 +163,15 @@ default_authorizer::authorize(const role_or_anonymous& maybe_role, const resourc
             ROLE_NAME,
             RESOURCE_NAME);
 
-    return _qp.execute_internal(
+    const auto results = co_await _qp.execute_internal(
             query,
             db::consistency_level::LOCAL_ONE,
             {*maybe_role.name, r.name()},
-            cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> results) {
-        if (results->empty()) {
-            return permissions::NONE;
-        }
-
-        return permissions::from_strings(results->one().get_set<sstring>(PERMISSIONS_NAME));
-    });
+            cql3::query_processor::cache_internal::yes);
+    if (results->empty()) {
+        co_return permissions::NONE;
+    }
+    co_return permissions::from_strings(results->one().get_set<sstring>(PERMISSIONS_NAME));
 }
 
 future<>
@@ -219,51 +217,44 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
             _auth_ks_name,
             PERMISSIONS_CF);
 
-    return _qp.execute_internal(
+    const auto results = co_await _qp.execute_internal(
             query,
             db::consistency_level::ONE,
             internal_distributed_query_state(),
             {},
-            cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> results) {
-        std::vector<permission_details> all_details;
+            cql3::query_processor::cache_internal::yes);
 
-        for (const auto& row : *results) {
-            if (row.has(PERMISSIONS_NAME)) {
-                auto role_name = row.get_as<sstring>(ROLE_NAME);
-                auto resource = parse_resource(row.get_as<sstring>(RESOURCE_NAME));
-                auto perms = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
-                all_details.push_back(permission_details{std::move(role_name), std::move(resource), std::move(perms)});
-            }
+    std::vector<permission_details> all_details;
+    for (const auto& row : *results) {
+        if (row.has(PERMISSIONS_NAME)) {
+            auto role_name = row.get_as<sstring>(ROLE_NAME);
+            auto resource = parse_resource(row.get_as<sstring>(RESOURCE_NAME));
+            auto perms = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
+            all_details.push_back(permission_details{std::move(role_name), std::move(resource), std::move(perms)});
         }
-
-        return all_details;
-    });
+    }
+    co_return all_details;
 }
 
 future<> default_authorizer::revoke_all(std::string_view role_name) {
-    static const sstring query = format("DELETE FROM {}.{} WHERE {} = ?",
-            _auth_ks_name,
-            PERMISSIONS_CF,
-            ROLE_NAME);
-    auto f = make_ready_future<>();
-    if (legacy_mode(_qp)) {
-        f = _qp.execute_internal(
-                query,
-                db::consistency_level::ONE,
-                internal_distributed_query_state(),
-                {sstring(role_name)},
-                cql3::query_processor::cache_internal::no).discard_result();
-    } else {
-        f = announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as);
-    }
-
-    return f.handle_exception([role_name](auto ep) {
-        try {
-            std::rethrow_exception(ep);
-        } catch (exceptions::request_execution_exception& e) {
-            alogger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", role_name, e);
+    try {
+        static const sstring query = format("DELETE FROM {}.{} WHERE {} = ?",
+                _auth_ks_name,
+                PERMISSIONS_CF,
+                ROLE_NAME);
+        if (legacy_mode(_qp)) {
+            co_await _qp.execute_internal(
+                    query,
+                    db::consistency_level::ONE,
+                    internal_distributed_query_state(),
+                    {sstring(role_name)},
+                    cql3::query_processor::cache_internal::no).discard_result();
+        } else {
+            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as);
         }
-    });
+    } catch (exceptions::request_execution_exception& e) {
+        alogger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", role_name, e);
+    }
 }
 
 future<> default_authorizer::revoke_all_legacy(const resource& resource) {
