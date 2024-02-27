@@ -26,16 +26,16 @@
 
 #include "error_injection_fcts.hh"
 
-namespace std {
-std::ostream& operator<<(std::ostream& os, const std::vector<data_type>& arg_types) {
+auto fmt::formatter<std::vector<data_type>>::format(const std::vector<data_type>& arg_types, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
     for (size_t i = 0; i < arg_types.size(); ++i) {
         if (i > 0) {
-            os << ", ";
+            out = fmt::format_to(out, ", ");
         }
-        os << arg_types[i]->as_cql3_type().to_string();
+        out = fmt::format_to(out, "{}", arg_types[i]->as_cql3_type());
     }
-    return os;
-}
+    return out;
 }
 
 namespace cql3 {
