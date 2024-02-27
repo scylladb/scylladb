@@ -6,7 +6,7 @@ The procedure described above applies to clusters where consistent topology upda
 are enabled. The feature is automatically enabled in new clusters.
 
 If you've upgraded an existing cluster from version 5.4, ensure that you 
-:doc:`manually enabled consistent topology updates </upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-raft-topology>`.
+:doc:`manually enabled consistent topology updates </upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology>`.
 Without consistent topology updates enabled, you must consider the following
 limitations while applying the procedure:
 

@@ -6,7 +6,7 @@ ScyllaDB 5.4 to 6.0 Upgrade Guide
    :maxdepth: 2
    :hidden:
 
-   Enable Raft-based Topology <enable-raft-topology.rst>
+   Enable Consistent Topology Updates <enable-consistent-topology.rst>
 
 
-* :doc:`Enable Raft-based Topology <enable-raft-topology>`
+* :doc:`Enable Consistent Topology Updates <enable-consistent-topology>`
