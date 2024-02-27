@@ -16,6 +16,19 @@ else:
     cmd = run.run_scylla_cmd
     check_cql = run.check_cql
 
+# If the "--vnodes" option is given, drop the "tablets" experimental
+# feature (turned on in run.py) so that all tests will be run with the
+# old vnode-based replication instead of tablets. This option only has
+# temporary usefulness, and should eventually be removed.
+if '--vnodes' in sys.argv:
+    sys.argv.remove('--vnodes')
+    def run_without_tablets(pid, dir):
+        (c, e) = run_without_tablets.orig_cmd(pid, dir)
+        c.remove('--experimental-features=tablets')
+        return (c, e)
+    run_without_tablets.orig_cmd = cmd
+    cmd = run_without_tablets
+
 pid = run.run_with_temporary_dir(cmd)
 ip = run.pid_to_ip(pid)
 
