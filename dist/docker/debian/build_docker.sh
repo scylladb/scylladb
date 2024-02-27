@@ -109,6 +109,6 @@ bconfig --label summary="NoSQL data store using the seastar framework, compatibl
 
 mkdir -p build/$mode/dist/docker/
 image="oci-archive:build/$mode/dist/docker/$product-$version-$release"
-buildah commit "$container" "$image"
+buildah commit --rm "$container" "$image"
 
 echo "Image is now available in $image."
