@@ -1,6 +1,3 @@
-.. |UBUNTU_SCYLLADB_LIST| replace:: scylla-5.4.list
-.. |CENTOS_SCYLLADB_REPO| replace:: scylla-5.4.repo
-
 .. The |RHEL_EPEL| variable needs to be adjuster per release, depending on support for RHEL.
 .. 5.2 supports Rocky/RHEL 8 only
 .. 5.4 supports Rocky/RHEL 8 and 9
