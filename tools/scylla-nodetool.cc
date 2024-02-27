@@ -40,7 +40,6 @@
 #include "tools/format_printers.hh"
 #include "tools/utils.hh"
 #include "utils/http.hh"
-#include "utils/human_readable.hh"
 #include "utils/pretty_printers.hh"
 #include "utils/rjson.hh"
 #include "utils/UUID.hh"
@@ -746,11 +745,27 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
         max_column_length[c] = header_row[c].size();
     }
 
-    auto format_hr_size = [] (const utils::human_readable_value hrv) {
-        if (!hrv.suffix || hrv.suffix == 'B') {
-            return fmt::format("{} B  ", hrv.value);
+    auto format_hr_size = [] (uint64_t val, bool use_alternative_units) {
+        const char* const units[] = {"bytes", "KB", "MB", "GB", "TB", "PB", "EB"};
+        const char* const alternative_units[] = {"bytes", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"};
+
+        unsigned i = 0;
+        const uint64_t step = 1024;
+        uint64_t nominator = 1;
+
+        for (; i < std::size(units); ++i) {
+            if (val / nominator < step) {
+                break;
+            }
+            nominator *= step;
         }
-        return fmt::format("{} {}iB", hrv.value, hrv.suffix);
+
+        auto formatted_number = fmt::format("{:.2f}", double(val) / double(nominator));
+        // Legacy nodetool omits decimal parts if they are "00"
+        if (formatted_number.ends_with(".00")) {
+            formatted_number.erase(formatted_number.size() - 3);
+        }
+        return fmt::format("{} {}", formatted_number, use_alternative_units ? alternative_units[i] : units[i]);
     };
 
     std::vector<std::array<std::string, 5>> rows;
@@ -761,8 +776,8 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
                     snapshot_name,
                     std::string(rjson::to_string_view(snapshot["ks"])),
                     std::string(rjson::to_string_view(snapshot["cf"])),
-                    format_hr_size(utils::to_hr_size(snapshot["live"].GetInt64())),
-                    format_hr_size(utils::to_hr_size(snapshot["total"].GetInt64()))});
+                    format_hr_size(snapshot["live"].GetInt64(), false),
+                    format_hr_size(snapshot["total"].GetInt64(), false)});
 
             for (size_t c = 0; c < rows.back().size(); ++c) {
                 max_column_length[c] = std::max(max_column_length[c], rows.back()[c].size());
@@ -772,16 +787,16 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
 
     const auto header_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}}\n", max_column_length[0],
             max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4]);
-    const auto regular_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:>{}}} {{:>{}}}\n", max_column_length[0],
+    const auto regular_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}}\n", max_column_length[0],
             max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4]);
 
-    fmt::print(std::cout, "Snapshot Details:\n");
+    fmt::print(std::cout, "Snapshot Details: \n");
     fmt::print(std::cout, fmt::runtime(header_row_format.c_str()), header_row[0], header_row[1], header_row[2], header_row[3], header_row[4]);
     for (const auto& r : rows) {
         fmt::print(std::cout, fmt::runtime(regular_row_format.c_str()), r[0], r[1], r[2], r[3], r[4]);
     }
 
-    fmt::print(std::cout, "\nTotal TrueDiskSpaceUsed: {}\n\n", format_hr_size(utils::to_hr_size(true_size)));
+    fmt::print(std::cout, "\nTotal TrueDiskSpaceUsed: {}\n\n", format_hr_size(true_size, true));
 }
 
 void move_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
