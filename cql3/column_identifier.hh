@@ -51,10 +51,6 @@ public:
 
     sstring to_cql_string() const;
 
-    friend std::ostream& operator<<(std::ostream& out, const column_identifier& i) {
-        return out << i._text;
-    }
-
 #if 0
     public ColumnIdentifier clone(AbstractAllocator allocator)
     {
@@ -91,7 +87,6 @@ public:
     sstring to_cql_string() const;
 
     friend std::hash<column_identifier_raw>;
-    friend std::ostream& operator<<(std::ostream& out, const column_identifier_raw& id);
 };
 
 static inline
@@ -121,5 +116,26 @@ struct hash<cql3::column_identifier_raw> {
         return std::hash<sstring>()(r._text);
     }
 };
+
+}
+
+template <> struct fmt::formatter<cql3::column_identifier> : fmt::formatter<std::string_view> {
+    auto format(const cql3::column_identifier& i, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", i.text());
+    }
+};
+
+template <> struct fmt::formatter<cql3::column_identifier_raw> : fmt::formatter<std::string_view> {
+    auto format(const cql3::column_identifier_raw& id, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", id.text());
+    }
+};
+
+namespace cql3 {
+
+static inline std::ostream& operator<<(std::ostream& out, const column_identifier& i) {
+    fmt::print(out, "{}", i);
+    return out;
+}
 
 }

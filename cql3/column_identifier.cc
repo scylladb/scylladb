@@ -98,10 +98,6 @@ sstring column_identifier_raw::to_string() const {
     return _text;
 }
 
-std::ostream& operator<<(std::ostream& out, const column_identifier_raw& id) {
-    return out << id._text;
-}
-
 }
 
 bool cql3::column_identifier::text_comparator::operator()(const cql3::column_identifier& c1, const cql3::column_identifier& c2) const {
