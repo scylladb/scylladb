@@ -1533,7 +1533,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     }
 
     auto& semaphore = get_reader_concurrency_semaphore();
-    auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_unlimited_query_max_result_size();
+    auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_query_max_result_size();
 
     std::optional<query::querier> querier_opt;
     lw_shared_ptr<query::result> result;
@@ -1598,7 +1598,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
 
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto& semaphore = get_reader_concurrency_semaphore();
-    auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_unlimited_query_max_result_size();
+    auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_query_max_result_size();
     auto accounter = co_await get_result_memory_limiter().new_mutation_read(max_result_size, short_read_allwoed);
     column_family& cf = find_column_family(cmd.cf_id);
 
@@ -1656,13 +1656,15 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     co_return std::tuple(std::move(result), hit_rate);
 }
 
-query::max_result_size database::get_unlimited_query_max_result_size() const {
+query::max_result_size database::get_query_max_result_size() const {
     switch (classify_request(_dbcfg)) {
         case request_class::user:
-            return query::max_result_size(_cfg.max_memory_for_unlimited_query_soft_limit(), _cfg.max_memory_for_unlimited_query_hard_limit());
+            return query::max_result_size(_cfg.max_memory_for_unlimited_query_soft_limit(), _cfg.max_memory_for_unlimited_query_hard_limit(),
+                    _cfg.query_page_size_in_bytes());
         case request_class::system: [[fallthrough]];
         case request_class::maintenance:
-            return query::max_result_size(query::result_memory_limiter::unlimited_result_size);
+            return query::max_result_size(query::result_memory_limiter::unlimited_result_size, query::result_memory_limiter::unlimited_result_size,
+                    query::result_memory_limiter::maximum_result_size);
     }
     std::abort();
 }
@@ -3013,8 +3015,7 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         db::timeout_clock::time_point timeout) {
-    auto max_size = db.local().get_unlimited_query_max_result_size();
-    auto max_res_size = query::max_result_size(max_size.soft_limit, max_size.hard_limit, query::result_memory_limiter::maximum_result_size);
+    auto max_res_size = db.local().get_query_max_result_size();
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
     auto erm = s->table().get_effective_replication_map();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
@@ -3037,8 +3038,7 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         db::timeout_clock::time_point timeout) {
-    auto max_size = db.local().get_unlimited_query_max_result_size();
-    auto max_res_size = query::max_result_size(max_size.soft_limit, max_size.hard_limit, query::result_memory_limiter::maximum_result_size);
+    auto max_res_size = db.local().get_query_max_result_size();
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
     auto prs = dht::partition_range_vector{pr};
     auto opts = query::result_options::only_result();
