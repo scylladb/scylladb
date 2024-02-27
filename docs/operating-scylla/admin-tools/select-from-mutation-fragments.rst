@@ -1,6 +1,6 @@
-============================================
-SELECT * FROM MUTATION_FRAGMENTS() Statement
-============================================
+==========================
+Reading mutation fragments
+==========================
 
 .. warning:: This statement is not final and is subject to change without notice and in backwards-incompatible ways.
 
