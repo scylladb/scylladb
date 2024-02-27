@@ -576,22 +576,27 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary:
     }
 }
 
-static
-std::ostream&
-operator<<(std::ostream&out, untyped_constant::type_class t)
-{
-    switch (t) {
-        case untyped_constant::type_class::string:   return out << "STRING";
-        case untyped_constant::type_class::integer:  return out << "INTEGER";
-        case untyped_constant::type_class::uuid:     return out << "UUID";
-        case untyped_constant::type_class::floating_point:    return out << "FLOAT";
-        case untyped_constant::type_class::boolean:  return out << "BOOLEAN";
-        case untyped_constant::type_class::hex:      return out << "HEX";
-        case untyped_constant::type_class::duration: return out << "DURATION";
-        case untyped_constant::type_class::null:     return out << "NULL";
-    }
-    abort();
 }
+
+template <> struct fmt::formatter<cql3::expr::untyped_constant::type_class> : fmt::formatter<std::string_view> {
+    auto format(cql3::expr::untyped_constant::type_class t, fmt::format_context& ctx) const {
+        using enum cql3::expr::untyped_constant::type_class;
+        std::string_view name;
+        switch (t) {
+            case string:   name = "STRING"; break;
+            case integer:  name = "INTEGER"; break;
+            case uuid:     name = "UUID"; break;
+            case floating_point:    name = "FLOAT"; break;
+            case boolean:  name = "BOOLEAN"; break;
+            case hex:      name = "HEX"; break;
+            case duration: name = "DURATION"; break;
+            case null:     name = "NULL"; break;
+        }
+        return fmt::format_to(ctx.out(), "{}", name);
+    }
+};
+
+namespace cql3::expr {
 
 static
 bytes
