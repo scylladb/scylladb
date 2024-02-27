@@ -34,8 +34,6 @@ class default_authorizer : public authorizer {
 
     future<> _finished{make_ready_future<>()};
 
-    std::string_view _auth_ks_name;
-
 public:
     default_authorizer(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
 
@@ -66,7 +64,7 @@ private:
 
     future<> revoke_all_legacy(const resource&);
 
-    future<bool> any_granted() const;
+    future<bool> legacy_any_granted() const;
 
     future<> migrate_legacy_metadata();
 

@@ -36,7 +36,6 @@ class standard_role_manager final : public role_manager {
     future<> _stopped;
     abort_source _as;
     std::string _superuser;
-    std::string_view _auth_ks_name;
 
 public:
     standard_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);

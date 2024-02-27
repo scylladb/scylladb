@@ -54,8 +54,7 @@ static const class_registrator<
 default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
         : _qp(qp)
         , _group0_client(g0)
-        , _migration_manager(mm)
-        , _auth_ks_name(get_auth_ks_name(qp)) {
+        , _migration_manager(mm) {
 }
 
 default_authorizer::~default_authorizer() {
@@ -67,7 +66,7 @@ bool default_authorizer::legacy_metadata_exists() const {
     return _qp.db().has_schema(meta::legacy::AUTH_KS, legacy_table_name);
 }
 
-future<bool> default_authorizer::any_granted() const {
+future<bool> default_authorizer::legacy_any_granted() const {
     static const sstring query = format("SELECT * FROM {}.{} LIMIT 1", meta::legacy::AUTH_KS, PERMISSIONS_CF);
 
     return _qp.execute_internal(
@@ -132,7 +131,7 @@ future<> default_authorizer::start() {
                     _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
                     if (legacy_metadata_exists()) {
-                        if (!any_granted().get()) {
+                        if (!legacy_any_granted().get()) {
                             migrate_legacy_metadata().get();
                             return;
                         }
@@ -156,9 +155,9 @@ default_authorizer::authorize(const role_or_anonymous& maybe_role, const resourc
         co_return permissions::NONE;
     }
 
-    static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? AND {} = ?",
+    const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? AND {} = ?",
             PERMISSIONS_NAME,
-            _auth_ks_name,
+            get_auth_ks_name(_qp),
             PERMISSIONS_CF,
             ROLE_NAME,
             RESOURCE_NAME);
@@ -181,7 +180,7 @@ default_authorizer::modify(
         const resource& resource,
         std::string_view op) {
     const sstring query = format("UPDATE {}.{} SET {} = {} {} ? WHERE {} = ? AND {} = ?",
-            _auth_ks_name,
+            get_auth_ks_name(_qp),
             PERMISSIONS_CF,
             PERMISSIONS_NAME,
             PERMISSIONS_NAME,
@@ -210,11 +209,11 @@ future<> default_authorizer::revoke(std::string_view role_name, permission_set s
 }
 
 future<std::vector<permission_details>> default_authorizer::list_all() const {
-    static const sstring query = format("SELECT {}, {}, {} FROM {}.{}",
+    const sstring query = format("SELECT {}, {}, {} FROM {}.{}",
             ROLE_NAME,
             RESOURCE_NAME,
             PERMISSIONS_NAME,
-            _auth_ks_name,
+            get_auth_ks_name(_qp),
             PERMISSIONS_CF);
 
     const auto results = co_await _qp.execute_internal(
@@ -238,8 +237,8 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
 
 future<> default_authorizer::revoke_all(std::string_view role_name) {
     try {
-        static const sstring query = format("DELETE FROM {}.{} WHERE {} = ?",
-                _auth_ks_name,
+        const sstring query = format("DELETE FROM {}.{} WHERE {} = ?",
+                get_auth_ks_name(_qp),
                 PERMISSIONS_CF,
                 ROLE_NAME);
         if (legacy_mode(_qp)) {
@@ -260,7 +259,7 @@ future<> default_authorizer::revoke_all(std::string_view role_name) {
 future<> default_authorizer::revoke_all_legacy(const resource& resource) {
     static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
             ROLE_NAME,
-            _auth_ks_name,
+            get_auth_ks_name(_qp),
             PERMISSIONS_CF,
             RESOURCE_NAME);
 
@@ -276,7 +275,7 @@ future<> default_authorizer::revoke_all_legacy(const resource& resource) {
                     res->end(),
                     [this, res, resource](const cql3::untyped_result_set::row& r) {
                 static const sstring query = format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
-                        _auth_ks_name,
+                        get_auth_ks_name(_qp),
                         PERMISSIONS_CF,
                         ROLE_NAME,
                         RESOURCE_NAME);
@@ -309,9 +308,9 @@ future<> default_authorizer::revoke_all(const resource& resource) {
     auto name = resource.name();
     try {
         auto gen = [this, name] (api::timestamp_type& t) -> mutations_generator {
-            static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
+            const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
                     ROLE_NAME,
-                    _auth_ks_name,
+                    get_auth_ks_name(_qp),
                     PERMISSIONS_CF,
                     RESOURCE_NAME);
             auto res = co_await _qp.execute_internal(
@@ -320,8 +319,8 @@ future<> default_authorizer::revoke_all(const resource& resource) {
                     {name},
                     cql3::query_processor::cache_internal::no);
             for (const auto& r : *res) {
-                static const sstring query = format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
-                        _auth_ks_name,
+                const sstring query = format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
+                        get_auth_ks_name(_qp),
                         PERMISSIONS_CF,
                         ROLE_NAME,
                         RESOURCE_NAME);
