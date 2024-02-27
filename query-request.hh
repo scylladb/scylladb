@@ -367,14 +367,9 @@ public:
     max_result_size without_page_limit() const {
         return max_result_size(soft_limit, hard_limit, 0);
     }
-    friend bool operator==(const max_result_size&, const max_result_size&);
+    bool operator==(const max_result_size&) const = default;
     friend class ser::serializer<query::max_result_size>;
 };
-
-inline bool operator==(const max_result_size& a, const max_result_size& b) {
-    return a.soft_limit == b.soft_limit && a.hard_limit == b.hard_limit && a.page_size == b.page_size;
-}
-
 
 // Full specification of a query to the database.
 // Intended for passing across replicas.
