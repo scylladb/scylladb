@@ -254,6 +254,7 @@ public:
     named_value<uint32_t> tombstone_warn_threshold;
     named_value<uint32_t> tombstone_failure_threshold;
     named_value<uint64_t> query_tombstone_page_limit;
+    named_value<uint64_t> query_page_size_in_bytes;
     named_value<uint32_t> range_request_timeout_in_ms;
     named_value<uint32_t> read_request_timeout_in_ms;
     named_value<uint32_t> counter_write_request_timeout_in_ms;

@@ -363,6 +363,9 @@ public:
     uint64_t get_page_size() const {
         return page_size == 0 ? hard_limit : page_size;
     }
+    max_result_size without_page_limit() const {
+        return max_result_size(soft_limit, hard_limit, 0);
+    }
     friend bool operator==(const max_result_size&, const max_result_size&);
     friend class ser::serializer<query::max_result_size>;
 };

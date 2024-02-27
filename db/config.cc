@@ -678,6 +678,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The maximum number of tombstones a query can scan before aborting.")
     , query_tombstone_page_limit(this, "query_tombstone_page_limit", liveness::LiveUpdate, value_status::Used, 10000,
         "The number of tombstones after which a query cuts a page, even if not full or even empty.")
+    , query_page_size_in_bytes(this, "query_page_size_in_bytes", liveness::LiveUpdate, value_status::Used, 1 << 20,
+        "The size of pages in bytes, after a page accumulates this much data, the page is cut and sent to the client."
+        " Setting a too large value increases the risk of OOM.")
     /**
     * @Group Network timeout settings
     */

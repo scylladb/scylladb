@@ -576,7 +576,7 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> dump_mutations(
     }
 
     auto permit = co_await db.local().obtain_reader_permit(underlying_schema, "mutation-dump", timeout, ts);
-    auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : db.local().get_unlimited_query_max_result_size();
+    auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : db.local().get_query_max_result_size();
     permit.set_max_result_size(max_result_size);
 
     const auto opts = query::result_options::only_result();

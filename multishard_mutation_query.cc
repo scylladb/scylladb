@@ -251,7 +251,7 @@ public:
     }
 
     query::max_result_size get_max_result_size() {
-        return _cmd.max_result_size ? *_cmd.max_result_size : _db.local().get_unlimited_query_max_result_size();
+        return _cmd.max_result_size ? *_cmd.max_result_size : _db.local().get_query_max_result_size();
     }
 
     virtual flat_mutation_reader_v2 create_reader(
