@@ -340,7 +340,7 @@ future<> service_level_controller::drop_distributed_service_level(sstring name, 
             return role_manager.query_attribute_for_all("service_level").then( [&role_manager, name] (auth::role_manager::attribute_vals attributes) {
                 return parallel_for_each(attributes.begin(), attributes.end(), [&role_manager, name] (auto&& attr) {
                     if (attr.second == name) {
-                        return role_manager.remove_attribute(attr.first, "service_level");
+                        return do_with(attr.first, [&role_manager] (const sstring& role_name) {return role_manager.remove_attribute(role_name, "service_level");});
                     } else {
                         return make_ready_future();
                     }
