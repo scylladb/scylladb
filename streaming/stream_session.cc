@@ -36,6 +36,7 @@
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "consumer.hh"
 #include "readers/generating_v2.hh"
+#include "utils/error_injection.hh"
 
 namespace streaming {
 
@@ -167,6 +168,9 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             // Make sure the table with cf_id is still present at this point.
             // Close the sink in case the table is dropped.
             auto& table = _db.local().find_column_family(cf_id);
+            utils::get_local_injector().inject("stream_mutation_fragments_table_dropped", [this] () {
+                _db.local().find_column_family(table_id::create_null_id());
+            });
             auto erm = table.get_effective_replication_map();
             auto op = table.stream_in_progress();
             //FIXME: discarded future.
