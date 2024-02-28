@@ -71,7 +71,10 @@ public:
     using per_device_limits_map = std::unordered_map<dev_t, per_device_limits>;
 
 private:
-    size_t _total_size = 0;
+    /// The total size occupied by valid hint directories, i.e those whose names represent IP addresses.
+    size_t _total_valid_size = 0;
+    /// The total size occupied by invalid hint directories, i.e. those who are not valid.
+    size_t _total_invalid_size = 0;
     shard_managers_set& _shard_managers;
     per_device_limits_map& _per_device_limits_map;
     seastar::named_semaphore _update_lock;
@@ -111,9 +114,9 @@ private:
     ///
     /// \param path directory to scan
     /// \param shard_manager the hint manager managing the directory specified by `path`
-    /// \param ep_name endpoint ID corresponding to the scanned directory
+    /// \param maybe_ep endpoint ID of the scanned dir; empty optional if it doesn't represent a valid IP address
     /// \return future that resolves when scanning is complete
-    future<> scan_one_ep_dir(fs::path path, manager& shard_manager, endpoint_id ep_key);
+    future<> scan_one_ep_dir(fs::path path, manager& shard_manager, std::optional<endpoint_id> maybe_ep);
 };
 
 class resource_manager {

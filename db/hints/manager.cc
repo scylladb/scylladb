@@ -185,13 +185,21 @@ future<> manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
 
     co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
             [this] (fs::path datadir, directory_entry de) {
-        endpoint_id ep = endpoint_id{de.name};
+        const auto maybe_ep = std::invoke([&] () -> std::optional<endpoint_id> {
+            try {
+                return endpoint_id{de.name};
+            } catch (...) {
+                manager_logger.warn("Encountered a hint directory of invalid name: {}, exception: {}. "
+                        "Hints stored in it won't be replayed.", de.name, std::current_exception());
+                return {};
+            }
+        });
 
-        if (!check_dc_for(ep)) {
+        if (!maybe_ep || !check_dc_for(*maybe_ep)) {
             return make_ready_future<>();
         }
 
-        return get_ep_manager(ep).populate_segments_to_replay();
+        return get_ep_manager(*maybe_ep).populate_segments_to_replay();
     });
 
     co_await compute_hints_dir_device_id();
@@ -422,9 +430,23 @@ future<> manager::change_host_filter(host_filter filter) {
         // for some of them
         co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
                 [this] (fs::path datadir, directory_entry de) {
-            const endpoint_id ep = endpoint_id{de.name};
+            const auto maybe_ep = std::invoke([&] () -> std::optional<endpoint_id> {
+                try {
+                    return endpoint_id{de.name};
+                } catch (...) {
+                    manager_logger.warn("Encountered a hint directory of invalid name: {}, exception: {}. "
+                            "Hints stored in it won't be replayed.", de.name, std::current_exception());
+                    return {};
+                }
+            });
 
+            if (!maybe_ep) {
+                return make_ready_future();
+            }
+
+            const auto ep = *maybe_ep;
             const auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
+
             if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(topology, ep)) {
                 return make_ready_future();
             }
