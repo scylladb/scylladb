@@ -391,18 +391,20 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
 
     std::vector<future<>> sys_ks_futures;
 
-    auto remove_ip = [&](inet_address ip) -> future<> {
+    auto remove_ip = [&](inet_address ip, bool notify) -> future<> {
         sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(ip));
 
         if (_gossiper.get_endpoint_state_ptr(ip) && !get_used_ips().contains(ip)) {
             co_await _gossiper.force_remove_endpoint(ip, gms::null_permit_id);
-            co_await notify_left(ip);
+            if (notify) {
+                co_await notify_left(ip);
+            }
         }
     };
 
     auto process_left_node = [&] (raft::server_id id) -> future<> {
         if (const auto ip = am.find(id)) {
-            co_await remove_ip(*ip);
+            co_await remove_ip(*ip, true);
         }
 
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
@@ -454,7 +456,8 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
                     slogger.info("crash-before-prev-ip-removed hit, killing the node");
                     _exit(1);
                 });
-                co_await remove_ip(it->second);
+                // IP change is not expected to emit REMOVED_NODE notifications
+                co_await remove_ip(it->second, false);
             }
         }
         update_topology(host_id, ip, rs);
