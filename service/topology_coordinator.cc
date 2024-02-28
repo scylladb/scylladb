@@ -1553,6 +1553,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
 
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
+                auto state = node.rs->state;
                 try {
                     if (node.rs->state == node_state::removing) {
                         // tell all nodes to stream data of the removed node to new range owners
@@ -1565,7 +1566,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     throw;
                 } catch (...) {
                     rtlogger.error("send_raft_topology_cmd(stream_ranges) failed with exception"
-                                    " (node state is {}): {}", node.rs->state, std::current_exception());
+                                    " (node state is {}): {}", state, std::current_exception());
                     _rollback = fmt::format("Failed stream ranges: {}", std::current_exception());
                     break;
                 }
