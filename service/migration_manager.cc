@@ -123,8 +123,9 @@ void migration_manager::init_messaging_service()
         });
         return netw::messaging_service::no_wait();
     });
-    _messaging.register_migration_request(std::bind_front(
-            [] (migration_manager& self, const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options)
+    _messaging.register_migration_request([this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
+        return container().invoke_on(0, std::bind_front(
+            [] (netw::msg_addr, rpc::optional<netw::schema_pull_options> options, migration_manager& self)
                 -> future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> {
         const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
 
@@ -151,7 +152,8 @@ void migration_manager::init_messaging_service()
             return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
         }));
         co_return rpc::tuple(std::move(fm), std::move(cm));
-    }, std::ref(*this)));
+    }, netw::messaging_service::get_source(cinfo), std::move(options)));
+    });
     _messaging.register_schema_check([this] {
         return make_ready_future<table_schema_version>(_storage_proxy.get_db().local().get_version());
     });
