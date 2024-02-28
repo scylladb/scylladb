@@ -40,14 +40,16 @@ def test_smoke(cql, test_table, scylla_only):
         cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 1, 'regular val')")
         cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 2, 'regular val')")
         partitions[(pk1, pk2)] = [
-                (pk1, pk2, 'memtable:0', 0, None, None, None, 'partition start'),
-                (pk1, pk2, 'memtable:0', 1, None, None, None, 'static row'),
-                (pk1, pk2, 'memtable:0', 2, 0   , 0   , 1   , 'range tombstone change'),
-                (pk1, pk2, 'memtable:0', 2, 0   , 1   , 0   , 'clustering row'),
-                (pk1, pk2, 'memtable:0', 2, 0   , 2   , 0   , 'clustering row'),
-                (pk1, pk2, 'memtable:0', 2, 0   , 3   , -1  , 'range tombstone change'),
-                (pk1, pk2, 'memtable:0', 3, None, None, None, 'partition end'),
+                (pk1, pk2, 'sstable:', 0, None, None, None, 'partition start'),
+                (pk1, pk2, 'sstable:', 1, None, None, None, 'static row'),
+                (pk1, pk2, 'sstable:', 2, 0   , 0   , 1   , 'range tombstone change'),
+                (pk1, pk2, 'sstable:', 2, 0   , 1   , 0   , 'clustering row'),
+                (pk1, pk2, 'sstable:', 2, 0   , 2   , 0   , 'clustering row'),
+                (pk1, pk2, 'sstable:', 2, 0   , 3   , -1  , 'range tombstone change'),
+                (pk1, pk2, 'sstable:', 3, None, None, None, 'partition end'),
         ]
+
+    nodetool.flush(cql, f"{test_table}")
 
     col_names = ('pk1', 'pk2', 'mutation_source', 'partition_region', 'ck1', 'ck2', 'position_weight', 'mutation_fragment_kind')
 
@@ -57,15 +59,18 @@ def test_smoke(cql, test_table, scylla_only):
         for expected_col_values, row in zip(expected_rows, rows):
             for col_name, col_value in zip(col_names, expected_col_values):
                 assert hasattr(row, col_name)
-                assert getattr(row, col_name) == col_value
+                if col_name == 'mutation_source':
+                    assert getattr(row, col_name).startswith(col_value)
+                else:
+                    assert getattr(row, col_name) == col_value
 
     # Point queries
     for (pk1, pk2), expected_rows in partitions.items():
-        rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2}"))
+        rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2} AND mutation_source > 'sstable:'"))
         check_partition_rows(rows, expected_rows)
 
     # Range scan
-    all_rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table})"))
+    all_rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE mutation_source > 'sstable:' ALLOW FILTERING"))
     for (pk1, pk2), expected_rows in partitions.items():
         rows = [r for r in all_rows if r.pk1 == pk1 and r.pk2 == pk2]
         check_partition_rows(rows, expected_rows)
@@ -95,6 +100,9 @@ def test_mutation_source(cql, test_table, scylla_only):
                 assert len(rows) == 3 # partition-start, clustering-row, partition-end
             else:
                 assert len(rows) == 0
+
+    # Start with an empty memtable.
+    nodetool.flush(cql, f"{test_table}")
 
     cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
     expect_sources('memtable')
@@ -305,7 +313,15 @@ def test_paging(cql, test_table, scylla_only):
     for ck in range(0, num_rows):
         cql.execute(insert_stmt, (pk1, pk2, 0, ck, 'asdasd'))
 
-    read_stmt = cassandra.query.SimpleStatement(f"SELECT * FROM mutation_fragments({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2}", fetch_size=page_size)
+    nodetool.flush(cql, f"{test_table}")
+
+    read_stmt = cassandra.query.SimpleStatement(
+            f"""SELECT * FROM mutation_fragments({test_table})
+            WHERE
+                pk1 = {pk1} AND
+                pk2 = {pk2} AND
+                mutation_source > 'sstable:'""",
+            fetch_size=page_size)
     result = cql.execute(read_stmt)
 
     remaining = expected_mutation_fragments
@@ -330,14 +346,21 @@ def test_slicing_rows(cql, test_table, scylla_only):
     cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 20, 'vv')")
     cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 1, 20, 'vv')")
 
-    all_rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2}"))
+    nodetool.flush(cql, f"{test_table}")
+
+    all_rows = list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
+            WHERE
+                pk1 = {pk1} AND
+                pk2 = {pk2} AND
+                mutation_source > 'sstable:'"""))
+    mutation_source = all_rows[0].mutation_source
 
     def check_slice(ck1, ck2_start_inclusive, ck2_end_exclusive):
         res = list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
             WHERE
                 pk1 = {pk1} AND
                 pk2 = {pk2} AND
-                mutation_source = 'memtable:0' AND
+                mutation_source = '{mutation_source}' AND
                 partition_region = 2 AND
                 ck1 = {ck1} AND
                 ck2 >= {ck2_start_inclusive} AND
@@ -369,12 +392,22 @@ def test_slicing_range_tombstone_changes(cql, test_table, scylla_only):
     cql.execute(f"DELETE FROM {test_table} WHERE pk1 = {pk1} AND pk2 = {pk2} AND ck1 = {ck1} AND ck2 > 10 AND ck2 < 20")
     cql.execute(f"DELETE FROM {test_table} WHERE pk1 = {pk1} AND pk2 = {pk2} AND ck1 = {ck1} AND ck2 > 20 AND ck2 < 30")
 
+    nodetool.flush(cql, f"{test_table}")
+
+    sample_row = list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
+        WHERE
+            pk1 = {pk1} AND
+            pk2 = {pk2} AND
+            mutation_source > 'sstable:'
+        LIMIT 1"""))
+    mutation_source = sample_row[0].mutation_source
+
     def check_slice_ck1_fixed(ck2_start_inclusive, ck2_end_exclusive, expected_rtcs):
         res = list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
             WHERE
                 pk1 = {pk1} AND
                 pk2 = {pk2} AND
-                mutation_source = 'memtable:0' AND
+                mutation_source = '{mutation_source}' AND
                 partition_region = 2 AND
                 ck1 = {ck1} AND
                 ck2 >= {ck2_start_inclusive} AND
@@ -443,11 +476,14 @@ def test_many_partitions(cql, test_keyspace, scylla_only):
         for pk in range(num_partitions):
             cql.execute(delete_id, (pk,))
 
+        nodetool.flush(cql, f"{table}")
+
         # since this scan is very slow, we create an extra patient cql connection,
         # with an abundant 10 minutes timeout
         ep = cql.hosts[0].endpoint
         with util.cql_session(ep.address, ep.port, False, 'cassandra', 'cassandra', 600) as patient_cql:
-            res = list(patient_cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table})"))
+            res = list(patient_cql.execute(
+                f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE mutation_source > 'sstable:' ALLOW FILTERING"))
         pks = set()
         partition_starts = 0
         partition_ends = 0
