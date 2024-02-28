@@ -70,6 +70,17 @@ async def populate_auth_v1_data(manager: ManagerClient):
     ])
 
 
+async def warmup_v1_static_values(manager: ManagerClient, hosts):
+    # auth-v1 was using statics to cache internal queries
+    # in auth-v2 those statics were removed but we want to
+    # verify that it was effective so trigger here internal
+    # call to potentially populate static storage and we'll
+    # verify later that after migration properly formed query
+    # executes (query has to change because keyspace name changes)
+    cql = manager.get_cql()
+    await asyncio.gather(*(cql.run_async("LIST ROLES", host=host) for host in hosts))
+
+
 async def check_auth_v2_data_migration(manager: ManagerClient, hosts):
     cql = manager.get_cql()
     # auth reads are eventually consistent so we need to make sure hosts are up-to-date
@@ -107,6 +118,12 @@ async def check_auth_v2_works(manager: ManagerClient, hosts):
     assert set([user1_roles[0].role, user1_roles[1].role]) == set(["users",  "user 1"])
 
     await cql.run_async("CREATE ROLE IF NOT EXISTS user_after_migration")
+    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+    # see warmup_v1_static_values for background about checks below
+    # check if it was added to a new table
+    assert len(await cql.run_async("SELECT role FROM system_auth_v2.roles WHERE role = 'user_after_migration'")) == 1
+    # check whether list roles statement sees it also via new table (on all nodes)
+    await asyncio.gather(*(cql.run_async("LIST ROLES OF user_after_migration", host=host) for host in hosts))
     await cql.run_async("DROP ROLE user_after_migration")
 
 
@@ -133,6 +150,7 @@ async def test_auth_v2_migration(request, manager: ManagerClient):
         assert status == "not_upgraded"
 
     await populate_auth_v1_data(manager)
+    await warmup_v1_static_values(manager, hosts)
 
     logging.info("Triggering upgrade to raft topology")
     await manager.api.upgrade_to_raft_topology(hosts[0].address)
