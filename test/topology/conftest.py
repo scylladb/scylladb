@@ -139,7 +139,7 @@ def cluster_con(hosts: List[IPAddress | EndPoint], port: int, use_ssl: bool, aut
                    # where a node can be unavailable for an extended period of time,
                    # this can cause the reconnection retry interval to get very large,
                    # longer than a test timeout.
-                   reconnection_policy = ExponentialReconnectionPolicy(1.0, 4.0),
+                   reconnection_policy = ExponentialReconnectionPolicy(1.0, 4.0, 512),
 
                    auth_provider=auth_provider,
                    # Capture messages for debugging purposes.
