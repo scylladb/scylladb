@@ -9,9 +9,7 @@ There are two methods to replace a running node in a Scylla cluster.
 
 .. note::
 
-    Replacing a node requires at least a quorum of nodes in a cluster to be available. 
-    If the quorum is lost, it must be restored before a node is replaced. 
-    See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
+    .. include:: /operating-scylla/procedures/cluster-management/_common/quorum-requirement.rst
 
 
 Add a new node to the cluster and then decommission the old node
