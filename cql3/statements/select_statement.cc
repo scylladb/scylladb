@@ -1761,7 +1761,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
                     *command, key_ranges))) {
         return do_query({}, qp.proxy(), _schema, command, std::move(key_ranges), cl,
                 {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}})
-        .then(wrap_result_to_error_message([&, this, erm_keepalive] (service::storage_proxy_coordinator_query_result&& qr) {
+        .then(wrap_result_to_error_message([this, erm_keepalive, now, slice = command->slice] (service::storage_proxy_coordinator_query_result&& qr) mutable {
             cql3::selection::result_set_builder builder(*_selection, now);
             query::result_view::consume(*qr.query_result, std::move(slice),
                     cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection));
