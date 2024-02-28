@@ -71,6 +71,8 @@ ap.add_argument('--build-dir', default='build/release',
                 help='Build dir ("build/debug" or "build/release") to use')
 ap.add_argument('--node-exporter-dir', default='build/node_exporter',
                 help='the directory where node_exporter is located')
+ap.add_argument('--debian-dir', default='build/debian/debian',
+                help='the directory where debian packaging is located')
 ap.add_argument('--stripped', action='store_true',
                 help='use stripped binaries')
 ap.add_argument('--print-libexec', action='store_true',
@@ -169,7 +171,7 @@ ar.reloc_add('swagger-ui')
 ar.reloc_add('api')
 ar.reloc_add('tools/scyllatop')
 ar.reloc_add('scylla-gdb.py')
-ar.reloc_add('build/debian/debian', arcname='debian')
+ar.reloc_add(args.debian_dir, arcname='debian')
 node_exporter_dir = args.node_exporter_dir
 if args.stripped:
     ar.reloc_add(f'{node_exporter_dir}', arcname='node_exporter')
