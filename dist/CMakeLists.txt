@@ -26,33 +26,24 @@ add_custom_target(dist-server-rpm
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 function(add_stripped name)
-  set(output ${name}.stripped)
-  if(TARGET ${name})
-    add_custom_command(
-      OUTPUT
-        ${CMAKE_BINARY_DIR}/${name}.debug
-        ${CMAKE_BINARY_DIR}/${name}.stripped
-      COMMAND ${CMAKE_SOURCE_DIR}/scripts/strip.sh $<TARGET_FILE:${name}>
-      DEPENDS ${name})
-  else()
-    # ${name} must be an absolute path
-    add_custom_command(
-      OUTPUT
-        ${name}.debug
-        ${name}.stripped
-      COMMAND ${CMAKE_SOURCE_DIR}/scripts/strip.sh ${name}
-      DEPENDS ${name})
-  endif()
+  # ${name} must be an absolute path
+  add_custom_command(
+    OUTPUT
+      ${name}.debug
+      ${name}.stripped
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/strip.sh ${name}
+    DEPENDS ${name})
 endfunction()
 
-add_stripped(scylla)
+add_stripped("${CMAKE_BINARY_DIR}/$<CONFIG>/scylla")
 
 # app_iotune is located in seastar/apps/iotune
+set(iotune_path "${CMAKE_BINARY_DIR}/$<CONFIG>/iotune")
 add_custom_command(
-  OUTPUT ${CMAKE_BINARY_DIR}/iotune
-  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:app_iotune> ${CMAKE_BINARY_DIR}/iotune
+  OUTPUT "${iotune_path}"
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:app_iotune> "${iotune_path}"
   DEPENDS app_iotune)
-add_stripped(${CMAKE_BINARY_DIR}/iotune)
+add_stripped("${iotune_path}")
 
 find_program(TAR_COMMAND tar
   REQUIRED)
