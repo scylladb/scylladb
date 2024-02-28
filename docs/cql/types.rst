@@ -269,8 +269,12 @@ Collections are meant for storing/denormalizing a relatively small amount of dat
 phone numbers of a given user”, “labels applied to an email”, etc. But when items are expected to grow unbounded (“all
 messages sent by a user”, “events registered by a sensor”...), then collections are not appropriate, and a specific table
 (with clustering columns) should be used. A collection can be **frozen** or **non-frozen**.
-A non-frozen collection can be modified, i.e., have an element added or removed. A
-frozen collection can only be updated as a whole. By default, a collection is non-frozen.
+
+A non-frozen collection can be modified, i.e., have an element added or removed. 
+A frozen collection is *immutable*, and can only be updated as a whole.
+Only frozen collections can be used as primary keys or nested collections.
+
+By default, a collection is non-frozen. 
 To declare a frozen collection, use ``FROZEN`` keyword:
 
 .. code-block:: cql
@@ -279,7 +283,7 @@ To declare a frozen collection, use ``FROZEN`` keyword:
                           : | FROZEN '<' SET '<' `cql_type` '>' '>'
                           : | FROZEN '<' LIST '<' `cql_type` '>' '>'
 
-Non-frozen collections have the following noteworthy characteristics and limitations:
+Collections, frozen and non-frozen, have the following noteworthy characteristics and limitations:
 
 - Individual collections are not indexed internally. This means that even to access a single element of a collection,
   the whole collection has to be read (and reading one is not paged internally).
@@ -287,8 +291,6 @@ Non-frozen collections have the following noteworthy characteristics and limitat
   Further, some list operations are not idempotent by nature (see the section on :ref:`lists <lists>` below for
   details), making their retry in case of timeout problematic. It is thus advised to prefer sets over lists when
   possible.
-- Non-frozen collections impose a significant performance penalty. To ensure better performance, use frozen collections 
-  or frozen UDTs. See `this blog post <https://www.scylladb.com/2017/12/07/performance-udt/>`_ for more information about improving performance.
 
 Please note that while some of those limitations may or may not be removed/improved upon in the future, it is an
 anti-pattern to use a (single) collection to store large amounts of data.
