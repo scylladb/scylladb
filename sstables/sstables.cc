@@ -1471,7 +1471,10 @@ sstable::load_owner_shards(const dht::sharder& sharder) {
     // If sharding metadata is not available, we must load first and last keys from summary
     // for sstable::compute_shards_for_this_sstable() to operate on them.
     if (!has_valid_sharding_metadata) {
-        sstlog.warn("Sharding metadata not available for {}, so Summary will be read to allow Scylla to compute shards owning the SSTable.", get_filename());
+        if (_schema->try_get_static_sharder() != nullptr) {
+            // The table uses vnodes but sharding metadata is not available
+            sstlog.warn("Sharding metadata not available for {}, so Summary will be read to allow Scylla to compute shards owning the SSTable.", get_filename());
+        }
         co_await read_summary();
         set_first_and_last_keys();
     }
