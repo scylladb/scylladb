@@ -5,6 +5,8 @@
 #
 
 from typing import NamedTuple
+import functools
+import operator
 import pytest
 from rest_api_mock import expected_request
 from utils import format_size
@@ -18,6 +20,12 @@ class Host(NamedTuple):
     state: str
     load: float
     ownership: float
+    tokens: list[str]
+
+    def token_to_endpoint(self):
+        return {
+            token: self.endpoint for token in self.tokens
+        }
 
 
 def map_to_json(mapper, mapped_type=None):
@@ -45,17 +53,17 @@ def format_stat(width, address, rack, status, state, load, owns, token):
                          ])
 def test_ring(request, nodetool, keyspace, host_status, host_state):
     host = Host('dc0', 'rack0', '127.0.0.1', host_status, host_state,
-                6414780.0, 1.0)
-    token_to_endpoint = {
-        "-9217327499541836964": host.endpoint,
-        "9066719992055809912": host.endpoint,
-        "50927788561116407": host.endpoint,
-    }
+                6414780.0, 1.0,
+                ["-9217327499541836964",
+                 "9066719992055809912",
+                 "50927788561116407"])
     endpoint_to_ownership = {
         host.endpoint: host.ownership,
     }
 
     all_hosts = [host]
+    token_to_endpoint = functools.reduce(operator.or_,
+                                         (h.token_to_endpoint() for h in all_hosts))
 
     def hosts_in_status(status):
         return list(h.endpoint for h in all_hosts if h.status == status)
