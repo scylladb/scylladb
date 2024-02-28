@@ -5,11 +5,13 @@ add_custom_command(
   COMMAND scripts/create-relocatable-package.py
     --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
     --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
+    --debian-dir ${CMAKE_BINARY_DIR}/debian
     ${unstripped_dist_pkg}
   DEPENDS
     scylla
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
+    ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 add_custom_target(dist-server-deb
@@ -67,10 +69,10 @@ add_custom_command(
 add_stripped(${CMAKE_BINARY_DIR}/node_exporter/node_exporter)
 
 add_custom_command(
-  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/debian
+  OUTPUT ${CMAKE_BINARY_DIR}/debian
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/debian/debian_files_gen.py
     --build-dir ${CMAKE_BINARY_DIR}
-    --output-dir ${CMAKE_CURRENT_BINARY_DIR}/debian
+    --output-dir ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 set(stripped_dist_pkg
@@ -83,11 +85,13 @@ add_custom_command(
       --stripped
       --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
       --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
+      --debian-dir ${CMAKE_BINARY_DIR}/debian
       ${stripped_dist_pkg}
   DEPENDS
     ${CMAKE_BINARY_DIR}/$<CONFIG>/scylla.stripped
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune.stripped
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter.stripped
+    ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-tar
   DEPENDS ${stripped_dist_pkg})
