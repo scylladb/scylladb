@@ -6,9 +6,9 @@
 
 from typing import NamedTuple
 import pytest
-import subprocess
 from rest_api_mock import expected_request
 from utils import format_size
+
 
 class Host(NamedTuple):
     dc: str
