@@ -21,10 +21,15 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-async def test_topology_ops(request, manager: ManagerClient):
+@pytest.mark.parametrize("tablets_enabled", ["true", "false"])
+async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bool):
     """Test basic topology operations using the topology coordinator."""
+    cfg = {'experimental_features': ['consistent-topology-changes']}
+    if tablets_enabled:
+        cfg['experimental_features'].append('tablets')
+
     logger.info("Bootstrapping first node")
-    servers = [await manager.server_add()]
+    servers = [await manager.server_add(config=cfg)]
 
     logger.info(f"Restarting node {servers[0]}")
     await manager.server_stop_gracefully(servers[0].server_id)
@@ -37,7 +42,7 @@ async def test_topology_ops(request, manager: ManagerClient):
     #finish_writes = await start_writes(cql)
 
     logger.info("Bootstrapping other nodes")
-    servers += await manager.servers_add(3)
+    servers += await manager.servers_add(3, config=cfg)
 
     logger.info(f"Decommissioning node {servers[0]}")
     await manager.decommission_node(servers[0].server_id)
