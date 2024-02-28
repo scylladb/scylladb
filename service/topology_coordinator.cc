@@ -848,7 +848,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             holder = futurize_invoke(action).then_wrapped([this, gid, name] (future<> f) {
                 if (f.failed()) {
                     auto ep = f.get_exception();
-                    rtlogger.error("{} for tablet {} failed: {}", name, gid, ep);
+                    rtlogger.warn("{} for tablet {} failed: {}", name, gid, ep);
                     return seastar::sleep_abortable(std::chrono::seconds(1), _as).then([ep] () mutable {
                         std::rethrow_exception(ep);
                     });
