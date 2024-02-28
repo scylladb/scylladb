@@ -82,6 +82,10 @@ public:
     const migration_notifier& get_notifier() const { return _notifier; }
     service::storage_proxy& get_storage_proxy() { return _storage_proxy; }
     const service::storage_proxy& get_storage_proxy() const { return _storage_proxy; }
+    abort_source& get_abort_source() noexcept { return _as; }
+    const abort_source& get_abort_source() const noexcept { return _as; }
+    service::raft_group0_client& get_group0_client() noexcept { return _group0_client; }
+    const service::raft_group0_client& get_group0_client() const noexcept { return _group0_client; }
 
     future<> submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node = true);
 

@@ -36,6 +36,7 @@
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "consumer.hh"
 #include "readers/generating_v2.hh"
+#include "utils/error_injection.hh"
 
 namespace streaming {
 
@@ -167,6 +168,9 @@ void stream_manager::init_messaging_service_handler() {
             // Make sure the table with cf_id is still present at this point.
             // Close the sink in case the table is dropped.
             auto op = _db.local().find_column_family(cf_id).stream_in_progress();
+            utils::get_local_injector().inject("stream_mutation_fragments_table_dropped", [this] () {
+                _db.local().find_column_family(table_id::create_null_id());
+            });
             //FIXME: discarded future.
             (void)mutation_writer::distribute_reader_and_consume_on_shards(s,
                 make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),

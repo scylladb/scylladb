@@ -230,6 +230,17 @@ static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
     return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
 }
 
+future<> raft_group0_client::perform_read_barrier(seastar::abort_source* as) {
+    if (this_shard_id() != 0) {
+        on_internal_error(logger, "perform_read_barrier: must run on shard 0");
+    }
+
+    if (_raft_gr.is_enabled()) {
+        return _raft_gr.group0().read_barrier(as);
+    }
+    return make_ready_future();
+}
+
 future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* as) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "start_group0_operation: must run on shard 0");

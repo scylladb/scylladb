@@ -105,6 +105,9 @@ public:
 
     future<> add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as = nullptr);
 
+    // Call only on shard 0.
+    future<> perform_read_barrier(seastar::abort_source* as = nullptr);
+
     // Ensures that all previously finished operations on group 0 are visible on this node;
     // in particular, performs a Raft read barrier on group 0.
     //
