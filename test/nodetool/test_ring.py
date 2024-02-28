@@ -124,7 +124,7 @@ def test_ring(request, nodetool, keyspace, host_status, host_state):
 Datacenter: {host.dc}
 ==========
 '''
-    max_width = max(len(endpoint) for endpoint in token_to_endpoint.values())
+    max_width = max(len(h.endpoint) for h in all_hosts)
     last_token = list(token_to_endpoint)[-1]
     expected_output += format_stat(max_width, 'Address', 'Rack',
                                    'Status', 'State', 'Load', 'Owns', 'Token')
