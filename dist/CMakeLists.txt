@@ -3,12 +3,12 @@ set(unstripped_dist_pkg
 add_custom_command(
   OUTPUT ${unstripped_dist_pkg}
   COMMAND scripts/create-relocatable-package.py
-    --build-dir ${CMAKE_BINARY_DIR}
+    --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
     --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
     ${unstripped_dist_pkg}
   DEPENDS
     scylla
-    ${CMAKE_BINARY_DIR}/iotune
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
@@ -81,12 +81,12 @@ add_custom_command(
   COMMAND
     ${CMAKE_SOURCE_DIR}/scripts/create-relocatable-package.py
       --stripped
-      --build-dir ${CMAKE_BINARY_DIR}
+      --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
       --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
       ${stripped_dist_pkg}
   DEPENDS
-    ${CMAKE_BINARY_DIR}/scylla.stripped
-    ${CMAKE_BINARY_DIR}/iotune.stripped
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/scylla.stripped
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune.stripped
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter.stripped
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-tar
