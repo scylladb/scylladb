@@ -114,7 +114,7 @@ public:
     {}
 
     const std::string& name() const { return _name; }
-    const std::vector<std::string> aliases() const { return _aliases; }
+    const std::vector<std::string>& aliases() const { return _aliases; }
     const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
     const std::vector<operation_option>& options() const { return _options; }
