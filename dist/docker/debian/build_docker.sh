@@ -40,14 +40,36 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# CMake puts deb packages in build/$<CONFIG>, so translate $mode
+# to $<CONFIG> if build.ninja is located under build/.
+if [ -f build/build.ninja ]; then
+   case $mode in
+       release)
+           config=RelWithDebInfo
+           ;;
+       dev)
+           config=Dev
+           ;;
+       debug)
+           config=Debug
+           ;;
+       *)
+           echo "unsupported mode: ${mode}"
+           exit 1
+           ;;
+   esac
+else
+    config=$mode
+fi
+
 container="$(buildah from docker.io/ubuntu:22.04)"
 
 packages=(
-    "build/dist/$mode/debian/${product}_$version-$release-1_$arch.deb"
-    "build/dist/$mode/debian/$product-server_$version-$release-1_$arch.deb"
-    "build/dist/$mode/debian/$product-conf_$version-$release-1_$arch.deb"
-    "build/dist/$mode/debian/$product-kernel-conf_$version-$release-1_$arch.deb"
-    "build/dist/$mode/debian/$product-node-exporter_$version-$release-1_$arch.deb"
+    "build/dist/$config/debian/${product}_$version-$release-1_$arch.deb"
+    "build/dist/$config/debian/$product-server_$version-$release-1_$arch.deb"
+    "build/dist/$config/debian/$product-conf_$version-$release-1_$arch.deb"
+    "build/dist/$config/debian/$product-kernel-conf_$version-$release-1_$arch.deb"
+    "build/dist/$config/debian/$product-node-exporter_$version-$release-1_$arch.deb"
     "tools/java/build/debian/$product-tools_$version-$release-1_all.deb"
     "tools/java/build/debian/$product-tools-core_$version-$release-1_all.deb"
     "tools/jmx/build/debian/$product-jmx_$version-$release-1_all.deb"
