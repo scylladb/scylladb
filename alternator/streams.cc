@@ -1016,7 +1016,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             // shard did end, then the next read will have nrecords == 0 and
             // will notice end end of shard and not return NextShardIterator.
             rjson::add(ret, "NextShardIterator", next_iter);
-            _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
+            _stats.api_operations.get_records_latency.mark(std::chrono::steady_clock::now() - start_time);
             return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
         }
 
@@ -1039,7 +1039,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
                 shard_iterator next_iter(iter.table, iter.shard, utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch()), true);
                 rjson::add(ret, "NextShardIterator", iter);
             }
-            _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
+            _stats.api_operations.get_records_latency.mark(std::chrono::steady_clock::now() - start_time);
             if (is_big(ret)) {
                 return make_ready_future<executor::request_return_type>(make_streamed(std::move(ret)));
             }

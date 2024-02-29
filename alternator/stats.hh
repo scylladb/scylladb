@@ -12,6 +12,7 @@
 
 #include <seastar/core/metrics_registration.hh>
 #include "utils/estimated_histogram.hh"
+#include "utils/histogram.hh"
 #include "cql3/stats.hh"
 
 namespace alternator {
@@ -65,11 +66,11 @@ public:
         uint64_t get_shard_iterator = 0;
         uint64_t get_records = 0;
 
-        utils::time_estimated_histogram put_item_latency;
-        utils::time_estimated_histogram get_item_latency;
-        utils::time_estimated_histogram delete_item_latency;
-        utils::time_estimated_histogram update_item_latency;
-        utils::time_estimated_histogram get_records_latency;
+        utils::timed_rate_moving_average_summary_and_histogram put_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram get_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram delete_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram update_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram get_records_latency;
     } api_operations;
     // Miscellaneous event counters
     uint64_t total_operations = 0;

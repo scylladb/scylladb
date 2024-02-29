@@ -21,10 +21,12 @@ stats::stats() : api_operations{} {
     _metrics.add_group("alternator", {
 #define OPERATION(name, CamelCaseName) \
                 seastar::metrics::make_total_operations("operation", api_operations.name, \
-                        seastar::metrics::description("number of operations via Alternator API"), {op(CamelCaseName)}),
+                        seastar::metrics::description("number of operations via Alternator API"), {op(CamelCaseName)}).set_skip_when_empty(),
 #define OPERATION_LATENCY(name, CamelCaseName) \
                 seastar::metrics::make_histogram("op_latency", \
-                        seastar::metrics::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName)}, [this]{return to_metrics_histogram(api_operations.name);}),
+                        seastar::metrics::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName)}, [this]{return to_metrics_histogram(api_operations.name.histogram());}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(), \
+				seastar::metrics::make_summary("op_latency_summary", \
+						                        seastar::metrics::description("Latency summary of an operation via Alternator API"), [this]{return to_metrics_summary(api_operations.name.summary());})(op(CamelCaseName)).set_skip_when_empty(),
             OPERATION(batch_get_item, "BatchGetItem")
             OPERATION(batch_write_item, "BatchWriteItem")
             OPERATION(create_backup, "CreateBackup")
