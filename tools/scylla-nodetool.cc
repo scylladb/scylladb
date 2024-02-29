@@ -1979,7 +1979,7 @@ void toppartitions_operation(scylla_rest_client& client, const bpo::variables_ma
     if (!table_filters.empty()) {
         params.emplace("table_filters", table_filters);
     }
-    auto res = client.get("/storage_service/toppartitions", std::move(params));
+    auto res = client.get("/storage_service/toppartitions/", std::move(params));
     const auto& toppartitions = res.GetObject();
     struct record {
         std::string_view partition;
