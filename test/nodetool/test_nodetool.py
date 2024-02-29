@@ -59,3 +59,11 @@ def test_nodetool_api_request_failed(nodetool, scylla_only, rest_api_mock_server
                                                 response={"message": "ERROR MESSAGE", "code": 500},
                                                 response_status=500)]},
         error_messages)
+
+
+def test_nodetool_nonexistent_command(nodetool, scylla_only):
+    utils.check_nodetool_fails_with_error_contains(
+            nodetool,
+            ("non-existent-command",),
+            {},
+            ["error: unrecognized operation argument: expected one of"])
