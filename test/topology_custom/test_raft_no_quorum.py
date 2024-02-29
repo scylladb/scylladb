@@ -188,6 +188,11 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
     logger.info("starting a second node (a follower)")
     servers += [await manager.server_add()]
 
+    logger.info('create keyspace and table')
+    await manager.get_cql().run_async("create keyspace ks "
+                                      "with replication = {'class': 'SimpleStrategy', 'replication_factor': 2}")
+    await manager.get_cql().run_async('create table ks.test_table (pk int primary key)')
+
     logger.info("stopping the second node")
     await manager.server_stop_gracefully(servers[1].server_id)
 
@@ -205,5 +210,9 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
     await manager.rebuild_node(servers[0].server_id,
                                expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
                                timeout=60)
+
+    with pytest.raises(Exception, match="raft operation \[read_barrier\] timed out, "
+                                        "there is no raft quorum, total voters count 2, alive voters count 1"):
+        await manager.get_cql().run_async('drop table ks.test_table', timeout=60)
 
     logger.info("done")

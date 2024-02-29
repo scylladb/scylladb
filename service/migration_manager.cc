@@ -969,7 +969,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
         },
         guard, std::move(description));
 
-    co_return co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as);
+    co_return co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as, raft_timeout{});
 }
 
 future<> migration_manager::announce_without_raft(std::vector<mutation> schema, group0_guard guard) {
@@ -1046,7 +1046,7 @@ future<> migration_manager::announce(std::vector<mutation> schema, group0_guard 
 
 future<group0_guard> migration_manager::start_group0_operation() {
     assert(this_shard_id() == 0);
-    return _group0_client.start_operation(&_as);
+    return _group0_client.start_operation(&_as, raft_timeout{});
 }
 
 /**
