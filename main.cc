@@ -471,6 +471,7 @@ void print_starting_message(int ac, char** av, const bpo::parsed_options& opts) 
         }
         fmt::print("\"\n");
     }
+    fmt::print("pid: {}\n", getpid());
 
     fmt::print("parsed command line options: {}\n", format_parsed_options(opts.options));
 }
