@@ -1995,6 +1995,9 @@ void toppartitions_operation(scylla_rest_client& client, const bpo::variables_ma
     bool first = true;
     for (const auto& operation : operations) {
         // add a separator
+        if (!std::exchange(first, false)) {
+            fmt::print("\n");
+        }
         auto cardinality = toppartitions[fmt::format("{}_cardinality", operation)].GetInt64();
         fmt::print("{}S Sampler:\n", boost::to_upper_copy(operation));
         fmt::print("  Cardinality: ~{} ({} capacity)\n", cardinality, capacity);
@@ -2027,9 +2030,6 @@ void toppartitions_operation(scylla_rest_client& client, const bpo::variables_ma
             for (auto& record : topk) {
                 fmt::print("\t{:<{}}{:>10}{:>10}\n", record.partition, width, record.count, record.error);
             }
-        }
-        if (std::exchange(first, false)) {
-            fmt::print("\n");
         }
     }
 }
