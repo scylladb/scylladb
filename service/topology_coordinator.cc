@@ -130,7 +130,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     struct term_changed_error {};
 
-    future<> cleanup_group0_config_if_needed() {
+    future<group0_guard> cleanup_group0_config_if_needed(group0_guard guard) {
         auto& topo = _topo_sm._topology;
         auto rconf = _group0.group0_server().get_configuration();
         if (!rconf.is_joint()) {
@@ -141,6 +141,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     | boost::adaptors::filtered([&] (const raft::server_id& id) { return topo.left_nodes.contains(id); }));
             if (!to_remove.empty()) {
                 // Remove from group 0 nodes that left. They may failed to do so by themselves
+                release_guard(std::move(guard));
                 try {
                     rtlogger.debug("topology coordinator fiber removing {}"
                                   " from raft since they are in `left` state", to_remove);
@@ -149,8 +150,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     rtlogger.warn("topology coordinator fiber got commit_status_unknown status"
                                   " while removing {} from raft", to_remove);
                 }
+                guard = co_await start_operation();
             }
         }
+        co_return std::move(guard);
     }
 
     struct cancel_requests {
@@ -406,10 +409,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return retake_node(std::move(guard), node.id);
     };
 
-    future<> remove_from_group0(const raft::server_id& id) {
+    future<group0_guard> remove_from_group0(group0_guard guard, const raft::server_id& id) {
         rtlogger.info("removing node {} from group 0 configuration...", id);
+        release_guard(std::move(guard));
         co_await _group0.remove_from_raft_config(id);
         rtlogger.info("node {} removed from group 0 configuration", id);
+        co_return co_await start_operation();
     }
 
     future<> step_down_as_nonvoter() {
@@ -1624,7 +1629,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                     break;
                 case node_state::removing:
-                    co_await remove_from_group0(node.id);
+                    node = retake_node(co_await remove_from_group0(std::move(node.guard), node.id), node.id);
                     [[fallthrough]];
                 case node_state::decommissioning: {
                     topology_mutation_builder builder(node.guard.write_timestamp());
@@ -1651,7 +1656,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 case node_state::replacing: {
                     auto replaced_node_id = parse_replaced_node(node.req_param);
-                    co_await remove_from_group0(replaced_node_id);
+                    node = retake_node(co_await remove_from_group0(std::move(node.guard), replaced_node_id), node.id);
 
                     topology_mutation_builder builder1(node.guard.write_timestamp());
                     // Move new node to 'normal'
@@ -1750,7 +1755,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 // Remove the node from group0 here - in general, it won't be able to leave on its own
                 // because we'll ban it as soon as we tell it to shut down.
-                co_await remove_from_group0(node.id);
+                node = retake_node(co_await remove_from_group0(std::move(node.guard), node.id), node.id);
 
                 topology_mutation_builder builder(node.guard.write_timestamp());
                 cleanup_ignored_nodes_on_left(builder, node.id);
@@ -2036,11 +2041,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         auto id = node.id;
 
         assert(!_topo_sm._topology.transition_nodes.empty());
+
+        release_node(std::move(node));
+
         if (!_raft.get_configuration().contains(id)) {
             co_await _raft.modify_config({raft::config_member({id, {}}, {})}, {}, &_as);
         }
-
-        release_node(std::move(node));
 
         auto responded = false;
         try {
@@ -2476,10 +2482,14 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
             // add will be removed from the group0 by the transition handler. It will also be notified to shutdown.
             transition_state = topology::transition_state::left_token_ring;
             break;
-        case node_state::removing:
+        case node_state::removing: {
+            auto id = node.id;
             // The node was removed already. We need to add it back. Lets do it as non voter.
             // If it ever boots again it will make itself a voter.
-            co_await _group0.group0_server().modify_config({raft::config_member{{node.id, {}}, false}}, {}, &_as);
+            release_node(std::move(node));
+            co_await _group0.group0_server().modify_config({raft::config_member{{id, {}}, false}}, {}, &_as);
+            node = retake_node(co_await start_operation(), id);
+        }
             [[fallthrough]];
         case node_state::decommissioning:
             // To rollback decommission or remove just move the topology to rollback_to_normal.
@@ -2575,8 +2585,7 @@ future<> topology_coordinator::run() {
         try {
             co_await utils::get_local_injector().inject_with_handler("topology_coordinator_pause_before_processing_backlog",
                 [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(1)); });
-            auto guard = co_await start_operation();
-            co_await cleanup_group0_config_if_needed();
+            auto guard = co_await cleanup_group0_config_if_needed(co_await start_operation());
 
             if (_rollback) {
                 co_await rollback_current_topology_op(std::move(guard));
