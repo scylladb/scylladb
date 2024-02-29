@@ -6080,9 +6080,14 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
                 // the replacing node that is alive.
                 co_await _gossiper.advertise_to_nodes({});
 
+                co_await utils::get_local_injector().inject("join-node-response_handler-before-read-barrier", [] (auto& handler) -> future<> {
+                    rtlogger.info("join-node-response_handler-before-read-barrier injection hit");
+                    co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                    rtlogger.info("join-node-response_handler-before-read-barrier injection done");
+                });
+
                 // Do a read barrier to read/initialize the topology state
-                auto& raft_server = _group0->group0_server();
-                co_await raft_server.read_barrier(&_group0_as);
+                co_await _group0->group0_server_with_timeouts().read_barrier(&_group0_as, raft_timeout{});
 
                 // Calculate nodes to ignore
                 // TODO: ignore_dead_nodes setting for bootstrap

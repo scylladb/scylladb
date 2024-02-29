@@ -9,7 +9,7 @@ import pytest
 import asyncio
 from test.pylib.manager_client import ManagerClient
 from test.topology.conftest import skip_mode
-from test.pylib.rest_client import inject_error_one_shot
+from test.pylib.rest_client import inject_error_one_shot, InjectionHandler
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +111,56 @@ async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_time
     await manager.server_stop_gracefully(servers[1].server_id)
 
     logger.info("release join-node-before-add-entry injection")
+    await injection_handler.message()
+
+    logger.info("waiting for third node joining process to fail")
+    await third_node_future
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+@skip_mode('debug', 'aarch64/debug is unpredictably slow', platform_key='aarch64')
+async def test_quorum_lost_during_node_join_response_handler(manager: ManagerClient, raft_op_timeout: int) -> None:
+    logger.info("starting a first node (the leader)")
+    servers = [await manager.server_add()]
+
+    logger.info("starting a second node (the follower)")
+    servers += [await manager.server_add()]
+
+    logger.info("adding a third node")
+    servers += [await manager.server_add(config={
+        'error_injections_at_startup': [
+            {
+                'name': 'group0-raft-op-timeout-in-ms',
+                'value': raft_op_timeout
+            },
+            {
+                'name': 'raft-group-registry-fd-threshold-in-ms',
+                'value': '500'
+            },
+            {
+                'name': 'join-node-response_handler-before-read-barrier'
+            }
+        ]
+    }, start=False)]
+
+    logger.info("starting a third node")
+    third_node_future = asyncio.create_task(
+        manager.server_start(servers[2].server_id,
+                             expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
+                             timeout=60))
+
+    logger.info(f"waiting for the third node {servers[2]} to hit join-node-response_handler-before-read-barrier")
+    log_file = await manager.server_open_log(servers[2].server_id)
+    await log_file.wait_for("join-node-response_handler-before-read-barrier injection hit", timeout=60)
+
+    logger.info("stopping the second node")
+    await manager.server_stop_gracefully(servers[1].server_id)
+
+    logger.info("release join-node-response_handler-before-read-barrier injection")
+    injection_handler = InjectionHandler(manager.api,
+                                         'join-node-response_handler-before-read-barrier',
+                                         servers[2].ip_addr)
     await injection_handler.message()
 
     logger.info("waiting for third node joining process to fail")
