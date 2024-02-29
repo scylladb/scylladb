@@ -1162,9 +1162,6 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
             if (!options.ignore_nodes.empty()) {
                 throw std::runtime_error("The ignore_nodes option is not supported for tablet repair");
             }
-            if (!options.data_centers.empty()) {
-                throw std::runtime_error("The dataCenters option is not supported for tablet repair");
-            }
             if (!options.start_token.empty()) {
                 throw std::runtime_error("The startToken option is not supported for tablet repair");
             }
@@ -1183,7 +1180,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
                 co_return *ip;
             };
             bool primary_replica_only = options.primary_range;
-            co_await repair_tablets(id, keyspace, cfs, host2ip, primary_replica_only, options.ranges);
+            co_await repair_tablets(id, keyspace, cfs, host2ip, primary_replica_only, options.ranges, options.data_centers);
             co_return id.id;
         }
     }
@@ -2041,8 +2038,23 @@ future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, 
     co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), myloc.dc, reason, std::move(ignore_nodes));
 }
 
+static std::unordered_set<gms::inet_address> get_nodes_in_dcs(std::vector<sstring> data_centers, locator::effective_replication_map_ptr erm) {
+    auto dc_endpoints_map = erm->get_token_metadata().get_topology().get_datacenter_endpoints();
+    std::unordered_set<gms::inet_address> dc_endpoints;
+    for (const sstring& dc : data_centers) {
+        auto it = dc_endpoints_map.find(dc);
+        if (it == dc_endpoints_map.end()) {
+            throw std::runtime_error(fmt::format("Unknown dc={}", dc));
+        }
+        for (const auto& endpoint : it->second) {
+            dc_endpoints.insert(endpoint);
+        }
+    }
+    return dc_endpoints;
+}
+
 // Repair all tablets belong to this node for the given table
-future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only, dht::token_range_vector ranges_specified) {
+future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers) {
     std::vector<tablet_repair_task_meta> task_metas;
     for (auto& table_name : table_names) {
         lw_shared_ptr<replica::table> t;
@@ -2095,6 +2107,11 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             return make_ready_future<>();
         });
 
+        std::unordered_set<gms::inet_address> dc_endpoints = get_nodes_in_dcs(data_centers, erm);
+        if (!data_centers.empty() && !dc_endpoints.contains(myip)) {
+            throw std::runtime_error("The current host must be part of the repair");
+        }
+
         size_t nr = 0;
         for (auto& m : metas) {
             nr++;
@@ -2137,10 +2154,13 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
                 auto shard = r.shard;
                 auto ip = co_await host2ip(r.host);
                 if (r.host != myhostid) {
-                    rlogger.debug("repair[{}] Repair get neighbors table={}.{} hostid={} shard={} ip={} myip={} myhostid={}",
-                            rid.uuid(), keyspace_name, table_name, r.host, shard, ip, myip, myhostid);
-                    shards.push_back(shard);
-                    nodes.push_back(ip);
+                    bool select = data_centers.empty() ? true : dc_endpoints.contains(ip);
+                    if (select) {
+                        rlogger.debug("repair[{}] Repair get neighbors table={}.{} hostid={} shard={} ip={} myip={} myhostid={}",
+                                rid.uuid(), keyspace_name, table_name, r.host, shard, ip, myip, myhostid);
+                        shards.push_back(shard);
+                        nodes.push_back(ip);
+                    }
                 }
             }
             for (auto& r : intersection_ranges) {

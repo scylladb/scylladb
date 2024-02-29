@@ -162,7 +162,7 @@ private:
             shared_ptr<node_ops_info> ops_info);
 
 public:
-    future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only = true, dht::token_range_vector ranges_specified = {});
+    future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only = true, dht::token_range_vector ranges_specified = {}, std::vector<sstring> dcs = {});
 
 private:
 
