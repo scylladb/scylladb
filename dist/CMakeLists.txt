@@ -17,7 +17,7 @@ add_custom_command(
 add_custom_target(dist-server-deb
   COMMAND reloc/build_deb.sh
     --reloc-pkg ${unstripped_dist_pkg}
-    --builddir ${CMAKE_CURRENT_BINARY_DIR}
+    --builddir ${CMAKE_BINARY_DIR}/$<CONFIG>/debian
   DEPENDS ${unstripped_dist_pkg}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-rpm
