@@ -1955,16 +1955,21 @@ void toppartitions_operation(scylla_rest_client& client, const bpo::variables_ma
     if (list_size >= capacity) {
         throw std::invalid_argument("TopK count (-k) option must be smaller than the summary capacity (-s)");
     }
+    std::vector<std::string> operations;
     {
-        // scylla's API server does not use samplers, but let's verify them anyway
+        // the API of /storage_service/toppartition/ does not use samplers, but
+        // we need to check and normalize them
         std::vector<sstring> samplers;
         boost::split(samplers, vm["samplers"].as<sstring>(), boost::algorithm::is_any_of(","));
         for (auto& sampler : samplers) {
-            auto sampler_lo = boost::to_lower_copy(sampler);
-            if (sampler_lo != "reads" && sampler_lo != "writes") {
+            boost::to_lower(sampler);
+            if (sampler != "reads" && sampler != "writes") {
                 throw std::invalid_argument(
                     fmt::format("{} is not a valid sampler, choose one of: READS, WRITES", sampler));
             }
+            // remove the trailing "s"
+            sampler.resize(sampler.size() - 1);
+            operations.push_back(sampler);
         }
     }
     // prepare the query params
@@ -1988,9 +1993,10 @@ void toppartitions_operation(scylla_rest_client& client, const bpo::variables_ma
     };
     // format the query result
     bool first = true;
-    for (auto operation : {"read", "write"}) {
+    for (const auto& operation : operations) {
+        // add a separator
         auto cardinality = toppartitions[fmt::format("{}_cardinality", operation)].GetInt64();
-        fmt::print("{}S Sampler:\n", boost::to_upper_copy(std::string(operation)));
+        fmt::print("{}S Sampler:\n", boost::to_upper_copy(operation));
         fmt::print("  Cardinality: ~{} ({} capacity)\n", cardinality, capacity);
         fmt::print("  Top {} partitions:\n", list_size);
 
