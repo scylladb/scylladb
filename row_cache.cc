@@ -1467,9 +1467,9 @@ future<> row_cache::do_update(row_cache::external_updater eu, row_cache::interna
   });
 }
 
-std::ostream& operator<<(std::ostream& out, const cache_entry& e) {
-    fmt::print(out, "{{cache_entry: {}, cont={}, dummy={}, {}}}",
+auto fmt::formatter<cache_entry>::format(const cache_entry& e, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{{cache_entry: {}, cont={}, dummy={}, {}}}",
                e.position(), e.continuous(), e.is_dummy_entry(),
                partition_entry::printer(e.partition()));
-    return out;
 }
