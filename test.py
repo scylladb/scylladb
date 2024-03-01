@@ -427,7 +427,11 @@ class PythonTestSuite(TestSuite):
             config_options = default_config_options | \
                              self.cfg.get("extra_scylla_config_options", {}) | \
                              create_cfg.config_from_test
-
+            # add more experimental_features specified in command line
+            if options.experimental_features:
+                experimental_features = config_options.get('experimental_features', [])
+                experimental_features.extend(options.experimental_features)
+                config_options['experimental_features'] = list(set(experimental_features))
             server = ScyllaServer(
                 exe=self.scylla_exe,
                 vardir=os.path.join(self.options.tmpdir, self.mode),
@@ -1295,6 +1299,19 @@ def parse_cmd_line() -> argparse.Namespace:
     boost_group = parser.add_argument_group('boost suite options')
     boost_group.add_argument('--random-seed', action="store",
                              help="Random number generator seed to be used by boost tests")
+
+    pytest_group = parser.add_argument_group('pytest Options')
+    pytest_group.add_argument('--experimental-features',
+                              action='extend', nargs='+',
+                              default=[],
+                              help='Additional experimental feature to be '
+                                   'enabled when creating a server with cluster manager')
+    pytest_group.add_argument('--tablets',
+                              action='store_const',
+                              const=['consistent-topology-changes',
+                                     'tablets'],
+                              dest='experimental_features',
+                              help='enable tablets when creating scylla servers')
 
     args = parser.parse_args()
 
