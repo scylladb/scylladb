@@ -137,8 +137,6 @@ public:
     void set_continuous(bool value) noexcept { _flags._continuous = value; }
 
     bool is_dummy_entry() const noexcept { return _flags._dummy_entry; }
-
-    friend std::ostream& operator<<(std::ostream&, const cache_entry&);
 };
 
 //
@@ -524,3 +522,7 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<cache_entry> : fmt::formatter<std::string_view> {
+    auto format(const cache_entry&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
