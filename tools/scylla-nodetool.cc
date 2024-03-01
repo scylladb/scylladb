@@ -905,6 +905,117 @@ void move_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     throw std::invalid_argument("This operation is not supported");
 }
 
+void print_stream_session(
+        const rjson::value& summaries,
+        const rjson::value& files,
+        std::string_view action_continuous,
+        std::string_view action_perfect,
+        std::string_view target,
+        bool human_readable) {
+    if (summaries.GetArray().Empty()) {
+        return;
+    }
+
+    uint64_t total_count{}, total_size{}, done_count{}, done_size{};
+    for (const auto& tbl : summaries.GetArray()) {
+        total_count += tbl["files"].GetInt();
+        total_size += tbl["total_size"].GetInt();
+    }
+    for (const auto& file_entry : files.GetArray()) {
+        const auto& file = file_entry["value"];
+        if (file["current_bytes"].GetInt() == file["total_bytes"].GetInt()) {
+            ++done_count;
+        }
+        done_size += file["current_bytes"].GetInt();
+    }
+
+    auto format_bytes = [] (uint64_t value, bool human_readable) {
+        if (!human_readable) {
+            return format("{} bytes", value);
+        }
+        return format("{}", file_size_printer(value, true, true));
+    };
+
+    fmt::print(std::cout, "        {} {} files, {} total. Already {} {} files, {} total\n",
+            action_continuous,
+            total_count,
+            format_bytes(total_size, human_readable),
+            action_perfect,
+            done_count,
+            format_bytes(done_size, human_readable));
+
+    for (const auto& file_entry : files.GetArray()) {
+        const auto& file = file_entry["value"];
+        fmt::print(std::cout, "            {} {}/{} bytes({}%) {} {} idx:{}/{}\n",
+                rjson::to_string_view(file["file_name"]),
+                file["current_bytes"].GetInt(),
+                file["total_bytes"].GetInt(),
+                uint64_t(file["current_bytes"].GetDouble() / file["total_bytes"].GetDouble() * 100.0),
+                action_perfect,
+                target,
+                file["session_index"].GetInt(),
+                rjson::to_string_view(file["peer"]));
+    }
+}
+
+void netstats_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto mode = sstring(rjson::to_string_view(client.get("/storage_service/operation_mode")));
+    const bool human_readable = vm.count("human-readable");
+
+    fmt::print(std::cout, "Mode: {}\n", mode);
+
+    const auto streams_res = client.get("/stream_manager/");
+    if (streams_res.GetArray().Empty()) {
+        fmt::print(std::cout, "Not sending any streams.\n");
+    } else {
+        for (const auto& stream : streams_res.GetArray()) {
+            fmt::print(std::cout, "{} {}\n", rjson::to_string_view(stream["description"]), rjson::to_string_view(stream["plan_id"]));
+
+            for (const auto& session : stream["sessions"].GetArray()) {
+                const auto ip = rjson::to_string_view(session["peer"]);
+                const auto private_ip = rjson::to_string_view(session["connecting"]);
+                fmt::print(std::cout, "    /{}", ip);
+                if (ip != private_ip) {
+                    fmt::print(std::cout, " (using /{})", private_ip);
+                }
+                fmt::print(std::cout, "\n");
+                print_stream_session(session["receiving_summaries"], session["receiving_files"], "Receiving", "received", "from", human_readable);
+                print_stream_session(session["sending_summaries"], session["sending_files"], "Sending", "sent", "to", human_readable);
+            }
+        }
+    }
+
+    if (client.get("/storage_service/is_starting").GetBool()) {
+        return;
+    }
+
+    fmt::print(std::cout, "Read Repair Statistics:\n");
+    fmt::print(std::cout, "Attempted: {}\n", client.get("/storage_proxy/read_repair_attempted").GetInt());
+    fmt::print(std::cout, "Mismatch (Blocking): {}\n", client.get("/storage_proxy/read_repair_repaired_blocking").GetInt());
+    fmt::print(std::cout, "Mismatch (Background): {}\n", client.get("/storage_proxy/read_repair_repaired_background").GetInt());
+
+    constexpr auto line_fmt = "{:<25}{:>10}{:>10}{:>15}{:>10}\n";
+
+    auto sum_nodes = [] (auto&& res) {
+        uint64_t sum = 0;
+        for (const auto& node : res.GetArray()) {
+            sum += node["value"].GetInt();
+        }
+        return sum;
+    };
+
+    fmt::print(std::cout, line_fmt, "Pool Name", "Active", "Pending", "Completed", "Dropped");
+    fmt::print(std::cout, line_fmt, "Large messages", "n/a",
+            sum_nodes(client.get("/messaging_service/messages/pending")),
+            sum_nodes(client.get("/messaging_service/messages/sent")),
+            0);
+    fmt::print(std::cout, line_fmt, "Small messages", "n/a",
+            sum_nodes(client.get("/messaging_service/messages/respond_pending")),
+            sum_nodes(client.get("/messaging_service/messages/respond_completed")),
+            0);
+    fmt::print(std::cout, line_fmt, "Gossip messages", "n/a", 0, 0, 0);
+}
+
 void help_operation(const tool_app_template::config& cfg, const bpo::variables_map& vm) {
     if (vm.count("command")) {
         const auto command = vm["command"].as<sstring>();
@@ -2661,6 +2772,20 @@ This operation is not supported.
                 },
             },
             move_operation
+        },
+        {
+            {
+                "netstats",
+                "Print network information on provided host (connecting node by default)",
+R"(
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/netstats.html
+)",
+                {
+                    typed_option<>("human-readable,H", "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
+                },
+                { },
+            },
+            netstats_operation
         },
         {
             {
