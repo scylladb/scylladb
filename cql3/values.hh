@@ -14,6 +14,7 @@
 
 #include <optional>
 #include <variant>
+#include <fmt/core.h>
 
 #include <seastar/util/variant_utils.hh>
 
@@ -154,7 +155,7 @@ public:
         return to_managed_bytes_opt(view);
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const raw_value_view& value);
+    friend fmt::formatter<raw_value_view>;
     friend class raw_value;
 };
 
@@ -270,7 +271,6 @@ public:
     friend class raw_value_view;
 
     friend bool operator==(const raw_value& v1, const raw_value& v2);
-    friend std::ostream& operator<<(std::ostream& os, const raw_value& value);
 };
 
 }
@@ -291,4 +291,25 @@ inline bytes_opt to_bytes_opt(const cql3::raw_value_view& view) {
 
 inline bytes_opt to_bytes_opt(const cql3::raw_value& value) {
     return to_bytes_opt(value.view());
+}
+
+template <> struct fmt::formatter<cql3::raw_value_view> : fmt::formatter<std::string_view> {
+    auto format(const cql3::raw_value_view& value, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<cql3::raw_value> : fmt::formatter<std::string_view> {
+    auto format(const cql3::raw_value& value, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", value.view());
+    }
+};
+
+namespace cql3 {
+static inline std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
+    fmt::print(os, "{}", value);
+    return os;
+}
+static inline std::ostream& operator<<(std::ostream& os, const raw_value& value) {
+    fmt::print(os, "{}", value);
+    return os;
+}
 }

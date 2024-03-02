@@ -1043,7 +1043,7 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
     expr::visit(overloaded_functor{
             [&] (const constant& v) {
                 if (pr.debug_mode) {
-                    os << v.view();
+                    fmt::print(os, "{}", v.view());
                 } else {
                     if (v.value.is_null()) {
                         os << "null";
