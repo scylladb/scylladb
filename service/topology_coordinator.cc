@@ -918,7 +918,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
 
         for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
-            auto s = _db.find_schema(table_id);
+            schema_ptr s;
+            try {
+                s = _db.find_schema(table_id);
+            } catch (const replica::no_such_column_family&) {
+                rtlogger.warn("Skipping tablet resize plan for table {}: {}", table_id, std::current_exception());
+                continue;
+            }
             auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
             // Sequence number is monotonically increasing, globally. Therefore, it can be used to identify a decision.
             resize_decision.sequence_number = tmap.resize_decision().next_sequence_number();
@@ -938,7 +944,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 continue;
             }
 
-            auto s = _db.find_schema(table_id);
+            schema_ptr s;
+            try {
+                s = _db.find_schema(table_id);
+            } catch (const replica::no_such_column_family&) {
+                rtlogger.warn("Skipping finalization of tablet resize plan for table {}: {}", table_id, std::current_exception());
+                continue;
+            }
             auto new_tablet_map = co_await _tablet_allocator.split_tablets(get_token_metadata_ptr(), table_id);
             out.emplace_back(co_await replica::tablet_map_to_mutation(
                 new_tablet_map,
