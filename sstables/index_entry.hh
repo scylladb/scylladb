@@ -297,6 +297,10 @@ public:
     bool empty() const { return _entries.empty(); }
     size_t size() const { return _entries.size(); }
 
+    void clear_one_entry() {
+        _entries.pop_back();
+    }
+
     size_t external_memory_usage() const {
         size_t size = _entries.external_memory_usage();
         for (auto&& e : _entries) {
