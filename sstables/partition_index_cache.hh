@@ -246,21 +246,43 @@ public:
     // Evicts all unreferenced entries.
     future<> evict_gently() {
         auto i = _cache.begin();
-        while (i != _cache.end()) {
+        std::optional<partition_index_page> partial_page;
+        auto clear_on_exception = defer([&] {
+            with_allocator(_region.allocator(), [&] {
+                partial_page.reset();
+            });
+        });
+        while (partial_page || i != _cache.end()) {
+          if (partial_page) {
+            auto preempted = with_allocator(_region.allocator(), [&] {
+                while (!partial_page->empty()) {
+                    partial_page->clear_one_entry();
+                    if (need_preempt()) {
+                        return true;
+                    }
+                }
+                partial_page.reset();
+                return false;
+            });
+            if (preempted) {
+                auto key = (i != _cache.end()) ? std::optional(i->key()) : std::nullopt;
+                co_await coroutine::maybe_yield();
+                i = key ? _cache.lower_bound(*key) : _cache.end();
+            }
+          } else {
             with_allocator(_region.allocator(), [&] {
                 if (i->is_referenced()) {
                     ++i;
                 } else {
                     _lru.remove(*i);
                     on_evicted(*i);
+                    if (i->ready()) {
+                        partial_page = std::move(i->page());
+                    }
                     i = i.erase(key_less_comparator());
                 }
             });
-            if (need_preempt() && i != _cache.end()) {
-                auto key = i->key();
-                co_await coroutine::maybe_yield();
-                i = _cache.lower_bound(key);
-            }
+          }
         }
     }
 };
