@@ -871,9 +871,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                                            const locator::tablet_transition_info&)> func) {
         auto tm = get_token_metadata_ptr();
         for (auto&& [table, tmap] : tm->tablets().all_tables()) {
-            co_await coroutine::maybe_yield();
-            auto s = _db.find_schema(table);
-            for (auto&& [tablet, trinfo]: tmap.transitions()) {
+            const auto& transitions = tmap.transitions();
+            if (transitions.empty()) {
+                continue;
+            }
+            schema_ptr s;
+            try {
+                s = _db.find_schema(table);
+            } catch (const replica::no_such_column_family&) {
+                rtlogger.warn("Skipping tablet transitions for table {}: {}", table, std::current_exception());
+                continue;
+            }
+            for (auto&& [tablet, trinfo]: transitions) {
                 co_await coroutine::maybe_yield();
                 auto gid = locator::global_tablet_id {table, tablet};
                 func(tmap, s, gid, trinfo);
