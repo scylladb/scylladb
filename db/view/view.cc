@@ -1297,9 +1297,12 @@ future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_up
 }
 
 void view_update_builder::generate_update(clustering_row&& update, std::optional<clustering_row>&& existing) {
-    // If we have no update at all, we shouldn't get there.
     if (update.empty()) {
-        throw std::logic_error("Empty materialized view updated");
+        // An empty update row (no cells and no tombstone) is rare, but it is
+        // possible (see #15228): A mutation can modify a column that was
+        // later dropped, and upgrade()ing the mutation's schema in
+        // table::do_push_view_replica_updates() left an empty row.
+        return;
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
