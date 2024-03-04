@@ -20,10 +20,15 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "qos_configuration_change_subscriber.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/raft/raft_group_registry.hh"
 
 namespace db {
     class system_distributed_keyspace;
 }
+namespace cql3 {
+    class query_processor;
+}
+
 namespace qos {
 /**
  *  a structure to hold a service level
@@ -187,6 +192,10 @@ public:
 
     void upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client);
 
+    /**
+     * Migrate data from `system_distributed.service_levels` to `system.service_levels_v2`
+     */
+    static future<> migrate_to_v2(size_t nodes_count, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as);
 private:
     /**
      *  Adds a service level configuration if it doesn't exists, and updates

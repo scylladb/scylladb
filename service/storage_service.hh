@@ -16,6 +16,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include "service/qos/service_level_controller.hh"
 #include "service/topology_guard.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
@@ -145,6 +146,7 @@ private:
     sharded<repair_service>& _repair;
     sharded<streaming::stream_manager>& _stream_manager;
     sharded<locator::snitch_ptr>& _snitch;
+    sharded<qos::service_level_controller>& _sl_controller;
 
     // Engaged on shard 0 before `join_cluster`.
     service::raft_group0* _group0;
@@ -200,7 +202,8 @@ public:
         sharded<locator::snitch_ptr>& snitch,
         sharded<service::tablet_allocator>& tablet_allocator,
         sharded<cdc::generation_service>& cdc_gs,
-        cql3::query_processor& qp);
+        cql3::query_processor& qp,
+        sharded<qos::service_level_controller>& sl_controller);
 
     // Needed by distributed<>
     future<> stop();

@@ -14,6 +14,9 @@
 #include "db/system_auth_keyspace.hh"
 #include "gc_clock.hh"
 #include "raft/raft.hh"
+#include "service/qos/raft_service_level_distributed_data_accessor.hh"
+#include "service/qos/service_level_controller.hh"
+#include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/topology_guard.hh"
 #include "service/session.hh"
 #include "dht/boot_strapper.hh"
@@ -129,7 +132,8 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<locator::snitch_ptr>& snitch,
     sharded<service::tablet_allocator>& tablet_allocator,
     sharded<cdc::generation_service>& cdc_gens,
-    cql3::query_processor& qp)
+    cql3::query_processor& qp,
+    sharded<qos::service_level_controller>& sl_controller)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -140,6 +144,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _repair(repair)
         , _stream_manager(stream_manager)
         , _snitch(snitch)
+        , _sl_controller(sl_controller)
         , _group0(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
@@ -608,6 +613,7 @@ future<> storage_service::topology_state_load() {
     if (_manage_topology_change_kind_from_group0) {
         _topology_change_kind_enabled = upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state);
     }
+
     if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::done) {
         co_return;
     }
@@ -616,6 +622,10 @@ future<> storage_service::topology_state_load() {
         // auth-v2 gets enabled when consistent topology changes are enabled
         // (see topology::upgrade_state_type::done above) as we use the same migration procedure
         qp.auth_version = db::system_auth_keyspace::version_t::v2;
+    });
+
+    co_await _sl_controller.invoke_on_all([this] (qos::service_level_controller& sl_controller) {
+        sl_controller.upgrade_to_v2(_qp, _group0->client());
     });
 
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {

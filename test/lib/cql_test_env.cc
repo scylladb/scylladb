@@ -770,7 +770,8 @@ private:
                 std::ref(_snitch),
                 std::ref(_tablet_allocator),
                 std::ref(_cdc_generation_service),
-                std::ref(_qp)).get();
+                std::ref(_qp),
+                std::ref(_sl_controller)).get();
             auto stop_storage_service = defer([this] { _ss.stop().get(); });
 
             _mnotifier.local().register_listener(&_ss.local());
