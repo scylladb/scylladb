@@ -299,6 +299,41 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
     co_return std::move(tm);
 }
 
+future<std::unordered_set<locator::host_id>> read_required_hosts(cql3::query_processor& qp) {
+    std::unordered_set<locator::host_id> hosts;
+
+    auto process_row = [&] (const cql3::untyped_result_set_row& row) {
+        tablet_replica_set tablet_replicas;
+        if (row.has("replicas")) {
+            tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
+        }
+
+        for (auto&& r : tablet_replicas) {
+            hosts.insert(r.host);
+        }
+
+        if (row.has("new_replicas")) {
+            tablet_replica_set new_tablet_replicas;
+            new_tablet_replicas = deserialize_replica_set(row.get_view("new_replicas"));
+            for (auto&& r : new_tablet_replicas) {
+                hosts.insert(r.host);
+            }
+        }
+    };
+
+    try {
+        co_await qp.query_internal("select replicas, new_replicas from system.tablets",
+           [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+               process_row(row);
+               return make_ready_future<stop_iteration>(stop_iteration::no);
+           });
+    } catch (...) {
+        std::throw_with_nested(std::runtime_error("Failed to read tablet required hosts"));
+    }
+
+    co_return std::move(hosts);
+}
+
 future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<replica::database>& db) {
     auto s = db::system_keyspace::tablets();
     auto rs = co_await db::system_keyspace::query_mutations(db, db::system_keyspace::NAME, db::system_keyspace::TABLETS);

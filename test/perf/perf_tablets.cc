@@ -129,6 +129,12 @@ static future<> test_basic_operations(app_template& app) {
 
         testlog.info("Read mutations in {:.6f} [ms]", time_to_read_muts.count() * 1000);
 
+        auto time_to_read_hosts = duration_in_seconds([&] {
+            replica::read_required_hosts(e.local_qp()).get();
+        });
+
+        testlog.info("Read required hosts in {:.6f} [ms]", time_to_read_hosts.count() * 1000);
+
         auto cm_size = 0;
         for (auto&& cm : muts) {
             cm_size += cm.representation().size();
