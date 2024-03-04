@@ -173,6 +173,17 @@ async def delete_raft_topology_state(cql: Session, host: Host):
     await cql.run_async("truncate table system.topology", host=host)
 
 
+async def wait_for_cdc_generations_publishing(cql: Session, hosts: list[Host], deadline: float):
+    for host in hosts:
+        async def all_generations_published():
+            topo_res = await cql.run_async("SELECT unpublished_cdc_generations FROM system.topology", host=host)
+            assert len(topo_res) != 0
+            unpublished_generations = topo_res[0].unpublished_cdc_generations
+            return unpublished_generations is None or len(unpublished_generations) == 0 or None
+
+        await wait_for(all_generations_published, deadline=deadline, period=1.0)
+
+
 async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host]):
     assert len(hosts) != 0
 

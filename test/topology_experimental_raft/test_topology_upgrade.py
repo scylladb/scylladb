@@ -13,7 +13,7 @@ from test.pylib.rest_client import HTTPError
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import log_run_time, wait_until_topology_upgrade_finishes, \
-        check_system_topology_and_cdc_generations_v3_consistency
+        wait_for_cdc_generations_publishing, check_system_topology_and_cdc_generations_v3_consistency
 
 
 @pytest.mark.asyncio
@@ -48,6 +48,9 @@ async def test_topology_upgrade_basic(request, manager: ManagerClient):
     logging.info("Waiting until upgrade finishes")
     await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
 
+    logging.info("Waiting for CDC generations publishing")
+    await wait_for_cdc_generations_publishing(cql, hosts, time.time() + 60)
+
     logging.info("Checking consistency of data in system.topology and system.cdc_generations_v3")
     await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
 
@@ -56,6 +59,9 @@ async def test_topology_upgrade_basic(request, manager: ManagerClient):
 
     logging.info("Waiting until driver connects to every server")
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    logging.info("Waiting for the new CDC generation publishing")
+    await wait_for_cdc_generations_publishing(cql, hosts, time.time() + 60)
 
     logging.info("Checking consistency of data in system.topology and system.cdc_generations_v3")
     await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
