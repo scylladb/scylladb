@@ -53,7 +53,7 @@ def metrics(dynamodb):
 
 # Utility function for fetching all metrics from Scylla, using an HTTP request
 # to port 9180. The response format is defined by the Prometheus protocol.
-# Only use get_metrics() in a test using the metrics_available fixture.
+# get_metrics() needs the test to use the "metrics" fixture.
 def get_metrics(metrics):
     response = requests.get(metrics)
     assert response.status_code == 200
@@ -144,7 +144,7 @@ def test_item_operations(test_table_s, metrics):
         test_table_s.update_item(Key={'p': p})
 
 # Test counters for Query and Scan:
-def test_item_operations(test_table_s, metrics):
+def test_scan_operations(test_table_s, metrics):
     with check_increases_operation(metrics, ['Query', 'Scan']):
         # We don't care whether test_table_s contains any content when we scan
         # it. We just want the scan to be counted
@@ -152,11 +152,13 @@ def test_item_operations(test_table_s, metrics):
         test_table_s.query(Limit=1, KeyConditionExpression='p=:p',
             ExpressionAttributeValues={':p': 'dog'})
 
-def test_describe_endpoints(dynamodb, metrics):
+# Test counters for DescribeEndpoints:
+def test_describe_endpoints_operations(dynamodb, metrics):
     with check_increases_operation(metrics, ['DescribeEndpoints']):
         dynamodb.meta.client.describe_endpoints()
 
-def test_list_tables(dynamodb, metrics):
+# Test counters for ListTables:
+def test_list_tables_operations(dynamodb, metrics):
     with check_increases_operation(metrics, ['ListTables']):
         dynamodb.meta.client.list_tables(Limit=1)
 
