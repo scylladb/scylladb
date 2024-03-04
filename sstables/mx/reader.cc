@@ -313,7 +313,7 @@ public:
         if (!_is_mutation_end) {
             return proceed::yes;
         }
-        auto pk = partition_key::from_exploded(key.explode(*_schema));
+        auto pk = key.to_partition_key(*_schema);
         setup_for_partition(pk);
         auto dk = dht::decorate_key(*_schema, pk);
         _reader->on_next_partition(std::move(dk), tombstone(deltime));
@@ -1814,4 +1814,340 @@ void mx::mp_row_consumer_reader_mx::on_next_partition(dht::decorated_key key, to
     _sst->get_stats().on_partition_read();
 }
 
+<<<<<<< HEAD
+=======
+// A validating consumer implementing the Consumer concept of data_consume_rows_context_m.
+//
+// It consumes the atoms coming from the parser and validates that the mutation
+// fragment stream they form is valid, namely it checks:
+// * partition ordering
+// * mutation fragment kind ordering
+// * clustering element ordering
+// * partitions being ended properly (before EOS)
+// * range tombstones being ended properly (before end-of-partition)
+//
+// For this, it relies on the mutation_fragment_stream_validator.
+//
+// It also allows for checking that partitions and clustering keys are laid out
+// as expected by the index and promoted index respectively.
+class validating_consumer {
+public:
+    struct clustering_block {
+        position_in_partition start;
+        position_in_partition end;
+        bool done = false;
+
+        clustering_block(position_in_partition_view start, position_in_partition_view end) : start(start), end(end) {
+        }
+    };
+
+private:
+    schema_ptr _schema;
+    reader_permit _permit;
+    std::function<void(sstring)> _error_handler;
+    // For static-compact tables C* stores the only row in the static row but in our representation they're regular rows.
+    const bool _treat_static_row_as_regular;
+    mutation_fragment_stream_validator _validator;
+    uint64_t _error_count = 0;
+    std::optional<partition_key> _expected_pkey;
+    std::optional<clustering_block> _expected_clustering_block;
+    position_in_partition _current_pos;
+    bool _stop_after_partition_header = false;
+
+private:
+    clustering_key from_fragmented_buffer(const std::vector<fragmented_temporary_buffer>& ecp) {
+        return clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
+                [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
+    }
+    void validate_fragment_order(mutation_fragment_v2::kind kind, std::optional<tombstone> new_current_tombstone) {
+        if (auto res = _validator(kind, _current_pos, new_current_tombstone); !res) {
+            report_error(res.what());
+            _validator.reset(kind, _current_pos, new_current_tombstone);
+        }
+        if (_current_pos.region() != partition_region::clustered) {
+            return;
+        }
+        if (_expected_clustering_block) {
+            auto cmp = position_in_partition::tri_compare(*_schema);
+            const auto cmp_start = cmp(_expected_clustering_block->start, _current_pos);
+            const auto cmp_end = cmp(_expected_clustering_block->end, _current_pos);
+            if (cmp_start > 0 || cmp_end < 0) {
+                if (_expected_clustering_block->done) {
+                    report_error(format("mismatching index/data: promoted index has no more blocks, but partition {} ({}) has more rows",
+                            _validator.previous_partition_key().key().with_schema(*_schema),
+                            _validator.previous_partition_key().key()));
+                } else {
+                    report_error(format("mismatching index/data: clustering element {} is outside of current promoted-index block [{}, {}]",
+                            _current_pos,
+                            _expected_clustering_block->start,
+                            _expected_clustering_block->end));
+                }
+            }
+            if (cmp_end == 0) {
+                _expected_clustering_block->done = true;
+            }
+        }
+    }
+
+public:
+    validating_consumer(const schema_ptr schema, reader_permit permit, const shared_sstable& sst, std::function<void(sstring)> error_handler)
+        : _schema(schema)
+        , _permit(std::move(permit))
+        , _error_handler(std::move(error_handler))
+        , _treat_static_row_as_regular(_schema->is_static_compact_table()
+            && (!sst->has_scylla_component() || sst->features().is_enabled(sstable_feature::CorrectStaticCompact))) // See #4139
+        , _validator(*_schema)
+        , _current_pos(position_in_partition::end_of_partition_tag_t{})
+    {
+    }
+
+    const reader_permit& permit() const { return _permit; }
+    tracing::trace_state_ptr trace_state() { return {}; }
+    uint64_t error_count() const { return _error_count; }
+    position_in_partition_view current_position() const { return _current_pos; }
+
+    void set_stop_after_partition_header() {
+        _stop_after_partition_header = true;
+    }
+
+    void set_index_expected_partition(partition_key pkey) {
+        _expected_pkey.emplace(std::move(pkey));
+    }
+    void reset_index_expected_partition() {
+        _expected_pkey.reset();
+    }
+    void set_index_expected_clustering_block(position_in_partition_view start, position_in_partition_view end) {
+        _expected_clustering_block.emplace(start, end);
+    }
+
+    void report_error(sstring what) {
+        ++_error_count;
+        _error_handler(what);
+    }
+
+    data_consumer::proceed consume_partition_start(sstables::key_view key, sstables::deletion_time deltime) {
+        auto pk = key.to_partition_key(*_schema);
+        auto dk = dht::decorate_key(*_schema, pk);
+        _current_pos = position_in_partition(position_in_partition::partition_start_tag_t{});
+        sstlog.trace("validating_consumer {}: {}({}) _expected_pkey={}", fmt::ptr(this), __FUNCTION__, pk, _expected_pkey);
+        validate_fragment_order(mutation_fragment_v2::kind::partition_start, {});
+        if (_expected_pkey && !_expected_pkey->equal(*_schema, dk.key())) {
+            report_error(format("mismatching index/data: partition mismatch: index: {}, data: {}", *_expected_pkey, dk.key()));
+        }
+        if (auto res = _validator(dk); !res) {
+            report_error(res.what());
+            _validator.reset(dk);
+        }
+        if (_stop_after_partition_header) {
+            _stop_after_partition_header = false;
+            return data_consumer::proceed::no;
+        }
+        return data_consumer::proceed::yes;
+    }
+
+    row_processing_result consume_row_start(const std::vector<fragmented_temporary_buffer>& ecp) {
+        auto ck = from_fragmented_buffer(ecp);
+        _current_pos = position_in_partition::for_key(std::move(ck));
+        sstlog.trace("validating_consumer {}: {}({})", fmt::ptr(this), __FUNCTION__, _current_pos);
+        validate_fragment_order(mutation_fragment_v2::kind::clustering_row, {});
+        return row_processing_result::do_proceed;
+    }
+
+    data_consumer::proceed consume_row_marker_and_tombstone(const liveness_info& info, tombstone tomb, tombstone shadowable_tomb) {
+        return data_consumer::proceed::yes;
+    }
+
+    row_processing_result consume_static_row_start() {
+        sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        if (_treat_static_row_as_regular) {
+            return consume_row_start({});
+        }
+        _current_pos = position_in_partition(position_in_partition::static_row_tag_t{});
+        validate_fragment_order(mutation_fragment_v2::kind::static_row, {});
+        return row_processing_result::do_proceed;
+    }
+
+    data_consumer::proceed consume_column(const column_translation::column_info& column_info, bytes_view cell_path, fragmented_temporary_buffer::view value,
+            api::timestamp_type timestamp, gc_clock::duration ttl, gc_clock::time_point local_deletion_time, bool is_deleted) {
+        return data_consumer::proceed::yes;
+    }
+
+    data_consumer::proceed consume_complex_column_start(const sstables::column_translation::column_info& column_info, tombstone tomb) {
+        return data_consumer::proceed::yes;
+    }
+
+    data_consumer::proceed consume_complex_column_end(const sstables::column_translation::column_info& column_info) {
+        return data_consumer::proceed::yes;
+    }
+
+    data_consumer::proceed consume_counter_column(const column_translation::column_info& column_info, fragmented_temporary_buffer::view value, api::timestamp_type timestamp) {
+        return data_consumer::proceed::yes;
+    }
+
+    data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp, bound_kind kind, tombstone tomb) {
+        auto ck = from_fragmented_buffer(ecp);
+        _current_pos = position_in_partition(position_in_partition::range_tag_t(), kind, std::move(ck));
+        std::optional<tombstone> new_current_tomb;
+        if (kind == bound_kind::incl_start || kind == bound_kind::excl_start) {
+            new_current_tomb = tomb;
+        }
+        sstlog.trace("validating_consumer {}: {}({}, {})", fmt::ptr(this), __FUNCTION__, _current_pos, tomb);
+        validate_fragment_order(mutation_fragment_v2::kind::range_tombstone_change, new_current_tomb);
+        return data_consumer::proceed(!need_preempt());
+    }
+
+    data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp, sstables::bound_kind_m kind, tombstone end_tombstone, tombstone start_tombstone) {
+        sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        switch (kind) {
+        case bound_kind_m::incl_end_excl_start:
+            return consume_range_tombstone(ecp, bound_kind::excl_start, start_tombstone);
+        case bound_kind_m::excl_end_incl_start:
+            return consume_range_tombstone(ecp, bound_kind::incl_start, start_tombstone);
+        default:
+            assert(false && "Invalid boundary type");
+        }
+    }
+
+    data_consumer::proceed consume_row_end() {
+        sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        if (_expected_clustering_block) {
+            return data_consumer::proceed(!_expected_clustering_block->done);
+        } else {
+            return data_consumer::proceed(!need_preempt());
+        }
+    }
+
+    void on_end_of_stream() {
+        if (auto res = _validator.on_end_of_stream(); !res) {
+            report_error(res.what());
+        }
+        sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+    }
+
+    data_consumer::proceed consume_partition_end() {
+        sstlog.trace("validating_consumer {}: {}()", fmt::ptr(this), __FUNCTION__);
+        _current_pos = position_in_partition(position_in_partition::end_of_partition_tag_t{});
+        validate_fragment_order(mutation_fragment_v2::kind::partition_end, {});
+        return data_consumer::proceed::no;
+    }
+};
+
+future<uint64_t> validate(
+        shared_sstable sstable,
+        reader_permit permit,
+        abort_source& abort,
+        std::function<void(sstring)> error_handler,
+        sstables::read_monitor& monitor) {
+    auto schema = sstable->get_schema();
+    validating_consumer consumer(schema, permit, sstable, std::move(error_handler));
+    auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer);
+
+    std::optional<sstables::index_reader> idx_reader;
+    idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);
+
+    try {
+        monitor.on_read_started(context->reader_position());
+        while (!context->eof() && !abort.abort_requested()) {
+            uint64_t current_partition_pos = 0;
+            clustered_index_cursor* idx_cursor = nullptr;
+
+            if (idx_reader && idx_reader->eof()) {
+                consumer.report_error("mismatching index/data: index is at EOF, but data file has more data");
+                co_await idx_reader->close();
+                idx_reader.reset();
+            }
+
+            if (idx_reader) {
+                co_await idx_reader->read_partition_data();
+
+                idx_cursor = idx_reader->current_clustered_cursor();
+
+                const auto index_pos = idx_reader->get_data_file_position();
+                const auto data_pos = context->position();
+                sstlog.trace("validate(): index-data position check for partition {}: {} == {}", idx_reader->get_partition_key(), data_pos, index_pos);
+                if (index_pos != data_pos) {
+                    consumer.report_error(format("mismatching index/data: position mismatch: index: {}, data: {}", index_pos, data_pos));
+                }
+                current_partition_pos = data_pos;
+
+                consumer.set_index_expected_partition(idx_reader->get_partition_key());
+            } else {
+                consumer.reset_index_expected_partition();
+            }
+
+            std::optional<clustered_index_cursor::entry_info> current_pi_block;
+
+            if (idx_cursor) {
+                consumer.set_stop_after_partition_header();
+                co_await context->consume_input();
+            }
+            bool first_block = true;
+
+            do {
+                if (idx_cursor && (current_pi_block = co_await idx_cursor->next_entry())) {
+                    // The mx format always has position-in-partition in the variant.
+                    const auto start = std::get<position_in_partition_view>(current_pi_block->start);
+                    const auto end = std::get<position_in_partition_view>(current_pi_block->end);
+                    const auto index_pos = current_partition_pos + current_pi_block->offset;
+                    const auto data_pos = context->position();
+                    sstlog.trace("validate(): index-data position check for clustering block (first={}) [{}, {}]: {} == {}", first_block, start, end, data_pos, index_pos);
+                    // We cannot reliably position the parser at the start of
+                    // the first block, because there is no way to check what
+                    // the next element is (static row or clustering row)
+                    // without reading its header. And once read, we cannot
+                    // rewind the parser.
+                    // So we do a best-effort here: we ask the consumer to stop
+                    // after consuming the partition-start. For schemas without
+                    // static row this should result in the exact position, but
+                    // even then it is not guaranteed if the schema has a dropped
+                    // static column.
+                    if (first_block) {
+                        first_block = false;
+                        if (data_pos > index_pos) {
+                            consumer.report_error(format("mismatching index/data: position mismatch: first promoted index block: {}, data: {}", index_pos, data_pos));
+                        }
+                    } else {
+                        if (data_pos != index_pos) {
+                            consumer.report_error(format("mismatching index/data: position mismatch: promoted index: {}, data: {}", index_pos, data_pos));
+                        }
+                    }
+
+                    consumer.set_index_expected_clustering_block(start, end);
+                }
+                co_await context->consume_input();
+
+                co_await coroutine::maybe_yield();
+            } while (consumer.current_position().region() != partition_region::partition_end && !abort.abort_requested());
+
+            if (abort.abort_requested()) {
+                // Prevent fall-through to the post-checks below if the the loop above was broken due to abort.
+                break;
+            }
+
+            // Check if promoted index still has more entries.
+            if (idx_cursor && (current_pi_block = co_await idx_cursor->next_entry())) {
+                consumer.report_error(format("mismatching index/data: promoted index has more blocks, but it is end of partition {} ({})",
+                        idx_reader->get_partition_key().with_schema(*schema),
+                        idx_reader->get_partition_key()));
+            }
+
+            if (idx_reader) {
+                co_await idx_reader->advance_to_next_partition();
+            }
+        }
+    } catch (...) {
+        consumer.report_error(format("unexpected exception: {}", std::current_exception()));
+    }
+
+    monitor.on_read_completed();
+    if (idx_reader) {
+        co_await idx_reader->close();
+    }
+
+    co_await context->close();
+    co_return consumer.error_count();
+}
+
+} // namespace mx
+>>>>>>> 7a7b8972e5 (sstables: fix a use-after-free in key_view::explode())
 } // namespace sstables
