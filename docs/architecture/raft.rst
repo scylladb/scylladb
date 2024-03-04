@@ -54,6 +54,10 @@ When all the nodes in the cluster are upgraded to ScyllaDB Open Source 5.5 or Sc
 Verifying that the Raft upgrade procedure finished successfully
 ========================================================================
 
+.. note::
+    After the procedure described in this section finishes, you must perform manual action in order to enable consistent topology changes.
+    See :doc:`the guide for enabling consistent topology changes</upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology>` for more details.
+
 The Raft upgrade procedure requires **full cluster availability** to correctly setup the Raft algorithm; after the setup finishes, Raft can proceed with only a majority of nodes, but this initial setup is an exception.
 An unlucky event, such as a hardware failure, may cause one of your nodes to fail. If this happens before the Raft upgrade procedure finishes, the procedure will get stuck and your intervention will be required.
 
@@ -150,6 +154,10 @@ If some nodes are **dead and irrecoverable**, you'll need to perform a manual re
 Verifying that Raft is enabled
 ===============================
 
+.. _schema-on-raft-enabled:
+
+**Schema on Raft**
+
 You can verify that Raft is enabled on your cluster by performing the following query on each node:
 
 .. code-block:: sql
@@ -173,6 +181,38 @@ If the query returns 0 rows, or ``value`` is ``synchronize`` or ``use_pre_raft_p
 If ``value`` is ``recovery``, it means that the cluster is in the middle of the manual recovery procedure. The procedure must be finished. Consult :ref:`the section about Raft recovery <recovery-procedure>`.
 
 If ``value`` is anything else, it might mean data corruption or a mistake when performing the manual recovery procedure. The value will be treated as if it was equal to ``recovery`` when the node is restarted.
+
+.. _verifying-consistent-topology-changes-enabled:
+
+**Consistent topology changes**
+
+You can verify that consistent topology management is enabled on your cluster in two ways:
+
+#. By querying the ``system.topology`` table:
+
+    .. code-block:: cql
+
+        cqlsh> SELECT upgrade_state FROM system.topology;
+
+   The query should return ``done`` after upgrade is complete:
+
+    .. code-block:: console
+
+        upgrade_state
+        ---------------
+                done
+
+        (1 rows)
+
+    An empty result or a value of ``not_upgraded`` means that upgrade has not started yet. Any other value means that upgrade is in progress.
+
+#. By sending a GET HTTP request to the `/`storage_service/raft_topology/upgrade`` endpoint. For example, you can do it with ``curl`` like this:
+
+    .. code-block:: bash
+
+        curl -X GET "http://127.0.0.1:10000/storage_service/raft_topology/upgrade"
+
+   It returns a JSON string, with the same meaning and value as the ``upgrade_state`` column in ``system.topology`` (see the previous point).
 
 .. _raft-schema-changes:
 
