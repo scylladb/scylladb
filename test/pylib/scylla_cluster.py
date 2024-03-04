@@ -53,7 +53,16 @@ class ReplaceConfig(NamedTuple):
     wait_replaced_dead: bool = True
 
 
-def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str) -> dict[str, object]:
+def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str) -> dict[str, object]:
+    # We significantly increase default timeouts to allow running tests on a very slow
+    # setup (but without network losses). These timeouts can impact the running time of
+    # topology tests. For example, the barrier_and_drain topology command waits until
+    # background writes' handlers time out. We don't want to slow down tests for no
+    # reason, so we increase the timeouts according to each mode's needs. The client
+    # should avoid timing out its requests before the server times out - for this reason
+    # we increase the CQL driver's client-side timeout in conftest.py.
+    request_timeout_in_ms = 180000 if mode in {'debug', 'sanitize'} else 30000
+
     return {
         'cluster_name': cluster_name,
         'workdir': str(workdir.resolve()),
@@ -86,19 +95,13 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
         'flush_schema_tables_after_modification': False,
         'auto_snapshot': False,
 
-        # Significantly increase default timeouts to allow running tests
-        # on a very slow setup (but without network losses). Note that these
-        # are server-side timeouts: The client should also avoid timing out
-        # its own requests - for this reason we increase the CQL driver's
-        # client-side timeout in conftest.py.
-
-        'range_request_timeout_in_ms': 300000,
-        'read_request_timeout_in_ms': 300000,
-        'counter_write_request_timeout_in_ms': 300000,
-        'cas_contention_timeout_in_ms': 300000,
-        'truncate_request_timeout_in_ms': 300000,
-        'write_request_timeout_in_ms': 300000,
-        'request_timeout_in_ms': 300000,
+        'range_request_timeout_in_ms': request_timeout_in_ms,
+        'read_request_timeout_in_ms': request_timeout_in_ms,
+        'counter_write_request_timeout_in_ms': request_timeout_in_ms,
+        'cas_contention_timeout_in_ms': request_timeout_in_ms,
+        'truncate_request_timeout_in_ms': request_timeout_in_ms,
+        'write_request_timeout_in_ms': request_timeout_in_ms,
+        'request_timeout_in_ms': request_timeout_in_ms,
         'user_defined_function_time_limit_ms': 1000,
 
         'strict_allow_filtering': True,
@@ -209,7 +212,7 @@ class ScyllaServer:
     host_id: HostID                             # Host id (UUID)
     newid = itertools.count(start=1).__next__   # Sequential unique id
 
-    def __init__(self, exe: str, vardir: str,
+    def __init__(self, mode: str, exe: str, vardir: str,
                  logger: Union[logging.Logger, logging.LoggerAdapter],
                  cluster_name: str, ip_addr: str, seeds: List[str],
                  cmdline_options: List[str],
@@ -236,6 +239,7 @@ class ScyllaServer:
         self.property_filename = self.workdir / "conf/cassandra-rackdc.properties"
         # Sum of basic server configuration and the user-provided config options.
         self.config = make_scylla_conf(
+                mode = mode,
                 workdir = self.workdir,
                 host_addr = self.ip_addr,
                 seed_addrs = self.seeds,

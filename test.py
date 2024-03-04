@@ -429,6 +429,7 @@ class PythonTestSuite(TestSuite):
                              create_cfg.config_from_test
 
             server = ScyllaServer(
+                mode=self.mode,
                 exe=self.scylla_exe,
                 vardir=os.path.join(self.options.tmpdir, self.mode),
                 logger=create_cfg.logger,

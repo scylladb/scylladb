@@ -21,23 +21,28 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-async def test_topology_ops(request, manager: ManagerClient):
+@pytest.mark.parametrize("tablets_enabled", ["true", "false"])
+async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bool):
     """Test basic topology operations using the topology coordinator."""
+    cfg = {'experimental_features': ['consistent-topology-changes']}
+    if tablets_enabled:
+        cfg['experimental_features'].append('tablets')
+
     logger.info("Bootstrapping first node")
-    servers = [await manager.server_add()]
+    servers = [await manager.server_add(config=cfg)]
 
     logger.info(f"Restarting node {servers[0]}")
     await manager.server_stop_gracefully(servers[0].server_id)
     await manager.server_start(servers[0].server_id)
 
-    await wait_for_cql_and_get_hosts(manager.cql, await manager.running_servers(), time.time() + 60)
-    cql = await reconnect_driver(manager)
-    # FIXME: disabled as a workaround for #15935, #15924
-    # We need to re-enable once these issues are fixed.
-    #finish_writes = await start_writes(cql)
-
     logger.info("Bootstrapping other nodes")
-    servers += await manager.servers_add(3)
+    servers += await manager.servers_add(3, config=cfg)
+
+    await wait_for_cql_and_get_hosts(manager.cql, servers, time.time() + 60)
+    cql = await reconnect_driver(manager)
+    # FIXME: we disable background writes with tablets enabled because the test fails due to #17025.
+    # We need to re-enable them once this issue is fixed (by removing `if` here and above `await finish_writes()`).
+    finish_writes = await start_writes(cql) if not tablets_enabled else None
 
     logger.info(f"Decommissioning node {servers[0]}")
     await manager.decommission_node(servers[0].server_id)
@@ -67,7 +72,8 @@ async def test_topology_ops(request, manager: ManagerClient):
     servers = servers[1:]
 
     logger.info("Checking results of the background writes")
-    #await finish_writes()
+    if not tablets_enabled:
+        await finish_writes()
 
     for server in servers:
         await check_node_log_for_failed_mutations(manager, server)
