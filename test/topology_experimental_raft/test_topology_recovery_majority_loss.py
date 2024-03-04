@@ -13,7 +13,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import reconnect_driver, restart, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, log_run_time, wait_until_upgrade_finishes as wait_until_schema_upgrade_finishes, \
-        wait_until_topology_upgrade_finishes, delete_raft_topology_state, check_system_topology_and_cdc_generations_v3_consistency
+        wait_until_topology_upgrade_finishes, delete_raft_topology_state, wait_for_cdc_generations_publishing, \
+        check_system_topology_and_cdc_generations_v3_consistency
 
 
 @pytest.mark.asyncio
@@ -64,12 +65,18 @@ async def test_topology_recovery_after_majority_loss(request, manager: ManagerCl
     logging.info("Waiting until upgrade to raft topology finishes")
     await wait_until_topology_upgrade_finishes(manager, host1.address, time.time() + 60)
 
+    logging.info("Waiting for CDC generations publishing")
+    await wait_for_cdc_generations_publishing(cql, [host1], time.time() + 60)
+
     logging.info("Checking consistency of data in system.topology and system.cdc_generations_v3")
     await check_system_topology_and_cdc_generations_v3_consistency(manager, [host1])
 
     logging.info("Add two more nodes")
     servers = [srv1] + await manager.servers_add(2)
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    logging.info("Waiting for the new CDC generations publishing")
+    await wait_for_cdc_generations_publishing(cql, hosts, time.time() + 60)
 
     logging.info("Checking consistency of data in system.topology and system.cdc_generations_v3")
     await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
