@@ -15,6 +15,7 @@ from typing import Callable, Awaitable, Optional, TypeVar, Any
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
+from cassandra import DriverException # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import ServerInfo
 
@@ -78,10 +79,18 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
 
         logging.info(f"Driver hasn't yet learned about hosts: {remaining}")
         return None
+    def try_refresh_nodes():
+        try:
+            cql.cluster.refresh_nodes(force_token_rebuild=True)
+        except DriverException:
+            # Silence the exception, which might get thrown if we call this in the middle of
+            # driver reconnect (scylladb/scylladb#17616). `wait_for` will retry anyway and it's enough
+            # if we succeed only one `get_hosts()` attempt before timing out.
+            pass
     hosts = await wait_for(
         pred=get_hosts,
         deadline=deadline,
-        before_retry=lambda: cql.cluster.refresh_nodes(force_token_rebuild=True),
+        before_retry=try_refresh_nodes,
     )
 
     # Take only hosts from `ip_set` (there may be more)
