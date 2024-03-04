@@ -731,27 +731,27 @@ future<> storage_service::topology_transition() {
 }
 
 future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
-   std::vector<mutation> muts;
-   muts.reserve(snp.topology_mutations.size() + snp.cdc_generation_mutations.size() + snp.topology_requests_mutations.size());
-   {
-       auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
-       boost::transform(snp.topology_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
-           return m.to_mutation(s);
-       });
-   }
-   if (snp.cdc_generation_mutations.size() > 0) {
-       auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
-       boost::transform(snp.cdc_generation_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
-           return m.to_mutation(s);
-       });
-   }
-   if (snp.topology_requests_mutations.size()) {
-       auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
-       boost::transform(snp.topology_requests_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
-           return m.to_mutation(s);
-       });
-   }
-   co_await _db.local().apply(freeze(muts), db::no_timeout);
+    std::vector<mutation> muts;
+    muts.reserve(snp.topology_mutations.size() + snp.cdc_generation_mutations.size() + snp.topology_requests_mutations.size());
+    {
+        auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+        boost::transform(snp.topology_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
+            return m.to_mutation(s);
+        });
+    }
+    if (snp.cdc_generation_mutations.size() > 0) {
+        auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+        boost::transform(snp.cdc_generation_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
+            return m.to_mutation(s);
+        });
+    }
+    if (snp.topology_requests_mutations.size()) {
+        auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
+        boost::transform(snp.topology_requests_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
+            return m.to_mutation(s);
+        });
+    }
+    co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
 // Moves the coroutine lambda onto the heap and extends its
