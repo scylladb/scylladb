@@ -62,9 +62,14 @@ static std::ostream& operator<<(std::ostream& os, const std::vector<sstring>& v)
 struct file_size_printer {
     uint64_t value;
     bool human_readable;
-    file_size_printer(uint64_t value, bool human_readable = true)
+    bool use_correct_units;
+    // Cassandra nodetool uses base_2 and base_10 units interchangeably, some
+    // commands use this, some that. Let's accomodate this for now, and maybe
+    // fix this mess at one point in the future, after the rewrite is done.
+    file_size_printer(uint64_t value, bool human_readable = true, bool use_correct_units = false)
         : value{value}
         , human_readable{human_readable}
+        , use_correct_units{use_correct_units}
     {}
 };
 
@@ -75,17 +80,18 @@ struct fmt::formatter<file_size_printer> : fmt::formatter<std::string_view> {
             return fmt::format_to(ctx.out(), "{}", size.value);
         }
 
-        using unit_t = std::pair<uint64_t, std::string_view>;
+        using unit_t = std::tuple<uint64_t, std::string_view, std::string_view>;
         const unit_t units[] = {
-            {1UL << 40, "TB"},
-            {1UL << 30, "GB"},
-            {1UL << 20, "MB"},
-            {1UL << 10, "KB"},
+            {1UL << 40, "TiB", "TB"},
+            {1UL << 30, "GiB", "GB"},
+            {1UL << 20, "MiB", "MB"},
+            {1UL << 10, "KiB", "KB"},
         };
-        for (auto [n, prefix] : units) {
+        for (auto [n, base_2, base_10] : units) {
             if (size.value > n) {
                 auto d = static_cast<float>(size.value) / n;
-                return fmt::format_to(ctx.out(), "{:.2f} {}", d, prefix);
+                auto postfix = size.use_correct_units ? base_2 : base_10;
+                return fmt::format_to(ctx.out(), "{:.2f} {}", d, postfix);
             }
         }
         return fmt::format_to(ctx.out(), "{} bytes", size.value);
