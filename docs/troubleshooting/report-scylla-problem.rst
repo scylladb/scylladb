@@ -6,8 +6,8 @@ In the event there is an issue you would like to report to ScyllaDB support, you
 
 In general, there are two types of issues:
 
-* **Scylla failure** - There is some kind of failure, possibly due to a connectivity issue, a timeout, or otherwise, where the Scylla server or the Scylla nodes are not working. These cases require you to send ScyllaDB support both a `Health Check Report`_ as well as `Core Dump`_ files (if available).
-* **Scylla performance** - you have noticed some type of degradation of service with Scylla reads or writes. If it is clearly a performance case and not a failure, refer to `Report a performance problem`_.
+* **ScyllaDB failure** - There is some kind of failure, possibly due to a connectivity issue, a timeout, or otherwise, where the Scylla server or the Scylla nodes are not working. These cases require you to send :ref:`Scylla Doctor vitals and ScyllaDB logs <report-scylla-problem-scylla-doctor>`, as well as `Core Dump`_ files (if available), to ScyllaDB support.
+* **ScyllaDB performance** - you have noticed some type of degradation of service with Scylla reads or writes. If it is clearly a performance case and not a failure, refer to `Report a performance problem`_.
 
 Once you have used our diagnostic tools to report the current status, you need to `Send files to ScyllaDB support`_ for further analysis.
 
@@ -16,40 +16,59 @@ Make sure the Scylla system logs are configured properly to report info level me
 .. note:: 
    If you are unsure which reports need to be included, `Open a support ticket or GitHub issue`_ and consult with the ScyllaDB team. 
 
-Health Check Report
-^^^^^^^^^^^^^^^^^^^
 
-The Health Check Report is a script which generates:
+.. _report-scylla-problem-scylla-doctor:
 
-* An archive file (output_files.tgz) containing configuration data (hardware, OS, Scylla SW, etc.) 
-* System logs 
-* A Report file ``(<node_IP>-health-check-report.txt)`` based on the collected info.
+Scylla Doctor
+^^^^^^^^^^^^^^^
 
-If your node configuration is identical across the cluster, you only need to run the script once on one node. If not you will need to run the script on multiple nodes.
+Scylla Doctor is a troubleshooting tool that checks the node status regarding 
+system requirements, configuration, and tuning. The collected information is 
+output as a ``.vitals.json`` file and an archive file with ScyllaDB logs. 
+You need to run the tool **on every node in the cluster**. 
 
-.. note:: In order to generate a full health check report, scylla-server and scylla-jmx must be running. Note that the script will alert you if either one is not running. By default, the script looks for scylla-jmx via port 7199. If you are running it on a different port, you will have to provide the port number at runtime. 
+#. Download the Scylla Doctor executable ``scylla_doctor.pyz`` from 
+   https://downloads.scylladb.com/downloads/scylla-doctor/latest/. 
+#. Copy ``scylla_doctor.pyz`` file to all nodes in the cluster.
+#. Execute the following command from the directory where you copied 
+   ``scylla_doctor.pyz`` on each node in your cluster:
 
-Prepare Health Check Report
-...........................
+   .. code:: shell
 
-**Procedure:**
-
-1. Run the node healthcheck:
-
-.. code-block:: shell
-
-   node_health_check
+      sudo ./scylla_doctor.pyz --save-vitals <unique-host-id>.vitals.json
  
-The report generates output files. Once complete, a similar message is displayed:
+   Make sure you provide a unique host identifier in the filename, such as 
+   the host IP. Scylla Doctor will generate:
+   
+   * ``<unique-host-id>.vitals.json`` - Scylla Doctor vitals
+   * ``scylla_logs_<timestamp>.tar.gz`` - ScyllaDB logs
 
-.. code-block:: shell
+   **Authenticated Clusters**
 
-   Health Check Report Created Successfully
-   Path to Report: ./192.0.2.0-health-check-report.txt
+   If CQL authentication is enabled on the cluster, you need to additionally
+   provide CQL credentials with permissions to perform the ``DESCRIBE SCHEMA`` 
+   command using the following parameters:
 
-If an error message displays check that scylla-server and scylla-jmx must be running. See the note in `Health Check Report`_.
+   .. code:: shell
 
-2. Follow the instructions in `Send files to ScyllaDB support`_.
+      -sov CQL,user,<CQL user name> -sov CQL,password,<CQL password>
+
+   Scylla Doctor employs cqlsh installed on a given node using the provided 
+   credentials. Make sure to set up any additional configuration required to 
+   use cqlsh, such as TLS-related information, in the .cqlshrc file.
+
+#. Collect the ``.vitals.json`` and log files from each node into a local
+   directory with a name identifying your cluster and compress them into an archive.
+   In the following example, the Linux ``tar`` command is used to compress 
+   the files in the ``my_cluster_123`` directory:
+
+   .. code:: shell
+
+      tar czvf my_cluster_123_vitals.tgz my_cluster_123
+
+#. Upload the archive using the instructions in the 
+   :ref:`Send files to ScyllaDB support <report-problem-send-files-to-support>` 
+   section.
 
 .. _report-scylla-problem-core-dump:
 
@@ -112,7 +131,7 @@ If you are experiencing a performance issue when using Scylla, let us know and w
 
 Include the following information in your report:
 
-* A complete `Health Check Report`_ 
+* Complete :ref:`Scylla Doctor Vitals <report-scylla-problem-scylla-doctor>`
 * A `Server Metrics`_ Report 
 * A `Client Metrics`_ Report
 * The contents of your tracing data. See :ref:`Collecting Tracing Data <tracing-collecting-tracing-data>`.
@@ -132,7 +151,7 @@ There are several commands you can use to see if there is a performance issue on
 Use ``scyllatop`` instead. 
 
 .. note:: 
-   To help the ScyllaDB support team assess your problem, it is best to pipe the results to a file which you can attach with the Health Check report.
+   To help the ScyllaDB support team assess your problem, it is best to pipe the results to a file which you can attach with Scylla Doctor vitals and ScyllaDB logs.
 
 1. Check the ``Send files to ScyllaDB supportgauge-load``. If the load is close to 100%, the bottleneck is Scylla CPU. 
 
@@ -224,6 +243,7 @@ Client Metrics
  
 Check the client CPU using ``top``. If the CPU is close to 100%, the bottleneck is the client CPU. In this case, you should add more loaders to stress Scylla.
 
+.. _report-problem-send-files-to-support:
 
 Send files to ScyllaDB support
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
