@@ -308,7 +308,7 @@ public:
         if (!_is_mutation_end) {
             return data_consumer::proceed::yes;
         }
-        auto pk = partition_key::from_exploded(key.explode(*_schema));
+        auto pk = key.to_partition_key(*_schema);
         setup_for_partition(pk);
         auto dk = dht::decorate_key(*_schema, pk);
         _reader->on_next_partition(std::move(dk), tombstone(deltime));
@@ -1940,7 +1940,7 @@ public:
     }
 
     data_consumer::proceed consume_partition_start(sstables::key_view key, sstables::deletion_time deltime) {
-        auto pk = partition_key::from_exploded(key.explode(*_schema));
+        auto pk = key.to_partition_key(*_schema);
         auto dk = dht::decorate_key(*_schema, pk);
         _current_pos = position_in_partition(position_in_partition::partition_start_tag_t{});
         sstlog.trace("validating_consumer {}: {}({}) _expected_pkey={}", fmt::ptr(this), __FUNCTION__, pk, _expected_pkey);
