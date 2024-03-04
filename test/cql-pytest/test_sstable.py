@@ -14,6 +14,7 @@
 import pytest
 from util import unique_name, new_test_table
 import nodetool
+import random
 
 # Reproduces issue #8138, where the sstable reader in a TWCS sstable set
 # had a bug and resulted in no results for queries.
@@ -36,3 +37,21 @@ def test_twcs_optimal_query_path(cql, test_keyspace, scylla_only):
         # in the debug build.
         nodetool.flush(cql, table)
         assert 1 == len(list(cql.execute(f"SELECT * FROM {table} WHERE pk = 0 BYPASS CACHE")))
+
+# Reproduces https://github.com/scylladb/scylladb/issues/17625.
+# Without the fix, it trips ASAN.
+def test_big_key_index_reader(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk blob, ck blob, PRIMARY KEY (pk, ck)") as table:
+        # Insert a partition with a partition key large enough to be fragmented in LSA,
+        # and enough clustering rows for a promoted index to be written.
+        insert = cql.prepare(f"INSERT INTO {table}(pk, ck) VALUES(?, ?)")
+        k = 30000
+        pk = random.randbytes(k)
+        for i in range(10):
+            ck = random.randbytes(k)
+            cql.execute(insert, [pk, ck])
+        # Flush the partition.
+        nodetool.flush(cql, table)
+        # Read the partition from sstables.
+        select = cql.prepare(f"SELECT pk, ck FROM {table} WHERE pk = ? BYPASS CACHE")
+        cql.execute(select, [pk])
