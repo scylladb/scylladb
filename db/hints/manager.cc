@@ -353,7 +353,7 @@ bool manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
     // There is no need to check the DC here because if there is an in-flight hint for this
     // endpoint, then this means that its DC has already been checked and found to be ok.
     return _stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS
-            && _proxy.local_db().get_token_metadata().get_topology().is_me(ep)
+            && !_proxy.local_db().get_token_metadata().get_topology().is_me(ep)
             && hints_in_progress_for(ep) > 0
             && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
