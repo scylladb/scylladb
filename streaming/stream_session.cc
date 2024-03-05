@@ -128,7 +128,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             };
             auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
             auto offstrategy_update = make_lw_shared<offstrategy_trigger>(_db, cf_id, plan_id);
-            auto guard = service::topology_guard(s->table(), topo_guard);
+            auto guard = service::topology_guard(topo_guard);
 
             // Will log a message when streaming is done. Used to synchronize tests.
             lw_shared_ptr<std::any> log_done;
