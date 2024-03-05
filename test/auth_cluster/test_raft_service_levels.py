@@ -7,10 +7,11 @@ import pytest
 import time
 import asyncio
 import logging
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, read_barrier
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo
-from test.topology.util import trigger_snapshot
+from test.topology.util import trigger_snapshot, wait_until_topology_upgrade_finishes
+from test.topology.conftest import skip_mode
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
@@ -53,4 +54,52 @@ async def test_service_levels_snapshot(manager: ManagerClient):
     new_result = await cql.run_async("SELECT service_level FROM system.service_levels_v2")
 
     assert set([sl.service_level for sl in result]) == set([sl.service_level for sl in new_result])
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_service_levels_upgrade(request, manager: ManagerClient):
+    # First, force the first node to start in legacy mode due to the error injection
+    cfg = {'error_injections_at_startup': ['force_gossip_based_join']}
+
+    servers = [await manager.server_add(config=cfg)]
+    # Disable injections for the subsequent nodes - they should fall back to
+    # using gossiper-based node operations
+    del cfg['error_injections_at_startup']
+
+    servers += [await manager.server_add(config=cfg) for _ in range(2)]
+    cql = manager.get_cql()
+    assert(cql)
+
+    logging.info("Waiting until driver connects to every server")
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    logging.info("Checking the upgrade state on all nodes")
+    for host in hosts:
+        status = await manager.api.raft_topology_upgrade_status(host.address)
+        assert status == "not_upgraded"
+
+    sls = ["sl" + unique_name() for _ in range(10)]
+    for sl in sls:
+        await cql.run_async(f"CREATE SERVICE LEVEL {sl}")
+
+    result = await cql.run_async("SELECT service_level FROM system_distributed.service_levels")
+    assert set([sl.service_level for sl in result]) == set(sls)
+
+    logging.info("Triggering upgrade to raft topology")
+    await manager.api.upgrade_to_raft_topology(hosts[0].address)
+
+    logging.info("Waiting until upgrade finishes")
+    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+
+    result_v2 = await cql.run_async("SELECT service_level FROM system.service_levels_v2")
+    assert set([sl.service_level for sl in result_v2]) == set(sls)
+
+    sl_v2 = "sl" + unique_name()
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl_v2}")
+
+    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+    result_with_sl_v2 = await cql.run_async(f"SELECT service_level FROM system.service_levels_v2")
+    assert set([sl.service_level for sl in result_with_sl_v2]) == set(sls + [sl_v2])
+
+    
 
