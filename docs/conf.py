@@ -167,3 +167,7 @@ html_baseurl = BASE_URL
 
 # Dictionary of values to pass into the template engine’s context for all pages
 html_context = {"html_baseurl": html_baseurl}
+
+def setup(app):
+    if 'opensource' in app.tags:
+        app.tags.add('experimental')
