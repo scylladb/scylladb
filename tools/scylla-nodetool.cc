@@ -188,6 +188,56 @@ public:
     }
 };
 
+// Based on origin's org.apache.cassandra.tools.NodeProbe.BufferSamples
+class buffer_samples {
+    std::vector<uint64_t> _samples;
+
+public:
+    explicit buffer_samples(std::vector<uint64_t> samples) : _samples(std::move(samples)) {
+        std::sort(_samples.begin(), _samples.end());
+    }
+
+    const std::vector<uint64_t>& values() const { return _samples; }
+
+    double min() const { return _samples.empty() ? 0.0 : double(_samples.front()); }
+
+    double max() const { return _samples.empty() ? 0.0 : double(_samples.back()); }
+
+    double value(double quantile) const {
+        if (quantile < 0.0 || quantile > 1.0) {
+            throw std::runtime_error(fmt::format("quantile {} is not in [0..1]", quantile));
+        }
+
+        if (_samples.empty()) {
+            return 0.0;
+        }
+
+        const double pos = quantile * (_samples.size() + 1);
+
+        if (pos < 1) {
+            return _samples.front();
+        }
+
+        if (pos >= _samples.size()) {
+            return _samples.back();
+        }
+
+        const double lower = _samples.at(size_t(pos) - 1);
+        const double upper = _samples.at(size_t(pos));
+        return lower + (pos - floor(pos)) * (upper - lower);
+    }
+
+    static buffer_samples retrieve_from_api(scylla_rest_client& client, sstring path) {
+        const auto res = client.get(std::move(path));
+        const auto res_object = res.GetObject();
+        std::vector<uint64_t> samples;
+        for (const auto& sample : res_object["hist"]["sample"].GetArray()) {
+            samples.push_back(sample.GetInt());
+        }
+        return buffer_samples(std::move(samples));
+    }
+};
+
 std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}) {
     std::unordered_map<sstring, sstring> params;
     if (type) {
