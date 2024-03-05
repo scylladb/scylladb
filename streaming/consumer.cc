@@ -35,7 +35,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
             }
 
             auto cf = db.local().find_column_family(reader.schema()).shared_from_this();
-            auto guard = service::topology_guard(*cf, frozen_guard);
+            auto guard = service::topology_guard(frozen_guard);
             auto use_view_update_path = co_await db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *cf, reason);
             //FIXME: for better estimations this should be transmitted from remote
             auto metadata = mutation_source_metadata{};

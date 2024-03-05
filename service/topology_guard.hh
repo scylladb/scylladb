@@ -39,9 +39,9 @@ session_manager& get_topology_session_manager();
 /// the guard's scope, then executing a token metadata barrier after invalidating the guard
 /// guarantees that there can be no side-effects from earlier stages.
 /// The token metadata barrier must contact all nodes which may have alive guards.
-template <typename T> concept TopologyGuard = requires(T guard, replica::table& t, frozen_topology_guard frozen_guard) {
+template <typename T> concept TopologyGuard = requires(T guard, frozen_topology_guard frozen_guard) {
     // Acquiring the guard.
-    { T(t, frozen_guard) } -> std::same_as<T>;
+    { T(frozen_guard) } -> std::same_as<T>;
 
     // Moving the guard.
     { T(std::move(guard)) } -> std::same_as<T>;
@@ -58,7 +58,7 @@ class session_topology_guard {
 public:
     using frozen = session_id;
 
-    session_topology_guard(replica::table& t, frozen_topology_guard g)
+    session_topology_guard(frozen_topology_guard g)
         : _guard(get_topology_session_manager().enter_session(g))
     { }
 
