@@ -2456,9 +2456,18 @@ future<> table::clear() {
 // NOTE: does not need to be futurized, but might eventually, depending on
 // if we implement notifications, whatnot.
 future<db::replay_position> table::discard_sstables(db_clock::time_point truncated_at) {
-    assert(std::ranges::all_of(compaction_groups(), [this] (const compaction_group& cg) {
-        return _compaction_manager.compaction_disabled(cg.as_table_state());
-    }));
+    // truncate_table_on_all_shards() disables compaction for the truncated
+    // tables and views, so we normally expect compaction to be disabled on
+    // this table. But as shown in issue #17543, it is possible that a new
+    // materialized view was created right after truncation started, and it
+    // would not have compaction disabled when this function is called on it.
+    if (!schema()->is_view()) {
+        if (!std::ranges::all_of(compaction_groups(), [this] (const compaction_group& cg) {
+                return _compaction_manager.compaction_disabled(cg.as_table_state()); })) {
+            utils::on_internal_error(fmt::format("compaction not disabled on table {}.{} during TRUNCATE",
+                schema()->ks_name(), schema()->cf_name()));
+        }
+    }
 
     db::replay_position rp;
     struct removed_sstable {
