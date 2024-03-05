@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import ConfigurationException
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
@@ -61,3 +62,30 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
     assert len(rows) == len(keys)
     for r in rows:
         assert r.c == r.pk
+
+
+@pytest.mark.asyncio
+async def test_tablet_degraded_scan_query(manager: ManagerClient):
+    cfg = {'enable_user_defined_functions': False,
+           'experimental_features': ['tablets', 'consistent-topology-changes']}
+    servers = await manager.servers_add(4, config=cfg)
+
+    cql = manager.get_cql()
+    res = await cql.run_async("SELECT data_center FROM system.local")
+    this_dc = res[0].data_center
+
+    await cql.run_async(f"CREATE KEYSPACE test_keyspace WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 3}}")
+    await cql.run_async("CREATE TABLE test_keyspace.test_table (pk int PRIMARY KEY, c int);")
+
+    # Stop all but one node
+    for srv in servers[1:]:
+        await manager.server_stop_gracefully(srv.server_id)
+
+    stmt = "SELECT * FROM test_keyspace.test_table"
+    for cl in [ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE,
+               ConsistencyLevel.TWO, ConsistencyLevel.THREE,
+               ConsistencyLevel.QUORUM, ConsistencyLevel.LOCAL_QUORUM,
+               ConsistencyLevel.ALL]:
+        query = SimpleStatement(stmt, consistency_level=cl)
+        with pytest.raises(NoHostAvailable, match=r"Cannot achieve consistency level for cl \w+. Requires [1-3], alive [0-1]"):
+            await cql.run_async(query)
