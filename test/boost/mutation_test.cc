@@ -1146,6 +1146,40 @@ SEASTAR_TEST_CASE(test_v2_apply_monotonically_is_monotonic_on_alloc_failures) {
     return make_ready_future<>();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_split_mutations) {
+    random_mutation_generator mut_gen1(random_mutation_generator::generate_counters::no);
+    random_mutation_generator mut_gen2(random_mutation_generator::generate_counters::yes);
+    const double fracs[] = {0.1, 0.3, 0.6, 0.8, 2.0};
+    for (unsigned i = 0; i < 100; ++i) {
+        auto& mut_gen = (i & 1) == 0 ? mut_gen1 : mut_gen2;
+        auto s = mut_gen.schema();
+        auto mut = mut_gen();
+        const auto mut_size = mut.memory_usage(*s);
+        for (const auto frac: fracs) {
+            const auto max_size = size_t(double(mut_size) * frac);
+            if (max_size == 0) {
+                continue;
+            }
+            std::vector<mutation> splitted;
+            split_mutation(mut, splitted, max_size / 2).get();
+            BOOST_REQUIRE(!splitted.empty());
+            for (const auto& m: splitted) {
+                BOOST_REQUIRE_EQUAL(m.schema(), s);
+                BOOST_REQUIRE(!m.partition().empty());
+                if (m.memory_usage(*s) > max_size) {
+                    // We don't split rows into cells, so one row can be bigger than the limit.
+                    const auto rows_count = m.partition().row_count() +
+                                            (m.partition().static_row().empty() ? 0 : 1);
+                    BOOST_REQUIRE_EQUAL(rows_count, 1);
+                }
+            }
+            const auto squashed = squash_mutations(splitted);
+            BOOST_REQUIRE_EQUAL(squashed.size(), 1);
+            assert_that(squashed.front()).is_equal_to(mut);
+        }
+    }
+}
+
 SEASTAR_TEST_CASE(test_mutation_diff) {
     return seastar::async([] {
         mutation_application_stats app_stats;
