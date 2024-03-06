@@ -1112,6 +1112,36 @@ void netstats_operation(scylla_rest_client& client, const bpo::variables_map& vm
     fmt::print(std::cout, line_fmt, "Gossip messages", "n/a", 0, 0, 0);
 }
 
+void proxyhistograms_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto read_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/read/moving_average_histogram");
+    const auto write_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/write/moving_average_histogram");
+    const auto range_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/range/moving_average_histogram");
+    const auto cas_read_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/cas_read/moving_average_histogram");
+    const auto cas_write_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/cas_write/moving_average_histogram");
+    const auto view_write_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/view_write/moving_average_histogram");
+
+    fmt::print(std::cout, "proxy histograms\n");
+    fmt::print(std::cout, "{:>10}{:>19}{:>19}{:>19}{:>19}{:>19}{:>19}\n", "Percentile", "Read Latency", "Write Latency", "Range Latency", "CAS Read Latency", "CAS Write Latency", "View Write Latency");
+    fmt::print(std::cout, "{:>10}{:>19}{:>19}{:>19}{:>19}{:>19}{:>19}\n", "", "(micros)", "(micros)", "(micros)", "(micros)", "(micros)", "(micros)");
+    for (const auto percentile : {0.5, 0.75, 0.95, 0.98, 0.99}) {
+        fmt::print(
+                std::cout,
+                "{}%       {:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n",
+                int(percentile * 100),
+                read_hg.value(percentile),
+                write_hg.value(percentile),
+                range_hg.value(percentile),
+                cas_read_hg.value(percentile),
+                cas_write_hg.value(percentile),
+                view_write_hg.value(percentile));
+    }
+    fmt::print(std::cout, "{:<10}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n", "Min", read_hg.min(), write_hg.min(), range_hg.min(),
+            cas_read_hg.min(), cas_write_hg.min(), view_write_hg.min());
+    fmt::print(std::cout, "{:<10}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n", "Max", read_hg.max(), write_hg.max(), range_hg.max(),
+            cas_read_hg.max(), cas_write_hg.max(), view_write_hg.max());
+    fmt::print(std::cout, "\n");
+}
+
 void help_operation(const tool_app_template::config& cfg, const bpo::variables_map& vm) {
     if (vm.count("command")) {
         const auto command = vm["command"].as<sstring>();
@@ -2934,6 +2964,23 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
                 { },
             },
             netstats_operation
+        },
+        {
+            {
+                "proxyhistograms",
+                "Print statistic histograms for network operations",
+R"(
+Provide the latency request that is recorded by the coordinator.
+This command is helpful if you encounter slow node operations.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/proxyhistograms.html
+)",
+                { },
+                {
+                    typed_option<std::vector<sstring>>("table", "<keyspace> <table>, <keyspace>.<table> or <keyspace>-<table>", 2),
+                }
+            },
+            proxyhistograms_operation
         },
         {
             {
