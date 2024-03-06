@@ -3,19 +3,21 @@ set(unstripped_dist_pkg
 add_custom_command(
   OUTPUT ${unstripped_dist_pkg}
   COMMAND scripts/create-relocatable-package.py
-    --build-dir ${CMAKE_BINARY_DIR}
+    --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
     --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
+    --debian-dir ${CMAKE_BINARY_DIR}/debian
     ${unstripped_dist_pkg}
   DEPENDS
     scylla
-    ${CMAKE_BINARY_DIR}/iotune
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
+    ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 add_custom_target(dist-server-deb
   COMMAND reloc/build_deb.sh
     --reloc-pkg ${unstripped_dist_pkg}
-    --builddir ${CMAKE_CURRENT_BINARY_DIR}
+    --builddir ${CMAKE_BINARY_DIR}/$<CONFIG>/debian
   DEPENDS ${unstripped_dist_pkg}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-rpm
@@ -26,33 +28,24 @@ add_custom_target(dist-server-rpm
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 function(add_stripped name)
-  set(output ${name}.stripped)
-  if(TARGET ${name})
-    add_custom_command(
-      OUTPUT
-        ${CMAKE_BINARY_DIR}/${name}.debug
-        ${CMAKE_BINARY_DIR}/${name}.stripped
-      COMMAND ${CMAKE_SOURCE_DIR}/scripts/strip.sh $<TARGET_FILE:${name}>
-      DEPENDS ${name})
-  else()
-    # ${name} must be an absolute path
-    add_custom_command(
-      OUTPUT
-        ${name}.debug
-        ${name}.stripped
-      COMMAND ${CMAKE_SOURCE_DIR}/scripts/strip.sh ${name}
-      DEPENDS ${name})
-  endif()
+  # ${name} must be an absolute path
+  add_custom_command(
+    OUTPUT
+      ${name}.debug
+      ${name}.stripped
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/strip.sh ${name}
+    DEPENDS ${name})
 endfunction()
 
-add_stripped(scylla)
+add_stripped("${CMAKE_BINARY_DIR}/$<CONFIG>/scylla")
 
 # app_iotune is located in seastar/apps/iotune
+set(iotune_path "${CMAKE_BINARY_DIR}/$<CONFIG>/iotune")
 add_custom_command(
-  OUTPUT ${CMAKE_BINARY_DIR}/iotune
-  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:app_iotune> ${CMAKE_BINARY_DIR}/iotune
+  OUTPUT "${iotune_path}"
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:app_iotune> "${iotune_path}"
   DEPENDS app_iotune)
-add_stripped(${CMAKE_BINARY_DIR}/iotune)
+add_stripped("${iotune_path}")
 
 find_program(TAR_COMMAND tar
   REQUIRED)
@@ -76,10 +69,10 @@ add_custom_command(
 add_stripped(${CMAKE_BINARY_DIR}/node_exporter/node_exporter)
 
 add_custom_command(
-  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/debian
+  OUTPUT ${CMAKE_BINARY_DIR}/debian
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/debian/debian_files_gen.py
     --build-dir ${CMAKE_BINARY_DIR}
-    --output-dir ${CMAKE_CURRENT_BINARY_DIR}/debian
+    --output-dir ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 set(stripped_dist_pkg
@@ -90,13 +83,15 @@ add_custom_command(
   COMMAND
     ${CMAKE_SOURCE_DIR}/scripts/create-relocatable-package.py
       --stripped
-      --build-dir ${CMAKE_BINARY_DIR}
+      --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
       --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
+      --debian-dir ${CMAKE_BINARY_DIR}/debian
       ${stripped_dist_pkg}
   DEPENDS
-    ${CMAKE_BINARY_DIR}/scylla.stripped
-    ${CMAKE_BINARY_DIR}/iotune.stripped
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/scylla.stripped
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune.stripped
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter.stripped
+    ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-tar
   DEPENDS ${stripped_dist_pkg})
