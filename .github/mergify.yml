@@ -1,0 +1,47 @@
+pull_request_rules:
+  - name: Automate backport pull request 5.2
+    conditions:
+      - or:
+        - closed
+        - merged
+      - or:
+          - base=master
+          - base=next
+      - label=backport/5.2 # The PR must have this label to trigger the backport
+      - label=promoted-to-master
+    actions:
+      copy:
+        title: "[Backport 5.2] {{ title }}"
+        body: |
+          {{ body }}
+
+          {% for c in commits %}
+          (cherry picked from commit {{ c.sha }})
+          {% endfor %}
+        branches:
+          - next-5.2
+        assignees:
+          - "{{ author }}"
+  - name: Automate backport pull request 5.4
+    conditions:
+      - or:
+        - closed
+        - merged
+      - or:
+          - base=master
+          - base=next
+      - label=backport/5.4 # The PR must have this label to trigger the backport
+      - label=promoted
+    actions:
+      copy:
+        title: "[Backport 5.4] {{ title }}"
+        body: |
+          {{ body }}
+
+          {% for c in commits %}
+          (cherry picked from commit {{ c.sha }})
+          {% endfor %}
+        branches:
+          - next-5.4
+        assignees:
+          - "{{ author }}"
