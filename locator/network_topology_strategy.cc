@@ -198,9 +198,7 @@ public:
         };
 
         // Create a data_center_endpoints object for each non-empty DC.
-        for (auto& p : _dc_rep_factor) {
-            auto& dc = p.first;
-            auto rf = p.second;
+        for (auto& [dc, rf] : _dc_rep_factor) {
             auto node_count = size_for(_all_endpoints, dc);
 
             if (rf == 0 || node_count == 0) {
@@ -235,9 +233,9 @@ public:
             auto i = dc_endpoints.find(dc);
             return i != dc_endpoints.end() ? i->second.size() : size_t(0);
         };
-        for (const auto& p : dc_rf) {
-            if (p.second > endpoints_in(p.first)) {
-                throw exceptions::configuration_exception(fmt::format("Datacenter {} doesn't have enough nodes for replication_factor={}", p.first, p.second));
+        for (const auto& [dc, rf] : dc_rf) {
+            if (rf > endpoints_in(dc)) {
+                throw exceptions::configuration_exception(fmt::format("Datacenter {} doesn't have enough nodes for replication_factor={}", dc, rf));
             }
         }
     }
