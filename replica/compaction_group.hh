@@ -253,6 +253,7 @@ public:
 
     future<> for_each_storage_group_gently(std::function<future<>(size_t, storage_group&)> f);
     void for_each_storage_group(std::function<void(size_t, storage_group&)> f) const;
+    void remove_storage_group(size_t id);
     // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
     storage_group* storage_group_for_id(const schema_ptr&, size_t i) const;
 

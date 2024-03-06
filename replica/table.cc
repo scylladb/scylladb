@@ -561,10 +561,18 @@ void storage_group_manager::for_each_storage_group(std::function<void(size_t, st
     }
 }
 
+void storage_group_manager::remove_storage_group(size_t id) {
+    if (auto it = _storage_groups.find(id); it != _storage_groups.end()) {
+        _storage_groups.erase(it);
+    } else {
+        throw std::out_of_range(format("remove_storage_group: storage group with id={} not found", id));
+    }
+}
+
 storage_group* storage_group_manager::storage_group_for_id(const schema_ptr& s, size_t i) const {
     auto it = _storage_groups.find(i);
     if (it == _storage_groups.end()) [[unlikely]] {
-        on_internal_error(tlogger, format("Storage wasn't found for tablet {} of table {}.{}", i, s->ks_name(), s->cf_name()));
+        throw std::out_of_range(format("Storage wasn't found for tablet {} of table {}.{}", i, s->ks_name(), s->cf_name()));
     }
     return it->second.get();
 }
@@ -674,10 +682,9 @@ public:
             auto shard = tmap.get_shard(tid, _my_host_id);
             if (shard && *shard == this_shard_id()) {
                 tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
+                auto cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
+                ret[tid.value()] = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
             }
-            // FIXME: don't allocate compaction groups for tablets that aren't present in this shard.
-            auto cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
-            ret[tid.value()] = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
         }
         _storage_groups = std::move(ret);
     }
@@ -1014,11 +1021,14 @@ void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) no
 
 future<>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy, bool trigger_compaction) {
+    compaction_group& cg = compaction_group_for_sstable(sst);
+    // Hold gate to make share compaction group is alive.
+    auto holder = cg.async_gate().hold();
+
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
     co_return co_await get_row_cache().invalidate(row_cache::external_updater([&] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
-        compaction_group& cg = compaction_group_for_sstable(sst);
         if (!offstrategy) {
             add_sstable(cg, sst);
         } else {
@@ -2109,6 +2119,25 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
         tlogger.info0("Detected tablet split for table {}.{}, increasing from {} to {} tablets",
                         schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
         co_await handle_tablet_split_completion(*old_tablet_map, *new_tablet_map);
+        co_return;
+    }
+
+    // Allocate storage group if tablet is migrating in.
+    auto this_replica = locator::tablet_replica{
+        .host = erm.get_token_metadata().get_my_id(),
+        .shard = this_shard_id()
+    };
+    auto tablet_migrates_in = [this_replica] (locator::tablet_transition_info& transition_info) {
+        return transition_info.stage == locator::tablet_transition_stage::allow_write_both_read_old && transition_info.pending_replica == this_replica;
+    };
+    for (auto& transition : new_tablet_map->transitions()) {
+        auto tid = transition.first;
+        auto transition_info = transition.second;
+        if (!_storage_groups.contains(tid.value()) && tablet_migrates_in(transition_info)) {
+            auto range = new_tablet_map->get_token_range(tid);
+            auto cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
+            _storage_groups[tid.value()] = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
+        }
     }
     co_return;
 }
@@ -3426,23 +3455,27 @@ future<> compaction_group::cleanup() {
     _t._cache.refresh_snapshot();
 }
 
-future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
-    auto holder = async_gate().hold();
-
-    auto* sg = storage_group_for_id(tid.value());
-
+future<> table::clear_inactive_reads_for_tablet(database& db, storage_group* sg) {
     for (auto& cg_ptr : sg->compaction_groups()) {
-        if (!cg_ptr) {
-            throw std::runtime_error(format("Cannot cleanup tablet {} of table {}.{} because it is not allocated in this shard",
-                                            tid, _schema->ks_name(), _schema->cf_name()));
-        }
-
         co_await db.clear_inactive_reads_for_tablet(_schema->id(), cg_ptr->token_range());
+    }
+}
 
-        // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
-        // FIXME: to be able to stop group and provide guarantee above, we must first be able to reallocate a new group if tablet is migrated back.
-        //co_await _cg.stop();
+future<> table::stop_compaction_groups(storage_group* sg) {
+    // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
+    for (auto& cg_ptr : sg->compaction_groups()) {
+        co_await cg_ptr->stop();
+    }
+}
+
+future<> table::flush_compaction_groups(storage_group* sg) {
+    for (auto& cg_ptr : sg->compaction_groups()) {
         co_await cg_ptr->flush();
+    }
+}
+
+future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group* sg) {
+    for (auto& cg_ptr : sg->compaction_groups()) {
         co_await cg_ptr->cleanup();
         // FIXME: at this point _highest_rp might be greater than the replay_position of the last cleaned mutation,
         // and can cover some mutations which weren't cleaned, causing them to be lost during replay.
@@ -3460,8 +3493,29 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     }
 
     tlogger.info("Cleaned up tablet {} of table {}.{} successfully.", tid, _schema->ks_name(), _schema->cf_name());
+}
 
-    // FIXME: Deallocate compaction group in this shard
+future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
+    auto holder = async_gate().hold();
+    rwlock::holder exclusive_lock = co_await _sg_manager->get_rwlock().hold_write_lock();
+    auto* sg = storage_group_for_id(tid.value());
+
+    co_await clear_inactive_reads_for_tablet(db, sg);
+    // compaction_group::stop takes care of flushing.
+    co_await stop_compaction_groups(sg);
+    co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
+    _sg_manager->remove_storage_group(tid.value());
+}
+
+future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
+    auto holder = async_gate().hold();
+    // Hold shared lock to keep storage group alive.
+    rwlock::holder shared_lock = co_await _sg_manager->get_rwlock().hold_read_lock();
+    auto* sg = storage_group_for_id(tid.value());
+
+    co_await clear_inactive_reads_for_tablet(db, sg);
+    co_await flush_compaction_groups(sg);
+    co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
 }
 
 } // namespace replica

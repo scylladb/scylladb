@@ -838,7 +838,15 @@ public:
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
     future<> update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
+private:
+    future<> clear_inactive_reads_for_tablet(database& db, storage_group* sg);
+    future<> stop_compaction_groups(storage_group* sg);
+    future<> flush_compaction_groups(storage_group* sg);
+    future<> cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group* sg);
+public:
     future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id);
+    // For tests only.
+    future<> cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     shard_id shard_of(const mutation& m) const {
