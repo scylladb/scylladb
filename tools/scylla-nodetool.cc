@@ -962,8 +962,8 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         repair_params["primaryRange"] = "true";
     }
 
-    auto log = [&] (const char* fmt, auto&&... param) {
-        const auto msg = fmt::format(fmt::runtime(fmt), param...);
+    auto log = [&]<typename... Args> (fmt::format_string<Args...> fmt, Args&&... param) {
+        const auto msg = fmt::format(fmt, param...);
         using clock = std::chrono::system_clock;
         const auto n = clock::now();
         const auto t = clock::to_time_t(n);
