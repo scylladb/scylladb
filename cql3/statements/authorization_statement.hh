@@ -35,6 +35,11 @@ protected:
     static void maybe_correct_resource(auth::resource&, const service::client_state&, query_processor&);
 };
 
+class authorization_altering_statement : public authorization_statement {
+public:
+    virtual bool needs_guard(query_processor& qp) const override;
+};
+
 }
 
 }

@@ -21,6 +21,7 @@ static const class_registrator<
         role_manager,
         maintenance_socket_role_manager,
         cql3::query_processor&,
+        ::service::raft_group0_client&,
         ::service::migration_manager&> registration(sstring{maintenance_socket_role_manager_name});
 
 

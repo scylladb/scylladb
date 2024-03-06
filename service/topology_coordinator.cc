@@ -14,6 +14,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+#include "auth/service.hh"
 #include "cdc/generation.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
@@ -2321,9 +2322,13 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     rtlogger.info("waiting for all nodes to finish upgrade to raft schema");
     release_guard(std::move(guard));
     co_await _group0.wait_for_all_nodes_to_finish_upgrade(_as);
-    guard = co_await start_operation();
+
+    rtlogger.info("migrating system_auth keyspace data");
+    co_await auth::migrate_to_auth_v2(_sys_ks.query_processor(), _group0.client(),
+            [this] (abort_source*) { return start_operation();}, _as);
 
     rtlogger.info("building initial raft topology state and CDC generation");
+    guard = co_await start_operation();
 
     auto get_application_state = [&] (locator::host_id host_id, gms::inet_address ep, const gms::application_state_map& epmap, gms::application_state app_state) -> sstring {
         const auto it = epmap.find(app_state);

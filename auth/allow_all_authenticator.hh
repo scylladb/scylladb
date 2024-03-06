@@ -28,7 +28,7 @@ extern const std::string_view allow_all_authenticator_name;
 
 class allow_all_authenticator final : public authenticator {
 public:
-    allow_all_authenticator(cql3::query_processor&, ::service::migration_manager&) {
+    allow_all_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&) {
     }
 
     virtual future<> start() override {

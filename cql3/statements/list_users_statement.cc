@@ -29,23 +29,23 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::list_users_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     static const sstring virtual_table_name("users");
 
-    static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
+    const auto make_column_spec = [auth_ks = auth::get_auth_ks_name(qp)](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
         return make_lw_shared<column_specification>(
-            auth::meta::AUTH_KS,
+            auth_ks,
             virtual_table_name,
             ::make_shared<column_identifier>(name, true),
             ty);
     };
 
-    static thread_local const auto metadata = ::make_shared<cql3::metadata>(
+    auto metadata = ::make_shared<cql3::metadata>(
         std::vector<lw_shared_ptr<column_specification>>{
                 make_column_spec("name", utf8_type),
                 make_column_spec("super", boolean_type)});
 
-    static const auto make_results = [](const auth::service& as, std::unordered_set<sstring>&& roles) {
+    auto make_results = [metadata = std::move(metadata)](const auth::service& as, std::unordered_set<sstring>&& roles) mutable {
         using cql_transport::messages::result_message;
 
-        auto results = std::make_unique<result_set>(metadata);
+        auto results = std::make_unique<result_set>(std::move(metadata));
 
         std::vector<sstring> sorted_roles(roles.cbegin(), roles.cend());
         std::sort(sorted_roles.begin(), sorted_roles.end());
@@ -73,14 +73,14 @@ cql3::statements::list_users_statement::execute(query_processor& qp, service::qu
     const auto& cs = state.get_client_state();
     const auto& as = *cs.get_auth_service();
 
-    return auth::has_superuser(as, *cs.user()).then([&cs, &as](bool has_superuser) {
+    return auth::has_superuser(as, *cs.user()).then([&cs, &as, make_results = std::move(make_results)](bool has_superuser) mutable {
         if (has_superuser) {
-            return as.underlying_role_manager().query_all().then([&as](std::unordered_set<sstring> roles) {
+            return as.underlying_role_manager().query_all().then([&as, make_results = std::move(make_results)](std::unordered_set<sstring> roles) mutable {
                 return make_results(as, std::move(roles));
             });
         }
 
-        return auth::get_roles(as, *cs.user()).then([&as](std::unordered_set<sstring> granted_roles) {
+        return auth::get_roles(as, *cs.user()).then([&as, make_results = std::move(make_results)](std::unordered_set<sstring> granted_roles) mutable {
             return make_results(as, std::move(granted_roles));
         });
     });

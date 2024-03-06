@@ -314,6 +314,10 @@ public:
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
     static query_mutations(distributed<replica::database>& db,
+                    schema_ptr schema);
+
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+    static query_mutations(distributed<replica::database>& db,
                     const sstring& ks_name,
                     const sstring& cf_name);
 
@@ -604,6 +608,9 @@ public:
 
     const replica::database& local_db() const noexcept {
         return _db;
+    }
+    cql3::query_processor& query_processor() const noexcept {
+        return _qp;
     }
 }; // class system_keyspace
 

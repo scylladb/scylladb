@@ -285,12 +285,12 @@ future<> list_roles_statement::check_access(query_processor& qp, const service::
 }
 
 future<result_message_ptr>
-list_roles_statement::execute(query_processor&, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
+list_roles_statement::execute(query_processor& qp, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
     static const sstring virtual_table_name("roles");
 
-    static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
+    const auto make_column_spec = [auth_ks = auth::get_auth_ks_name(qp)](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
         return make_lw_shared<column_specification>(
-                auth::meta::AUTH_KS,
+                auth_ks,
                 virtual_table_name,
                 ::make_shared<column_identifier>(name, true),
                 ty);
@@ -298,18 +298,18 @@ list_roles_statement::execute(query_processor&, service::query_state& state, con
 
     static const thread_local auto custom_options_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
 
-    static const thread_local auto metadata = ::make_shared<cql3::metadata>(
+    auto metadata = ::make_shared<cql3::metadata>(
             std::vector<lw_shared_ptr<column_specification>>{
                     make_column_spec("role", utf8_type),
                     make_column_spec("super", boolean_type),
                     make_column_spec("login", boolean_type),
                     make_column_spec("options", custom_options_type)});
 
-    static const auto make_results = [](
+    auto make_results = [metadata = std::move(metadata)](
             auth::role_manager& rm,
             const auth::authenticator& a,
-            auth::role_set&& roles) -> future<result_message_ptr> {
-        auto results = std::make_unique<result_set>(metadata);
+            auth::role_set&& roles) mutable -> future<result_message_ptr> {
+        auto results = std::make_unique<result_set>(std::move(metadata));
 
         if (roles.empty()) {
             return make_ready_future<result_message_ptr>(
@@ -352,7 +352,7 @@ list_roles_statement::execute(query_processor&, service::query_state& state, con
     const auto& cs = state.get_client_state();
     const auto& as = *cs.get_auth_service();
 
-    return auth::has_superuser(as, *cs.user()).then([this, &cs, &as](bool super) {
+    return auth::has_superuser(as, *cs.user()).then([this, &cs, &as, make_results = std::move(make_results)](bool super) mutable {
         auto& rm = as.underlying_role_manager();
         const auto& a = as.underlying_authenticator();
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
@@ -362,20 +362,20 @@ list_roles_statement::execute(query_processor&, service::query_state& state, con
             // only the roles granted to them.
             return cs.check_has_permission({
                     auth::permission::DESCRIBE,
-                    auth::root_role_resource()}).then([&cs, &rm, &a, query_mode](bool has_describe) {
+                    auth::root_role_resource()}).then([&cs, &rm, &a, query_mode, make_results = std::move(make_results)](bool has_describe) mutable {
                 if (has_describe) {
-                    return rm.query_all().then([&rm, &a](auto&& roles) {
+                    return rm.query_all().then([&rm, &a, make_results = std::move(make_results)](auto&& roles) mutable {
                         return make_results(rm, a, std::move(roles));
                     });
                 }
 
-                return rm.query_granted(*cs.user()->name, query_mode).then([&rm, &a](auth::role_set roles) {
+                return rm.query_granted(*cs.user()->name, query_mode).then([&rm, &a, make_results = std::move(make_results)](auth::role_set roles) mutable {
                     return make_results(rm, a, std::move(roles));
                 });
             });
         }
 
-        return rm.query_granted(*_grantee, query_mode).then([&rm, &a](auth::role_set roles) {
+        return rm.query_granted(*_grantee, query_mode).then([&rm, &a, make_results = std::move(make_results)](auth::role_set roles) mutable {
             return make_results(rm, a, std::move(roles));
         });
     }).handle_exception_type([](const auth::nonexistant_role& e) {

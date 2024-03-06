@@ -16,6 +16,7 @@ class query_processor;
 
 namespace service {
 class migration_manager;
+class raft_group0_client;
 }
 
 namespace auth {
@@ -24,7 +25,7 @@ extern const std::string_view allow_all_authorizer_name;
 
 class allow_all_authorizer final  : public authorizer {
 public:
-    allow_all_authorizer(cql3::query_processor&, ::service::migration_manager&) {
+    allow_all_authorizer(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&) {
     }
 
     virtual future<> start() override {

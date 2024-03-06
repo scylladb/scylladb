@@ -23,6 +23,7 @@
 #include "cql3/cql_statement.hh"
 #include "exceptions/exceptions.hh"
 #include "service/migration_listener.hh"
+#include "timestamp.hh"
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
@@ -30,6 +31,7 @@
 #include "lang/wasm.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
+#include "db/system_auth_keyspace.hh"
 
 
 namespace service {
@@ -173,6 +175,8 @@ public:
     }
 
     wasm::manager& wasm() { return _wasm; }
+
+    db::system_auth_keyspace::version_t auth_version = db::system_auth_keyspace::version_t::v1;
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
         if (user) {
@@ -371,6 +375,18 @@ public:
     execute_internal(const sstring& query_string, cache_internal cache) {
         return execute_internal(query_string, db::consistency_level::ONE, {}, cache);
     }
+
+    // Obtains mutations from query. For internal usage, most notable
+    // use-case is generating data for group0 announce(). Note that this
+    // function enables putting multiple CQL queries into a single raft command
+    // and vice versa, split mutations from one query into separate commands.
+    // It supports write-only queries, read-modified-writes not supported.
+    future<std::vector<mutation>> get_mutations_internal(
+        const sstring query_string,
+        service::query_state& query_state,
+        api::timestamp_type timestamp,
+        std::vector<data_value_or_unset> values);
+
     future<::shared_ptr<untyped_result_set>> execute_with_params(
             statements::prepared_statement::checked_weak_ptr p,
             db::consistency_level,
@@ -451,7 +467,7 @@ private:
 
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,
-            const data_value_list& values,
+            const std::vector<data_value_or_unset>& values,
             db::consistency_level,
             int32_t page_size = -1) const;
 

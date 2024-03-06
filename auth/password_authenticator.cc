@@ -46,6 +46,7 @@ static const class_registrator<
         authenticator,
         password_authenticator,
         cql3::query_processor&,
+        ::service::raft_group0_client&,
         ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
 
 static thread_local auto rng_for_salt = std::default_random_engine(std::random_device{}());
@@ -61,8 +62,9 @@ std::string password_authenticator::default_superuser(const db::config& cfg) {
 password_authenticator::~password_authenticator() {
 }
 
-password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::migration_manager& mm)
+password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
     : _qp(qp)
+    , _group0_client(g0)
     , _migration_manager(mm)
     , _stopped(make_ready_future<>()) 
     , _superuser(default_superuser(qp.db().get_config()))
@@ -72,23 +74,23 @@ static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
     return !row.get_or<sstring>(SALTED_HASH, "").empty();
 }
 
-static const sstring& update_row_query() {
-    static const sstring update_row_query = format("UPDATE {} SET {} = ? WHERE {} = ?",
-            meta::roles_table::qualified_name,
+sstring password_authenticator::update_row_query() const {
+    return format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
+            get_auth_ks_name(_qp),
+            meta::roles_table::name,
             SALTED_HASH,
             meta::roles_table::role_col_name);
-    return update_row_query;
 }
 
 static const sstring legacy_table_name{"credentials"};
 
 bool password_authenticator::legacy_metadata_exists() const {
-    return _qp.db().has_schema(meta::AUTH_KS, legacy_table_name);
+    return _qp.db().has_schema(meta::legacy::AUTH_KS, legacy_table_name);
 }
 
 future<> password_authenticator::migrate_legacy_metadata() const {
     plogger.info("Starting migration of legacy authentication metadata.");
-    static const sstring query = format("SELECT * FROM {}.{}", meta::AUTH_KS, legacy_table_name);
+    static const sstring query = format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, legacy_table_name);
 
     return _qp.execute_internal(
             query,
@@ -98,9 +100,9 @@ future<> password_authenticator::migrate_legacy_metadata() const {
         return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
             auto username = row.get_as<sstring>("username");
             auto salted_hash = row.get_as<sstring>(SALTED_HASH);
-
+            static const auto query = update_row_query();
             return _qp.execute_internal(
-                    update_row_query(),
+                    query,
                     consistency_for_user(username),
                     internal_distributed_query_state(),
                     {std::move(salted_hash), username},
@@ -115,24 +117,30 @@ future<> password_authenticator::migrate_legacy_metadata() const {
 }
 
 future<> password_authenticator::create_default_if_missing() {
-    return default_role_row_satisfies(_qp, &has_salted_hash, _superuser).then([this](bool exists) {
-        if (!exists) {
-            std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
-            if (salted_pwd.empty()) {
-                salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt);
-            }
-            return _qp.execute_internal(
-                    update_row_query(),
-                    db::consistency_level::QUORUM,
-                    internal_distributed_query_state(),
-                    {salted_pwd, _superuser},
-                    cql3::query_processor::cache_internal::no).then([](auto&&) {
-                plogger.info("Created default superuser authentication record.");
-            });
-        }
-
-        return make_ready_future<>();
-    });
+    const auto exists = co_await default_role_row_satisfies(_qp, &has_salted_hash, _superuser);
+    if (exists) {
+        co_return;
+    }
+    std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
+    if (salted_pwd.empty()) {
+        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt);
+    }
+    const auto query = update_row_query();
+    if (legacy_mode(_qp)) {
+        co_await _qp.execute_internal(
+            query,
+            db::consistency_level::QUORUM,
+            internal_distributed_query_state(),
+            {salted_pwd, _superuser},
+            cql3::query_processor::cache_internal::no).then([](auto&&) {
+            plogger.info("Created default superuser authentication record.");
+        });
+    } else {
+        co_await announce_mutations(_qp, _group0_client, query,
+            {salted_pwd, _superuser}, &_as).then([]() {
+            plogger.info("Created default superuser authentication record.");
+        });
+    }
 }
 
 future<> password_authenticator::start() {
@@ -207,93 +215,104 @@ future<authenticated_user> password_authenticator::authenticate(
         throw exceptions::authentication_exception(format("Required key '{}' is missing", PASSWORD_KEY));
     }
 
-    auto& username = credentials.at(USERNAME_KEY);
-    auto& password = credentials.at(PASSWORD_KEY);
+    const sstring username = credentials.at(USERNAME_KEY);
+    const sstring password = credentials.at(PASSWORD_KEY);
 
     // Here was a thread local, explicit cache of prepared statement. In normal execution this is
     // fine, but since we in testing set up and tear down system over and over, we'd start using
     // obsolete prepared statements pretty quickly.
     // Rely on query processing caching statements instead, and lets assume
     // that a map lookup string->statement is not gonna kill us much.
-    return futurize_invoke([this, username, password] {
-        static const sstring query = format("SELECT {} FROM {} WHERE {} = ?",
+    const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ?",
                 SALTED_HASH,
-                meta::roles_table::qualified_name,
+                get_auth_ks_name(_qp),
+                meta::roles_table::name,
                 meta::roles_table::role_col_name);
-
-        return _qp.execute_internal(
+    try {
+        const auto res = co_await _qp.execute_internal(
                 query,
                 consistency_for_user(username),
                 internal_distributed_query_state(),
                 {username},
                 cql3::query_processor::cache_internal::yes);
-    }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
-        try {
-            auto res = f.get();
-            auto salted_hash = std::optional<sstring>();
-            if (!res->empty()) {
-                salted_hash = res->one().get_opt<sstring>(SALTED_HASH);
-            }
-            if (!salted_hash || !passwords::check(password, *salted_hash)) {
-                throw exceptions::authentication_exception("Username and/or password are incorrect");
-            }
-            return make_ready_future<authenticated_user>(username);
-        } catch (std::system_error &) {
-            std::throw_with_nested(exceptions::authentication_exception("Could not verify password"));
-        } catch (exceptions::request_execution_exception& e) {
-            std::throw_with_nested(exceptions::authentication_exception(e.what()));
-        } catch (exceptions::authentication_exception& e) {
-            std::throw_with_nested(e);
-        } catch (exceptions::unavailable_exception& e) {
-            std::throw_with_nested(exceptions::authentication_exception(e.get_message()));
-        } catch (...) {
-            std::throw_with_nested(exceptions::authentication_exception("authentication failed"));
+
+        auto salted_hash = std::optional<sstring>();
+        if (!res->empty()) {
+            salted_hash = res->one().get_opt<sstring>(SALTED_HASH);
         }
-    });
+        if (!salted_hash || !passwords::check(password, *salted_hash)) {
+            throw exceptions::authentication_exception("Username and/or password are incorrect");
+        }
+        co_return username;
+    } catch (std::system_error &) {
+        std::throw_with_nested(exceptions::authentication_exception("Could not verify password"));
+    } catch (exceptions::request_execution_exception& e) {
+        std::throw_with_nested(exceptions::authentication_exception(e.what()));
+    } catch (exceptions::authentication_exception& e) {
+        std::throw_with_nested(e);
+    } catch (exceptions::unavailable_exception& e) {
+        std::throw_with_nested(exceptions::authentication_exception(e.get_message()));
+    } catch (...) {
+        std::throw_with_nested(exceptions::authentication_exception("authentication failed"));
+    }
 }
 
 future<> password_authenticator::create(std::string_view role_name, const authentication_options& options) {
     if (!options.password) {
-        return make_ready_future<>();
+        co_return;
     }
-
-    return _qp.execute_internal(
-            update_row_query(),
-            consistency_for_user(role_name),
-            internal_distributed_query_state(),
-            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)},
-            cql3::query_processor::cache_internal::no).discard_result();
+    const auto query = update_row_query();
+    if (legacy_mode(_qp)) {
+        co_await _qp.execute_internal(
+                query,
+                consistency_for_user(role_name),
+                internal_distributed_query_state(),
+                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)},
+                cql3::query_processor::cache_internal::no).discard_result();
+    } else {
+        co_await announce_mutations(_qp, _group0_client, query,
+                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}, &_as);
+    }
 }
 
 future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options) {
     if (!options.password) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    static const sstring query = format("UPDATE {} SET {} = ? WHERE {} = ?",
-            meta::roles_table::qualified_name,
+    const sstring query = format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
+            get_auth_ks_name(_qp),
+            meta::roles_table::name,
             SALTED_HASH,
             meta::roles_table::role_col_name);
-
-    return _qp.execute_internal(
-            query,
-            consistency_for_user(role_name),
-            internal_distributed_query_state(),
-            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)},
-            cql3::query_processor::cache_internal::no).discard_result();
+    if (legacy_mode(_qp)) {
+        co_await _qp.execute_internal(
+                query,
+                consistency_for_user(role_name),
+                internal_distributed_query_state(),
+                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)},
+                cql3::query_processor::cache_internal::no).discard_result();
+    } else {
+        co_await announce_mutations(_qp, _group0_client, query,
+            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}, &_as);
+    }
 }
 
 future<> password_authenticator::drop(std::string_view name) {
-    static const sstring query = format("DELETE {} FROM {} WHERE {} = ?",
+    const sstring query = format("DELETE {} FROM {}.{} WHERE {} = ?",
             SALTED_HASH,
-            meta::roles_table::qualified_name,
+            get_auth_ks_name(_qp),
+            meta::roles_table::name,
             meta::roles_table::role_col_name);
-
-    return _qp.execute_internal(
-            query, consistency_for_user(name),
-            internal_distributed_query_state(),
-            {sstring(name)},
-            cql3::query_processor::cache_internal::no).discard_result();
+    if (legacy_mode(_qp)) {
+        co_await _qp.execute_internal(
+                query, consistency_for_user(name),
+                internal_distributed_query_state(),
+                {sstring(name)},
+                cql3::query_processor::cache_internal::no).discard_result();
+    } else {
+        co_await announce_mutations(_qp, _group0_client, query, {sstring(name)}, &_as);
+    }
 }
 
 future<custom_options> password_authenticator::query_custom_options(std::string_view role_name) const {
@@ -301,7 +320,7 @@ future<custom_options> password_authenticator::query_custom_options(std::string_
 }
 
 const resource_set& password_authenticator::protected_resources() const {
-    static const resource_set resources({make_data_resource(meta::AUTH_KS, meta::roles_table::name)});
+    static const resource_set resources({make_data_resource(meta::legacy::AUTH_KS, meta::roles_table::name)});
     return resources;
 }
 

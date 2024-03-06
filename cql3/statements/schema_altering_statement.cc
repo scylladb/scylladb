@@ -21,17 +21,17 @@ namespace statements {
 schema_altering_statement::schema_altering_statement(timeout_config_selector timeout_selector)
     : cf_statement(cf_name())
     , cql_statement_no_metadata(timeout_selector)
-    , _is_column_family_level{false}
-{
-  needs_guard = true;
+    , _is_column_family_level{false} {
 }
 
 schema_altering_statement::schema_altering_statement(cf_name name, timeout_config_selector timeout_selector)
     : cf_statement{std::move(name)}
     , cql_statement_no_metadata(timeout_selector)
-    , _is_column_family_level{true}
-{
-  needs_guard = true;
+    , _is_column_family_level{true} {
+}
+
+bool schema_altering_statement::needs_guard(query_processor& qp) const {
+    return true;
 }
 
 future<> schema_altering_statement::grant_permissions_to_creator(const service::client_state&) const {

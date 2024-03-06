@@ -50,15 +50,21 @@ public:
     private:
         const client_state* _cs;
         seastar::sharded<auth::service>* _auth_service;
-        client_state_for_another_shard(const client_state* cs, seastar::sharded<auth::service>* auth_service) : _cs(cs), _auth_service(auth_service) {}
+        seastar::sharded<qos::service_level_controller>* _sl_controller;
+        client_state_for_another_shard(const client_state* cs,
+            seastar::sharded<auth::service>* auth_service,
+            seastar::sharded<qos::service_level_controller>* sl_controller)
+            : _cs(cs), _auth_service(auth_service), _sl_controller(sl_controller) {}
         friend client_state;
     public:
         client_state get() const {
-            return client_state(_cs, _auth_service);
+            return client_state(_cs, _auth_service, _sl_controller);
         }
     };
 private:
-    client_state(const client_state* cs, seastar::sharded<auth::service>* auth_service)
+    client_state(const client_state* cs,
+        seastar::sharded<auth::service>* auth_service,
+        seastar::sharded<qos::service_level_controller>* sl_controller)
             : _keyspace(cs->_keyspace)
             , _user(cs->_user)
             , _auth_state(cs->_auth_state)
@@ -66,6 +72,7 @@ private:
             , _is_thrift(cs->_is_thrift)
             , _remote_address(cs->_remote_address)
             , _auth_service(auth_service ? &auth_service->local() : nullptr)
+            , _sl_controller(sl_controller ? &sl_controller->local() : nullptr)
             , _default_timeout_config(cs->_default_timeout_config)
             , _timeout_config(cs->_timeout_config)
             , _enabled_protocol_extensions(cs->_enabled_protocol_extensions)
@@ -172,7 +179,7 @@ public:
     gms::inet_address get_client_address() const {
         return gms::inet_address(_remote_address);
     }
-    
+
     ::in_port_t get_client_port() const {
         return _remote_address.port();
     }
@@ -377,7 +384,9 @@ public:
     }
 
     client_state_for_another_shard move_to_other_shard() {
-        return client_state_for_another_shard(this, _auth_service ? &_auth_service->container() : nullptr);
+        return client_state_for_another_shard(this,
+            _auth_service ? &_auth_service->container() : nullptr,
+            _sl_controller ? &_sl_controller->container() : nullptr);
     }
 
 #if 0

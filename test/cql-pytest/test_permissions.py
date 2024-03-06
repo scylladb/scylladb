@@ -151,7 +151,7 @@ def test_udf_permissions_serialization(cql):
                     for permission in permissions:
                         cql.execute(f"GRANT {permission} ON {resource} TO {user}")
 
-                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM system_auth.role_permissions")}
+                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM system_auth_v2.role_permissions")}
                 assert permissions['functions'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
                 assert permissions[f'functions/{keyspace}'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
                 assert permissions[f'functions/{keyspace}/{div_fun}[org.apache.cassandra.db.marshal.LongType^org.apache.cassandra.db.marshal.Int32Type]'] == set(['ALTER', 'AUTHORIZE', 'DROP', 'EXECUTE'])

@@ -14,6 +14,7 @@
 
 #include "db/consistency_level_type.hh"
 #include "auth/authenticator.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace db {
     class config;
@@ -35,16 +36,17 @@ extern const std::string_view password_authenticator_name;
 
 class password_authenticator : public authenticator {
     cql3::query_processor& _qp;
+    ::service::raft_group0_client& _group0_client;
     ::service::migration_manager& _migration_manager;
     future<> _stopped;
-    seastar::abort_source _as;
+    abort_source _as;
     std::string _superuser;
 
 public:
     static db::consistency_level consistency_for_user(std::string_view role_name);
     static std::string default_superuser(const db::config&);
 
-    password_authenticator(cql3::query_processor&, ::service::migration_manager&);
+    password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
 
     ~password_authenticator();
 
@@ -80,6 +82,8 @@ private:
     future<> migrate_legacy_metadata() const;
 
     future<> create_default_if_missing();
+
+    sstring update_row_query() const;
 };
 
 }

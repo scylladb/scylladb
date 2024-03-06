@@ -310,8 +310,8 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
         }
     }
 
-    auto cache_getter = [&proxy = _proxy] (std::string username) {
-        return get_key_from_roles(proxy, std::move(username));
+    auto cache_getter = [&proxy = _proxy, &as = _auth_service] (std::string username) {
+        return get_key_from_roles(proxy, as, std::move(username));
     };
     return _key_cache.get_ptr(user, cache_getter).then([this, &req, &content,
                                                     user = std::move(user),

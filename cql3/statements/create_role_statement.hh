@@ -22,7 +22,7 @@ class query_processor;
 
 namespace statements {
 
-class create_role_statement final : public authentication_statement {
+class create_role_statement final : public authentication_altering_statement {
     sstring _role;
 
     role_options _options;

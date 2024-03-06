@@ -11,6 +11,8 @@
 #include "auth/service.hh"
 
 #include <algorithm>
+#include <boost/algorithm/string/join.hpp>
+#include <chrono>
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sharded.hh>
@@ -26,11 +28,19 @@
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/functions/function_name.hh"
+#include "db/system_auth_keyspace.hh"
 #include "log.hh"
+#include "schema/schema_fwd.hh"
+#include "seastar/core/future.hh"
 #include "service/migration_manager.hh"
+#include "timestamp.hh"
 #include "utils/class_registrator.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/keyspace_metadata.hh"
+#include "service/storage_service.hh"
+#include "service_permit.hh"
+
+using namespace std::chrono_literals;
 
 namespace auth {
 
@@ -147,6 +157,7 @@ service::service(
 service::service(
         utils::loading_cache_config c,
         cql3::query_processor& qp,
+        ::service::raft_group0_client& g0,
         ::service::migration_notifier& mn,
         ::service::migration_manager& mm,
         const service_config& sc,
@@ -155,9 +166,9 @@ service::service(
                       std::move(c),
                       qp,
                       mn,
-                      create_object<authorizer>(sc.authorizer_java_name, qp, mm),
-                      create_object<authenticator>(sc.authenticator_java_name, qp, mm),
-                      create_object<role_manager>(sc.role_manager_java_name, qp, mm),
+                      create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
+                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm),
+                      create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm),
                       used_by_maintenance_socket) {
 }
 
@@ -165,24 +176,24 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
     assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
     auto db = _qp.db();
 
-    while (!db.has_keyspace(meta::AUTH_KS)) {
+    while (!db.has_keyspace(meta::legacy::AUTH_KS)) {
         auto group0_guard = co_await mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
 
-        if (!db.has_keyspace(meta::AUTH_KS)) {
+        if (!db.has_keyspace(meta::legacy::AUTH_KS)) {
             locator::replication_strategy_config_options opts{{"replication_factor", "1"}};
 
             auto ksm = data_dictionary::keyspace_metadata::new_keyspace(
-                    meta::AUTH_KS,
+                    meta::legacy::AUTH_KS,
                     "org.apache.cassandra.locator.SimpleStrategy",
                     opts,
                     std::nullopt);
 
             try {
                 co_return co_await mm.announce(::service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
-                        std::move(group0_guard), format("auth_service: create {} keyspace", meta::AUTH_KS));
+                        std::move(group0_guard), format("auth_service: create {} keyspace", meta::legacy::AUTH_KS));
             } catch (::service::group0_concurrent_modification&) {
-                log.info("Concurrent operation is detected while creating {} keyspace, retrying.", meta::AUTH_KS);
+                log.info("Concurrent operation is detected while creating {} keyspace, retrying.", meta::legacy::AUTH_KS);
             }
         }
     }
@@ -241,18 +252,18 @@ void service::reset_authorization_cache() {
 }
 
 future<bool> service::has_existing_legacy_users() const {
-    if (!_qp.db().has_schema(meta::AUTH_KS, meta::USERS_CF)) {
+    if (!_qp.db().has_schema(meta::legacy::AUTH_KS, meta::legacy::USERS_CF)) {
         return make_ready_future<bool>(false);
     }
 
     static const sstring default_user_query = format("SELECT * FROM {}.{} WHERE {} = ?",
-            meta::AUTH_KS,
-            meta::USERS_CF,
+            meta::legacy::AUTH_KS,
+            meta::legacy::USERS_CF,
             meta::user_name_col_name);
 
     static const sstring all_users_query = format("SELECT * FROM {}.{} LIMIT 1",
-            meta::AUTH_KS,
-            meta::USERS_CF);
+            meta::legacy::AUTH_KS,
+            meta::legacy::USERS_CF);
 
     // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default user, we
     // can potentially avoid doing a range query with a high consistency level.
@@ -480,7 +491,7 @@ future<> create_role(
                 options,
                 ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
             return ser.underlying_authenticator().create(name, options);
-        }).handle_exception([&ser, &name](std::exception_ptr ep) {
+        }).handle_exception([&ser, name](std::exception_ptr ep) {
             // Roll-back.
             return ser.underlying_role_manager().drop(name).then([ep = std::move(ep)] {
                 std::rethrow_exception(ep);
@@ -624,6 +635,77 @@ future<std::vector<permission_details>> list_filtered_permissions(
             });
         });
     });
+}
+
+future<> migrate_to_auth_v2(cql3::query_processor& qp, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {
+    // FIXME: if this function fails it may leave partial data in the new tables
+    // that should be cleared
+    auto gen = [&qp] (api::timestamp_type& ts) -> mutations_generator {
+        for (const auto& cf_name : std::vector<sstring>{
+                "roles", "role_members", "role_attributes", "role_permissions"}) {
+            schema_ptr schema;
+            try {
+                schema = qp.db().find_schema(meta::legacy::AUTH_KS, cf_name);
+            } catch (const data_dictionary::no_such_column_family&) {
+                continue; // some tables might not have been created if they were not used
+            }
+
+            // use longer than usual timeout as we scan the whole table
+            // but not infinite or very long as we want to fail reasonably fast
+            const auto t = 5min;
+            const timeout_config tc{t, t, t, t, t, t, t};
+            ::service::client_state cs(::service::client_state::internal_tag{}, tc);
+            ::service::query_state qs(cs, empty_service_permit());
+
+            auto rows = co_await qp.execute_internal(
+                    format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, cf_name),
+                    db::consistency_level::ALL,
+                    qs,
+                    {},
+                    cql3::query_processor::cache_internal::no);
+            if (rows->empty()) {
+                continue;
+            }
+            std::vector<sstring> col_names;
+            for (const auto& col : schema->all_columns()) {
+                col_names.push_back(col.name_as_cql_string());
+            }
+            auto col_names_str = boost::algorithm::join(col_names, ", ");
+            sstring val_binders_str = "?";
+            for (size_t i = 1; i < col_names.size(); ++i) {
+                val_binders_str += ", ?";
+            }
+            for (const auto& row : *rows) {
+                std::vector<data_value_or_unset> values;
+                for (const auto& col : schema->all_columns()) {
+                    if (row.has(col.name_as_text())) {
+                        values.push_back(
+                                col.type->deserialize(row.get_blob(col.name_as_text())));
+                    } else {
+                        values.push_back(unset_value{});
+                    }
+                }
+                auto muts = co_await qp.get_mutations_internal(
+                        format("INSERT INTO {}.{} ({}) VALUES ({})",
+                                db::system_auth_keyspace::NAME,
+                                cf_name,
+                                col_names_str,
+                                val_binders_str),
+                        internal_distributed_query_state(),
+                        ts,
+                        std::move(values));
+                if (muts.size() != 1) {
+                    on_internal_error(log,
+                            format("expecting single insert mutation, got {}", muts.size()));
+                }
+                co_yield std::move(muts[0]);
+            }
+        }
+    };
+    co_await announce_mutations_with_batching(g0,
+            start_operation_func,
+            std::move(gen),
+            &as);
 }
 
 }

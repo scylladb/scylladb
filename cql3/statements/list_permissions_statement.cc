@@ -80,15 +80,15 @@ cql3::statements::list_permissions_statement::execute(
         service::query_state& state,
         const query_options& options,
         std::optional<service::group0_guard> guard) const {
-    static auto make_column = [](sstring name) {
+    auto make_column = [auth_ks = auth::get_auth_ks_name(qp)](sstring name) {
         return make_lw_shared<column_specification>(
-                auth::meta::AUTH_KS,
+                auth_ks,
                 "permissions",
                 ::make_shared<column_identifier>(std::move(name), true),
                 utf8_type);
     };
 
-    static thread_local const std::vector<lw_shared_ptr<column_specification>> metadata({
+    std::vector<lw_shared_ptr<column_specification>> metadata({
         make_column("role"), make_column("username"), make_column("resource"), make_column("permission")
     });
 
@@ -105,15 +105,15 @@ cql3::statements::list_permissions_statement::execute(
 
     const auto& as = *state.get_client_state().get_auth_service();
 
-    return do_with(make_resource_filter(), [this, &as](const auto& resource_filter) {
+    return do_with(make_resource_filter(), [this, &as, metadata = std::move(metadata)](const auto& resource_filter) mutable {
         return auth::list_filtered_permissions(
                 as,
                 _permissions,
                 _role_name,
-                resource_filter).then([](std::vector<auth::permission_details> all_details) {
+                resource_filter).then([metadata = std::move(metadata)](std::vector<auth::permission_details> all_details) mutable {
             std::sort(all_details.begin(), all_details.end());
 
-            auto rs = std::make_unique<result_set>(metadata);
+            auto rs = std::make_unique<result_set>(std::move(metadata));
 
             for (const auto& pd : all_details) {
                 const std::vector<sstring> sorted_permission_names = [&pd] {

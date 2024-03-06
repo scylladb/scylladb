@@ -14,6 +14,7 @@
 
 #include "auth/authorizer.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace cql3 {
 
@@ -25,6 +26,7 @@ namespace auth {
 
 class default_authorizer : public authorizer {
     cql3::query_processor& _qp;
+    ::service::raft_group0_client& _group0_client;
 
     ::service::migration_manager& _migration_manager;
 
@@ -33,7 +35,7 @@ class default_authorizer : public authorizer {
     future<> _finished{make_ready_future<>()};
 
 public:
-    default_authorizer(cql3::query_processor&, ::service::migration_manager&);
+    default_authorizer(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
 
     ~default_authorizer();
 
@@ -60,7 +62,9 @@ public:
 private:
     bool legacy_metadata_exists() const;
 
-    future<bool> any_granted() const;
+    future<> revoke_all_legacy(const resource&);
+
+    future<bool> legacy_any_granted() const;
 
     future<> migrate_legacy_metadata();
 

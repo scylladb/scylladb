@@ -20,6 +20,7 @@ class query_processor;
 
 namespace service {
 class migration_manager;
+class raft_group0_client;
 }
 
 namespace auth {
@@ -30,7 +31,7 @@ class certificate_authenticator : public authenticator {
     enum class query_source;
     std::vector<std::pair<query_source, boost::regex>> _queries;
 public:
-    certificate_authenticator(cql3::query_processor&, ::service::migration_manager&);
+    certificate_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
     ~certificate_authenticator();
 
     future<> start() override;

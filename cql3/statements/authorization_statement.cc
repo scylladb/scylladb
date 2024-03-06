@@ -17,6 +17,7 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include "db/cql_type_parser.hh"
+#include "auth/common.hh"
 
 uint32_t cql3::statements::authorization_statement::get_bound_terms() const {
     return 0;
@@ -75,3 +76,7 @@ void cql3::statements::authorization_statement::maybe_correct_resource(auth::res
     }
 }
 
+bool cql3::statements::authorization_altering_statement::needs_guard(
+                query_processor& qp) const {
+    return !auth::legacy_mode(qp);
+};

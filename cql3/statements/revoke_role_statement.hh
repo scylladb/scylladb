@@ -22,7 +22,7 @@ class query_processor;
 
 namespace statements {
 
-class revoke_role_statement final : public authorization_statement {
+class revoke_role_statement final : public authorization_altering_statement {
     sstring _role;
 
     sstring _revokee;

@@ -18,6 +18,7 @@ class query_processor;
 
 namespace service {
 class migration_manager;
+class raft_group0_client;
 }
 
 namespace auth {
@@ -28,7 +29,7 @@ extern const std::string_view maintenance_socket_role_manager_name;
 // system_auth keyspace, which may be not yet created when the maintenance socket starts listening.
 class maintenance_socket_role_manager final : public role_manager {
 public:
-    maintenance_socket_role_manager(cql3::query_processor&, ::service::migration_manager&) {}
+    maintenance_socket_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&) {}
 
     virtual std::string_view qualified_java_name() const noexcept override;
 

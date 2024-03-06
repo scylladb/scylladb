@@ -20,6 +20,7 @@ static const class_registrator<
         authenticator,
         allow_all_authenticator,
         cql3::query_processor&,
+        ::service::raft_group0_client&,
         ::service::migration_manager&> registration("org.apache.cassandra.auth.AllowAllAuthenticator");
 
 }

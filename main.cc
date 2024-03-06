@@ -1715,7 +1715,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
             maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_socket_role_manager_name};
 
-            maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes).get();
+            maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes).get();
 
             scheduling_group_key_config maintenance_cql_sg_stats_cfg =
             make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::yes);
@@ -1850,7 +1850,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no).get();
+            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(group0_client), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no).get();
 
             std::any stop_auth_service;
             start_auth_service(auth_service, stop_auth_service, "auth service");

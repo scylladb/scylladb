@@ -213,6 +213,15 @@ struct raft_topology_snapshot {
 struct raft_topology_pull_params {
 };
 
+struct raft_snapshot {
+    // FIXME: handle this with rpc streaming instead as we can't guarantee size bounds.
+    utils::chunked_vector<canonical_mutation> mutations;
+};
+
+struct raft_snapshot_pull_params {
+    std::vector<table_id> tables;
+};
+
 // State machine that is responsible for topology change
 struct topology_state_machine {
     using topology_type = topology;

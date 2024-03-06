@@ -22,7 +22,9 @@
 #include "auth/permission.hh"
 #include "auth/permissions_cache.hh"
 #include "auth/role_manager.hh"
+#include "auth/common.hh"
 #include "seastarx.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "utils/observable.hh"
 #include "utils/serialized_action.hh"
 #include "db/config.hh"
@@ -115,6 +117,7 @@ public:
     service(
             utils::loading_cache_config,
             cql3::query_processor&,
+            ::service::raft_group0_client&,
             ::service::migration_notifier&,
             ::service::migration_manager&,
             const service_config&,
@@ -167,7 +170,7 @@ public:
         return *_role_manager;
     }
 
-    const cql3::query_processor& query_processor() const noexcept {
+    cql3::query_processor& query_processor() const noexcept {
         return _qp;
     }
 
@@ -311,5 +314,8 @@ future<std::vector<permission_details>> list_filtered_permissions(
         permission_set,
         std::optional<std::string_view> role_name,
         const std::optional<std::pair<resource, recursive_permissions>>& resource_filter);
+
+// Migrates data from old keyspace to new one which supports linearizable writes via raft.
+future<> migrate_to_auth_v2(cql3::query_processor& qp, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as);
 
 }

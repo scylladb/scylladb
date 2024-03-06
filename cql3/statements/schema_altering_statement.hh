@@ -42,6 +42,8 @@ protected:
 
     schema_altering_statement(cf_name name, timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
+    virtual bool needs_guard(query_processor& qp) const override;
+
     /**
      * When a new data_dictionary::database object (keyspace, table) is created, the creator needs to be granted all applicable
      * permissions on it.

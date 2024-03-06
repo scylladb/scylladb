@@ -22,7 +22,7 @@ class query_processor;
 
 namespace statements {
 
-class drop_role_statement final : public authentication_statement {
+class drop_role_statement final : public authentication_altering_statement {
     sstring _role;
 
     bool _if_exists;

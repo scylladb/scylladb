@@ -16,6 +16,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
+#include "db/system_auth_keyspace.hh"
 #include "thrift/server.hh"
 #include "cql3/query_processor.hh"
 #include "partition_slice_builder.hh"
@@ -2112,6 +2113,11 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
         r.insert(r.end(), {topology(), cdc_generations_v3(), topology_requests()});
     }
 
+    if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
+        auto auth_tables = db::system_auth_keyspace::all_tables();
+        std::copy(auth_tables.begin(), auth_tables.end(), std::back_inserter(r));
+    }
+
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
         r.insert(r.end(), {broadcast_kv_store()});
     }
@@ -2155,9 +2161,14 @@ void system_keyspace::mark_writable() {
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+system_keyspace::query_mutations(distributed<replica::database>& db, schema_ptr schema) {
+    return replica::query_mutations(db, schema, query::full_partition_range, schema->full_slice(), db::no_timeout);
+}
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 system_keyspace::query_mutations(distributed<replica::database>& db, const sstring& ks_name, const sstring& cf_name) {
     schema_ptr schema = db.local().find_schema(ks_name, cf_name);
-    return replica::query_mutations(db, schema, query::full_partition_range, schema->full_slice(), db::no_timeout);
+    return query_mutations(db, schema);
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>

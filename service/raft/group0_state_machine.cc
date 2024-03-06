@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #include "service/raft/group0_state_machine.hh"
+#include "db/system_auth_keyspace.hh"
 #include "mutation/atomic_cell.hh"
 #include "cql3/selection/selection.hh"
 #include "dht/i_partitioner.hh"
@@ -81,6 +82,14 @@ static mutation extract_history_mutation(std::vector<canonical_mutation>& muts, 
     auto res = it->to_mutation(s);
     muts.erase(it);
     return res;
+}
+
+static future<> mutate_locally(utils::chunked_vector<canonical_mutation> muts, storage_proxy& sp) {
+    auto db = sp.data_dictionary();
+    co_await max_concurrent_for_each(muts, 128, [&sp, &db] (const canonical_mutation& cmut) -> future<> {
+        auto schema = db.find_schema(cmut.column_family_id());
+        return sp.mutate_locally(cmut.to_mutation(schema), nullptr, db::commitlog::force_sync::yes);
+    });
 }
 
 static bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db) {
@@ -257,8 +266,16 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     }
 
     std::optional<service::raft_topology_snapshot> topology_snp;
+    std::optional<service::raft_snapshot> auth_snp;
     if (_topology_change_enabled) {
         topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_topology_snapshot(&_mm._messaging, addr, as, from_id, service::raft_topology_pull_params{});
+
+        std::vector<table_id> tables;
+        for (const auto& schema : db::system_auth_keyspace::all_tables()) {
+            tables.push_back(schema->id());
+        }
+        auth_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
     }
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
@@ -273,6 +290,10 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         co_await _ss.merge_topology_snapshot(std::move(*topology_snp));
         // Flush so that current supported and enabled features are readable before commitlog replay
         co_await _sp.get_db().local().flush(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+    }
+
+    if (auth_snp) {
+        co_await mutate_locally(std::move(auth_snp->mutations), _sp);
     }
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);

@@ -21,6 +21,7 @@ from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.auth import AuthProvider
 import aiohttp
 import asyncio
 
@@ -56,12 +57,15 @@ class ManagerClient():
         self.driver_close()
         await self.client.shutdown()
 
-    async def driver_connect(self, server: Optional[ServerInfo] = None) -> None:
+    async def driver_connect(self, server: Optional[ServerInfo] = None, auth_provider: Optional[AuthProvider] = None) -> None:
         """Connect to cluster"""
         targets = [server] if server else await self.running_servers()
         servers = [s_info.rpc_address for s_info in targets]
+        # avoids leaking connections if driver wasn't closed before
+        self.driver_close()
         logger.debug("driver connecting to %s", servers)
-        self.ccluster = self.con_gen(servers, self.port, self.use_ssl, self.auth_provider)
+        self.ccluster = self.con_gen(servers, self.port, self.use_ssl,
+                                     auth_provider if auth_provider else self.auth_provider)
         self.cql = self.ccluster.connect()
 
     def driver_close(self) -> None:
