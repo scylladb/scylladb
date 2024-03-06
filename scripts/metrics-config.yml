@@ -1,0 +1,65 @@
+"cdc/log.cc":
+  params:
+    cdc_group_name: cdc
+    part_name;suffix: [["static_row", "total"],["clustering_row", "total"], ["map", "total"], ["set", "total"], ["list", "total"], ["udt", "total"], ["range_tombstone", "total"],["partition_delete", "total"],["row_delete", "total"], ["static_row", "failed"],["clustering_row", "failed"], ["map", "failed"], ["set", "failed"], ["list", "failed"], ["udt", "failed"], ["range_tombstone", "failed"],["partition_delete", "failed"],["row_delete", "failed"]]
+    kind: ["total", "failed"]
+"db/commitlog/commitlog.cc":
+    params:
+        metrics_category_name: ["commitlog", "schema_commitlog"]
+        cfg.max_active_flushes: "cfg.max_active_flushes"
+"cql3/query_processor.cc":
+    groups:
+        "80": query_processor
+    allowmismatch: true
+"raft/server.cc":
+  allowmismatch: true
+"replica/dirty_memory_manager.cc":
+  params:
+    namestr: ["regular", "system"]
+"replica/table.cc":
+  params:
+    stat_name: ["exclusive_row", "shared_row", "exclusive_partition", "shared_partition"]
+"replica/database.cc":
+  params:
+    "_dirty_memory_manager.throttle_threshold()": "throttle threshold"
+"seastar/apps/metrics_tester/metrics_tester.cc": skip
+"seastar/tests/unit/metrics_test.cc": skip
+"service/storage_proxy.cc":
+  params:
+    COORDINATOR_STATS_CATEGORY: "storage_proxy_coordinator"
+    "storage_proxy_stats::COORDINATOR_STATS_CATEGORY": "storage_proxy_coordinator"
+    REPLICA_STATS_CATEGORY: "storage_proxy_replica"
+    _short_description_prefix: ["total_write_attempts", "write_errors", "background_replica_writes_failed", "read_repair_write_attempts"]
+    _long_description_prefix: ["total number of write requests", "number of write requests that failed", "background_replica_writes_failed", "number of write operations in a read repair context"]
+    _category: "storage_proxy_coordinator"
+  allowmismatch: true
+"thrift/server.cc": skip
+"tracing/tracing.cc":
+  params:
+    "max_pending_trace_records + write_event_records_threshold": "max_pending_trace_records + write_event_records_threshold"
+"transport/server.cc":
+  groups:
+    "200": transport
+  params:
+    _max_request_size: "max_request_size"
+"seastar/src/net/dpdk.cc": skip
+"db/hints/manager.cc":
+    params:
+        "group_name": ["hints_for_views_manager", "hints_manager"]
+"seastar/src/core/execution_stage.cc":
+    groups:
+        "100": execution_stages
+"seastar/src/core/fair_queue.cc":
+    groups:
+        "400": io_queue
+"seastar/src/net/net.cc":
+    params:
+        _stats_plugin_name: ["stats_plugin_name"]
+        _queue_name: ["queue"]
+        "_queue_name + \"_tx_packet_queue\"": ["queue"]
+        "_queue_name + \"_tx_packets\"": ["queue"]
+        "_queue_name + \"_rx_packets\"": ["queue"]
+        "_queue_name + \"_tx_bytes\"": ["queue"]
+        "_queue_name + \"_rx_bytes\"": ["queue"]
+        "_queue_name + \"_tx_frags\"": ["queue"]
+        "_queue_name + \"_rx_frags\"": ["queue"]
