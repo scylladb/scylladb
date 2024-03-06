@@ -3798,7 +3798,7 @@ class scylla_fiber(gdb.Command):
 
         return ptr_meta, maybe_vptr, resolved_symbol
 
-   # Find futures waiting on this task
+    # Find futures waiting on this task
     def _walk_forward(self, ptr_meta, name, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         ptr = ptr_meta.ptr
 
@@ -3836,7 +3836,7 @@ class scylla_fiber(gdb.Command):
 
         return None
 
-   # Find futures waited-on by this task
+    # Find futures waited-on by this task
     def _walk_backward(self, ptr_meta, name, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         orig = gdb.selected_thread()
         res = None
