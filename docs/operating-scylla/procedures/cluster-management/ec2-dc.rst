@@ -43,29 +43,30 @@ Prerequisites
 
 * Select a unique name as ``cluster_name`` for the cluster (identical for all the nodes in the cluster).
 
+* Choose one of the nodes to be a seed node. You'll need to provide the IP of that node using 
+  the ``seeds`` parameter in the ``scylla.yaml`` configuration file on each node.
 
 Procedure
 ---------
 
-Perform the following steps for each node in the new cluster:
-
-#. Install Scylla on the node. See :doc:`Getting Started</getting-started/index>` for installation instructions and
+#. Install ScyllaDB on the nodes you want to add to the cluster. See :doc:`Getting Started</getting-started/index>` for installation instructions and
    follow the procedure up to  the ``scylla.yaml`` configuration phase.
 
    If the Scylla service is already running (for example, if you are using `Scylla AMI`_), stop it before moving to the next step by using :doc:`these instructions </operating-scylla/procedures/cluster-management/clear-data>`.
 
-#. Edit the parameters listed below in the ``scylla.yaml`` file located in ``/etc/scylla/``. See the :ref:`table` above on how to configure your cluster.
+#. On each node, edit the ``scylla.yaml`` file in ``/etc/scylla/`` to configure the parameters listed below. See the :ref:`table` above on how to configure your cluster.
 
      * **cluster_name** - Set the selected cluster_name.
-     * **seeds** - IP address of the first node in the cluster. See :doc:`Scylla Seed Nodes </kb/seed-nodes/>` for details.
+     * **seeds** - Specify the IP of the node you chose to be a seed node. See :doc:`Scylla Seed Nodes </kb/seed-nodes/>` for details.
      * **listen_address** - IP address that Scylla used to connect to other Scylla nodes in the cluster.
      * **endpoint_snitch** - Set the selected snitch.
      * **rpc_address** - Address for client connection (Thrift, CQL).
      * **broadcast_address** - The IP address a node tells other nodes in the cluster to contact it by.
      * **broadcast_rpc_address** - Default: unset. The RPC address to broadcast to drivers and other Scylla nodes. It cannot be set to 0.0.0.0. If left blank, it will be set to the value of ``rpc_address``. If ``rpc_address`` is set to 0.0.0.0, ``broadcast_rpc_address`` must be explicitly configured.
 
-#. After you have installed and configured Scylla and edited ``scylla.yaml`` file on all the nodes, start the node specified with the ``seeds`` parameter. Then start the rest of the nodes in your cluster, one at a time, using
-   ``sudo systemctl start scylla-server``.
+#. Start the nodes.
+
+   .. include:: /rst_include/scylla-commands-start-index.rst
 
 #. Verify that the node has been added to the cluster using
    ``nodetool status``.

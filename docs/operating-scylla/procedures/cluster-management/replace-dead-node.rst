@@ -1,21 +1,27 @@
 Replace a Dead Node in a ScyllaDB Cluster 
 ******************************************
 
+.. scylladb_include_flag:: upgrade-note-replace-node.rst
+
 Replace dead node operation will cause the other nodes in the cluster to stream data to the node that was replaced. This operation can take some time (depending on the data size and network bandwidth).
 
-This procedure is for replacing one dead node. To replace more than one dead node, run the full procedure to completion one node at a time.
-
-.. note::
-
-    Replacing a node requires at least a quorum of nodes in a cluster to be available. 
-    If the quorum is lost, it must be restored before a node is replaced. 
-    See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
+This procedure is for replacing one dead node. You can replace more than one dead node in parallel.
 
 -------------
 Prerequisites
 -------------
 
-* Verify the status of the node using :doc:`nodetool status </operating-scylla/nodetool-commands/status>` command, the node with status DN is down and need to be replaced
+Quorum of Nodes
+==================
+
+.. include:: /operating-scylla/procedures/cluster-management/_common/quorum-requirement.rst
+
+Verify the Node Status
+=======================
+Verify the status of the node you want to replace using the :doc:`nodetool status </operating-scylla/nodetool-commands/status>` command.
+
+In the following example, the status of the node with the IP address 192.168.1.203 is 
+Down (DN), and the node can be replaced.
 
 .. code-block:: shell
 
@@ -27,16 +33,17 @@ Prerequisites
    UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
    DN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-can8-43fddce952gy   B1
 
-.. warning::
+Remove the Data
+==================
 
-   It's essential to ensure the replaced (dead) node will **never** come back to the cluster, which might lead to a split-brain situation.
-   Remove the replaced (dead) node from the cluster network or VPC.
+Log in to the dead node and manually remove the data if you can. Delete the data with the following commands:
 
-* Log in to the dead node and manually remove the data if you can. Delete the data with the following commands:
+.. include:: /rst_include/clean-data-code.rst
 
-   .. include:: /rst_include/clean-data-code.rst
+Collect Cluster Information
+================================
 
-* Login to one of the nodes in the cluster with (UN) status. Collect the following info from the node:
+Login to one of the nodes in the cluster with the UN status. Collect the following info from the node:
 
   * cluster_name - ``cat /etc/scylla/scylla.yaml | grep cluster_name``
   * seeds - ``cat /etc/scylla/scylla.yaml | grep seeds:``
@@ -49,7 +56,7 @@ Procedure
 
 #. Install Scylla on a new node, see :doc:`Getting Started</getting-started/index>` for further instructions. Follow the Scylla install procedure up to ``scylla.yaml`` configuration phase. Ensure that the Scylla version of the new node is identical to the other nodes in the cluster. 
 
-    .. include:: /operating-scylla/procedures/cluster-management/_common/match_version.rst
+   .. include:: /operating-scylla/procedures/cluster-management/_common/match_version.rst
 
 #. In the ``scylla.yaml`` file edit the parameters listed below. The file can be found under ``/etc/scylla/``.
 
@@ -65,17 +72,17 @@ Procedure
 
 #. Add the ``replace_node_first_boot`` parameter to the ``scylla.yaml`` config file on the new node. This line can be added to any place in the config file. After a successful node replacement, there is no need to remove it from the ``scylla.yaml`` file. (Note: The obsolete parameters "replace_address" and "replace_address_first_boot" are not supported and should not be used). The value of the ``replace_node_first_boot`` parameter should be the Host ID of the node to be replaced.
 
-    For example (using the Host ID of the failed node from above):
+   For example (using the Host ID of the failed node from above):
 
-    ``replace_node_first_boot: 675ed9f4-6564-6dbd-can8-43fddce952gy``
+   ``replace_node_first_boot: 675ed9f4-6564-6dbd-can8-43fddce952gy``
 
-#. Start Scylla node.
+#. Start the new node.
 
-    .. include:: /rst_include/scylla-commands-start-index.rst
+   .. include:: /rst_include/scylla-commands-start-index.rst
 
 #. Verify that the node has been added to the cluster using ``nodetool status`` command.
 
-    For example:
+   For example:
     
     .. code-block:: shell
     
@@ -148,11 +155,6 @@ Procedure
        When :doc:`Repair Based Node Operations (RBNO) <repair-based-node-operation>` for **replace** is enabled, there is no need to rerun repair.
 
 
-Handling Failures
------------------
-
-If the new node starts and begins the replace operation but then fails in the middle e.g. due to a power loss, you can retry the replace (by restarting the node). If you don't want to retry, or the node refuses to boot on subsequent attempts, consult the :doc:`Handling Membership Change Failures document</operating-scylla/procedures/cluster-management/handling-membership-change-failures>`.
-
 ------------------------------
 Setup RAID Following a Restart
 ------------------------------
@@ -191,3 +193,8 @@ In this case, the node's data will be cleaned after restart. To remedy this, you
    .. include:: /rst_include/scylla-commands-stop-index.rst
 
 Sometimes the public/ private IP of instance is changed after restart. If so refer to the Replace Procedure_ above.
+
+
+.. _replace-node-upgrade-info:
+
+.. scylladb_include_flag:: upgrade-warning-replace-node.rst

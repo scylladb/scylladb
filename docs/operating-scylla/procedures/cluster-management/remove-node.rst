@@ -2,13 +2,9 @@
 Remove a Node from a ScyllaDB Cluster (Down Scale)
 ***************************************************
 
+.. scylladb_include_flag:: upgrade-note-remove-node.rst
+
 You can remove nodes from your cluster to reduce its size.
-
-.. note::
-
-    Removing a node requires at least a quorum of nodes in a cluster to be available. 
-    If the quorum is lost, it must be restored before a node is removed. 
-    See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
 
 -----------------------
 Removing a Running Node
@@ -34,7 +30,7 @@ Removing a Running Node
 
    If the node status is **Down**, see `Removing an Unavailable Node`_.
 
-     .. include:: /operating-scylla/_common/decommission_warning.rst
+   .. include:: /operating-scylla/_common/decommission_warning.rst
 
 #. Run the ``nodetool netstats`` command to monitor the progress of the token reallocation.
 #. Run the ``nodetool status`` command to verify that the node has been removed.
@@ -55,11 +51,6 @@ Removing a Running Node
 
    .. include:: /rst_include/clean-data-code.rst
 
-Handling Failures
------------------
-
-If ``nodetool decommission`` starts executing but then fails in the middle e.g. due to a power loss, consult the :doc:`Handling Membership Change Failures document</operating-scylla/procedures/cluster-management/handling-membership-change-failures>`.
-
 ----------------------------
 Removing an Unavailable Node
 ----------------------------
@@ -73,20 +64,13 @@ command providing the Host ID of the node you are removing. See :doc:`nodetool r
 .. warning::
     * Using ``nodetool removenode`` is a fallback procedure that should only be used when a node is permanently down and cannot
       be recovered.
-    * It’s essential to ensure the removed node will **never** come back to the cluster, which **might adversely affect your data** 
-      (data resurrection/loss). To prevent the removed node from rejoining the cluster, remove that node from the cluster 
-      network or VPC.
     * You must never use ``nodetool removenode`` to remove a running node that can be reached by other nodes in the cluster.
-
-.. REMOVE IN FUTURE VERSIONS - The problem listed as the second bullet in the warning above is solved by Raft.
-.. Update the warning to suggest enabling Raft when Raft topology changes are implemented.
-.. Remove the bullet when Raft topology changes are mandatory.
 
 **Example:**
 
-    .. code-block:: console
-
-        nodetool removenode 675ed9f4-6564-6dbd-can8-43fddce952gy
+.. code-block:: console
+   
+   nodetool removenode 675ed9f4-6564-6dbd-can8-43fddce952gy
 
 The ``nodetool removenode`` command notifies other nodes that the token range it owns needs to be moved and
 the nodes should redistribute the data using streaming. Using the command does not guarantee the consistency of the rebalanced data if
@@ -98,6 +82,10 @@ the ``nodetool removenode`` operation will fail. To ensure successful operation 
 * In the case of node failures during the ``removenode`` operation, re-run repair before running
   ``nodetool removenode`` (not required when :doc:`Repair Based Node Operations (RBNO) <repair-based-node-operation>` for ``removenode`` 
   is enabled).
+
+.. _remove-node-upgrade-info:
+
+.. scylladb_include_flag:: upgrade-warning-remove-node.rst
 
 Additional Information
 ----------------------

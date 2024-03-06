@@ -55,18 +55,16 @@ When working with production environments, you must choose one of the snitches b
 Procedure
 ---------
 
-These steps need to be done for each of the nodes in the new cluster.
-
-1. Install Scylla on a node, see :doc:`Getting Started</getting-started/index>` for further instructions, create as many nodes that you need.
+1. Install Scylla on the nodes you want to add to the cluster. See :doc:`Getting Started</getting-started/index>` for further instructions, create as many nodes that you need.
 Follow the Scylla install procedure up to scylla.yaml configuration phase.
 
 In case that your node starts during the process follow :doc:`these instructions </operating-scylla/procedures/cluster-management/clear-data>` 
 
-2. In the ``scylla.yaml`` file edit the parameters listed below,
-the file can be found under ``/etc/scylla/``
+2. On each node, edit the ``scylla.yaml`` file to configure the parameters listed below.
+The file can be found under ``/etc/scylla/``.
 
 - **cluster_name** - Set the selected cluster_name
-- **seeds** - Specify the IP of the first node and **only the first node**. New nodes will use the IP of this seed node to connect to the cluster and learn the cluster topology and state.
+- **seeds** - Specify the IP of the node you chose to be a seed node. New nodes will use the IP of this seed node to connect to the cluster and learn the cluster topology and state.
 - **listen_address** - IP address that the Scylla use to connect to other Scylla nodes in the cluster
 - **endpoint_snitch** - Set the selected snitch
 - **rpc_address** - Address for client connection (Thrift, CQLSH)
@@ -76,18 +74,18 @@ The file can be found under ``/etc/scylla/``.
 
 To save bandwidth, add the ``prefer_local=true`` parameter. Scylla will use the node private (local) IP address when the nodes are in the same data center.
 
-4. After you have installed and configured Scylla and edit ``scylla.yaml`` on all nodes, using one node as a seed. Start the seed node, and once it is in **UN** state, repeat for all the other nodes, each after the previous is in **UN** state.
+4. Start the nodes.
 
 .. include:: /rst_include/scylla-commands-start-index.rst
 
-5. Verify that the node added to the cluster
-``nodetool status``
+5. Verify that the nodes have been added to the cluster using  
+``nodetool status``.
 
 **For Example:**
 
 In this example, we will show how to install a nine nodes cluster.
 
-1. Installing nine Scylla nodes, three nodes in each data center (U.S, ASIA, EUROPE). The IP's are:
+1. Install nine Scylla nodes, three nodes in each data center (U.S, ASIA, EUROPE). The IP's are:
 
 .. code-block:: shell
 
@@ -174,11 +172,11 @@ In this example, we will show how to install a nine nodes cluster.
    dc=EUROPE-DC
    rack=RACK1
 
-4. Starting Scylla nodes, starting with the seed node, wait until it is in **UN** state, and repeat for the other nodes.
+4. Start the nodes. 
 
 .. include:: /rst_include/scylla-commands-start-index.rst
 
-5. Verify that the node added to the cluster by using the ``nodetool status`` command
+5. Verify that the nodes have been added to the cluster by using the ``nodetool status`` command.
 
 .. code-block:: shell
 
