@@ -98,9 +98,20 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_transition_info& trinfo) {
     tablet_migration_streaming_info result;
     switch (trinfo.transition) {
+        case tablet_transition_kind::rf_change:
+            [[fallthrough]];
         case tablet_transition_kind::migration:
-            result.read_from = substract_sets(tinfo.replicas, trinfo.next);
-            result.written_to = substract_sets(trinfo.next, tinfo.replicas);
+            if (trinfo.transition == tablet_transition_kind::rf_change && !trinfo.pending_replica) {
+                return result;
+            }
+            result.read_from = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
+            result.written_to = std::unordered_set<tablet_replica>(trinfo.next.begin(), trinfo.next.end());
+            for (auto&& r : trinfo.next) {
+                result.read_from.erase(r);
+            }
+            for (auto&& r : tinfo.replicas) {
+                result.written_to.erase(r);
+            }
             return result;
         case tablet_transition_kind::rebuild:
             result.written_to.insert(*trinfo.pending_replica);
@@ -112,9 +123,6 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
                 return !n || n->is_excluded();
             });
 
-            return result;
-        case tablet_transition_kind::rf_change:
-            // TODO: implement, what exactly to do here?
             return result;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition kind: {}", static_cast<int>(trinfo.transition)));
