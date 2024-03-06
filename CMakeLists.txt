@@ -28,7 +28,7 @@ include(mode.common)
 if(CMAKE_CONFIGURATION_TYPES)
     foreach(config ${CMAKE_CONFIGURATION_TYPES})
         include(mode.${config})
-        list(APPEND scylla_build_modes ${scylla_build_mode})
+        list(APPEND scylla_build_modes ${scylla_build_mode_${config}})
     endforeach()
     add_custom_target(mode_list
         COMMAND ${CMAKE_COMMAND} -E echo "$<JOIN:${scylla_build_modes}, >"
