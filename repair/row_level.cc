@@ -761,6 +761,7 @@ private:
     std::optional<shared_future<>> _stopped;
     repair_hasher _repair_hasher;
     gc_clock::time_point _compaction_time;
+    reader_concurrency_semaphore::inactive_read_handle _fake_inactive_read_handle;
 public:
     std::vector<repair_node_state>& all_nodes() {
         return _all_node_states;
@@ -864,6 +865,13 @@ public:
             for (auto& node : all_live_peer_nodes) {
                 _all_node_states.push_back(repair_node_state(node));
             }
+            // Mark the permit as evictable immediately. If there are multiple
+            // repairs launched, they can deadlock in the initial phase, before
+            // they start reading from disk (which is the point where they
+            // become evictable normally).
+            // Prevent this by marking the permit as evictable ASAP.
+            // FIXME: provide a better API for this, this is very clunky
+            _fake_inactive_read_handle = _db.local().get_reader_concurrency_semaphore().register_inactive_read(make_empty_flat_reader_v2(_schema, _permit));
     }
 
     // follower constructor
@@ -1094,6 +1102,9 @@ private:
         std::list<repair_row> cur_rows;
         std::exception_ptr ex;
         if (!_repair_reader) {
+            // We are about to create a real evictable reader, so drop the fake
+            // reader (evicted or not), we don't need it anymore.
+            _db.local().get_reader_concurrency_semaphore().unregister_inactive_read(std::move(_fake_inactive_read_handle));
             _repair_reader.emplace(_db,
                 _cf,
                 _schema,
