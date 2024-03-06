@@ -4210,6 +4210,7 @@ private:
     utils::small_vector<digest_and_last_pos, 3> _digest_results;
     api::timestamp_type _last_modified = api::missing_timestamp;
     size_t _target_count_for_cl; // _target_count_for_cl < _targets_count if CL=LOCAL and RRD.GLOBAL
+    const bool _speculating;
 
     void on_timeout() override {
         fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _block_for, _data_result));
@@ -4225,12 +4226,13 @@ private:
 public:
     digest_read_resolver(shared_ptr<storage_proxy> proxy,
             locator::effective_replication_map_ptr ermp,
-            schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout)
+            schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout, bool speculating)
         : abstract_read_resolver(std::move(schema), cl, 0, timeout)
         , _proxy(std::move(proxy))
         , _effective_replication_map_ptr(std::move(ermp))
         , _block_for(block_for)
         , _target_count_for_cl(target_count_for_cl)
+        , _speculating(speculating)
     {}
     virtual size_t response_count() const override {
         return _digest_results.size();
@@ -4294,7 +4296,7 @@ private:
         if (waiting_for(ep)) {
             _failed++;
         }
-        if (kind == error_kind::DISCONNECT && _block_for == _target_count_for_cl) {
+        if (_speculating && kind == error_kind::DISCONNECT && _block_for == _target_count_for_cl) {
             // if the error is because of a connection disconnect and there is no targets to speculate
             // wait for timeout in hope that the client will issue speculative read
             // FIXME: resolver should have access to all replicas and try another one in this case
@@ -4847,6 +4849,7 @@ protected:
     tracing::trace_state_ptr _trace_state;
     lw_shared_ptr<replica::column_family> _cf;
     bool _foreground = true;
+    bool _speculating = true;
     service_permit _permit; // holds admission permit until operation completes
     db::per_partition_rate_limit::info _rate_limit_info;
 
@@ -5152,7 +5155,7 @@ public:
             return make_ready_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>(make_foreign(make_lw_shared(query::result())));
         }
         digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_proxy, _effective_replication_map_ptr, _schema, _cl, _block_for,
-                db::is_datacenter_local(_cl) ? _effective_replication_map_ptr->get_topology().count_local_endpoints(_targets): _targets.size(), timeout);
+                db::is_datacenter_local(_cl) ? _effective_replication_map_ptr->get_topology().count_local_endpoints(_targets): _targets.size(), timeout, _speculating);
         auto exec = shared_from_this();
 
         make_requests(digest_resolver, timeout);
@@ -5258,6 +5261,7 @@ public:
             db::per_partition_rate_limit::info rate_limit_info) :
                                         abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(ermp), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state), std::move(permit), rate_limit_info) {
         _block_for = _targets.size();
+        _speculating = false;
     }
 };
 
