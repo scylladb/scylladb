@@ -4607,23 +4607,23 @@ class scylla_smp_queues(gdb.Command):
 
     The summary takes the form of a histogram. Example:
 
-	(gdb) scylla smp-queues
-	    10747 17 ->  3 ++++++++++++++++++++++++++++++++++++++++
-	      721 17 -> 19 ++
-	      247 17 -> 20 +
-	      233 17 -> 10 +
-	      210 17 -> 14 +
-	      205 17 ->  4 +
-	      204 17 ->  5 +
-	      198 17 -> 16 +
-	      197 17 ->  6 +
-	      189 17 -> 11 +
-	      181 17 ->  1 +
-	      179 17 -> 13 +
-	      176 17 ->  2 +
-	      173 17 ->  0 +
-	      163 17 ->  8 +
-		1 17 ->  9 +
+    (gdb) scylla smp-queues
+        10747 17 ->  3 ++++++++++++++++++++++++++++++++++++++++
+          721 17 -> 19 ++
+          247 17 -> 20 +
+          233 17 -> 10 +
+          210 17 -> 14 +
+          205 17 ->  4 +
+          204 17 ->  5 +
+          198 17 -> 16 +
+          197 17 ->  6 +
+          189 17 -> 11 +
+          181 17 ->  1 +
+          179 17 -> 13 +
+          176 17 ->  2 +
+          173 17 ->  0 +
+          163 17 ->  8 +
+        1 17 ->  9 +
 
     Each line has the following format
 
@@ -4981,23 +4981,23 @@ class scylla_compaction_tasks(gdb.Command):
     form of a histogram with the compaction type and compaction running and
     table name as keys. Example:
 
-	(gdb) scylla compaction-task
-	     2116 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_postimage_scylla_cdc_log"
-	      769 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_scylla_cdc_log"
-	      750 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_postimage_scylla_cdc_log"
-	      731 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_scylla_cdc_log"
-	      293 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table"
-	      286 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage"
-	      230 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_postimage"
-	       58 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_postimage"
-		4 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_postimage_scylla_cdc_log"
-		2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table"
-		2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage_scylla_cdc_log"
-		2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage"
-		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage"
-		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_scylla_cdc_log"
-		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_scylla_cdc_log"
-	Total: 5246 instances of compaction::compaction_task_executor
+    (gdb) scylla compaction-task
+         2116 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_postimage_scylla_cdc_log"
+          769 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_scylla_cdc_log"
+          750 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_postimage_scylla_cdc_log"
+          731 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_scylla_cdc_log"
+          293 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table"
+          286 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage"
+          230 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_postimage"
+           58 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_postimage"
+        4 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_postimage_scylla_cdc_log"
+        2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table"
+        2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage_scylla_cdc_log"
+        2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage"
+        1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage"
+        1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_scylla_cdc_log"
+        1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_scylla_cdc_log"
+    Total: 5246 instances of compaction::compaction_task_executor
     """
 
     def __init__(self):
@@ -5150,19 +5150,19 @@ class scylla_schema(gdb.Command):
     """Pretty print a schema
 
     Example:
-	(gdb) scylla schema $s
-	(schema*) 0x604009352380 ks="scylla_bench" cf="test" id=a3eadd80-f2a7-11ea-853c-000000000004 version=47e0bf13-6cc8-3421-93c6-a9fe169b1689
+    (gdb) scylla schema $s
+    (schema*) 0x604009352380 ks="scylla_bench" cf="test" id=a3eadd80-f2a7-11ea-853c-000000000004 version=47e0bf13-6cc8-3421-93c6-a9fe169b1689
 
-	partition key: byte_order_equal=true byte_order_comparable=false is_reversed=false
-	    "org.apache.cassandra.db.marshal.LongType"
+    partition key: byte_order_equal=true byte_order_comparable=false is_reversed=false
+        "org.apache.cassandra.db.marshal.LongType"
 
-	clustering key: byte_order_equal=true byte_order_comparable=false is_reversed=true
-	    "org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.LongType)"
+    clustering key: byte_order_equal=true byte_order_comparable=false is_reversed=true
+        "org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.LongType)"
 
-	columns:
-	    column_kind::partition_key  id=0 ordinal_id=0 "pk" "org.apache.cassandra.db.marshal.LongType" is_atomic=true is_counter=false
-	    column_kind::clustering_key id=0 ordinal_id=1 "ck" "org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.LongType)" is_atomic=true is_counter=false
-	    column_kind::regular_column id=0 ordinal_id=2 "v" "org.apache.cassandra.db.marshal.BytesType" is_atomic=true is_counter=false
+    columns:
+        column_kind::partition_key  id=0 ordinal_id=0 "pk" "org.apache.cassandra.db.marshal.LongType" is_atomic=true is_counter=false
+        column_kind::clustering_key id=0 ordinal_id=1 "ck" "org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.LongType)" is_atomic=true is_counter=false
+        column_kind::regular_column id=0 ordinal_id=2 "v" "org.apache.cassandra.db.marshal.BytesType" is_atomic=true is_counter=false
 
     Argument is an expression that evaluates to a schema value, reference,
     pointer or shared pointer.
