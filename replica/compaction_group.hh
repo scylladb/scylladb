@@ -20,6 +20,10 @@
 
 #pragma once
 
+namespace locator {
+class effective_replication_map;
+}
+
 namespace replica {
 
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
@@ -141,7 +145,7 @@ public:
     void set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables);
 
     // Makes a compound set, which includes main and maintenance sets
-    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
+    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set() const;
 
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept;
     // Triggers regular compaction.
@@ -213,16 +217,61 @@ public:
     //  2) Compacts all sstables which overlap with the split point
     // Returns a future which resolves when this process is complete.
     future<> split(compaction_group_list&, sstables::compaction_type_options::split opt);
+
+    // Make an sstable set spanning all sstables in the storage_group
+    lw_shared_ptr<sstables::sstable_set> make_sstable_set() const;
 };
 
 using storage_group_vector = utils::chunked_vector<std::unique_ptr<storage_group>>;
 
 class storage_group_manager {
+protected:
+    // The compaction group list is only a helper for accessing the groups managed by the storage groups.
+    // The list entries are unlinked automatically when the storage group, they belong to, is removed.
+    compaction_group_list _compaction_groups;
+    storage_group_vector _storage_groups;
+
 public:
-    virtual ~storage_group_manager() {}
-    virtual storage_group_vector make_storage_groups(compaction_group_list& list) const = 0;
+    virtual ~storage_group_manager();
+
+    const compaction_group_list& compaction_groups() const noexcept {
+        return _compaction_groups;
+    }
+    compaction_group_list& compaction_groups() noexcept {
+        return _compaction_groups;
+    }
+
+    const storage_group_vector& storage_groups() const noexcept {
+        return _storage_groups;
+    }
+    storage_group_vector& storage_groups() noexcept {
+        return _storage_groups;
+    }
+
+    compaction_group* single_compaction_group_if_available() noexcept {
+        return _compaction_groups.size() == 1 ? &_compaction_groups.front() : nullptr;
+    }
+
+    // Caller must keep the current effective_replication_map_ptr valid
+    // until the storage_group_manager finishes update_effective_replication_map
+    virtual future<> update_effective_replication_map(const locator::effective_replication_map& erm) = 0;
+
+    virtual compaction_group& compaction_group_for_token(dht::token token) const noexcept = 0;
+    virtual utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const = 0;
+    virtual compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept = 0;
+    virtual compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept = 0;
+
     virtual std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const = 0;
     virtual size_t log2_storage_groups() const = 0;
+    virtual size_t storage_group_id_for_token(dht::token) const noexcept = 0;
+    virtual storage_group* storage_group_for_token(dht::token) const noexcept = 0;
+
+    virtual locator::resize_decision::seq_number_t split_ready_seq_number() const noexcept = 0;
+    virtual bool all_storage_groups_split() = 0;
+    virtual future<> split_all_storage_groups() = 0;
+    virtual future<> maybe_split_compaction_group_of(size_t idx) = 0;
+
+    virtual lw_shared_ptr<sstables::sstable_set> make_sstable_set() const = 0;
 };
 
 }

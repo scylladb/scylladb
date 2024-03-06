@@ -449,11 +449,9 @@ private:
 
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
+    // The storage_group_manager manages either a single storage_group for vnodes or per-tablet storage_group for tablets.
+    // It contains and manages both the compaction_groups list and the storage_groups vector.
     std::unique_ptr<storage_group_manager> _sg_manager;
-    // The compaction group list is only a helper for accessing the groups managed by the storage groups.
-    // The list entries are unlinked automatically when the storage group, they belong to, is removed.
-    mutable compaction_group_list _compaction_groups;
-    storage_group_vector _storage_groups;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
@@ -536,11 +534,6 @@ private:
     bool _is_bootstrap_or_replace = false;
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
 
-    // Every table replica that completes split work will load the seq number from tablet metadata into its local
-    // state. So when coordinator pull the local state of a table, it will know whether the table is ready for the
-    // current split, and not a previously revoked (stale) decision.
-    // The minimum value, which is a negative number, is not used by coordinator for first decision.
-    locator::resize_decision::seq_number_t _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
 public:
     void deregister_metrics();
 
@@ -593,9 +586,7 @@ private:
     // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
     // each tablet split into two, so this replica will remap all of its compaction groups
     // that were previously split.
-    void handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap);
-
-    sstables::compaction_type_options::split split_compaction_options() const noexcept;
+    future<> handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap);
 
     // Select a compaction group from a given token.
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token token) const noexcept;
@@ -616,6 +607,8 @@ private:
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept;
     // Returns a list of all compaction groups.
     compaction_group_list& compaction_groups() const noexcept;
+    // Returns a list of all storage groups.
+    const storage_group_vector& storage_groups() const noexcept;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
 
@@ -662,7 +655,7 @@ private:
                                         const sstables::sstable_predicate& = sstables::default_sstable_predicate()) const;
 
     lw_shared_ptr<sstables::sstable_set> make_maintenance_sstable_set() const;
-    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
+    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set() const;
     // Compound sstable set must be refreshed whenever any of its managed sets are changed
     void refresh_compound_sstable_set();
 
@@ -846,7 +839,7 @@ public:
     void set_schema(schema_ptr);
     db::commitlog* commitlog() const;
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
-    void update_effective_replication_map(locator::effective_replication_map_ptr);
+    future<> update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
     future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
@@ -1249,6 +1242,8 @@ public:
 
     friend class compaction_group;
 };
+
+lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::tablet_map&);
 
 using user_types_metadata = data_dictionary::user_types_metadata;
 

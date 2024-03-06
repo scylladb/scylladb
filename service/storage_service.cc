@@ -2872,7 +2872,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
     // Apply changes on all shards
     try {
-        co_await container().invoke_on_all([&] (storage_service& ss) {
+        co_await container().invoke_on_all([&] (storage_service& ss) -> future<> {
             ss._shared_token_metadata.set(std::move(pending_token_metadata_ptr[this_shard_id()]));
             auto& db = ss._db.local();
 
@@ -2886,7 +2886,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             auto& table_erms = pending_table_erms[this_shard_id()];
             for (auto it = table_erms.begin(); it != table_erms.end(); ) {
                 auto& cf = db.find_column_family(it->first);
-                cf.update_effective_replication_map(std::move(it->second));
+                co_await cf.update_effective_replication_map(std::move(it->second));
                 if (cf.uses_tablets()) {
                     register_tablet_split_candidate(it->first);
                 }
