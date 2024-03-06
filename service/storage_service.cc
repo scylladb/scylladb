@@ -5574,7 +5574,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             throw std::runtime_error(fmt::format("Tablet {} session is not set", tablet));
         }
         auto pending_replica = trinfo->pending_replica;
-        if (pending_replica.host != tm->get_my_id()) {
+        if (pending_replica && pending_replica->host != tm->get_my_id()) {
             throw std::runtime_error(fmt::format("Tablet {} has pending replica different than this one", tablet));
         }
 
@@ -5585,7 +5585,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             // The algorithm doesn't work with tablet migration within the same node because
             // it assumes there is only one tablet replica, picked by the sharder, on local node.
             throw std::runtime_error(fmt::format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
-                                            tablet, leaving_replica.shard, trinfo->pending_replica.shard));
+                                            tablet, leaving_replica.shard, trinfo->pending_replica->shard));
         }
 
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
@@ -5630,7 +5630,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         //  participating in streaming anymore (which is true), so it could schedule more
         //  migrations. This way compaction would run in parallel with streaming which can
         //  reduce the delay.
-        co_await _db.invoke_on(pending_replica.shard, [tablet] (replica::database& db) {
+        co_await _db.invoke_on(pending_replica->shard, [tablet] (replica::database& db) {
             auto& table = db.find_column_family(tablet.table);
             return table.maybe_split_compaction_group_of(tablet.tablet);
         });
@@ -5666,7 +5666,7 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                     throw std::runtime_error(fmt::format("Tablet {} has leaving replica different than this one", tablet));
                 }
             } else if (trinfo->stage == locator::tablet_transition_stage::cleanup_target) {
-                if (trinfo->pending_replica.host != tm->get_my_id()) {
+                if (trinfo->pending_replica && trinfo->pending_replica->host != tm->get_my_id()) {
                     throw std::runtime_error(fmt::format("Tablet {} has pending replica different than this one", tablet));
                 }
             } else {
@@ -5905,7 +5905,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
                     return true;
                 }
 
-                bool is_pending = transition->pending_replica == me;
+                bool is_pending = *transition->pending_replica == me;
                 bool is_leaving = locator::get_leaving_replica(info, *transition) == me;
                 auto s = transition->stage;
 

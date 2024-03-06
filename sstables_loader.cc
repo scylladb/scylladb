@@ -188,9 +188,38 @@ inet_address_vector_replica_set sstable_streamer::get_endpoints(const dht::token
     return current_targets;
 }
 
-inet_address_vector_replica_set sstable_streamer::get_primary_endpoints(const dht::token& token) const {
-    auto current_targets = _erm->get_natural_endpoints(token);
-    current_targets.resize(1);
+inet_address_vector_replica_set tablet_sstable_streamer::get_endpoints(const dht::token& token, bool primary_replica_only) const {
+    auto current_targets = sstable_streamer::get_endpoints(token, primary_replica_only);
+
+    auto pending_replica_endpoint = std::invoke([&] () -> std::optional<gms::inet_address> {
+        auto tid = _tablet_map.get_tablet_id(token);
+        auto* tinfo = _tablet_map.get_tablet_transition_info(tid);
+        // No tablet in transit.
+        if (!tinfo) {
+            return std::nullopt;
+        }
+
+        auto leaving_replica = locator::get_leaving_replica(_tablet_map.get_tablet_info(tid), *tinfo);
+        auto& tm = _erm->get_token_metadata();
+        auto is_leaving = [&] (gms::inet_address target) {
+            return tm.get_host_id(target) == leaving_replica.host;
+        };
+        // If primary_replica_only is set, then it might happen the primary replica is not
+        // the one leaving through migration. Or migration is at such an advanced stage,
+        // that the next replica set is picked and none are leaving.
+        if (std::ranges::none_of(current_targets, is_leaving)) {
+            return std::nullopt;
+        }
+        // If intra-node migration is happening, we don't want to stream to same node twice.
+        if (leaving_replica.host == tinfo->pending_replica->host) {
+            return std::nullopt;
+        }
+        return tm.get_endpoint_for_host_id(tinfo->pending_replica->host);
+    });
+    if (pending_replica_endpoint) {
+        current_targets.push_back(*pending_replica_endpoint);
+    }
+
     return current_targets;
 }
 

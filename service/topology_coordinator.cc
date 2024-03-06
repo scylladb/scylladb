@@ -766,10 +766,30 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         new_rf_per_int_dc.insert(std::pair{pair.first, std::stoi(pair.second)});
                     }
 
-                    // TODO: e.g. for a single node setup, this method returns the old map, and we fail later
-                    //       when trying to change a replica map to the same replica map.
-                    //       Perhaps we should throw an exception or handle this case earlier.
-                    auto new_tablet_map = co_await reallocate_tablets_for_new_rf(table, tmptr, new_rf_per_int_dc);
+                    // == START mocking new tablets map ==
+                    // currently just drops the last tablets replica, i.e. works only for lowering the RF
+//                    auto new_tablet_map = co_await reallocate_tablets_for_new_rf(table, tmptr, new_rf_per_int_dc);
+
+                    locator::tablet_map old_tablet_map = tmptr->tablets().get_tablet_map(table->id());
+                    auto new_tablet_map = old_tablet_map;
+
+                    for (auto tb : old_tablet_map.tablet_ids()) {
+                        const locator::tablet_info &ti = old_tablet_map.get_tablet_info(tb);
+                        locator::tablet_replica_set replicas = ti.replicas;
+                        rtlogger.info("smaron old tablet {} map for {}", tb, replicas);
+                    }
+
+                    for (auto tb : new_tablet_map.tablet_ids()) {
+                        locator::tablet_info &ti = new_tablet_map.get_tablet_info(tb);
+                        locator::tablet_replica_set& replicas = ti.replicas;
+//                        auto last_replica = replicas[0];
+//                        last_replica.shard = (last_replica.shard + 1) % 3;
+//                        replicas.push_back(last_replica);
+                        replicas.pop_back();
+                        rtlogger.info("smaron new tablet {} map for {}", tb, replicas);
+
+                    }
+                    // == END mocking new tablets map ==
 
                     auto tablet_id = new_tablet_map.first_tablet();
                     while (true) {
@@ -778,18 +798,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                         // TODO: correctly handle setting next replicas
                         updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table->id())
-                                                 .set_replicas(last_token, tablet_info.replicas)
-                                                 // TODO: setting the stage works only when increasing the RF
-                                                 //       when decreasing, we get an error: "Stage set but no pending replica for table..."
-                                                 //       BTW. see replica/tablets.cc:252
-                                                 // .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                                                 .set_new_replicas(last_token, tablet_info.replicas)
+                                                 .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
                                                  .set_transition(last_token, locator::tablet_transition_kind::rf_change)
                                                  .build());
 
-                        if (auto next_tablet = new_tablet_map.next_tablet(tablet_id); next_tablet.has_value())
+                        if (auto next_tablet = new_tablet_map.next_tablet(tablet_id); next_tablet.has_value()) {
                             tablet_id = *next_tablet;
-                        else
+                        } else {
                             break;
+                        }
                     }
                 }
                 updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
@@ -1165,7 +1183,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                     if (advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
                         rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, trinfo.pending_replica);
-                        auto dst = trinfo.pending_replica.host;
+                        auto dst = trinfo.pending_replica->host;
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
                                    netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
                     })) {
@@ -1219,7 +1237,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 case locator::tablet_transition_stage::cleanup_target:
                     if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target", [&] {
-                        locator::tablet_replica dst = trinfo.pending_replica;
+                        locator::tablet_replica dst = *trinfo.pending_replica;
                         if (is_excluded(raft::server_id(dst.host.uuid()))) {
                             rtlogger.info("Tablet cleanup of {} on {} skipped because node is excluded and doesn't need to revert migration", gid, dst);
                             return make_ready_future<>();

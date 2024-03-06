@@ -206,7 +206,7 @@ struct tablet_transition_info {
     tablet_transition_stage stage;
     tablet_transition_kind transition;
     tablet_replica_set next;
-    tablet_replica pending_replica; // Optimization (next - tablet_info::replicas)
+    std::optional<tablet_replica> pending_replica; // Optimization (next - tablet_info::replicas)
     service::session_id session_id;
     write_replica_set_selector writes;
     read_replica_set_selector reads;
@@ -214,7 +214,7 @@ struct tablet_transition_info {
     tablet_transition_info(tablet_transition_stage stage,
                            tablet_transition_kind kind,
                            tablet_replica_set next,
-                           tablet_replica pending_replica,
+                           std::optional<tablet_replica> pending_replica,
                            service::session_id session_id = {});
 
     bool operator==(const tablet_transition_info&) const = default;
@@ -343,7 +343,7 @@ public:
     /// Returns tablet_info associated with a given tablet.
     /// The given id must belong to this instance.
     const tablet_info& get_tablet_info(tablet_id) const;
-
+    tablet_info& get_tablet_info(tablet_id);
     /// Returns a pointer to tablet_transition_info associated with a given tablet.
     /// If there is no transition for a given tablet, returns nullptr.
     /// \throws std::logic_error If the given id does not belong to this instance.
