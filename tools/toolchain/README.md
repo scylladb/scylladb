@@ -88,6 +88,11 @@ Publishing an image is complicated since multiple architectures are supported.
 There are two procedures, one using emulation (can run on any x86 machine) and
 another using native systems, which requires access to aarch64 and s390x machines.
 
+You will need credentials to push images. You either need to setup permanent
+credentials with `podman login`, or you can just append
+`--creds=yourname@scylladb.com` to the `podman manifest push` command and then
+type in your password.
+
 ## Emulated publishing procedure (slow)
 
 1. Pick a new name for the image (in `tools/toolchain/image`) and
