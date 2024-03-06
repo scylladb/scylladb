@@ -270,10 +270,17 @@ else
     log "Relocatable package ${PACKAGE_URL} already downloaded and extracted"
 fi
 
+if [[ "${PRODUCT}" == "scylla-enterprise" ]]
+then
+    MAIN_BRANCH=enterprise
+else
+    MAIN_BRANCH=master
+fi
+
 COMMIT_HASH=$(cut -f3 -d. <<< $RELEASE)
 if [ "$(grep -o ~dev <<< $VERSION)" == "~dev" ]
 then
-    BRANCH=master
+    BRANCH=${MAIN_BRANCH}
 else
     BASE_VERSION=$(grep -o "^[0-9]\+\.[0-9]\+" <<< $VERSION)
     BRANCH=branch-${BASE_VERSION}
@@ -302,13 +309,6 @@ if ! [[ -f ${COREDIR}/scylla-gdb.py ]]
 then
     if [[ "${SCYLLA_GDB_PY_SOURCE}" == "repo" ]]
     then
-        if [[ "${PRODUCT}" == "scylla-enterprise" ]]
-        then
-            MAIN_BRANCH=enterprise
-        else
-            MAIN_BRANCH=master
-        fi
-
         WORKDIR=$(pwd)
         cd ${SCYLLA_REPO_PATH}
         git checkout -q $MAIN_BRANCH
