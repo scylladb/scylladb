@@ -512,8 +512,6 @@ extern std::ostream& operator<<(std::ostream&, const column_value&);
 
 extern std::ostream& operator<<(std::ostream&, const expression&);
 
-extern std::ostream& operator<<(std::ostream&, const expression::printer&);
-
 data_type type_of(const expression& e);
 
 
@@ -555,9 +553,7 @@ public:
 
     template <typename FormatContext>
     auto format(const cql3::expr::expression& expr, FormatContext& ctx) const {
-        std::ostringstream os;
-        os << cql3::expr::expression::printer{.expr_to_print = expr, .debug_mode = _debug, .for_metadata = _for_metadata};
-        return fmt::format_to(ctx.out(), "{}", os.str());
+        return fmt::format_to(ctx.out(), "{}", cql3::expr::expression::printer{.expr_to_print = expr, .debug_mode = _debug, .for_metadata = _for_metadata});
     }
 };
 
@@ -569,11 +565,7 @@ struct fmt::formatter<cql3::expr::expression::printer> {
     }
 
     template <typename FormatContext>
-    auto format(const cql3::expr::expression::printer& pr, FormatContext& ctx) const {
-        std::ostringstream os;
-        os << pr;
-        return fmt::format_to(ctx.out(), "{}", os.str());
-    }
+    auto format(const cql3::expr::expression::printer& pr, FormatContext& ctx) const -> decltype(ctx.out());
 };
 
 /// Required for fmt::join() to work on ExpressionElement, and for {:user}/{:debug} to work on ExpressionElement.

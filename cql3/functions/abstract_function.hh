@@ -13,15 +13,15 @@
 #include "function.hh"
 #include "types/types.hh"
 #include "cql3/cql3_type.hh"
-#include <vector>
-#include <iosfwd>
-#include <boost/functional/hash.hpp>
-
 #include "cql3/functions/function_name.hh"
+#include <vector>
+#include <boost/functional/hash.hpp>
+#include <fmt/core.h>
 
-namespace std {
-    std::ostream& operator<<(std::ostream& os, const std::vector<data_type>& arg_types);
-}
+
+template <> struct fmt::formatter<std::vector<data_type>> : fmt::formatter<std::string_view> {
+    auto format(const std::vector<data_type>& arg_types, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
 
 namespace cql3 {
 

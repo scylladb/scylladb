@@ -8,20 +8,21 @@
 
 #include "cql3/values.hh"
 
-namespace cql3 {
-
-std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
-    seastar::visit(value._data, [&] (FragmentedView auto v) {
-        os << "{ value: ";
+auto fmt::formatter<cql3::raw_value_view>::format(const cql3::raw_value_view& value, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    return seastar::visit(value._data, [&] (FragmentedView auto v) {
+        out = fmt::format_to(out, "{{ value: ");
         for (bytes_view frag : fragment_range(v)) {
-            os << frag;
+            out = fmt::format_to(out, "{}", fmt_hex(frag));
         }
-        os << " }";
-    }, [&] (null_value) {
-        os << "{ null }";
+        return fmt::format_to(out, " }}");
+    }, [&] (cql3::null_value) {
+        return fmt::format_to(out, "{{ null }}");
     });
-    return os;
 }
+
+namespace cql3 {
 
 raw_value_view raw_value::view() const {
     switch (_data.index()) {
@@ -69,10 +70,6 @@ bool operator==(const raw_value& v1, const raw_value& v2) {
     }
 
     return false;
-}
-
-std::ostream& operator<<(std::ostream& os, const raw_value& value) {
-    return os << value.view();
 }
 
 }

@@ -34,6 +34,14 @@ std::ostream& boost_test_print_type(std::ostream& os, const std::vector<cql3::ex
 }
 }
 
+namespace cql3 {
+// required by BOOST_REQUIRE_EQUAL
+std::ostream& boost_test_print_type(std::ostream& os, const raw_value& value) {
+    fmt::print(os, "{}", value);
+    return os;
+}
+}
+
 bind_variable new_bind_variable(int bind_index, data_type type = int32_type) {
     return bind_variable {
         .bind_index = bind_index,

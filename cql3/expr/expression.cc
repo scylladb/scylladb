@@ -1027,10 +1027,17 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
         .debug_mode = false
     };
 
-    return os << pr;
+    fmt::print(os, "{}", pr);
+    return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
+}
+}
+
+template <typename FormatContext>
+auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::expression::printer& pr, FormatContext& ctx) const
+        -> decltype(ctx.out()) {
+    using namespace cql3::expr;
     // Wraps expression in expression::printer to forward formatting options
     auto to_printer = [&pr] (const expression& expr) -> expression::printer {
         return expression::printer {
@@ -1040,103 +1047,104 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
         };
     };
 
-    expr::visit(overloaded_functor{
+    auto out = ctx.out();
+    cql3::expr::visit(overloaded_functor{
             [&] (const constant& v) {
                 if (pr.debug_mode) {
-                    os << v.view();
+                    out = fmt::format_to(out, "{}", v.view());
                 } else {
                     if (v.value.is_null()) {
-                        os << "null";
+                        out = fmt::format_to(out, "null");
                     } else {
                         v.value.view().with_value([&](const FragmentedView auto& bytes_view) {
                             data_value deser_val = v.type->deserialize(bytes_view);
-                            os << deser_val.to_parsable_string();
+                            out = fmt::format_to(out, "{}", deser_val.to_parsable_string());
                         });
                     }
                 }
             },
-            [&] (const conjunction& conj) {
-                fmt::print(os, "({})", fmt::join(conj.children | transformed(to_printer), ") AND ("));
+            [&] (const cql3::expr::conjunction& conj) {
+                out = fmt::format_to(out, "({})", fmt::join(conj.children | transformed(to_printer), ") AND ("));
             },
             [&] (const binary_operator& opr) {
                 if (pr.debug_mode) {
-                    os << "(" << to_printer(opr.lhs) << ") " << opr.op << ' ' << to_printer(opr.rhs);
+                    out = fmt::format_to(out, "({}) {} {}", to_printer(opr.lhs), opr.op, to_printer(opr.rhs));
                     if (opr.null_handling == null_handling_style::lwt_nulls) {
-                        os << " [[lwt_nulls]]";
+                        out = fmt::format_to(out, " [[lwt_nulls]]");
                     }
                 } else {
                     if (opr.op == oper_t::IN && is<collection_constructor>(opr.rhs)) {
                         tuple_constructor rhs_tuple {
                             .elements = as<collection_constructor>(opr.rhs).elements
                         };
-                        os << to_printer(opr.lhs) << ' ' << opr.op << ' ' << to_printer(rhs_tuple);
+                        out = fmt::format_to(out, "{} {} {}", to_printer(opr.lhs), opr.op, to_printer(rhs_tuple));
                     } else if (opr.op == oper_t::IN && is<constant>(opr.rhs) && as<constant>(opr.rhs).type->without_reversed().is_list()) {
                         tuple_constructor rhs_tuple;
                         const list_type_impl* list_typ = dynamic_cast<const list_type_impl*>(&as<constant>(opr.rhs).type->without_reversed());
                         for (const managed_bytes_opt& elem : get_list_elements(as<constant>(opr.rhs).value)) {
-                            rhs_tuple.elements.push_back(constant(raw_value::make_value(elem), list_typ->get_elements_type()));
+                            rhs_tuple.elements.push_back(constant(cql3::raw_value::make_value(elem), list_typ->get_elements_type()));
                         }
-                        os << to_printer(opr.lhs) << ' ' << opr.op << ' ' << to_printer(rhs_tuple);
+                        out = fmt::format_to(out, "{} {} {}", to_printer(opr.lhs), opr.op, to_printer(rhs_tuple));
                     } else {
-                        os << to_printer(opr.lhs) << ' ' << opr.op << ' ' << to_printer(opr.rhs);
+                        out = fmt::format_to(out, "{} {} {}", to_printer(opr.lhs), opr.op, to_printer(opr.rhs));
                     }
                 }
             },
             [&] (const column_value& col) {
                 if (pr.for_metadata) {
-                    fmt::print(os, "{}", col.col->name_as_text());
+                    out = fmt::format_to(out, "{}", col.col->name_as_text());
                 } else {
-                    fmt::print(os, "{}", col.col->name_as_cql_string());
+                    out = fmt::format_to(out, "{}", col.col->name_as_cql_string());
                 }
             },
             [&] (const subscript& sub) {
-                fmt::print(os, "{}[{}]", to_printer(sub.val), to_printer(sub.sub));
+                out = fmt::format_to(out, "{}[{}]", to_printer(sub.val), to_printer(sub.sub));
             },
             [&] (const unresolved_identifier& ui) {
                 if (pr.debug_mode) {
-                    fmt::print(os, "unresolved({})", *ui.ident);
+                    out = fmt::format_to(out, "unresolved({})", *ui.ident);
                 } else {
-                    fmt::print(os, "{}", cql3::util::maybe_quote(ui.ident->to_string()));
+                    out = fmt::format_to(out, "{}", cql3::util::maybe_quote(ui.ident->to_string()));
                 }
             },
             [&] (const column_mutation_attribute& cma)  {
                 if (!pr.for_metadata) {
-                    fmt::print(os, "{}({})",
+                    out = fmt::format_to(out, "{}({})",
                             cma.kind,
                             to_printer(cma.column));
                 } else {
                     auto kind = fmt::format("{}", cma.kind);
                     std::transform(kind.begin(), kind.end(), kind.begin(), [] (unsigned char c) { return std::tolower(c); });
-                    fmt::print(os, "{}({})", kind, to_printer(cma.column));
+                    out = fmt::format_to(out, "{}({})", kind, to_printer(cma.column));
                 }
             },
             [&] (const function_call& fc)  {
                 if (is_token_function(fc)) {
                     if (!pr.for_metadata) {
-                        fmt::print(os, "token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                        out = fmt::format_to(out, "token({})", fmt::join(fc.args | transformed(to_printer), ", "));
                     } else {
-                        fmt::print(os, "system.token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                        out = fmt::format_to(out, "system.token({})", fmt::join(fc.args | transformed(to_printer), ", "));
                     }
                 } else {
                     std::visit(overloaded_functor{
-                        [&] (const functions::function_name& named) {
-                            fmt::print(os, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
+                        [&] (const cql3::functions::function_name& named) {
+                            out = fmt::format_to(out, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
                         },
-                        [&] (const shared_ptr<functions::function>& fn) {
+                        [&] (const shared_ptr<cql3::functions::function>& fn) {
                             if (!pr.debug_mode && fn->name() == cql3::functions::aggregate_fcts::first_function_name()) {
                                 // The "first" function is artificial, don't emit it
-                                fmt::print(os, "{}", to_printer(fc.args[0]));
+                                out = fmt::format_to(out, "{}", to_printer(fc.args[0]));
                             } else if (!pr.for_metadata) {
-                                fmt::print(os, "{}({})", fn->name(), fmt::join(fc.args | transformed(to_printer), ", "));
+                                out = fmt::format_to(out, "{}({})", fn->name(), fmt::join(fc.args | transformed(to_printer), ", "));
                             } else {
                                 const std::string_view fn_name = fn->name().name;
                                 if (fn->name().keyspace == "system" && fn_name.starts_with("castas")) {
                                     auto cast_type = fn_name.substr(6);
-                                    fmt::print(os, "cast({} as {})", fmt::join(fc.args | transformed(to_printer) | transformed(fmt::to_string<expression::printer>), ", "),
+                                    out = fmt::format_to(out, "cast({} as {})", fmt::join(fc.args | transformed(to_printer), ", "),
                                          cast_type);
                                 } else {
                                     auto args = boost::copy_range<std::vector<sstring>>(fc.args | transformed(to_printer) | transformed(fmt::to_string<expression::printer>));
-                                    fmt::print(os, "{}", fn->column_name(args));
+                                    out = fmt::format_to(out, "{}", fn->column_name(args));
                                 }
                             }
                         },
@@ -1145,92 +1153,102 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
             },
             [&] (const cast& c)  {
                 auto type_str = std::visit(overloaded_functor{
-                    [&] (const cql3_type& t) {
+                    [&] (const cql3::cql3_type& t) {
                         return fmt::format("{}", t);
                     },
-                    [&] (const shared_ptr<cql3_type::raw>& t) {
+                    [&] (const shared_ptr<cql3::cql3_type::raw>& t) {
                         return fmt::format("{}", t);
                     }}, c.type);
 
                 switch (c.style) {
                 case cast::cast_style::sql:
-                    fmt::print(os, "({} AS {})", to_printer(c.arg), type_str);
+                    out = fmt::format_to(out, "({} AS {})", to_printer(c.arg), type_str);
                     return;
                 case cast::cast_style::c:
-                    fmt::print(os, "({}) {}", type_str, to_printer(c.arg));
+                    out = fmt::format_to(out, "({}) {}", type_str, to_printer(c.arg));
                     return;
                 }
                 on_internal_error(expr_logger, "unexpected cast_style");
             },
             [&] (const field_selection& fs)  {
                 if (pr.debug_mode) {
-                    fmt::print(os, "({}.{})", to_printer(fs.structure), fs.field);
+                    out = fmt::format_to(out, "({}.{})", to_printer(fs.structure), fs.field);
                 } else {
-                    fmt::print(os, "{}.{}", to_printer(fs.structure), fs.field);
+                    out = fmt::format_to(out, "{}.{}", to_printer(fs.structure), fs.field);
                 }
             },
             [&] (const bind_variable&) {
                 // FIXME: store and present bind variable name
-                fmt::print(os, "?");
+                out = fmt::format_to(out, "?");
             },
             [&] (const untyped_constant& uc) {
                 if (uc.partial_type == untyped_constant::type_class::string) {
-                    fmt::print(os, "'{}'", uc.raw_text);
+                    out = fmt::format_to(out, "'{}'", uc.raw_text);
                 } else {
-                    fmt::print(os, "{}", uc.raw_text);
+                    out = fmt::format_to(out, "{}", uc.raw_text);
                 }
             },
             [&] (const tuple_constructor& tc) {
-                fmt::print(os, "({})", fmt::join(tc.elements | transformed(to_printer), ", "));
+                out = fmt::format_to(out, "({})", fmt::join(tc.elements | transformed(to_printer), ", "));
             },
             [&] (const collection_constructor& cc) {
                 switch (cc.style) {
                 case collection_constructor::style_type::list: {
-                    fmt::print(os, "[{}]", fmt::join(cc.elements | transformed(to_printer), ", "));
+                    out = fmt::format_to(out, "[{}]", fmt::join(cc.elements | transformed(to_printer), ", "));
                     return;
                 }
                 case collection_constructor::style_type::set: {
-                    fmt::print(os, "{{{}}}", fmt::join(cc.elements | transformed(to_printer), ", "));
+                    out = fmt::format_to(out, "{{{}}}", fmt::join(cc.elements | transformed(to_printer), ", "));
                     return;
                 }
                 case collection_constructor::style_type::map: {
-                    fmt::print(os, "{{");
+                    out = fmt::format_to(out, "{{");
                     bool first = true;
                     for (auto& e : cc.elements) {
                         if (!first) {
-                            fmt::print(os, ", ");
+                            out = fmt::format_to(out, ", ");
                         }
                         first = false;
-                        auto& tuple = expr::as<tuple_constructor>(e);
+                        auto& tuple = cql3::expr::as<tuple_constructor>(e);
                         if (tuple.elements.size() != 2) {
                             on_internal_error(expr_logger, "map constructor element is not a tuple of arity 2");
                         }
-                        fmt::print(os, "{}:{}", to_printer(tuple.elements[0]), to_printer(tuple.elements[1]));
+                        out = fmt::format_to(out, "{}:{}", to_printer(tuple.elements[0]), to_printer(tuple.elements[1]));
                     }
-                    fmt::print(os, "}}");
+                    out = fmt::format_to(out, "}}");
                     return;
                 }
                 }
                 on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(cc.style)));
             },
             [&] (const usertype_constructor& uc) {
-                fmt::print(os, "{{");
+                out = fmt::format_to(out, "{{");
                 bool first = true;
                 for (auto& [k, v] : uc.elements) {
                     if (!first) {
-                        fmt::print(os, ", ");
+                        out = fmt::format_to(out, ", ");
                     }
                     first = false;
-                    fmt::print(os, "{}:{}", k, to_printer(v));
+                    out = fmt::format_to(out, "{}:{}", k, to_printer(v));
                 }
-                fmt::print(os, "}}");
+                out = fmt::format_to(out, "}}");
             },
             [&] (const temporary& t) {
-                fmt::print(os, "@temporary{}", t.index);
+                out = fmt::format_to(out, "@temporary{}", t.index);
             }
         }, pr.expr_to_print);
-    return os;
+    return out;
 }
+
+template auto
+fmt::formatter<cql3::expr::expression::printer>::format<fmt::format_context>(const cql3::expr::expression::printer&, fmt::format_context& ctx) const
+    -> decltype(ctx.out());
+template auto
+fmt::formatter<cql3::expr::expression::printer>::format<fmt::basic_format_context<std::back_insert_iterator<std::string>, char>>(const cql3::expr::expression::printer&, fmt::basic_format_context<std::back_insert_iterator<std::string>, char>& ctx) const
+    -> decltype(ctx.out());
+
+namespace cql3 {
+namespace expr {
 
 sstring to_string(const expression& expr) {
     return fmt::format("{}", expr);
