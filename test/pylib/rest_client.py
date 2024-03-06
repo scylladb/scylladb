@@ -276,7 +276,7 @@ class ScyllaRESTAPIClient():
         """Flush the specified or all tables in the keyspace"""
         url = f"/storage_service/keyspace_flush/{keyspace}"
         if table is not None:
-            url += "?cf={table}"
+            url += f"?cf={table}"
         await self.client.post(url, host=node_ip)
 
     async def keyspace_compaction(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> None:
@@ -308,6 +308,33 @@ class ScyllaRESTAPIClient():
         status = await self.client.get_json(f"/storage_service/repair_status", host=node_ip, params={"id": str(sequence_number)})
         if status != 'SUCCESSFUL':
             raise Exception(f"Repair id {sequence_number} on node {node_ip} for table {keyspace}.{table} failed: status={status}")
+
+    def __get_autocompaction_url(self, keyspace: str, table: Optional[str] = None) -> str:
+        """Return autocompaction url for the given keyspace/table"""
+        return f"/storage_service/auto_compaction/{keyspace}" if not table else \
+            f"/column_family/autocompaction/{keyspace}:{table}"
+
+    async def enable_autocompaction(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> None:
+        """Enable autocompaction for the given keyspace/table"""
+        await self.client.post(self.__get_autocompaction_url(keyspace, table), host=node_ip)
+
+    async def disable_autocompaction(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> None:
+        """Disable autocompaction for the given keyspace/table"""
+        await self.client.delete(self.__get_autocompaction_url(keyspace, table), host=node_ip)
+
+    async def get_sstable_info(self, node_ip: str, keyspace: Optional[str] = None, table: Optional[str] = None):
+        url = "/storage_service/sstable_info"
+        params = []
+        if keyspace:
+            params.append(f"keyspace={keyspace}")
+        if table:
+            params.append(f"cf={table}")
+        if params:
+            url += f"?{'&'.join(params)}"
+
+        data = await self.client.get_json(url, host=node_ip)
+        assert(type(data) == list)
+        return data
 
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):

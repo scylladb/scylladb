@@ -61,3 +61,37 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
     assert len(rows) == len(keys)
     for r in rows:
         assert r.c == r.pk
+
+async def test_reshape_with_tablets(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets', 'consistent-topology-changes']}
+    server = (await manager.servers_add(1, config=cfg, cmdline=['--smp', '1']))[0]
+
+    logger.info("Creating table")
+    cql = manager.get_cql()
+    number_of_tablets = 2
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} and tablets = {{'initial': {number_of_tablets} }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    logger.info("Disabling autocompaction for the table")
+    await manager.api.disable_autocompaction(server.ip_addr, "test", "test")
+
+    logger.info("Populating table")
+    loop_count = 32
+    for _ in range(loop_count):
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in range(64)])
+        await manager.api.keyspace_flush(server.ip_addr, "test", "test")
+    # After populating the table, expect loop_count number of sstables per tablet
+    sstable_info = await manager.api.get_sstable_info(server.ip_addr, "test", "test")
+    assert len(sstable_info[0]['sstables']) == number_of_tablets * loop_count
+
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+
+    # Restart the server and verify that the sstables have been reshaped down to one sstable per tablet
+    logger.info("Restart the server")
+    await manager.server_restart(server.server_id)
+
+    await log.wait_for("Reshape test.test .* Reshaped 32 sstables to .*", mark, 30)
+    sstable_info = await manager.api.get_sstable_info(server.ip_addr, "test", "test")
+    assert len(sstable_info[0]['sstables']) == number_of_tablets

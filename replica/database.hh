@@ -1001,6 +1001,9 @@ public:
                                         std::optional<tasks::task_info> info = std::nullopt,
                                         do_flush = do_flush::yes);
     unsigned estimate_pending_compactions() const;
+    size_t get_compaction_group_id_for_sstable(const sstables::shared_sstable& sst) const noexcept {
+        return compaction_group_for_sstable(sst).group_id();
+    }
 
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
