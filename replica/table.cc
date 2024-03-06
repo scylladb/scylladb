@@ -3297,7 +3297,7 @@ public:
         return _t._compaction_manager.get_backlog_tracker(*this);
     }
     const std::string get_group_id() const noexcept override {
-        return fmt::format("{}/{}", _cg.group_id(), _t._compaction_groups.size());
+        return fmt::format("{}", _cg.group_id());
     }
 
     seastar::condition_variable& get_staging_done_condition() noexcept override {
