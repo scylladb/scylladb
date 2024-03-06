@@ -6,9 +6,9 @@ set(CMAKE_CXX_FLAGS_DEV
 update_cxx_flags(CMAKE_CXX_FLAGS_DEV
   OPTIMIZATION_LEVEL "2")
 
-set(scylla_build_mode "dev")
+set(scylla_build_mode_Dev "dev")
 set(Seastar_DEFINITIONS_DEV
-  SCYLLA_BUILD_MODE=${scylla_build_mode}
+  SCYLLA_BUILD_MODE=${scylla_build_mode_Dev}
   DEVEL
   SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION
   SCYLLA_ENABLE_ERROR_INJECTION)

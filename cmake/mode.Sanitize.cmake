@@ -7,9 +7,9 @@ update_cxx_flags(CMAKE_CXX_FLAGS_SANITIZE
   WITH_DEBUG_INFO
   OPTIMIZATION_LEVEL "s")
 
-set(scylla_build_mode "sanitize")
+set(scylla_build_mode_Sanitize "sanitize")
 set(Seastar_DEFINITIONS_SANITIZE
-  SCYLLA_BUILD_MODE=${scylla_build_mode}
+  SCYLLA_BUILD_MODE=${scylla_build_mode_Sanitize}
   DEBUG
   SANITIZE
   DEBUG_LSA_SANITIZER

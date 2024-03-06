@@ -7,9 +7,9 @@ update_cxx_flags(CMAKE_CXX_FLAGS_COVERAGE
   WITH_DEBUG_INFO
   OPTIMIZATION_LEVEL "g")
 
-set(scylla_build_mode "coverage")
+set(scylla_build_mode_Coverage "coverage")
 set(Seastar_DEFINITIONS_COVERAGE
-  SCYLLA_BUILD_MODE=${scylla_build_mode}
+  SCYLLA_BUILD_MODE=${scylla_build_mode_Coverage}
   DEBUG
   SANITIZE
   DEBUG_LSA_SANITIZER
