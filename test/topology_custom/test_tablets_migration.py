@@ -242,3 +242,51 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
     assert len(replicas) == 1
     for r in replicas[0].replicas:
         assert r[0] != host_ids[failer.fail_idx]
+
+@pytest.mark.asyncio
+async def test_tablet_back_and_forth_migration(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets', 'consistent-topology-changes']}
+    host_ids = []
+    servers = []
+
+    async def make_server():
+        s = await manager.server_add(config=cfg)
+        servers.append(s)
+        host_ids.append(await manager.get_host_id(s.server_id))
+        await manager.api.disable_tablet_balancing(s.ip_addr)
+
+    async def assert_rows(num):
+        res = await cql.run_async(f"SELECT * FROM test.test")
+        assert len(res) == num
+
+    await make_server()
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await make_server()
+
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({1}, {1});")
+    await assert_rows(1)
+
+    replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    logger.info(f"Tablet is on [{replicas}]")
+    assert len(replicas) == 1 and len(replicas[0].replicas) == 1
+
+    old_replica = replicas[0].replicas[0]
+    assert old_replica[0] != host_ids[1]
+    new_replica = (host_ids[1], 0)
+
+    logger.info(f"Moving tablet {old_replica} -> {new_replica}")
+    manager.api.move_tablet(servers[0].ip_addr, "test", "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+
+    await assert_rows(1)
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({2}, {2});")
+    await assert_rows(2)
+
+    logger.info(f"Moving tablet {new_replica} -> {old_replica}")
+    manager.api.move_tablet(servers[0].ip_addr, "test", "test", new_replica[0], new_replica[1], old_replica[0], old_replica[1], 0)
+
+    await assert_rows(2)
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({3}, {3});")
+    await assert_rows(3)
