@@ -60,8 +60,12 @@ def normalize_samplings(samplings):
     return sorted(normalized.items())
 
 
-@pytest.mark.parametrize("empty_samplings", [True, False])
-def test_toppartitions(nodetool, request, empty_samplings):
+@pytest.mark.parametrize("empty_samplings,samplers", [(True, "READS"),
+                                                      (True, "READS,WRITES"),
+                                                      (True, ""),
+                                                      (False, "WRITES"),
+                                                      (False, "")])
+def test_toppartitions(nodetool, request, empty_samplings, samplers):
 
     if empty_samplings:
         samplings = {
@@ -100,6 +104,10 @@ def test_toppartitions(nodetool, request, empty_samplings):
         "-k": list_size,
         "--cf-filters": table_filters,
     }
+    if samplers:
+        options["-a"] = samplers
+    else:
+        samplers = "WRITES,READS"
     args = []
     for name, value in options.items():
         args.extend([name, str(value)])
@@ -112,14 +120,16 @@ def test_toppartitions(nodetool, request, empty_samplings):
         # scylla sends list_size, while cassandra's nodetool does not.
         params['list_size'] = str(list_size)
     actual_output = nodetool("toppartitions", *args, expected_requests=[
-        expected_request("GET", "/storage_service/toppartitions",
+        expected_request("GET", "/storage_service/toppartitions/",
                          params=params,
                          response=response),
     ])
 
     expected_output = ''
     first = True
-    for operation in ('read', 'write'):
+    for sampler in samplers.lower().split(','):
+        # remove the trailing "s"
+        operation = sampler[:-1]
         operation_upper = operation.upper()
         cardinality = samplings[f'{operation}_cardinality']
         expected_output += f'''\
