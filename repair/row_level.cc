@@ -741,6 +741,12 @@ private:
     is_dirty_on_master _dirty_on_master = is_dirty_on_master::no;
     std::optional<shared_future<>> _stopped;
     repair_hasher _repair_hasher;
+<<<<<<< HEAD
+=======
+    gc_clock::time_point _compaction_time;
+    bool _is_tablet;
+    reader_concurrency_semaphore::inactive_read_handle _fake_inactive_read_handle;
+>>>>>>> c6e108ab5e (repair: resolve start-up deadlock)
 public:
     std::vector<repair_node_state>& all_nodes() {
         return _all_node_states;
@@ -852,6 +858,13 @@ public:
             for (auto& node : all_live_peer_nodes) {
                 _all_node_states.push_back(repair_node_state(node));
             }
+            // Mark the permit as evictable immediately. If there are multiple
+            // repairs launched, they can deadlock in the initial phase, before
+            // they start reading from disk (which is the point where they
+            // become evictable normally).
+            // Prevent this by marking the permit as evictable ASAP.
+            // FIXME: provide a better API for this, this is very clunky
+            _fake_inactive_read_handle = _db.local().get_reader_concurrency_semaphore().register_inactive_read(make_empty_flat_reader_v2(_schema, _permit));
     }
 
 public:
@@ -1053,10 +1066,84 @@ private:
     future<std::tuple<std::list<repair_row>, size_t>>
     read_rows_from_disk(size_t cur_size) {
         using value_type = std::tuple<std::list<repair_row>, size_t>;
+<<<<<<< HEAD
         return do_with(cur_size, size_t(0), std::list<repair_row>(), [this] (size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
             return repeat([this, &cur_size, &cur_rows, &new_rows_size] () mutable {
                 if (cur_size >= _max_row_buf_size) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
+=======
+        size_t new_rows_size = 0;
+        std::list<repair_row> cur_rows;
+        std::exception_ptr ex;
+        if (!_repair_reader) {
+            // We are about to create a real evictable reader, so drop the fake
+            // reader (evicted or not), we don't need it anymore.
+            _db.local().get_reader_concurrency_semaphore().unregister_inactive_read(std::move(_fake_inactive_read_handle));
+            _repair_reader.emplace(_db,
+                _db.local().find_column_family(_schema->id()),
+                _schema,
+                _permit,
+                _range,
+                _remote_sharder,
+                _master_node_shard_config.shard,
+                _seed,
+                std::invoke([this]() {
+                    if (_repair_master || _same_sharding_config || _is_tablet) {
+                        rlogger.debug("repair_reader: meta_id={}, _repair_master={}, _same_sharding_config={},"
+                                      "read_strategy {} is chosen",
+                           _repair_meta_id, _repair_master, _same_sharding_config,
+                           repair_reader::read_strategy::local);
+                        return repair_reader::read_strategy::local;
+                    }
+
+                    // multishard_filter means load all the data in the range and apply
+                    // filter by master shard on top, discarding partitions from other shards.
+                    // multishard_split means split the range into multiple subranges,
+                    // each containing only the required data from the master shard.
+                    // For situations with a sparse data set spread across numerous ranges,
+                    // the overhead from continuously switching between these ranges,
+                    // specifically during the fast_forward_to function on the multishard_reader,
+                    // can become the main factor in performance.
+                    // Similarly, with multishard_filter, reading all the partitions within
+                    // the range can lead to the next_partition cost dominating the overall cost.
+                    // The heuristic here chooses the strategy with minimal such cost.
+                    // Note that with multishard_filter we don't read entire partitions which
+                    // can be a huge waste. We only fill the buffer inside
+                    // flat_mutation_reader_v2, if a partition is found to belong to the incorrect
+                    // master shard, we call next_partition(), which effectively clears
+                    // the buffer until the next partition is reached.
+
+                    if (!_local_range_estimation) {
+                        // this should not normally happen since the master
+                        // calls get_estimated_partitions before get_sync_boundary
+                        rlogger.warn("repair_reader: meta_id={}, no _local_range_estimation, "
+                                     "read_strategy {} is chosen",
+                            _repair_meta_id, repair_reader::read_strategy::multishard_split);
+                        return repair_reader::read_strategy::multishard_split;
+                    }
+
+                    const auto read_strategy =
+                        _local_range_estimation->partitions_count <= _local_range_estimation->master_subranges_count
+                        ? repair_reader::read_strategy::multishard_filter
+                        : repair_reader::read_strategy::multishard_split;
+                    rlogger.debug("repair_reader: meta_id={}, _local_range_estimation: partitions_count={}, "
+                                  "master_subranges_count={}, read_strategy {} is chosen",
+                        _repair_meta_id,
+                        _local_range_estimation->partitions_count,
+                        _local_range_estimation->master_subranges_count,
+                        read_strategy);
+                    return read_strategy;
+                }),
+                _compaction_time);
+        }
+        try {
+            while (cur_size < _max_row_buf_size) {
+                _gate.check();
+                mutation_fragment_opt mfopt = co_await _repair_reader->read_mutation_fragment();
+                if (!mfopt) {
+                    co_await _repair_reader->on_end_of_stream();
+                    break;
+>>>>>>> c6e108ab5e (repair: resolve start-up deadlock)
                 }
                 _gate.check();
                 return _repair_reader.read_mutation_fragment().then([this, &cur_size, &new_rows_size, &cur_rows] (mutation_fragment_opt mfopt) mutable {
