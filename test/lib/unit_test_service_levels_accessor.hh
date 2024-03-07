@@ -10,6 +10,7 @@
 #include "service/qos/qos_common.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "test/lib/unit_test_raft_service_levels_accessor.hh"
 #pragma once
 
 namespace qos {
@@ -44,6 +45,11 @@ public:
             return _sys_dist_ks.local().drop_service_level(service_level_name).then([this] () {
                 return _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
             });
+        }
+
+        virtual ::shared_ptr<service_level_distributed_data_accessor> upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const override {
+            return ::static_pointer_cast<service_level_controller::service_level_distributed_data_accessor>(
+                ::make_shared<unit_test_raft_service_levels_accessor>(qp, group0_client, _sl_controller));
         }
 };
 

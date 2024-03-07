@@ -8,6 +8,7 @@
 
 #include "standard_service_level_distributed_data_accessor.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/raft/raft_group0_client.hh"
 
 namespace qos {
@@ -30,6 +31,11 @@ future<> standard_service_level_distributed_data_accessor::set_service_level(sst
 
 future<> standard_service_level_distributed_data_accessor::drop_service_level(sstring service_level_name, std::optional<service::group0_guard>, abort_source&) const {
     return _sys_dist_ks.drop_service_level(service_level_name);
+}
+
+::shared_ptr<service_level_controller::service_level_distributed_data_accessor> standard_service_level_distributed_data_accessor::upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const {
+    return ::static_pointer_cast<service_level_controller::service_level_distributed_data_accessor>(
+                ::make_shared<raft_service_level_distributed_data_accessor>(qp, group0_client));
 }
 
 }

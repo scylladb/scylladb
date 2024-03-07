@@ -52,6 +52,9 @@ public:
         virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const = 0;
         virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const = 0;
         virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard, abort_source& as) const = 0;
+
+        // Returns v2(raft) data accessor. If data accessor is already a raft one, returns nullptr.
+        virtual ::shared_ptr<service_level_distributed_data_accessor> upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const = 0;
     };
     using service_level_distributed_data_accessor_ptr = ::shared_ptr<service_level_distributed_data_accessor>;
 
@@ -180,6 +183,8 @@ public:
      * Returns true if service levels module is running under raft
      */
     bool is_v2() const;
+
+    void upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client);
 
 private:
     /**

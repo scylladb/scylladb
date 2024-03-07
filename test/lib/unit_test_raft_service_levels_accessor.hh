@@ -30,6 +30,10 @@ public:
         co_await raft_service_level_distributed_data_accessor::drop_service_level(std::move(service_level_name), std::move(guard), as);
         co_await _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
     }
+
+    virtual ::shared_ptr<service_level_distributed_data_accessor> upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const override {
+        return nullptr;
+    }
 };
 
 }

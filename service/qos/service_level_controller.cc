@@ -425,6 +425,17 @@ bool service_level_controller::is_v2() const {
     return false;
 }
 
+void service_level_controller::upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) {
+    if (!_sl_data_accessor) {
+        return;
+    }
+
+    auto v2_data_accessor = _sl_data_accessor->upgrade_to_v2(qp, group0_client);
+    if (v2_data_accessor) {
+        _sl_data_accessor = v2_data_accessor;
+    }
+}
+
 future<> service_level_controller::do_remove_service_level(sstring name, bool remove_static) {
     auto service_level_it = _service_levels_db.find(name);
     if (service_level_it != _service_levels_db.end()) {
