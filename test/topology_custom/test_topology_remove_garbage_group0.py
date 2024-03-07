@@ -9,8 +9,10 @@ Test removenode with node with node no longer member
 import logging
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
+from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import get_token_ring_host_ids, get_current_group0_config, \
-                               check_token_ring_and_group0_consistency
+                               check_token_ring_and_group0_consistency, wait_for_token_ring_and_group0_consistency
+import time
 import pytest
 
 
@@ -27,6 +29,15 @@ async def test_remove_garbage_group0_members(manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False,
            'experimental_features': list[str]()}
     servers = [await manager.server_add(config=cfg) for _ in range(4)]
+
+    # Make sure that the driver has connected to all nodes, and they see each other as NORMAL
+    # (otherwise the driver may remove connection to some host, even after it manages to connect to it,
+    # because the node that it has control connection to considers that host as not NORMAL yet).
+    # This ensures that after we stop/remove some nodes in the test, the driver will still
+    # be able to connect to the remaining nodes. See scylladb/scylladb#16373
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
+    await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 60)
+
     removed_host_id = await manager.get_host_id(servers[0].server_id)
     await manager.server_stop_gracefully(servers[0].server_id)
 
