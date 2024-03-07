@@ -3048,6 +3048,9 @@ future<> topology_coordinator::do_upgrade_step(group0_guard guard) {
                 "topology_coordinator was started even though upgrade to raft topology was not requested yet")));
 
     case topology::upgrade_state_type::build_coordinator_state:
+        utils::get_local_injector().inject("topology_coordinator_fail_to_build_state_during_upgrade", [] {
+            throw std::runtime_error("failed to build topology coordinator state due to error injection");
+        });
         co_await build_coordinator_state(std::move(guard));
         co_return;
 
