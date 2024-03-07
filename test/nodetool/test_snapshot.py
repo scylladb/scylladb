@@ -75,7 +75,7 @@ def test_listsnapshots(nodetool, request):
         expected_request("GET", "/storage_service/snapshots/size/true", response=945235),
         ])
 
-    cassandra_expected_output =\
+    expected_output =\
 """Snapshot Details: 
 Snapshot name Keyspace name Column family name True size Size on disk
 1698236289867 ks1           tbl1               0 bytes   44 KB       
@@ -86,22 +86,17 @@ Snapshot name Keyspace name Column family name True size Size on disk
 Total TrueDiskSpaceUsed: 923.08 KiB
 
 """
-    scylla_expected_output =\
-"""Snapshot Details:
-Snapshot name Keyspace name Column family name True size Size on disk
-1698236289867 ks1           tbl1                   0 B         44 KiB
-1698236289867 ks1           tbl2                   0 B         40 KiB
-1698236070745 ks1           tbl1                   0 B         34 KiB
-1698236070745 ks1           tbl2                   0 B         20 KiB
+    assert res == expected_output
 
-Total TrueDiskSpaceUsed: 923 KiB
 
-"""
-
+def test_listsnapshots_no_snapshots(nodetool, request):
+    res = nodetool("listsnapshots", expected_requests=[
+        expected_request("GET", "/storage_service/snapshots", response=[]),
+        ])
     if request.config.getoption("nodetool") == "scylla":
-        assert res == scylla_expected_output
+        assert res == "There are no snapshots\n"
     else:
-        assert res == cassandra_expected_output
+        assert res == "Snapshot Details: \nThere are no snapshots\n"
 
 
 def check_snapshot_out(res, tag, ktlist, skip_flush):
