@@ -14,6 +14,7 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <fmt/core.h>
 
 class partition_snapshot_row_cursor;
 
@@ -752,52 +753,57 @@ public:
         return _position;
     }
 
-    friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
-        fmt::print(out, "{{cursor: position={}, cont={}, rt={}}}",
+    friend fmt::formatter<partition_snapshot_row_cursor>;
+};
+
+template <> struct fmt::formatter<partition_snapshot_row_cursor> : fmt::formatter<std::string_view> {
+    auto format(const  partition_snapshot_row_cursor& cur, fmt::format_context& ctx) const {
+        auto out = ctx.out();
+        out = fmt::format_to(out, "{{cursor: position={}, cont={}, rt={}}}",
                    cur._position, cur.continuous(), cur.range_tombstone());
         if (cur.range_tombstone() != cur.range_tombstone_for_row()) {
-            fmt::print(out, ", row_rt={}", cur.range_tombstone_for_row());
+            out = fmt::format_to(out, ", row_rt={}", cur.range_tombstone_for_row());
         }
-        out << ", ";
+        out = fmt::format_to(out, ", ");
         if (cur._reversed) {
-            out << "reversed, ";
+            out = fmt::format_to(out, "reversed, ");
         }
         if (!cur.iterators_valid()) {
-            return out << " iterators invalid}";
+            return fmt::format_to(out, " iterators invalid}}");
         }
-        out << "snp=" << &cur._snp << ", current=[";
+        out = fmt::format_to(out, "snp={}, current=[", fmt::ptr(&cur._snp));
         bool first = true;
         for (auto&& v : cur._current_row) {
             if (!first) {
-                out << ", ";
+                out = fmt::format_to(out, ", ");
             }
             first = false;
-            fmt::print(out, "{{v={}, pos={}, cont={}, rt={}, row_rt={}}}",
+            out = fmt::format_to(out, "{{v={}, pos={}, cont={}, rt={}, row_rt={}}}",
                        v.version_no, v.it->position(), v.continuous, v.rt, v.it->range_tombstone());
         }
-        out << "], heap=[\n  ";
+        out = fmt::format_to(out, "], heap[\n  ");
         first = true;
         for (auto&& v : cur._heap) {
             if (!first) {
-                out << ",\n  ";
+                out = fmt::format_to(out, ",\n  ");
             }
             first = false;
-            fmt::print(out, "{{v={}, pos={}, cont={}, rt={}, row_rt={}}}",
+            out = fmt::format_to(out, "{{v={}, pos={}, cont={}, rt={}, row_rt={}}}",
                        v.version_no, v.it->position(), v.continuous, v.rt, v.it->range_tombstone());
         }
-        out << "], latest_iterator=[";
+        out = fmt::format_to(out, "], latest_iterator=[");
         if (cur._latest_it) {
             mutation_partition::rows_type::iterator i = *cur._latest_it;
             if (!i) {
-                fmt::print(out, "end");
+                out = fmt::format_to(out, "end");
             } else {
-                fmt::print(out, "{}", i->position());
+                out = fmt::format_to(out, "{}", i->position());
             }
         } else {
-            out << "<none>";
+            out = fmt::format_to(out, "<none>");
         }
-        return out << "]}";
-    };
+        return fmt::format_to(out, "]}}");
+    }
 };
 
 inline
