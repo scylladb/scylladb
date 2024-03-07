@@ -58,35 +58,47 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
     new_replica = (host_ids[2], 0)
     logger.info(f"Moving tablet {old_replica} -> {new_replica}")
 
-    fail_idx = 1 if fail_replica == "source" else 2
+    class node_failer:
+        def __init__(self, stage, replica):
+            self.stage = stage
+            self.replica = replica
+            self.fail_idx = 1 if self.replica == "source" else 2
 
-    logger.info(f"Will fail {fail_stage}")
-    if fail_stage == "streaming":
-        await manager.api.enable_injection(servers[2].ip_addr, "stream_mutation_fragments", one_shot=True)
-        s2_log = await manager.server_open_log(servers[2].server_id)
-        s2_mark = await s2_log.mark()
-    elif fail_stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new" ]:
-        await manager.api.enable_injection(servers[fail_idx].ip_addr, "raft_topology_barrier_and_drain_fail", one_shot=False, parameters={'keyspace': 'test', 'table': 'test', 'last_token': last_token, 'stage': fail_stage})
-        sx_log = await manager.server_open_log(servers[fail_idx].server_id)
-        sx_mark = await sx_log.mark()
-    else:
-        assert False, f"Unknown stage {fail_stage}"
+        async def setup(self):
+            logger.info(f"Will fail {self.stage}")
+            if self.stage == "streaming":
+                await manager.api.enable_injection(servers[2].ip_addr, "stream_mutation_fragments", one_shot=True)
+                self.log = await manager.server_open_log(servers[2].server_id)
+                self.mark = await self.log.mark()
+            elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new" ]:
+                await manager.api.enable_injection(servers[self.fail_idx].ip_addr, "raft_topology_barrier_and_drain_fail", one_shot=False, parameters={'keyspace': 'test', 'table': 'test', 'last_token': last_token, 'stage': self.stage})
+                self.log = await manager.server_open_log(servers[self.fail_idx].server_id)
+                self.mark = await self.log.mark()
+            else:
+                assert False, f"Unknown stage {self.stage}"
 
+        async def wait(self):
+            logger.info(f"Wait for {self.stage} to happen")
+            if self.stage == "streaming":
+                await self.log.wait_for('stream_mutation_fragments: waiting', from_mark=self.mark)
+            elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new" ]:
+                await self.log.wait_for('raft_topology_cmd: barrier handler waits', from_mark=self.mark);
+            else:
+                assert False
+
+        async def stop(self):
+            logger.info(f"Stop {self.replica} {host_ids[self.fail_idx]}")
+            await manager.server_stop(servers[self.fail_idx].server_id)
+            logger.info(f"Remove {self.replica} {host_ids[self.fail_idx]}")
+            await manager.remove_node(servers[0].server_id, servers[self.fail_idx].server_id)
+
+
+    failer = node_failer(fail_stage, fail_replica)
+    await failer.setup()
     migration_task = asyncio.create_task(
         manager.api.move_tablet(servers[0].ip_addr, "test", "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0))
-
-    logger.info(f"Wait for {fail_stage} to happen")
-    if fail_stage == "streaming":
-        await s2_log.wait_for('stream_mutation_fragments: waiting', from_mark=s2_mark)
-    elif fail_stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new" ]:
-        await sx_log.wait_for('raft_topology_cmd: barrier handler waits', from_mark=sx_mark);
-    else:
-        assert False
-
-    logger.info(f"Stop {fail_replica} {host_ids[fail_idx]}")
-    await manager.server_stop(servers[fail_idx].server_id)
-    logger.info(f"Remove {fail_replica} {host_ids[fail_idx]}")
-    await manager.remove_node(servers[0].server_id, servers[fail_idx].server_id)
+    await failer.wait()
+    await failer.stop()
 
     logger.info("Done, waiting for migration to finish")
     await migration_task
@@ -95,4 +107,4 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
     logger.info(f"Tablet is now on [{replicas}]")
     assert len(replicas) == 1
     for r in replicas[0].replicas:
-        assert r[0] != host_ids[fail_idx]
+        assert r[0] != host_ids[failer.fail_idx]
