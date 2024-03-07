@@ -723,6 +723,9 @@ class BoostTest(UnitTest):
             os.unlink(self.xmlout)
         except ET.ParseError as e:
             message = palette.crit(f"failed to parse XML output '{self.xmlout}': {e}")
+            if e.msg.__contains__("no element found"):
+                message = palette.crit(f"Empty testcase XML output, possibly caused by a crash in the cql_test_env.cc, "
+                                       f"details: '{self.xmlout}': {e}")
             print(f"error: {self.name}: {message}")
 
     def check_log(self, trim: bool) -> None:
