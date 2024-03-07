@@ -40,8 +40,7 @@ def test_storage_service_keyspaces(cql, this_dc, rest_api):
         resp.raise_for_status()
         assert keyspace in resp.json()
 
-@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
-def test_storage_service_keyspaces_replication(cql, this_dc, rest_api):
+def test_storage_service_keyspaces_replication(cql, this_dc, rest_api, skip_without_tablets):
     def get_keyspaces(replication):
         resp = rest_api.send("GET", "storage_service/keyspaces", { "type": "user", "replication": replication })
         resp.raise_for_status()
@@ -454,10 +453,17 @@ def test_range_to_endpoint_map_tablets_disabled_keyspace_param_only(cql, this_dc
         resp = rest_api.send("GET", f"storage_service/range_to_endpoint_map/{keyspace}")
         resp.raise_for_status()
 
-def test_describe_ring(cql, this_dc, rest_api):
+def test_describe_ring(cql, this_dc, rest_api, has_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
-        resp = rest_api.send("GET", f"storage_service/describe_ring/{keyspace}")
-        resp.raise_for_status()
+        if not has_tablets: # For keyspaces with tablets table must be specified.
+            resp = rest_api.send("GET", f"storage_service/describe_ring/{keyspace}")
+            resp.raise_for_status()
+
+        schema = 'p int, v text, primary key (p)'
+        with new_test_table(cql, keyspace, schema) as t0:
+            table = t0.split('.')[1]
+            resp = rest_api.send("GET", f"storage_service/describe_ring/{keyspace}", params={ "table": table })
+            resp.raise_for_status()
 
 def test_storage_service_keyspace_cleanup(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
@@ -491,44 +497,44 @@ def test_storage_service_keyspace_cleanup(cql, this_dc, rest_api):
                 resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}")
                 resp.raise_for_status()
 
-def test_storage_service_keyspace_cleanup_with_no_owned_ranges(cql, this_dc, rest_api):
-    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
-        schema = 'p int, v text, primary key (p)'
-        with new_test_table(cql, keyspace, schema) as t0:
-            stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
-            cql.execute(stmt, [0, 'hello'])
+def test_storage_service_keyspace_cleanup_with_no_owned_ranges(cql, this_dc, rest_api, test_keyspace_vnodes):
+    keyspace = test_keyspace_vnodes
+    schema = 'p int, v text, primary key (p)'
+    with new_test_table(cql, keyspace, schema) as t0:
+        stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+        cql.execute(stmt, [0, 'hello'])
 
-            def make_snapshot_tag(name):
-                tag = f"{int(time.time())}-{name}"
-                return tag
+        def make_snapshot_tag(name):
+            tag = f"{int(time.time())}-{name}"
+            return tag
 
-            resp = rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace}")
-            resp.raise_for_status()
-            with new_test_snapshot(rest_api, keyspaces=keyspace, tag=make_snapshot_tag('after-flush')) as after_flush_tag:
-                cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 0 }}")
-                with new_test_snapshot(rest_api, keyspaces=keyspace, tag=make_snapshot_tag('after-alter-keyspace')) as after_alter_keyspace_tag:
-                    resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}")
+        resp = rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace}")
+        resp.raise_for_status()
+        with new_test_snapshot(rest_api, keyspaces=keyspace, tag=make_snapshot_tag('after-flush')) as after_flush_tag:
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 0 }}")
+            with new_test_snapshot(rest_api, keyspaces=keyspace, tag=make_snapshot_tag('after-alter-keyspace')) as after_alter_keyspace_tag:
+                resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}")
+                resp.raise_for_status()
+                with new_test_snapshot(rest_api, keyspaces=keyspace, tag=make_snapshot_tag('after-cleanup')) as after_cleanup_tag:
+                    resp = rest_api.send("GET", "storage_service/snapshots")
                     resp.raise_for_status()
-                    with new_test_snapshot(rest_api, keyspaces=keyspace, tag=make_snapshot_tag('after-cleanup')) as after_cleanup_tag:
-                        resp = rest_api.send("GET", "storage_service/snapshots")
-                        resp.raise_for_status()
-                        snapshots = dict()
-                        for p in resp.json():
-                            key = p['key']
-                            assert isinstance(key, str), f"key is expected to be a string: {p}"
-                            if key in [after_flush_tag, after_alter_keyspace_tag, after_cleanup_tag]:
-                                value = p['value']
-                                if isinstance(value, list):
-                                    assert len(value) == 1, f"Expecting a single value in {p}"
-                                    value = value[0]
-                                assert isinstance(value, dict), f"value is expected to be a dict: {p}"
-                                snapshots[key] = value
+                    snapshots = dict()
+                    for p in resp.json():
+                        key = p['key']
+                        assert isinstance(key, str), f"key is expected to be a string: {p}"
+                        if key in [after_flush_tag, after_alter_keyspace_tag, after_cleanup_tag]:
+                            value = p['value']
+                            if isinstance(value, list):
+                                assert len(value) == 1, f"Expecting a single value in {p}"
+                                value = value[0]
+                            assert isinstance(value, dict), f"value is expected to be a dict: {p}"
+                            snapshots[key] = value
 
-                        print(f"snapshot metadata: {snapshots}")
+                    print(f"snapshot metadata: {snapshots}")
 
-                        assert snapshots[after_flush_tag]['total'] > 0, f"snapshots after flush should have non-zero data: {snapshots}"
-                        assert snapshots[after_alter_keyspace_tag]['total'] == snapshots[after_flush_tag]['total'], f"snapshots after alter-keyspace should have the same data as after flush: {snapshots}"
-                        assert snapshots[after_cleanup_tag]['total'] == 0, f"snapshots after clean should have no data: {snapshots}"
+                    assert snapshots[after_flush_tag]['total'] > 0, f"snapshots after flush should have non-zero data: {snapshots}"
+                    assert snapshots[after_alter_keyspace_tag]['total'] == snapshots[after_flush_tag]['total'], f"snapshots after alter-keyspace should have the same data as after flush: {snapshots}"
+                    assert snapshots[after_cleanup_tag]['total'] == 0, f"snapshots after clean should have no data: {snapshots}"
 
 def test_storage_service_keyspace_upgrade_sstables(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
@@ -572,18 +578,17 @@ def test_storage_service_system_keyspace_repair(rest_api):
     resp.raise_for_status()
     assert not [stats for stats in resp.json() if stats["sequence_number"] == sequence_number], "Repair task for keyspace with local replication strategy was created"
 
-@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
-def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled):
+def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
-        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
+        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as t0:
+            table = t0.split(".")[1]
             resp = rest_api.send("GET", f"storage_service/natural_endpoints/{keyspace}", params={"cf": table, "key": 1})
             resp.raise_for_status()
 
-            assert resp == [rest_api.host]
+            assert resp.json() == [rest_api.host]
 
-@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
-def test_range_to_endpoint_map_tablets_enabled_keyspace_param_only(cql,  rest_api):
+def test_range_to_endpoint_map_tablets_enabled_keyspace_param_only(cql,  rest_api, skip_without_tablets):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 } AND TABLETS = { 'enabled': true }") as keyspace:
         with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
             resp = rest_api.send("GET", f"storage_service/range_to_endpoint_map/{keyspace}")
@@ -594,9 +599,8 @@ def test_range_to_endpoint_map_tablets_enabled_keyspace_param_only(cql,  rest_ap
             expected_error_reason = f"storage_service/range_to_endpoint_map is per-table in keyspace '{keyspace}'. Please provide table name using 'cf' parameter."
             assert expected_error_reason == actual_error_reason
 
-@pytest.mark.xfail(reason="rest_api suite doesn't support tablets yet (#17338), run test manually")
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
-def test_range_to_endpoint_map_with_table_param(cql,  rest_api, tablets_enabled):
+def test_range_to_endpoint_map_with_table_param(cql,  rest_api, tablets_enabled, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
         with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
             cf = table.split('.')[1]

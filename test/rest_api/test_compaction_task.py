@@ -11,99 +11,97 @@ module_name = "compaction"
 long_time = 1000000000
 
 # depth parameter means the number of edges in the longest path from root to leaves in task tree.
-def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_type, depth, allow_no_children=False):
+def check_compaction_task(cql, rest_api, keyspace, run_compaction, compaction_type, depth, allow_no_children=False):
     drain_module_tasks(rest_api, module_name)
     with set_tmp_task_ttl(rest_api, long_time):
-        with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
-            schema = 'p int, v text, primary key (p)'
-            with new_test_table(cql, keyspace, schema) as t0:
-                stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
-                cql.execute(stmt, [0, 'hello'])
-                cql.execute(stmt, [1, 'world'])
+        schema = 'p int, v text, primary key (p)'
+        with new_test_table(cql, keyspace, schema) as t0:
+            stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+            cql.execute(stmt, [0, 'hello'])
+            cql.execute(stmt, [1, 'world'])
 
-                # Run major compaction.
-                [_, table] = t0.split(".")
-                resp = run_compaction(keyspace, table)
-                resp.raise_for_status()
+            # Run major compaction.
+            [_, table] = t0.split(".")
+            resp = run_compaction(keyspace, table)
+            resp.raise_for_status()
 
-                # Get list of compaction tasks.
-                tasks = [task for task in list_tasks(rest_api, module_name) if task["type"] == compaction_type]
-                assert tasks, f"{compaction_type} task was not created"
+            # Get list of compaction tasks.
+            tasks = [task for task in list_tasks(rest_api, module_name) if task["type"] == compaction_type]
+            assert tasks, f"{compaction_type} task was not created"
 
-                # Check if all tasks finished successfully.
-                statuses = [wait_for_task(rest_api, task["task_id"]) for task in tasks]
-                failed = [task["task_id"] for task in statuses if task["state"] != "done"]
-                assert not failed, f"tasks with ids {failed} failed"
+            # Check if all tasks finished successfully.
+            statuses = [wait_for_task(rest_api, task["task_id"]) for task in tasks]
+            failed = [task["task_id"] for task in statuses if task["state"] != "done"]
+            assert not failed, f"tasks with ids {failed} failed"
 
-                for top_level_task in statuses:
-                    check_child_parent_relationship(rest_api, top_level_task, depth, allow_no_children)
+            for top_level_task in statuses:
+                check_child_parent_relationship(rest_api, top_level_task, depth, allow_no_children)
     drain_module_tasks(rest_api, module_name)
 
-def checkout_async_task(cql, this_dc, rest_api, run_compaction_async, compaction_type):
+def checkout_async_task(cql, rest_api, keyspace, run_compaction_async, compaction_type):
     drain_module_tasks(rest_api, module_name)
     with set_tmp_task_ttl(rest_api, long_time):
-        with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
-            schema = 'p int, v text, primary key (p)'
-            with new_test_table(cql, keyspace, schema) as t0:
-                stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
-                cql.execute(stmt, [0, 'hello'])
-                cql.execute(stmt, [1, 'world'])
+        schema = 'p int, v text, primary key (p)'
+        with new_test_table(cql, keyspace, schema) as t0:
+            stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+            cql.execute(stmt, [0, 'hello'])
+            cql.execute(stmt, [1, 'world'])
 
-                resp = run_compaction_async(keyspace)
-                resp.raise_for_status()
-                task_id = resp.json()
+            resp = run_compaction_async(keyspace)
+            resp.raise_for_status()
+            task_id = resp.json()
 
-                # Use task_id in task manager api.
-                status = wait_for_task(rest_api, task_id)
-                assert status["type"] == compaction_type, "Task has an invalid type"
-                assert status["state"] == "done", "Compaction failed"
+            # Use task_id in task manager api.
+            status = wait_for_task(rest_api, task_id)
+            assert status["type"] == compaction_type, "Task has an invalid type"
+            assert status["state"] == "done", "Compaction failed"
     drain_module_tasks(rest_api, module_name)
 
-def test_global_major_keyspace_compaction_task(cql, this_dc, rest_api):
+def test_global_major_keyspace_compaction_task(cql, rest_api, test_keyspace):
     task_tree_depth = 4
     # global major compaction
-    check_compaction_task(cql, this_dc, rest_api, lambda _, __: rest_api.send("POST", f"storage_service/compact"), "major compaction", task_tree_depth, allow_no_children=True)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda _, __: rest_api.send("POST", f"storage_service/compact"), "major compaction", task_tree_depth, allow_no_children=True)
 
     # global major compaction, flush option
-    check_compaction_task(cql, this_dc, rest_api, lambda _, __: rest_api.send("POST", f"storage_service/compact?flush_memtables=true"), "major compaction", task_tree_depth, allow_no_children=True)
-    check_compaction_task(cql, this_dc, rest_api, lambda _, __: rest_api.send("POST", f"storage_service/compact?flush_memtables=false"), "major compaction", task_tree_depth, allow_no_children=True)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda _, __: rest_api.send("POST", f"storage_service/compact?flush_memtables=true"), "major compaction", task_tree_depth, allow_no_children=True)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda _, __: rest_api.send("POST", f"storage_service/compact?flush_memtables=false"), "major compaction", task_tree_depth, allow_no_children=True)
 
-def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
+def test_major_keyspace_compaction_task(cql, rest_api, test_keyspace):
     task_tree_depth = 3
     # keyspace major compaction
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}"), "major compaction", task_tree_depth)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}"), "major compaction", task_tree_depth)
     # column family major compaction
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}"), "major compaction", task_tree_depth)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}"), "major compaction", task_tree_depth)
 
     # keyspace major compaction, flush option
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}?flush_memtables=true"), "major compaction", task_tree_depth)
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}?flush_memtables=false"), "major compaction", task_tree_depth)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}?flush_memtables=true"), "major compaction", task_tree_depth)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}?flush_memtables=false"), "major compaction", task_tree_depth)
     # column family major compaction, flush option
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}?flush_memtables=true"), "major compaction", task_tree_depth)
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}?flush_memtables=false"), "major compaction", task_tree_depth)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}?flush_memtables=true"), "major compaction", task_tree_depth)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}?flush_memtables=false"), "major compaction", task_tree_depth)
 
-def test_cleanup_keyspace_compaction_task(cql, this_dc, rest_api):
+def test_cleanup_keyspace_compaction_task(cql, rest_api, test_keyspace_vnodes):
     task_tree_depth = 3
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}"), "cleanup compaction", task_tree_depth, True)
+    check_compaction_task(cql, rest_api, test_keyspace_vnodes, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}"), "cleanup compaction", task_tree_depth, True)
 
-def test_offstrategy_keyspace_compaction_task(cql, this_dc, rest_api):
+def test_offstrategy_keyspace_compaction_task(cql, rest_api, test_keyspace):
     task_tree_depth = 3
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_offstrategy_compaction/{keyspace}"), "offstrategy compaction", task_tree_depth, True)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_offstrategy_compaction/{keyspace}"), "offstrategy compaction", task_tree_depth, True)
 
-def test_rewrite_sstables_keyspace_compaction_task(cql, this_dc, rest_api):
+def test_rewrite_sstables_keyspace_compaction_task(cql, rest_api, test_keyspace):
     task_tree_depth = 2
     # upgrade sstables compaction
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}"), "upgrade sstables compaction", task_tree_depth)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}"), "upgrade sstables compaction", task_tree_depth)
     # scrub sstables compaction
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}"), "scrub sstables compaction", task_tree_depth)
+    check_compaction_task(cql, rest_api, test_keyspace, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}"), "scrub sstables compaction", task_tree_depth)
 
-def test_reshaping_compaction_task(cql, this_dc, rest_api):
+def test_reshaping_compaction_task(cql, rest_api, test_keyspace_vnodes):
     task_tree_depth = 2
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"storage_service/sstables/{keyspace}", {'cf': table, 'load_and_stream': False}), "reshaping compaction", task_tree_depth, True)
+    check_compaction_task(cql, rest_api, test_keyspace_vnodes, lambda keyspace, table: rest_api.send("POST", f"storage_service/sstables/{keyspace}", {'cf': table, 'load_and_stream': False}), "reshaping compaction", task_tree_depth, True)
 
-def test_resharding_compaction_task(cql, this_dc, rest_api):
+def test_resharding_compaction_task(cql, rest_api, test_keyspace_vnodes):
     task_tree_depth = 2
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"storage_service/sstables/{keyspace}", {'cf': table, 'load_and_stream': False}), "resharding compaction", task_tree_depth, True)
+    check_compaction_task(cql, rest_api, test_keyspace_vnodes, lambda keyspace, table: rest_api.send("POST", f"storage_service/sstables/{keyspace}", {'cf': table, 'load_and_stream': False}), "resharding compaction", task_tree_depth, True)
 
 def test_regular_compaction_task(cql, this_dc, rest_api):
     drain_module_tasks(rest_api, module_name)
@@ -161,17 +159,17 @@ def test_compaction_task_abort(cql, this_dc, rest_api):
                         assert all("children" not in child for child in children), "Some child tasks spawned new tasks even though they were aborted"
     drain_module_tasks(rest_api, module_name)
 
-def test_major_keyspace_compaction_task_async(cql, this_dc, rest_api):
-    checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_compaction/{keyspace}"), "major compaction")
+def test_major_keyspace_compaction_task_async(cql, rest_api, test_keyspace):
+    checkout_async_task(cql, rest_api, test_keyspace, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_compaction/{keyspace}"), "major compaction")
 
-def test_cleanup_keyspace_compaction_task_async(cql, this_dc, rest_api):
-    checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_cleanup/{keyspace}"), "cleanup compaction")
+def test_cleanup_keyspace_compaction_task_async(cql, rest_api, test_keyspace_vnodes):
+    checkout_async_task(cql, rest_api, test_keyspace_vnodes, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_cleanup/{keyspace}"), "cleanup compaction")
 
-def test_offstrategy_keyspace_compaction_task_async(cql, this_dc, rest_api):
-    checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_offstrategy_compaction/{keyspace}"), "offstrategy compaction")
+def test_offstrategy_keyspace_compaction_task_async(cql, rest_api, test_keyspace):
+    checkout_async_task(cql, rest_api, test_keyspace, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_offstrategy_compaction/{keyspace}"), "offstrategy compaction")
 
-def test_rewrite_sstables_keyspace_compaction_task_async(cql, this_dc, rest_api):
+def test_rewrite_sstables_keyspace_compaction_task_async(cql, rest_api, test_keyspace):
     # upgrade sstables compaction
-    checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("GET", f"tasks/compaction/keyspace_upgrade_sstables/{keyspace}"), "upgrade sstables compaction")
+    checkout_async_task(cql, rest_api, test_keyspace, lambda keyspace: rest_api.send("GET", f"tasks/compaction/keyspace_upgrade_sstables/{keyspace}"), "upgrade sstables compaction")
     # scrub sstables compaction
-    checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("GET", f"tasks/compaction/keyspace_scrub/{keyspace}"), "scrub sstables compaction")
+    checkout_async_task(cql, rest_api, test_keyspace, lambda keyspace: rest_api.send("GET", f"tasks/compaction/keyspace_scrub/{keyspace}"), "scrub sstables compaction")
