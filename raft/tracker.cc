@@ -256,36 +256,38 @@ vote_result votes::tally_votes() const {
     return _current.tally_votes();
 }
 
-std::ostream& operator<<(std::ostream& os, const election_tracker& v) {
-    os << "responded: " << v._responded.size() << ", ";
-    os << "granted: " << v._granted;
-    return os;
-}
-
-
-std::ostream& operator<<(std::ostream& os, const votes& v) {
-    os << "current: " << v._current << std::endl;
-    if (v._previous) {
-        os << "previous: " << v._previous.value() << std::endl;
-    }
-    return os;
-}
-
-std::ostream& operator<<(std::ostream& os, const vote_result& v) {
-    static const char *n;
-    switch (v) {
-    case vote_result::UNKNOWN:
-        n = "UNKNOWN";
-        break;
-    case vote_result::WON:
-        n = "WON";
-        break;
-    case vote_result::LOST:
-        n = "LOST";
-        break;
-    }
-    os << n;
-    return os;
-}
-
 } // end of namespace raft
+
+auto fmt::formatter<raft::election_tracker>::format(const raft::election_tracker& v, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "responded: {}, granted: {}",
+                          v._responded.size(), v._granted);
+}
+
+auto fmt::formatter<raft::votes>::format(const raft::votes& v, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "current: {}\n", v._current);
+    if (v._previous) {
+        out = fmt::format_to(out, "previous: {}\n", v._previous.value());
+    }
+    return out;
+}
+
+auto fmt::formatter<raft::vote_result>::format(const raft::vote_result& v, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name;
+    using enum raft::vote_result;
+    switch (v) {
+    case UNKNOWN:
+        name = "UNKNOWN";
+        break;
+    case WON:
+        name = "WON";
+        break;
+    case LOST:
+        name = "LOST";
+        break;
+    }
+    return formatter<std::string_view>::format(name, ctx);
+}

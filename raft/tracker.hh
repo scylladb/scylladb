@@ -8,6 +8,7 @@
 #pragma once
 
 #include <seastar/core/condition-variable.hh>
+#include <fmt/core.h>
 #include "raft.hh"
 
 namespace raft {
@@ -145,8 +146,6 @@ enum class vote_result {
     LOST,
 };
 
-std::ostream& operator<<(std::ostream& os, const vote_result& v);
-
 // State of election in a single quorum
 class election_tracker {
     // All eligible voters
@@ -182,7 +181,7 @@ public:
         auto unknown = _suffrage.size() - _responded.size();
         return _granted + unknown >= quorum ? vote_result::UNKNOWN : vote_result::LOST;
     }
-    friend std::ostream& operator<<(std::ostream& os, const election_tracker& v);
+    friend fmt::formatter<election_tracker>;
 };
 
 // Candidate's state specific to election
@@ -202,8 +201,19 @@ public:
     void register_vote(server_id from, bool granted);
     vote_result tally_votes() const;
 
-    friend std::ostream& operator<<(std::ostream& os, const votes& v);
+    friend fmt::formatter<votes>;
 };
 
 } // namespace raft
 
+template <> struct fmt::formatter<raft::election_tracker> : fmt::formatter<std::string_view> {
+    auto format(const raft::election_tracker& v, fmt::format_context& ctx) const  -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<raft::votes> : fmt::formatter<std::string_view> {
+    auto format(const raft::votes& v, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<raft::vote_result> : fmt::formatter<std::string_view> {
+    auto format(const raft::vote_result& v, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

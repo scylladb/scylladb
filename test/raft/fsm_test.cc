@@ -8,9 +8,19 @@
 
 #define BOOST_TEST_MODULE raft
 
+#include "raft/tracker.hh"
 #include "test/raft/helpers.hh"
 
 using namespace raft;
+
+namespace raft {
+
+std::ostream& boost_test_print_type(std::ostream& os, const vote_result& v) {
+    fmt::print(os, "{}", v);
+    return os;
+}
+
+}
 
 BOOST_AUTO_TEST_CASE(test_votes) {
     auto id1 = id();
