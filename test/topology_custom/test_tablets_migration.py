@@ -71,7 +71,8 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                 self.log = await manager.server_open_log(servers[2].server_id)
                 self.mark = await self.log.mark()
             elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new" ]:
-                await manager.api.enable_injection(servers[self.fail_idx].ip_addr, "raft_topology_barrier_and_drain_fail", one_shot=False, parameters={'keyspace': 'test', 'table': 'test', 'last_token': last_token, 'stage': self.stage})
+                await manager.api.enable_injection(servers[self.fail_idx].ip_addr, "raft_topology_barrier_and_drain_fail", one_shot=False,
+                        parameters={'keyspace': 'test', 'table': 'test', 'last_token': last_token, 'stage': self.stage.removeprefix('do_')})
                 self.log = await manager.server_open_log(servers[self.fail_idx].server_id)
                 self.mark = await self.log.mark()
             else:
