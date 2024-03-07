@@ -51,7 +51,7 @@ def get_base_class_offset(gdb_type, base_class_name):
             if re.match(name_pattern, field.type.strip_typedefs().name):
                 return field_offset
             offset = get_base_class_offset(field.type, base_class_name)
-            if not offset is None:
+            if offset is not None:
                 return field_offset + offset
 
 
@@ -2592,7 +2592,7 @@ class pointer_metadata(object):
         self.offset_in_object = 0
 
     def is_managed_by_seastar(self):
-        return not self.thread is None
+        return self.thread is not None
 
     @property
     def is_containing_page_free(self):
@@ -2651,7 +2651,7 @@ class scylla_ptr(gdb.Command):
 
     @staticmethod
     def is_seastar_allocator_used():
-        if not scylla_ptr._is_seastar_allocator_used is None:
+        if scylla_ptr._is_seastar_allocator_used is not None:
             return scylla_ptr._is_seastar_allocator_used
 
         try:
@@ -3864,7 +3864,7 @@ class scylla_fiber(gdb.Command):
             # stack grows downwards, so walk from end of buffer towards the beginning
             for maybe_tptr in range(stack_ptr + stack_meta.size - self._vptr_type.sizeof, stack_ptr - self._vptr_type.sizeof, -self._vptr_type.sizeof):
                 res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
-                if not res is None and 'thread_wake_task' in res[2]:
+                if res is not None and 'thread_wake_task' in res[2]:
                     return res
             return None
 
@@ -4710,7 +4710,7 @@ class scylla_smp_queues(gdb.Command):
         empty_queues = 0
 
         def add_to_histogram(a, b, key=None, count=1):
-            if not sg_id is None and int(key.dereference()['_sg']['_id']) != sg_id:
+            if sg_id is not None and int(key.dereference()['_sg']['_id']) != sg_id:
                 return
 
             if args.content:
