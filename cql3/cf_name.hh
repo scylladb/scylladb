@@ -24,11 +24,4 @@ public:
     virtual sstring to_string() const override;
 };
 
-inline
-std::ostream&
-operator<<(std::ostream& os, const cf_name& n) {
-    os << n.to_string();
-    return os;
-}
-
 }
