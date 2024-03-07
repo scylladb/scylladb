@@ -16,12 +16,14 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
-@pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup"])
+@pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target"])
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage):
     if fail_stage == 'cleanup' and fail_replica == 'destination':
         pytest.skip('Failing destination during cleanup is pointless')
+    if fail_stage == 'cleanup_target' and fail_replica == 'source':
+        pytest.skip('Failing source during target cleanup is pointless')
 
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets', 'consistent-topology-changes']}
@@ -44,6 +46,21 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
     keys = range(256)
     await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
     await make_server()
+
+    if fail_stage == "cleanup_target":
+        # we'll stop 2 servers, group0 quorum should be there
+        #
+        # it seems that we need five nodes to have three remaining, but
+        # when removing the 1st node it will be marked as non-voter so to
+        # remove the 2nd node just two remaining will be enough
+        #
+        # also this extra node will be used to call removenode on
+        # removing the 1st node will wait for the operation to go through
+        # raft log, and it will not finish before tablet migration. An
+        # attempt to remove the 2nd node, to make cleanup_target stage
+        # go ahead, will step on the legacy API lock on storage_service,
+        # so we need to ask some other node to do it
+        await make_server()
 
     logger.info(f"Cluster is [{host_ids}]")
 
@@ -82,6 +99,12 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                 await manager.api.enable_injection(servers[self.fail_idx].ip_addr, "cleanup_tablet_crash", one_shot=True)
                 self.log = await manager.server_open_log(servers[self.fail_idx].server_id)
                 self.mark = await self.log.mark()
+            elif self.stage == "cleanup_target":
+                assert self.fail_idx == 2
+                self.stream_fail = node_failer('streaming', 'source')
+                await self.stream_fail.setup()
+                self.cleanup_fail = node_failer('cleanup', 'destination')
+                await self.cleanup_fail.setup()
             else:
                 assert False, f"Unknown stage {self.stage}"
 
@@ -93,10 +116,19 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                 await self.log.wait_for('raft_topology_cmd: barrier handler waits', from_mark=self.mark);
             elif self.stage == "cleanup":
                 await self.log.wait_for('Crashing tablet cleanup', from_mark=self.mark)
+            elif self.stage == "cleanup_target":
+                await self.stream_fail.wait()
+                self.stream_stop_task = asyncio.create_task(self.stream_fail.stop())
+                await self.cleanup_fail.wait()
             else:
                 assert False
 
         async def stop(self, via=0):
+            if self.stage == "cleanup_target":
+                await self.cleanup_fail.stop(via=3) # removenode of source is happending via node0 already
+                await self.stream_stop_task
+                return
+
             logger.info(f"Stop {self.replica} {host_ids[self.fail_idx]}")
             await manager.server_stop(servers[self.fail_idx].server_id)
             logger.info(f"Remove {self.replica} {host_ids[self.fail_idx]} via {host_ids[via]}")
