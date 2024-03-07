@@ -44,6 +44,7 @@ public:
     virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const override;
     virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard, abort_source& as) const override;
 
+    virtual bool is_v2() const override;
     virtual ::shared_ptr<service_level_distributed_data_accessor> upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const override;
 };
 

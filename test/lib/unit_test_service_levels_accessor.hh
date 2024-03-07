@@ -47,6 +47,9 @@ public:
             });
         }
 
+        virtual bool is_v2() const override {
+            return false;
+        }
         virtual ::shared_ptr<service_level_distributed_data_accessor> upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const override {
             return ::static_pointer_cast<service_level_controller::service_level_distributed_data_accessor>(
                 ::make_shared<unit_test_raft_service_levels_accessor>(qp, group0_client, _sl_controller));

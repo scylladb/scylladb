@@ -421,8 +421,7 @@ future<> service_level_controller::do_add_service_level(sstring name, service_le
 }
 
 bool service_level_controller::is_v2() const {
-    //FIXME: return actual state (fixed with migration commit)
-    return false;
+    return _sl_data_accessor && _sl_data_accessor->is_v2();
 }
 
 void service_level_controller::upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) {

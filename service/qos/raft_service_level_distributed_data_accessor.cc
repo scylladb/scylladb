@@ -97,6 +97,10 @@ future<> raft_service_level_distributed_data_accessor::drop_service_level(sstrin
     co_await do_raft_command(std::move(*guard), as, std::move(muts), "drop service level");
 }
 
+bool raft_service_level_distributed_data_accessor::is_v2() const {
+    return true;
+}
+
 ::shared_ptr<service_level_controller::service_level_distributed_data_accessor> raft_service_level_distributed_data_accessor::upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const {
     return nullptr;
 }

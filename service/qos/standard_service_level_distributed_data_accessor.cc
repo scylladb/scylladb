@@ -33,6 +33,10 @@ future<> standard_service_level_distributed_data_accessor::drop_service_level(ss
     return _sys_dist_ks.drop_service_level(service_level_name);
 }
 
+bool standard_service_level_distributed_data_accessor::is_v2() const {
+    return false;
+}
+
 ::shared_ptr<service_level_controller::service_level_distributed_data_accessor> standard_service_level_distributed_data_accessor::upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const {
     return ::static_pointer_cast<service_level_controller::service_level_distributed_data_accessor>(
                 ::make_shared<raft_service_level_distributed_data_accessor>(qp, group0_client));
