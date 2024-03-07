@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
-@pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration"])
+@pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage):
@@ -47,7 +47,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
     await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
     await make_server()
 
-    if fail_stage == "cleanup_target":
+    if fail_stage in ["cleanup_target", "revert_migration"]:
         # we'll stop 2 servers, group0 quorum should be there
         #
         # it seems that we need five nodes to have three remaining, but
@@ -90,7 +90,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                 await manager.api.enable_injection(servers[2].ip_addr, "stream_mutation_fragments", one_shot=True)
                 self.log = await manager.server_open_log(servers[2].server_id)
                 self.mark = await self.log.mark()
-            elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "end_migration" ]:
+            elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "end_migration", "do_revert_migration" ]:
                 await manager.api.enable_injection(servers[self.fail_idx].ip_addr, "raft_topology_barrier_and_drain_fail", one_shot=False,
                         parameters={'keyspace': 'test', 'table': 'test', 'last_token': last_token, 'stage': self.stage.removeprefix('do_')})
                 self.log = await manager.server_open_log(servers[self.fail_idx].server_id)
@@ -105,6 +105,11 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                 await self.stream_fail.setup()
                 self.cleanup_fail = node_failer('cleanup', 'destination')
                 await self.cleanup_fail.setup()
+            elif self.stage == "revert_migration":
+                self.wbro_fail = node_failer('write_both_read_old', 'source' if self.replica == 'destination' else 'destination')
+                await self.wbro_fail.setup()
+                self.revert_fail = node_failer('do_revert_migration', self.replica)
+                await self.revert_fail.setup()
             else:
                 assert False, f"Unknown stage {self.stage}"
 
@@ -112,7 +117,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
             logger.info(f"Wait for {self.stage} to happen")
             if self.stage == "streaming":
                 await self.log.wait_for('stream_mutation_fragments: waiting', from_mark=self.mark)
-            elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "end_migration" ]:
+            elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "end_migration", "do_revert_migration" ]:
                 await self.log.wait_for('raft_topology_cmd: barrier handler waits', from_mark=self.mark);
             elif self.stage == "cleanup":
                 await self.log.wait_for('Crashing tablet cleanup', from_mark=self.mark)
@@ -120,6 +125,10 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                 await self.stream_fail.wait()
                 self.stream_stop_task = asyncio.create_task(self.stream_fail.stop())
                 await self.cleanup_fail.wait()
+            elif self.stage == "revert_migration":
+                await self.wbro_fail.wait()
+                self.wbro_fail_task = asyncio.create_task(self.wbro_fail.stop())
+                await self.revert_fail.wait()
             else:
                 assert False
 
@@ -127,6 +136,10 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
             if self.stage == "cleanup_target":
                 await self.cleanup_fail.stop(via=3) # removenode of source is happending via node0 already
                 await self.stream_stop_task
+                return
+            if self.stage == "revert_migration":
+                await self.revert_fail.stop(via=3)
+                await self.wbro_fail_task
                 return
 
             logger.info(f"Stop {self.replica} {host_ids[self.fail_idx]}")
