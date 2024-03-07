@@ -38,7 +38,7 @@ def test_proxyhistograms(nodetool):
 
     res = nodetool("proxyhistograms", expected_requests=expected_requests)
 
-    assert res == """proxy histograms
+    assert res.stdout == """proxy histograms
 Percentile       Read Latency      Write Latency      Range Latency   CAS Read Latency  CAS Write Latency View Write Latency
                      (micros)           (micros)           (micros)           (micros)           (micros)           (micros)
 50%                     32.00              31.50              32.00              33.00              33.00               4.00
@@ -71,7 +71,7 @@ def test_proxyhistograms_empty_histogram(nodetool):
 
     res = nodetool("proxyhistograms", expected_requests=expected_requests)
 
-    assert res == """proxy histograms
+    assert res.stdout == """proxy histograms
 Percentile       Read Latency      Write Latency      Range Latency   CAS Read Latency  CAS Write Latency View Write Latency
                      (micros)           (micros)           (micros)           (micros)           (micros)           (micros)
 50%                      0.00               0.00               0.00               0.00               0.00               0.00

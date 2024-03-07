@@ -87,7 +87,7 @@ Snapshot name Keyspace name Column family name True size Size on disk
 Total TrueDiskSpaceUsed: 923.08 KiB
 
 """
-    assert res == expected_output
+    assert res.stdout == expected_output
 
 
 def test_listsnapshots_no_snapshots(nodetool, request):
@@ -95,9 +95,9 @@ def test_listsnapshots_no_snapshots(nodetool, request):
         expected_request("GET", "/storage_service/snapshots", response=[]),
         ])
     if request.config.getoption("nodetool") == "scylla":
-        assert res == "There are no snapshots\n"
+        assert res.stdout == "There are no snapshots\n"
     else:
-        assert res == "Snapshot Details: \nThere are no snapshots\n"
+        assert res.stdout == "Snapshot Details: \nThere are no snapshots\n"
 
 
 def check_snapshot_out(res, tag, ktlist, skip_flush):
@@ -141,13 +141,13 @@ def test_snapshot_keyspace(nodetool):
         expected_request("POST", "/storage_service/snapshots",
                          params={"tag": tag, "sf": "false", "kn": "ks1"})
     ])
-    check_snapshot_out(res, tag, ["ks1"], False)
+    check_snapshot_out(res.stdout, tag, ["ks1"], False)
 
     res = nodetool("snapshot", "--tag", tag, "ks1", "ks2", expected_requests=[
         expected_request("POST", "/storage_service/snapshots",
                          params={"tag": tag, "sf": "false", "kn": "ks1,ks2"})
     ])
-    check_snapshot_out(res, tag, ["ks1", "ks2"], False)
+    check_snapshot_out(res.stdout, tag, ["ks1", "ks2"], False)
 
 
 @pytest.mark.parametrize("option_name", ("-cf", "--column-family", "--table"))
@@ -158,13 +158,13 @@ def test_snapshot_keyspace_with_table(nodetool, option_name):
         expected_request("POST", "/storage_service/snapshots",
                          params={"tag": tag, "sf": "false", "kn": "ks1", "cf": "tbl"})
     ])
-    check_snapshot_out(res, tag, ["ks1"], False)
+    check_snapshot_out(res.stdout, tag, ["ks1"], False)
 
     res = nodetool("snapshot", "--tag", tag, "ks1", option_name, "tbl1,tbl2", expected_requests=[
         expected_request("POST", "/storage_service/snapshots",
                          params={"tag": tag, "sf": "false", "kn": "ks1", "cf": "tbl1,tbl2"})
     ])
-    check_snapshot_out(res, tag, ["ks1"], False)
+    check_snapshot_out(res.stdout, tag, ["ks1"], False)
 
 
 class kn_param(NamedTuple):
@@ -194,7 +194,7 @@ def test_snapshot_keyspace_table_single_arg(nodetool, param, scylla_only):
     res = nodetool("snapshot", "--tag", tag, *param.args, expected_requests=[
         expected_request("POST", "/storage_service/snapshots", params=req_params)
     ])
-    check_snapshot_out(res, tag, param.snapshot_keyspaces, False)
+    check_snapshot_out(res.stdout, tag, param.snapshot_keyspaces, False)
 
 
 @pytest.mark.parametrize("option_name", ("-kt", "--kt-list", "-kc", "--kc.list"))
@@ -205,19 +205,19 @@ def test_snapshot_ktlist(nodetool, option_name):
         expected_request("POST", "/storage_service/snapshots",
                          params={"tag": tag, "sf": "false", "kn": "ks1", "cf": "tbl1"})
     ])
-    check_snapshot_out(res, tag, ["ks1.tbl1"], False)
+    check_snapshot_out(res.stdout, tag, ["ks1.tbl1"], False)
 
     res = nodetool("snapshot", "--tag", tag, option_name, "ks1.tbl1,ks2.tbl2", expected_requests=[
         expected_request("POST", "/storage_service/snapshots",
                          params={"tag": tag, "sf": "false", "kn": "ks1.tbl1,ks2.tbl2"})
     ])
-    check_snapshot_out(res, tag, ["ks1.tbl1", "ks2.tbl2"], False)
+    check_snapshot_out(res.stdout, tag, ["ks1.tbl1", "ks2.tbl2"], False)
 
     res = nodetool("snapshot", "--tag", tag, option_name, "ks1,ks2", expected_requests=[
         expected_request("POST", "/storage_service/snapshots",
                          params={"tag": tag, "sf": "false", "kn": "ks1,ks2"})
     ])
-    check_snapshot_out(res, tag, ["ks1" ,"ks2"], False)
+    check_snapshot_out(res.stdout, tag, ["ks1" ,"ks2"], False)
 
 
 @pytest.mark.parametrize("tag", [None, "my_snapshot_tag"])
@@ -274,7 +274,7 @@ def test_snapshot_options_matrix(nodetool, tag, ktlist, skip_flush):
         expected_request("POST", "/storage_service/snapshots", params=params)
     ])
 
-    check_snapshot_out(res, tag, keyspaces, skip_flush)
+    check_snapshot_out(res.stdout, tag, keyspaces, skip_flush)
 
 
 def test_snapshot_multiple_keyspace_with_table(nodetool):

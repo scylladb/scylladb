@@ -210,5 +210,5 @@ def test_info(request, nodetool, display_all_tokens):
     args = []
     if display_all_tokens:
         args.append('--tokens')
-    actual_output = nodetool("info", *args, expected_requests=expected_requests)
-    assert normalize_output(actual_output) == normalize_output(expected_output)
+    res = nodetool("info", *args, expected_requests=expected_requests)
+    assert normalize_output(res.stdout) == normalize_output(expected_output)

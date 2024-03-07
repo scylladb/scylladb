@@ -65,7 +65,8 @@ def test_compactionstats(nodetool, request, num_compactions, throughput):
         expected_requests.append(
             expected_request("GET", "/storage_service/compaction_throughput",
                              response=throughput))
-    actual_output = nodetool("compactionstats", expected_requests=expected_requests)
+    res = nodetool("compactionstats", expected_requests=expected_requests)
+    actual_output = res.stdout
     expected_output = f"pending tasks: {num_compactions}\n"
     for task in pending_tasks:
         expected_output += format_task(task)

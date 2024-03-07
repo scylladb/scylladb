@@ -55,7 +55,7 @@ def test_tablehistograms(nodetool, param):
 
     res = nodetool(*param.args, expected_requests=expected_requests)
 
-    assert res == f"""{param.keyspace_name}/{param.table_name} histograms
+    assert res.stdout == f"""{param.keyspace_name}/{param.table_name} histograms
 Percentile  SSTables     Write Latency      Read Latency    Partition Size        Cell Count
                               (micros)          (micros)           (bytes)                  
 50%             2.00              4.00             32.00                 3                 2
@@ -94,7 +94,7 @@ def test_tablehistograms_empty_histogram(nodetool):
 
     res = nodetool("tablehistograms", keyspace_name, table_name, expected_requests=expected_requests)
 
-    assert res == f"""{keyspace_name}/{table_name} histograms
+    assert res.stdout == f"""{keyspace_name}/{table_name} histograms
 Percentile  SSTables     Write Latency      Read Latency    Partition Size        Cell Count
                               (micros)          (micros)           (bytes)                  
 50%             0.00              0.00              0.00                 0                 0

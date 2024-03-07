@@ -65,9 +65,9 @@ edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4 system        peers             {}    11714
         res = nodetool(*cmd, expected_requests=[EXPECTED_REQUEST])
 
         if request.config.getoption("nodetool") == "scylla":
-            assert res == expected_res_scylla
+            assert res.stdout == expected_res_scylla
         else:
-            assert res == expected_res_cassandra
+            assert res.stdout == expected_res_cassandra
 
 
 def test_json(nodetool):
@@ -97,7 +97,7 @@ def test_json(nodetool):
     for cmd in [("compactionhistory", "--format", "json"), ("compactionhistory", "-F", "json")]:
         res = nodetool(*cmd, expected_requests=[EXPECTED_REQUEST])
 
-        assert json.loads(res) == expected_res
+        assert json.loads(res.stdout) == expected_res
 
 
 def test_yaml(nodetool):
@@ -127,7 +127,7 @@ def test_yaml(nodetool):
     for cmd in [("compactionhistory", "--format", "yaml"), ("compactionhistory", "-F", "yaml")]:
         res = nodetool(*cmd, expected_requests=[EXPECTED_REQUEST])
 
-        assert yaml.load(res, Loader=yaml.Loader) == expected_res
+        assert yaml.load(res.stdout, Loader=yaml.Loader) == expected_res
 
 
 def test_invalid_format(nodetool):

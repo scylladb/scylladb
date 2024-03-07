@@ -18,10 +18,10 @@ def test_enablebinary(nodetool):
 
 
 def test_statusbinary(nodetool):
-    out = nodetool("statusbinary", expected_requests=[
+    res = nodetool("statusbinary", expected_requests=[
         expected_request("GET", "/storage_service/native_transport", response=False)])
-    assert out == "not running\n"
+    assert res.stdout == "not running\n"
 
-    out = nodetool("statusbinary", expected_requests=[
+    res = nodetool("statusbinary", expected_requests=[
         expected_request("GET", "/storage_service/native_transport", response=True)])
-    assert out == "running\n"
+    assert res.stdout == "running\n"

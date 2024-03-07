@@ -9,10 +9,10 @@ import utils
 
 
 def test_gettraceprobability(nodetool):
-    out = nodetool("gettraceprobability", expected_requests=[
+    res = nodetool("gettraceprobability", expected_requests=[
         expected_request("GET", "/storage_service/trace_probability", response=0.2)])
 
-    assert out == "Current trace probability: 0.2\n"
+    assert res.stdout == "Current trace probability: 0.2\n"
 
 
 def test_settraceprobability(nodetool):

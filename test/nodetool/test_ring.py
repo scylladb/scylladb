@@ -140,7 +140,8 @@ def test_ring(request, nodetool, keyspace, resolve_ip, host_status, host_state):
         args.append(keyspace)
     if resolve_ip:
         args.append(resolve_ip)
-    actual_output = nodetool('ring', *args, expected_requests=expected_requests)
+    res = nodetool('ring', *args, expected_requests=expected_requests)
+    actual_output = res.stdout
 
     expected_output = f'''
 Datacenter: {host.dc}

@@ -123,9 +123,10 @@ def format_endpoint_info(endpoint):
 @pytest.mark.parametrize("num_endpoints", [1, 2])
 def test_gossipinfo(nodetool, num_endpoints):
     endpoints = [create_endpoint_info(i) for i in range(num_endpoints)]
-    actual_output = nodetool('gossipinfo', expected_requests=[
+    res = nodetool('gossipinfo', expected_requests=[
         expected_request('GET', '/failure_detector/endpoints',
                          response=[endpoint_to_jsonable(endpoint) for endpoint in endpoints])
     ])
+    actual_output = res.stdout
     expected_output = ''.join(format_endpoint_info(endpoint) for endpoint in endpoints)
     assert normalize_endpoints(actual_output) == normalize_endpoints(expected_output)

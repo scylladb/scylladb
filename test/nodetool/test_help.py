@@ -15,18 +15,18 @@ import utils
 
 
 def test_help(nodetool):
-    out = nodetool("help", expected_requests=[
+    res = nodetool("help", expected_requests=[
         # These requests are sometimes sent by Cassandra nodetool when invoking help
         # This looks like a new connection to JMX.
         expected_request("GET", "/column_family/", response=[], multiple=expected_request.ANY),
         expected_request("GET", "/stream_manager/", response=[], multiple=expected_request.ANY),
     ])
-    assert out
+    assert res.stdout
 
 
 def test_help_command(nodetool):
-    out = nodetool("help", "version")
-    assert out
+    res = nodetool("help", "version")
+    assert res.stdout
 
 
 def test_help_nonexistent_command(request, nodetool):
@@ -37,8 +37,8 @@ def test_help_nonexistent_command(request, nodetool):
                 {},
                 ["error processing arguments: unknown command foo"])
     else:
-        out = nodetool("help", "foo")
-        assert out == "Unknown command foo\n\n"
+        res = nodetool("help", "foo")
+        assert res.stdout == "Unknown command foo\n\n"
 
 
 def test_help_command_too_many_args(nodetool, scylla_only):
@@ -51,10 +51,10 @@ def test_help_command_too_many_args(nodetool, scylla_only):
 
 def test_help_consistent(nodetool, scylla_only):
     for command in ("version", "compact", "settraceprobability"):
-        out1 = nodetool("help", command)
+        res1 = nodetool("help", command)
         # seastar returns 1 when --help is invoked
         with pytest.raises(subprocess.CalledProcessError) as e:
             nodetool(command, "--help")
         assert e.value.returncode == 1
         out2 = e.value.stdout
-        assert out1 == out2
+        assert res1.stdout == out2

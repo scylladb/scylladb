@@ -13,7 +13,7 @@ def test_getlogginglevels(nodetool):
         expected_request("GET", "/storage_service/logging_level",
                          response=[{"key": "sstable", "value": "info"}, {"key": "cache", "value": "trace"}])])
 
-    assert res == \
+    assert res.stdout == \
 """
 Logger Name                                        Log Level
 sstable                                                 info

@@ -28,7 +28,7 @@ def test_getsstables(nodetool, key_option):
                 "/var/lib/scylla/data/ks/tbl-3ca78460d61611eea0b49524e39553c0/me-3gec_0mu7_7bz0024x96bfm476r6-big-Data.db",
                 ]),
     ])
-    assert res == (
+    assert res.stdout == (
 """/var/lib/scylla/data/ks/tbl-3ca78460d61611eea0b49524e39553c0/me-3gec_0mu7_5az0024x96bfm476r6-big-Data.db
 /var/lib/scylla/data/ks/tbl-3ca78460d61611eea0b49524e39553c0/me-3gec_0mu7_7bz0024x96bfm476r6-big-Data.db
 """)
@@ -207,7 +207,7 @@ def test_sstableinfo(nodetool, request):
             "/storage_service/sstable_info",
             response=info),
     ])
-    _check_sstableinfo_output(res, info, request.config.getoption("nodetool") == "cassandra")
+    _check_sstableinfo_output(res.stdout, info, request.config.getoption("nodetool") == "cassandra")
 
 
 def test_sstableinfo_keyspace(nodetool, request):
@@ -219,7 +219,7 @@ def test_sstableinfo_keyspace(nodetool, request):
             params={"keyspace": "ks"},
             response=info),
     ])
-    _check_sstableinfo_output(res, info, request.config.getoption("nodetool") == "cassandra")
+    _check_sstableinfo_output(res.stdout, info, request.config.getoption("nodetool") == "cassandra")
 
 
 def test_sstableinfo_keyspace_table(nodetool, request):
@@ -231,7 +231,7 @@ def test_sstableinfo_keyspace_table(nodetool, request):
             params={"keyspace": "ks", "cf": "tbl"},
             response=info),
     ])
-    _check_sstableinfo_output(res, info, request.config.getoption("nodetool") == "cassandra")
+    _check_sstableinfo_output(res.stdout, info, request.config.getoption("nodetool") == "cassandra")
 
 
 def test_sstableinfo_keyspace_tables(nodetool, request):
@@ -248,4 +248,4 @@ def test_sstableinfo_keyspace_tables(nodetool, request):
             params={"keyspace": "ks", "cf": "tbl2"},
             response=[ks_tbl2_sstable_info]),
     ])
-    _check_sstableinfo_output(res, info, request.config.getoption("nodetool") == "cassandra")
+    _check_sstableinfo_output(res.stdout, info, request.config.getoption("nodetool") == "cassandra")

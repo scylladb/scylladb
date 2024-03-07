@@ -465,7 +465,8 @@ Keyspace : {ks_name}
             expected_output += indent(table.format(), '\t\t')
         expected_output += '----------------\n'
 
-    actual_output = nodetool(command, *args, expected_requests=expected_requests)
+    res = nodetool(command, *args, expected_requests=expected_requests)
+    actual_output = res.stdout
     assert actual_output == expected_output
 
 
@@ -513,8 +514,9 @@ def test_output_format(request, nodetool, output_format):
         'json': json.loads
     }
 
-    actual_output = nodetool('tablestats', '--format', output_format,
-                             expected_requests=expected_requests)
+    res = nodetool('tablestats', '--format', output_format,
+                   expected_requests=expected_requests)
+    actual_output = res.stdout
     actual_dict = parsers[output_format](actual_output)
 
     assert actual_dict == expected_dict

@@ -217,6 +217,6 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
             assert len(expected_requests) == 0, ''.join(str(r) for r in expected_requests)
             assert unexpected_requests == 0
 
-            return res.stdout
+            return res
 
     return invoker

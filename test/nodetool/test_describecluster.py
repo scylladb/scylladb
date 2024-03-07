@@ -53,12 +53,13 @@ def test_describecluster(nodetool, num_schema_versions, num_schema_versions_host
         schema_versions_fmt += f"{version}: [{hosts}]\n\n"
     schema_versions_fmt = indent(schema_versions_fmt, "\t")
 
-    actual_output = nodetool("describecluster", expected_requests=[
+    res = nodetool("describecluster", expected_requests=[
         expected_request("GET", "/storage_service/cluster_name", response=cluster_name),
         expected_request("GET", "/snitch/name", response=snitch_name),
         expected_request("GET", "/storage_service/partitioner_name", response=partitioner),
         expected_request("GET", "/storage_proxy/schema_versions", response=schema_versions),
     ])
+    actual_output = res.stdout
 
     expected_cluster_info = indent(f"""\
 Name: {cluster_name}

@@ -18,10 +18,10 @@ def test_enablebackup(nodetool):
 
 
 def test_statusbackup(nodetool):
-    out = nodetool("statusbackup", expected_requests=[
+    res = nodetool("statusbackup", expected_requests=[
         expected_request("GET", "/storage_service/incremental_backups", response=False)])
-    assert out == "not running\n"
+    assert res.stdout == "not running\n"
 
-    out = nodetool("statusbackup", expected_requests=[
+    res = nodetool("statusbackup", expected_requests=[
         expected_request("GET", "/storage_service/incremental_backups", response=True)])
-    assert out == "running\n"
+    assert res.stdout == "running\n"
