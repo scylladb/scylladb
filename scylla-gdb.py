@@ -66,6 +66,7 @@ def get_field_offset(gdb_type, name):
 vtable_symbol_pattern = None
 vptr_type = None
 
+
 def _check_vptr(ptr):
     global vtable_symbol_pattern
     global vptr_type
@@ -78,6 +79,7 @@ def _check_vptr(ptr):
         raise ValueError("Failed to extract type name from symbol name `{}'".format(symbol_name))
 
     return m
+
 
 def downcast_vptr(ptr):
     global vtable_symbol_pattern
@@ -681,6 +683,7 @@ class std_list:
     @staticmethod
     def _make_dereference_func(value_type):
         list_node_type = gdb.lookup_type('std::_List_node<{}>'.format(str(value_type))).pointer()
+
         def deref(node):
             list_node = node.cast(list_node_type)
             return list_node['_M_storage']['_M_storage'].cast(value_type.pointer()).dereference()
@@ -824,6 +827,7 @@ def uint64_t(val):
         val += 1 << 64
     return val
 
+
 class inet_address_printer(gdb.printing.PrettyPrinter):
     'print a gms::inet_address'
 
@@ -885,6 +889,7 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
 
     def pure_bytes(self):
         inf = gdb.selected_inferior()
+
         def to_bytes(data, size):
             return bytes(inf.read_memory(data, size))
 
@@ -911,6 +916,7 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
 
     def display_hint(self):
         return 'managed_bytes'
+
 
 class optional_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
@@ -1082,6 +1088,7 @@ class sstable_generation_printer(gdb.printing.PrettyPrinter):
 class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
         self.val = intrusive_list(val)
+
     def to_string(self):
         items = ['@' + str(v.address) + '=' + str(v) for v in self.val]
         ptrs = [str(v.address) for v in self.val]
@@ -1703,6 +1710,7 @@ def find_vptrs():
     nr_pages = int(cpu_mem['nr_pages'])
 
     text_ranges = get_text_ranges()
+
     def is_vptr(addr):
         return addr_in_ranges(text_ranges, addr)
 
@@ -1759,7 +1767,6 @@ def find_single_sstable_readers():
             types = [_lookup_type(['sstables::mx::mx_sstable_mutation_reader']),
                      _lookup_type(['sstables::kl::sstable_mutation_reader'])]
 
-
     def _lookup_obj(obj_addr, vtable_addr):
         vtable_pfx = 'vtable for '
         name = resolve(vtable_addr, startswith=vtable_pfx)
@@ -1774,6 +1781,7 @@ def find_single_sstable_readers():
         obj = _lookup_obj(obj_addr, vtable_addr)
         if obj:
             yield obj
+
 
 def find_active_sstables():
     """ Yields sstable* once for each active sstable reader. """
@@ -1877,10 +1885,12 @@ def has_enable_lw_shared_from_this(type):
             return True
     return False
 
+
 def remove_prefix(s, prefix):
     if s.startswith(prefix):
         return s[len(prefix):]
     return s
+
 
 class seastar_lw_shared_ptr():
     def __init__(self, ref):
@@ -1920,6 +1930,7 @@ class lsa_region():
 
     def impl(self):
         return self.region
+
 
 class dirty_mem_mgr():
     def __init__(self, ref):
@@ -2620,6 +2631,7 @@ class pointer_metadata(object):
 
         return msg
 
+
 def get_segment_base(segment_pool):
     try:
         segment_store = segment_pool["_store"]
@@ -2753,6 +2765,7 @@ class segment_descriptor:
     def address(self):
         return self.ref.address
 
+
 class scylla_segment_descs(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla segment-descs', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -2788,6 +2801,7 @@ class scylla_segment_descs(gdb.Command):
 
 def shard_of(ptr):
     return (int(ptr) >> 36) & 0xff
+
 
 class scylla_lsa_check(gdb.Command):
     """
@@ -2908,6 +2922,7 @@ class lsa_regions(object):
         while self._region != self._regions['_M_impl']['_M_finish']:
             yield self._region
             self._region = self._region + 1
+
 
 class lsa_object_descriptor(object):
     @staticmethod
@@ -3711,7 +3726,6 @@ class scylla_io_queues(gdb.Command):
             gdb.write("\tPending in sink: ({})\n".format(len(pending)))
             for op in pending:
                 gdb.write("Completion {}\n".format(op['_completion']))
-
 
 
 class scylla_fiber(gdb.Command):
