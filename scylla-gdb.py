@@ -1097,7 +1097,7 @@ class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
 
 class interval_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
-        try :
+        try:
             self.val = val['_interval']
         except gdb.error: # 4.1 compatibility
             self.val = val['_range']
@@ -1116,10 +1116,10 @@ class interval_printer(gdb.printing.PrettyPrinter):
         has_end, end_inclusive, end_value = self.inspect_bound(self.val['_end'])
 
         return '{}{}, {}{}'.format(
-            '[' if start_inclusive  else '(',
+            '[' if start_inclusive else '(',
             str(start_value) if has_start else '-inf',
             str(end_value) if has_end else '+inf',
-            ']' if end_inclusive  else ')',
+            ']' if end_inclusive else ')',
         )
 
 
