@@ -51,7 +51,7 @@ def get_base_class_offset(gdb_type, base_class_name):
             if re.match(name_pattern, field.type.strip_typedefs().name):
                 return field_offset
             offset = get_base_class_offset(field.type, base_class_name)
-            if not offset is None:
+            if offset is not None:
                 return field_offset + offset
 
 
@@ -66,6 +66,7 @@ def get_field_offset(gdb_type, name):
 vtable_symbol_pattern = None
 vptr_type = None
 
+
 def _check_vptr(ptr):
     global vtable_symbol_pattern
     global vptr_type
@@ -78,6 +79,7 @@ def _check_vptr(ptr):
         raise ValueError("Failed to extract type name from symbol name `{}'".format(symbol_name))
 
     return m
+
 
 def downcast_vptr(ptr):
     global vtable_symbol_pattern
@@ -100,7 +102,7 @@ def downcast_vptr(ptr):
     # We are most likely dealing with multiple inheritance and a pointer to a
     # non-first base-class type.
     base_class_field = actual_type.fields()[0]
-    assert(base_class_field.is_base_class)
+    assert base_class_field.is_base_class
     base_classes = list(base_class_field.type.fields())
 
     # The pointer is surely not to the first base-class, we would have found
@@ -681,6 +683,7 @@ class std_list:
     @staticmethod
     def _make_dereference_func(value_type):
         list_node_type = gdb.lookup_type('std::_List_node<{}>'.format(str(value_type))).pointer()
+
         def deref(node):
             list_node = node.cast(list_node_type)
             return list_node['_M_storage']['_M_storage'].cast(value_type.pointer()).dereference()
@@ -824,6 +827,7 @@ def uint64_t(val):
         val += 1 << 64
     return val
 
+
 class inet_address_printer(gdb.printing.PrettyPrinter):
     'print a gms::inet_address'
 
@@ -885,6 +889,7 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
 
     def pure_bytes(self):
         inf = gdb.selected_inferior()
+
         def to_bytes(data, size):
             return bytes(inf.read_memory(data, size))
 
@@ -911,6 +916,7 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
 
     def display_hint(self):
         return 'managed_bytes'
+
 
 class optional_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
@@ -1082,6 +1088,7 @@ class sstable_generation_printer(gdb.printing.PrettyPrinter):
 class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
         self.val = intrusive_list(val)
+
     def to_string(self):
         items = ['@' + str(v.address) + '=' + str(v) for v in self.val]
         ptrs = [str(v.address) for v in self.val]
@@ -1090,7 +1097,7 @@ class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
 
 class interval_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
-        try :
+        try:
             self.val = val['_interval']
         except gdb.error: # 4.1 compatibility
             self.val = val['_range']
@@ -1109,10 +1116,10 @@ class interval_printer(gdb.printing.PrettyPrinter):
         has_end, end_inclusive, end_value = self.inspect_bound(self.val['_end'])
 
         return '{}{}, {}{}'.format(
-            '[' if start_inclusive  else '(',
+            '[' if start_inclusive else '(',
             str(start_value) if has_start else '-inf',
             str(end_value) if has_end else '+inf',
-            ']' if end_inclusive  else ')',
+            ']' if end_inclusive else ')',
         )
 
 
@@ -1703,6 +1710,7 @@ def find_vptrs():
     nr_pages = int(cpu_mem['nr_pages'])
 
     text_ranges = get_text_ranges()
+
     def is_vptr(addr):
         return addr_in_ranges(text_ranges, addr)
 
@@ -1759,7 +1767,6 @@ def find_single_sstable_readers():
             types = [_lookup_type(['sstables::mx::mx_sstable_mutation_reader']),
                      _lookup_type(['sstables::kl::sstable_mutation_reader'])]
 
-
     def _lookup_obj(obj_addr, vtable_addr):
         vtable_pfx = 'vtable for '
         name = resolve(vtable_addr, startswith=vtable_pfx)
@@ -1774,6 +1781,7 @@ def find_single_sstable_readers():
         obj = _lookup_obj(obj_addr, vtable_addr)
         if obj:
             yield obj
+
 
 def find_active_sstables():
     """ Yields sstable* once for each active sstable reader. """
@@ -1877,10 +1885,12 @@ def has_enable_lw_shared_from_this(type):
             return True
     return False
 
+
 def remove_prefix(s, prefix):
     if s.startswith(prefix):
         return s[len(prefix):]
     return s
+
 
 class seastar_lw_shared_ptr():
     def __init__(self, ref):
@@ -1920,6 +1930,7 @@ class lsa_region():
 
     def impl(self):
         return self.region
+
 
 class dirty_mem_mgr():
     def __init__(self, ref):
@@ -2581,7 +2592,7 @@ class pointer_metadata(object):
         self.offset_in_object = 0
 
     def is_managed_by_seastar(self):
-        return not self.thread is None
+        return self.thread is not None
 
     @property
     def is_containing_page_free(self):
@@ -2620,6 +2631,7 @@ class pointer_metadata(object):
 
         return msg
 
+
 def get_segment_base(segment_pool):
     try:
         segment_store = segment_pool["_store"]
@@ -2639,7 +2651,7 @@ class scylla_ptr(gdb.Command):
 
     @staticmethod
     def is_seastar_allocator_used():
-        if not scylla_ptr._is_seastar_allocator_used is None:
+        if scylla_ptr._is_seastar_allocator_used is not None:
             return scylla_ptr._is_seastar_allocator_used
 
         try:
@@ -2753,6 +2765,7 @@ class segment_descriptor:
     def address(self):
         return self.ref.address
 
+
 class scylla_segment_descs(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla segment-descs', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -2788,6 +2801,7 @@ class scylla_segment_descs(gdb.Command):
 
 def shard_of(ptr):
     return (int(ptr) >> 36) & 0xff
+
 
 class scylla_lsa_check(gdb.Command):
     """
@@ -2908,6 +2922,7 @@ class lsa_regions(object):
         while self._region != self._regions['_M_impl']['_M_finish']:
             yield self._region
             self._region = self._region + 1
+
 
 class lsa_object_descriptor(object):
     @staticmethod
@@ -3713,7 +3728,6 @@ class scylla_io_queues(gdb.Command):
                 gdb.write("Completion {}\n".format(op['_completion']))
 
 
-
 class scylla_fiber(gdb.Command):
     """ Walk the continuation chain starting from the given task
 
@@ -3798,7 +3812,7 @@ class scylla_fiber(gdb.Command):
 
         return ptr_meta, maybe_vptr, resolved_symbol
 
-   # Find futures waiting on this task
+    # Find futures waiting on this task
     def _walk_forward(self, ptr_meta, name, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         ptr = ptr_meta.ptr
 
@@ -3836,7 +3850,7 @@ class scylla_fiber(gdb.Command):
 
         return None
 
-   # Find futures waited-on by this task
+    # Find futures waited-on by this task
     def _walk_backward(self, ptr_meta, name, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         orig = gdb.selected_thread()
         res = None
@@ -3850,7 +3864,7 @@ class scylla_fiber(gdb.Command):
             # stack grows downwards, so walk from end of buffer towards the beginning
             for maybe_tptr in range(stack_ptr + stack_meta.size - self._vptr_type.sizeof, stack_ptr - self._vptr_type.sizeof, -self._vptr_type.sizeof):
                 res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
-                if not res is None and 'thread_wake_task' in res[2]:
+                if res is not None and 'thread_wake_task' in res[2]:
                     return res
             return None
 
@@ -4527,7 +4541,7 @@ class scylla_generate_object_graph(gdb.Command):
 
                     if max_vertices > 0 and len(vertices) >= max_vertices:
                         stop = True
-                        break;
+                        break
 
             if max_depth > 0 and depth == max_depth:
                 stop = True
@@ -4624,23 +4638,23 @@ class scylla_smp_queues(gdb.Command):
 
     The summary takes the form of a histogram. Example:
 
-	(gdb) scylla smp-queues
-	    10747 17 ->  3 ++++++++++++++++++++++++++++++++++++++++
-	      721 17 -> 19 ++
-	      247 17 -> 20 +
-	      233 17 -> 10 +
-	      210 17 -> 14 +
-	      205 17 ->  4 +
-	      204 17 ->  5 +
-	      198 17 -> 16 +
-	      197 17 ->  6 +
-	      189 17 -> 11 +
-	      181 17 ->  1 +
-	      179 17 -> 13 +
-	      176 17 ->  2 +
-	      173 17 ->  0 +
-	      163 17 ->  8 +
-		1 17 ->  9 +
+    (gdb) scylla smp-queues
+        10747 17 ->  3 ++++++++++++++++++++++++++++++++++++++++
+          721 17 -> 19 ++
+          247 17 -> 20 +
+          233 17 -> 10 +
+          210 17 -> 14 +
+          205 17 ->  4 +
+          204 17 ->  5 +
+          198 17 -> 16 +
+          197 17 ->  6 +
+          189 17 -> 11 +
+          181 17 ->  1 +
+          179 17 -> 13 +
+          176 17 ->  2 +
+          173 17 ->  0 +
+          163 17 ->  8 +
+        1 17 ->  9 +
 
     Each line has the following format
 
@@ -4713,7 +4727,7 @@ class scylla_smp_queues(gdb.Command):
         empty_queues = 0
 
         def add_to_histogram(a, b, key=None, count=1):
-            if not sg_id is None and int(key.dereference()['_sg']['_id']) != sg_id:
+            if sg_id is not None and int(key.dereference()['_sg']['_id']) != sg_id:
                 return
 
             if args.content:
@@ -4998,23 +5012,23 @@ class scylla_compaction_tasks(gdb.Command):
     form of a histogram with the compaction type and compaction running and
     table name as keys. Example:
 
-	(gdb) scylla compaction-task
-	     2116 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_postimage_scylla_cdc_log"
-	      769 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_scylla_cdc_log"
-	      750 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_postimage_scylla_cdc_log"
-	      731 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_scylla_cdc_log"
-	      293 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table"
-	      286 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage"
-	      230 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_postimage"
-	       58 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_postimage"
-		4 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_postimage_scylla_cdc_log"
-		2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table"
-		2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage_scylla_cdc_log"
-		2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage"
-		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage"
-		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_scylla_cdc_log"
-		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_scylla_cdc_log"
-	Total: 5246 instances of compaction::compaction_task_executor
+    (gdb) scylla compaction-task
+         2116 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_postimage_scylla_cdc_log"
+          769 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_scylla_cdc_log"
+          750 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_postimage_scylla_cdc_log"
+          731 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_scylla_cdc_log"
+          293 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table"
+          286 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage"
+          230 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_postimage"
+           58 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_postimage"
+        4 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_postimage_scylla_cdc_log"
+        2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table"
+        2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage_scylla_cdc_log"
+        2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage"
+        1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage"
+        1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_scylla_cdc_log"
+        1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_scylla_cdc_log"
+    Total: 5246 instances of compaction::compaction_task_executor
     """
 
     def __init__(self):
@@ -5167,19 +5181,19 @@ class scylla_schema(gdb.Command):
     """Pretty print a schema
 
     Example:
-	(gdb) scylla schema $s
-	(schema*) 0x604009352380 ks="scylla_bench" cf="test" id=a3eadd80-f2a7-11ea-853c-000000000004 version=47e0bf13-6cc8-3421-93c6-a9fe169b1689
+    (gdb) scylla schema $s
+    (schema*) 0x604009352380 ks="scylla_bench" cf="test" id=a3eadd80-f2a7-11ea-853c-000000000004 version=47e0bf13-6cc8-3421-93c6-a9fe169b1689
 
-	partition key: byte_order_equal=true byte_order_comparable=false is_reversed=false
-	    "org.apache.cassandra.db.marshal.LongType"
+    partition key: byte_order_equal=true byte_order_comparable=false is_reversed=false
+        "org.apache.cassandra.db.marshal.LongType"
 
-	clustering key: byte_order_equal=true byte_order_comparable=false is_reversed=true
-	    "org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.LongType)"
+    clustering key: byte_order_equal=true byte_order_comparable=false is_reversed=true
+        "org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.LongType)"
 
-	columns:
-	    column_kind::partition_key  id=0 ordinal_id=0 "pk" "org.apache.cassandra.db.marshal.LongType" is_atomic=true is_counter=false
-	    column_kind::clustering_key id=0 ordinal_id=1 "ck" "org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.LongType)" is_atomic=true is_counter=false
-	    column_kind::regular_column id=0 ordinal_id=2 "v" "org.apache.cassandra.db.marshal.BytesType" is_atomic=true is_counter=false
+    columns:
+        column_kind::partition_key  id=0 ordinal_id=0 "pk" "org.apache.cassandra.db.marshal.LongType" is_atomic=true is_counter=false
+        column_kind::clustering_key id=0 ordinal_id=1 "ck" "org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.LongType)" is_atomic=true is_counter=false
+        column_kind::regular_column id=0 ordinal_id=2 "v" "org.apache.cassandra.db.marshal.BytesType" is_atomic=true is_counter=false
 
     Argument is an expression that evaluates to a schema value, reference,
     pointer or shared pointer.
