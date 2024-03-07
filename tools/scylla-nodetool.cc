@@ -1363,7 +1363,6 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         fmt::print("[{:%F %T},{:03d}] {}\n", fmt::localtime(t), ms, msg);
     };
 
-    size_t failed = 0;
     for (const auto& keyspace : keyspaces) {
         const auto url = format("/storage_service/repair_async/{}", keyspace);
 
@@ -1389,13 +1388,8 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         if (status == "SUCCESSFUL") {
             log("Repair session {} finished", id);
         } else {
-            log("Repair session {} failed", id);
-            ++failed;
+            throw operation_failed_on_scylladb(format("Repair session {} failed", id));
         }
-    }
-
-    if (failed) {
-        throw operation_failed_on_scylladb(format("{} out of {} repair session(s) failed", failed, keyspaces.size()));
     }
 }
 
