@@ -8,7 +8,7 @@ from typing import NamedTuple
 import pytest
 import subprocess
 from rest_api_mock import expected_request
-
+from utils import format_size
 
 class Host(NamedTuple):
     dc: str
@@ -32,20 +32,6 @@ def map_to_json(mapper, mapped_type=None):
 
 def format_stat(width, address, rack, status, state, load, owns, token):
     return f"{address:<{width}}  {rack:<12}{status:<7}{state:<8}{load:<16}{owns:<20}{token:<44}\n"
-
-
-def format_size(v):
-    units = {
-        1 << 40: 'TB',
-        1 << 30: 'GB',
-        1 << 20: 'MB',
-        1 << 10: 'KB',
-    }
-    for n, unit in units.items():
-        if v > n:
-            d = v / n
-            return f'{d:.2f} {unit}'
-    return f'{v} bytes'
 
 
 @pytest.mark.parametrize("keyspace,host_status,host_state",

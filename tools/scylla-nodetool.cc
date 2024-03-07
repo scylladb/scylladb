@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <concepts>
 #include <limits>
@@ -730,6 +731,101 @@ void gossipinfo_operation(scylla_rest_client& client, const bpo::variables_map&)
     }
 }
 
+std::map<sstring, std::vector<sstring>> get_ks_to_cfs(scylla_rest_client& client) {
+    auto res = client.get("/column_family/");
+    std::map<sstring, std::vector<sstring>> keyspaces;
+    for (auto& element : res.GetArray()) {
+        const auto& cf_info = element.GetObject();
+        auto ks = rjson::to_string_view(cf_info["ks"]);
+        auto cf = rjson::to_string_view(cf_info["cf"]);
+        keyspaces[sstring(ks)].push_back(sstring(cf));
+    }
+    return keyspaces;
+}
+
+static uint64_t get_off_heap_memory_used(scylla_rest_client& client) {
+    uint64_t used = 0;
+    for (auto& [ks_name, cf_names] : get_ks_to_cfs(client)) {
+        for (auto& cf_name : cf_names) {
+            for (auto name : {"memtable_off_heap_size",
+                              "bloom_filter_off_heap_memory_used",
+                              "index_summary_off_heap_memory_used",
+                              "compression_metadata_off_heap_memory_used"}) {
+                used += client.get(fmt::format("/column_family/metrics/{}/{}:{}",
+                                               name, ks_name, cf_name)).GetUint64();
+            }
+        }
+    }
+    return used;
+}
+
+static double get_cache_count(scylla_rest_client& client,
+                              std::string_view cache_name,
+                              std::string_view metrics_name) {
+    auto res = client.get(fmt::format("/cache_service/metrics/{}/{}_moving_avrage",
+                                      cache_name, metrics_name));
+    auto moving_average = res.GetObject();
+    return moving_average["count"].GetInt64();
+}
+
+void info_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto gossip_running = client.get("/storage_service/gossiping").GetBool();
+    fmt::print("{:<23}: {}\n", "ID", rjson::to_string_view(client.get("/storage_service/hostid/local")));
+    fmt::print("{:<23}: {}\n", "Gossip active", gossip_running);
+    fmt::print("{:<23}: {}\n", "Thrift active", client.get("/storage_service/rpc_server").GetBool());
+    fmt::print("{:<23}: {}\n", "Native Transport active", client.get("/storage_service/native_transport").GetBool());
+    fmt::print("{:<23}: {}\n", "Load", file_size_printer(client.get("/storage_service/load").GetDouble()));
+    if (gossip_running) {
+        fmt::print("{:<23}: {}\n", "Generation No", client.get("/storage_service/generation_number").GetInt());
+    } else {
+        fmt::print("{:<23}: {}\n", "Generation No", 0);
+    }
+    auto uptime_ms = std::chrono::milliseconds(client.get("/system/uptime_ms").GetInt64());
+    fmt::print("{:<23}: {}\n", "Uptime (seconds)",
+               std::chrono::duration_cast<std::chrono::seconds>(uptime_ms).count());
+    // the JVM heap memory usage is meaningless for Scylla
+    const double mem_used = 0;
+    const double mem_max = 0;
+    fmt::print("{:<23}: {:.2f} / {:.2f}\n", "Heap Memory (MB)", mem_used, mem_max);
+    fmt::print("{:<23}: {:.2f}\n", "Off Heap Memory (MB)",
+               static_cast<float>(get_off_heap_memory_used(client)) / 1_MiB);
+    fmt::print("{:<23}: {}\n", "Data Center", rjson::to_string_view(client.get("/snitch/datacenter")));
+    fmt::print("{:<23}: {}\n", "Rack", rjson::to_string_view(client.get("/snitch/rack")));
+    // scylla always returns 0 though.
+    fmt::print("{:<23}: {}\n", "Exceptions", client.get("/storage_service/metrics/exceptions").GetInt64());
+    using namespace std::literals;
+    for (auto name : {"key"sv, "row"sv, "counter"sv}) {
+        std::string capitalized_name = fmt::format("{}{} Cache", static_cast<char>(toupper(name[0])), name.substr(1));
+        fmt::print("{:<23}: entries {}, size {}, capacity {}, {} hits, {} requests, {:.3f} recent hit rate, {} save period in seconds\n",
+                   capitalized_name,
+                   client.get(seastar::format("/cache_service/metrics/{}/entries", name)).GetInt64(),
+                   file_size_printer(client.get(seastar::format("/cache_service/metrics/{}/size", name)).GetInt64()),
+                   file_size_printer(client.get(seastar::format("/cache_service/metrics/{}/capacity", name)).GetInt64()),
+                   get_cache_count(client, name, "hits"),
+                   get_cache_count(client, name, "requests"),
+                   client.get(seastar::format("/cache_service/metrics/{}/hit_rate", name)).GetDouble(),
+                   client.get(seastar::format("/cache_service/{}_cache_save_period", name)).GetInt64());
+    }
+    // this is a dummy value, to be compatible with cassandra nodetool.
+    fmt::print("{:<23}: {:.1f}%\n", "Percent Repaired", 0.0);
+    const bool display_all_tokens = vm.contains("tokens");
+    if (client.get("/storage_service/join_ring").GetBool()) {
+        auto res = client.get("/storage_service/tokens");
+        auto tokens = res.GetArray();
+        const auto nr_tokens = tokens.Size();
+        if (nr_tokens == 1 || display_all_tokens) {
+            for (auto& token : tokens) {
+                fmt::print("{:<23}: {}\n", "Token", rjson::to_string_view(token));
+            }
+        } else {
+            fmt::print("{:<23}: (invoke with -T/--tokens to see all {} tokens)\n",
+                       "Token", nr_tokens);
+        }
+    } else {
+        fmt::print("{:<23}: (node is not joined to the cluster)\n", "Token");
+    }
+}
+
 void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const auto snapshots = client.get("/storage_service/snapshots");
     const auto true_size = client.get("/storage_service/snapshots/size/true").GetInt64();
@@ -1409,18 +1505,6 @@ void stop_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     }
 
     client.post("/compaction_manager/stop_compaction", {{"type", compaction_type}});
-}
-
-std::map<sstring, std::vector<sstring>> get_ks_to_cfs(scylla_rest_client& client) {
-    auto res = client.get("/column_family/");
-    std::map<sstring, std::vector<sstring>> keyspaces;
-    for (auto& element : res.GetArray()) {
-        const auto& cf_info = element.GetObject();
-        auto ks = rjson::to_string_view(cf_info["ks"]);
-        auto cf = rjson::to_string_view(cf_info["cf"]);
-        keyspaces[sstring(ks)].push_back(sstring(cf));
-    }
-    return keyspaces;
 }
 
 class table_metrics {
@@ -2484,6 +2568,19 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             [] (scylla_rest_client&, const bpo::variables_map&) {}
+        },
+        {
+            {
+                "info",
+                "Print node information (uptime, load, ...)",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/info.html
+)",
+                {
+                    typed_option<>("tokens,T", "Display all tokens"),
+                },
+            },
+            info_operation
         },
         {
             {
