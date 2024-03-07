@@ -835,6 +835,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     seastar::gate _async_gate;
 
+    bool action_failed(background_action_holder& holder) const {
+        return holder && holder->failed();
+    }
+
     // This function drives background_action_holder towards "executed successfully"
     // by starting the action if it is not already running or if the previous instance
     // of the action failed. If the action is already running, it does nothing.
@@ -842,7 +846,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     bool advance_in_background(locator::global_tablet_id gid, background_action_holder& holder, const char* name,
                                std::function<future<>()> action) {
         if (!holder || holder->failed()) {
-            if (holder && holder->failed()) {
+            if (action_failed(holder)) {
                 // Prevent warnings about abandoned failed future. Logged below.
                 holder->ignore_ready_future();
             }
@@ -1021,6 +1025,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old:
+                    if (action_failed(tablet_state.barriers[trinfo.stage])) {
+                        if (check_excluded_replicas()) {
+                            transition_to_with_barrier(locator::tablet_transition_stage::revert_migration);
+                            break;
+                        }
+                    }
                     if (do_barrier()) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
                         updates.emplace_back(get_mutation_builder()
@@ -1032,6 +1042,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_old:
+                    if (action_failed(tablet_state.barriers[trinfo.stage])) {
+                        if (check_excluded_replicas()) {
+                            transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            break;
+                        }
+                    }
                     transition_to_with_barrier(locator::tablet_transition_stage::streaming);
                     break;
                 // The state "streaming" is needed to ensure that stale stream_tablet() RPC doesn't
@@ -1043,7 +1059,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
                     }
 
-                    if (tablet_state.streaming && tablet_state.streaming->failed()) {
+                    if (action_failed(tablet_state.streaming)) {
                         if (check_excluded_replicas()) {
                             transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
                             break;
@@ -1063,8 +1079,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             .build());
                     }
                     break;
-                case locator::tablet_transition_stage::write_both_read_new:
-                    transition_to_with_barrier(locator::tablet_transition_stage::use_new);
+                case locator::tablet_transition_stage::write_both_read_new: {
+                    auto next_stage = locator::tablet_transition_stage::use_new;
+                    if (action_failed(tablet_state.barriers[trinfo.stage])) {
+                        auto& tinfo = tmap.get_tablet_info(gid.tablet);
+                        unsigned excluded_old = 0;
+                        for (auto r : tinfo.replicas) {
+                            if (is_excluded(raft::server_id(r.host.uuid()))) {
+                                excluded_old++;
+                            }
+                        }
+                        unsigned excluded_new = 0;
+                        for (auto r : trinfo.next) {
+                            if (is_excluded(raft::server_id(r.host.uuid()))) {
+                                excluded_new++;
+                            }
+                        }
+                        if (excluded_new > excluded_old) {
+                            rtlogger.debug("During {} stage of {} {} new nodes and {} old nodes were excluded", trinfo.stage, gid, excluded_new, excluded_old);
+                            next_stage = locator::tablet_transition_stage::cleanup_target;
+                        }
+                    }
+                    transition_to_with_barrier(next_stage);
+                }
                     break;
                 case locator::tablet_transition_stage::use_new:
                     transition_to_with_barrier(locator::tablet_transition_stage::cleanup);

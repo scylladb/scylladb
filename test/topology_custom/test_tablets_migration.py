@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
-@pytest.mark.parametrize("fail_stage", ["streaming"])
+@pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new"])
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage):
@@ -48,6 +48,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
     logger.info(f"Tablet is on [{replicas}]")
     assert len(replicas) == 1 and len(replicas[0].replicas) == 2
 
+    last_token = replicas[0].last_token
     old_replica = None
     for r in replicas[0].replicas:
         assert r[0] != host_ids[2], "Tablet got migrated to node2"
@@ -64,6 +65,10 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
         await manager.api.enable_injection(servers[2].ip_addr, "stream_mutation_fragments", one_shot=True)
         s2_log = await manager.server_open_log(servers[2].server_id)
         s2_mark = await s2_log.mark()
+    elif fail_stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new" ]:
+        await manager.api.enable_injection(servers[fail_idx].ip_addr, "raft_topology_barrier_and_drain_fail", one_shot=False, parameters={'keyspace': 'test', 'table': 'test', 'last_token': last_token, 'stage': fail_stage})
+        sx_log = await manager.server_open_log(servers[fail_idx].server_id)
+        sx_mark = await sx_log.mark()
     else:
         assert False, f"Unknown stage {fail_stage}"
 
@@ -73,6 +78,8 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
     logger.info(f"Wait for {fail_stage} to happen")
     if fail_stage == "streaming":
         await s2_log.wait_for('stream_mutation_fragments: waiting', from_mark=s2_mark)
+    elif fail_stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new" ]:
+        await sx_log.wait_for('raft_topology_cmd: barrier handler waits', from_mark=sx_mark);
     else:
         assert False
 
