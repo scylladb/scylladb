@@ -30,8 +30,8 @@ and the one that was written at a later time prevails.
 Finally, if both cells are live and have no expiration, or have the same expiration time and time-to-live,
 the cell with the lexicographically bigger value prevails.
 
-Note that when multiple columns are `INSERT`ed or `UPDATE`ed using the same timestamp,
-`SELECT`ing those columns might return a result that mixes cells from either upsert.
+Note that when multiple columns are inserted (`INSERT`) or updated (`UPDATE`) using the same timestamp,
+selecting (`SELECT`) those columns might return a result that mixes cells from either upsert.
 This may happen when both upserts have no expiration time, or both their expiration time and TTL are the
 same, respectively (in whole second resolution). In such a case, cell selection would be based on the cell values
 in each column, independently of each other.
