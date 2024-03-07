@@ -16,10 +16,13 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
-@pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new"])
+@pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup"])
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage):
+    if fail_stage == 'cleanup' and fail_replica == 'destination':
+        pytest.skip('Failing destination during cleanup is pointless')
+
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets', 'consistent-topology-changes']}
     host_ids = []
@@ -75,6 +78,10 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                         parameters={'keyspace': 'test', 'table': 'test', 'last_token': last_token, 'stage': self.stage.removeprefix('do_')})
                 self.log = await manager.server_open_log(servers[self.fail_idx].server_id)
                 self.mark = await self.log.mark()
+            elif self.stage == "cleanup":
+                await manager.api.enable_injection(servers[self.fail_idx].ip_addr, "cleanup_tablet_crash", one_shot=True)
+                self.log = await manager.server_open_log(servers[self.fail_idx].server_id)
+                self.mark = await self.log.mark()
             else:
                 assert False, f"Unknown stage {self.stage}"
 
@@ -84,6 +91,8 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                 await self.log.wait_for('stream_mutation_fragments: waiting', from_mark=self.mark)
             elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new" ]:
                 await self.log.wait_for('raft_topology_cmd: barrier handler waits', from_mark=self.mark);
+            elif self.stage == "cleanup":
+                await self.log.wait_for('Crashing tablet cleanup', from_mark=self.mark)
             else:
                 assert False
 
