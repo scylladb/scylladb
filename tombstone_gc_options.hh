@@ -10,6 +10,7 @@
 
 #include <map>
 #include <chrono>
+#include <fmt/core.h>
 #include <seastar/core/sstring.hh>
 
 enum class tombstone_gc_mode : uint8_t { timeout, disabled, immediate, repair };
@@ -30,4 +31,6 @@ public:
     bool operator==(const tombstone_gc_options&) const = default;
 };
 
-std::ostream& operator<<(std::ostream& os, const tombstone_gc_mode& m);
+template <> struct fmt::formatter<tombstone_gc_mode> : fmt::formatter<std::string_view> {
+    auto format(tombstone_gc_mode mode, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

@@ -56,12 +56,14 @@ seastar::sstring tombstone_gc_options::to_sstring() const {
     return rjson::print(rjson::from_string_map(to_map()));
 }
 
-std::ostream& operator<<(std::ostream& os, const tombstone_gc_mode& mode) {
+auto fmt::formatter<tombstone_gc_mode>::format(tombstone_gc_mode mode, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name = "unknown";
     switch (mode) {
-    case tombstone_gc_mode::timeout:     return os << "timeout";
-    case tombstone_gc_mode::disabled:    return os << "disabled";
-    case tombstone_gc_mode::immediate:   return os << "immediate";
-    case tombstone_gc_mode::repair:      return os << "repair";
+    case tombstone_gc_mode::timeout:     name = "timeout"; break;
+    case tombstone_gc_mode::disabled:    name = "disabled"; break;
+    case tombstone_gc_mode::immediate:   name = "immediate"; break;
+    case tombstone_gc_mode::repair:      name = "repair"; break;
     }
-    return os << "unknown";
+    return formatter<std::string_view>::format(name, ctx);
 }
