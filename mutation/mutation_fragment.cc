@@ -28,20 +28,6 @@ partition_region parse_partition_region(std::string_view s) {
     }
 }
 
-std::ostream& operator<<(std::ostream& out, position_in_partition_view pos) {
-    fmt::print(out, "{}", pos);
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& out, const position_in_partition& pos) {
-    fmt::print(out, "{}", pos);
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& out, const position_range& range) {
-    return out << "{" << range.start() << ", " << range.end() << "}";
-}
-
 mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, static_row&& r)
     : _kind(kind::static_row), _data(std::make_unique<data>(std::move(permit)))
 {
@@ -238,16 +224,22 @@ position_range mutation_fragment::range(const schema& s) const {
     abort();
 }
 
-std::ostream& operator<<(std::ostream& os, mutation_fragment::kind k)
-{
+auto fmt::formatter<mutation_fragment::kind>::format(mutation_fragment::kind k, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name;
     switch (k) {
-    case mutation_fragment::kind::static_row: return os << "static row";
-    case mutation_fragment::kind::clustering_row: return os << "clustering row";
-    case mutation_fragment::kind::range_tombstone: return os << "range tombstone";
-    case mutation_fragment::kind::partition_start: return os << "partition start";
-    case mutation_fragment::kind::partition_end: return os << "partition end";
+    case mutation_fragment::kind::static_row:
+        name = "static row"; break;
+    case mutation_fragment::kind::clustering_row:
+        name = "clustering row"; break;
+    case mutation_fragment::kind::range_tombstone:
+        name = "range tombstone"; break;
+    case mutation_fragment::kind::partition_start:
+        name = "partition start"; break;
+    case mutation_fragment::kind::partition_end:
+        name = "partition end"; break;
     }
-    abort();
+    return fmt::format_to(ctx.out(), "{}", name);
 }
 
 auto fmt::formatter<mutation_fragment::printer>::format(const mutation_fragment::printer& p, fmt::format_context& ctx) const
@@ -306,16 +298,17 @@ std::ostream& operator<<(std::ostream& os, mutation_fragment_v2::kind k)
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const mutation_fragment_v2::printer& p) {
+auto fmt::formatter<mutation_fragment_v2::printer>::format(const mutation_fragment_v2::printer& p, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     auto& mf = p._mutation_fragment;
-    os << "{mutation_fragment: " << mf._kind << " " << mf.position() << " ";
-    mf.visit(make_visitor(
-        [&] (const clustering_row& cr) { fmt::print(os, "{}", clustering_row::printer(p._schema, cr)); },
-        [&] (const static_row& sr) { fmt::print(os, "{}", static_row::printer(p._schema, sr)); },
-        [&] (const auto& what) -> void { fmt::print(os, "{}", what); }
+    auto out = ctx.out();
+    out = fmt::format_to(out, "{{mutation_fragment: {} {} ", mf._kind, mf.position());
+    out = mf.visit(make_visitor(
+        [&] (const clustering_row& cr) { return fmt::format_to(out, "{}", clustering_row::printer(p._schema, cr)); },
+        [&] (const static_row& sr) { return fmt::format_to(out, "{}", static_row::printer(p._schema, sr)); },
+        [&] (const auto& what) { return fmt::format_to(out, "{}", what); }
     ));
-    os << "}";
-    return os;
+    return fmt::format_to(out, "}}");
 }
 
 mutation_fragment_opt range_tombstone_stream::do_get_next()
@@ -410,11 +403,6 @@ bool mutation_fragment_v2::relevant_for_range(const schema& s, position_in_parti
         return true;
     }
     return false;
-}
-
-std::ostream& operator<<(std::ostream& out, const range_tombstone_stream& rtl) {
-    fmt::print(out, "{}", rtl._list);
-    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const clustering_interval_set& set) {

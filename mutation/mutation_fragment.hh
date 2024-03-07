@@ -526,9 +526,6 @@ inline position_in_partition_view partition_end::position() const
     return position_in_partition_view::for_partition_end();
 }
 
-std::ostream& operator<<(std::ostream&, mutation_fragment::kind);
-
-
 // range_tombstone_stream is a helper object that simplifies producing a stream
 // of range tombstones and merging it with a stream of clustering rows.
 // Tombstones are added using apply() and retrieved using get_next().
@@ -569,7 +566,7 @@ public:
     }
     void reset();
     bool empty() const;
-    friend std::ostream& operator<<(std::ostream& out, const range_tombstone_stream&);
+    friend fmt::formatter<range_tombstone_stream>;
 };
 
 // F gets a stream element as an argument and returns the new value which replaces that element
@@ -617,3 +614,11 @@ template <> struct fmt::formatter<mutation_fragment::printer> : fmt::formatter<s
     auto format(const mutation_fragment::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
+template <> struct fmt::formatter<mutation_fragment::kind> : fmt::formatter<std::string_view> {
+    auto format(mutation_fragment::kind, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+template <> struct fmt::formatter<range_tombstone_stream> : fmt::formatter<std::string_view> {
+    auto format(const range_tombstone_stream& rtl, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", rtl._list);
+    }
+};

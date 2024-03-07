@@ -3659,7 +3659,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_validator) {
                     expected_is_valid,
                     is_valid,
                     fmt::join(frag_refs | boost::adaptors::transformed([&] (std::reference_wrapper<const mutation_fragment_v2> mf) {
-                        return fmt::to_string(mutation_fragment_v2::printer(*s, mf.get()));
+                        return fmt::format("{}", mutation_fragment_v2::printer(*s, mf.get()));
                     }), "\n"));
             BOOST_FAIL(msg);
         }

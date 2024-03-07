@@ -634,7 +634,6 @@ public:
             return compare(a, b);
         }
     };
-    friend std::ostream& operator<<(std::ostream&, const position_in_partition&);
 
     // Create a position which is the same as this one but governed by a schema with reversed clustering key order.
     position_in_partition reversed() const& {
@@ -784,8 +783,6 @@ public:
     // Returns true iff this range contains all keys contained by position_range(start, end).
     bool contains(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
     bool is_all_clustered_rows(const schema&) const;
-
-    friend std::ostream& operator<<(std::ostream&, const position_range&);
 };
 
 class clustering_interval_set;
@@ -818,3 +815,9 @@ bool position_range::is_all_clustered_rows(const schema& s) const {
 //
 // If `r` does not contain any keys, returns nullopt.
 std::optional<query::clustering_range> position_range_to_clustering_range(const position_range& r, const schema&);
+
+template <> struct fmt::formatter<position_range> : fmt::formatter<std::string_view> {
+    auto format(const position_range& range, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{{}, {}}}", range.start(), range.end());
+    }
+};
