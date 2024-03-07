@@ -210,9 +210,12 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
             expected_requests = [r for r in rest_api_mock.get_expected_requests(rest_api_mock_server)
                                  if not r.exhausted()]
 
+            unexpected_requests = rest_api_mock.get_unexpected_requests(rest_api_mock_server)
+
             # Check the return-code first, if the command failed probably not all requests were consumed
             res.check_returncode()
             assert len(expected_requests) == 0, ''.join(str(r) for r in expected_requests)
+            assert unexpected_requests == 0
 
             return res.stdout
 

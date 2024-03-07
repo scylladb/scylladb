@@ -5,6 +5,7 @@
 #
 
 import pytest
+from rest_api_mock import expected_request
 import subprocess
 
 import utils
@@ -14,7 +15,12 @@ import utils
 
 
 def test_help(nodetool):
-    out = nodetool("help")
+    out = nodetool("help", expected_requests=[
+        # These requests are sometimes sent by Cassandra nodetool when invoking help
+        # This looks like a new connection to JMX.
+        expected_request("GET", "/column_family/", response=[], multiple=expected_request.ANY),
+        expected_request("GET", "/stream_manager/", response=[], multiple=expected_request.ANY),
+    ])
     assert out
 
 
