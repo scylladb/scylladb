@@ -102,7 +102,7 @@ def downcast_vptr(ptr):
     # We are most likely dealing with multiple inheritance and a pointer to a
     # non-first base-class type.
     base_class_field = actual_type.fields()[0]
-    assert(base_class_field.is_base_class)
+    assert base_class_field.is_base_class
     base_classes = list(base_class_field.type.fields())
 
     # The pointer is surely not to the first base-class, we would have found
@@ -4524,7 +4524,7 @@ class scylla_generate_object_graph(gdb.Command):
 
                     if max_vertices > 0 and len(vertices) >= max_vertices:
                         stop = True
-                        break;
+                        break
 
             if max_depth > 0 and depth == max_depth:
                 stop = True
