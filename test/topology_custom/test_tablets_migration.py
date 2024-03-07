@@ -86,11 +86,12 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
             else:
                 assert False
 
-        async def stop(self):
+        async def stop(self, via=0):
             logger.info(f"Stop {self.replica} {host_ids[self.fail_idx]}")
             await manager.server_stop(servers[self.fail_idx].server_id)
-            logger.info(f"Remove {self.replica} {host_ids[self.fail_idx]}")
-            await manager.remove_node(servers[0].server_id, servers[self.fail_idx].server_id)
+            logger.info(f"Remove {self.replica} {host_ids[self.fail_idx]} via {host_ids[via]}")
+            await manager.remove_node(servers[via].server_id, servers[self.fail_idx].server_id)
+            logger.info(f"Done with {self.replica} {host_ids[self.fail_idx]}")
 
 
     failer = node_failer(fail_stage, fail_replica)
