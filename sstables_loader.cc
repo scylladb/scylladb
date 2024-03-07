@@ -115,59 +115,204 @@ public:
 
 } // anonymous namespace
 
-future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
-        ::table_id table_id, std::vector<sstables::shared_sstable> sstables, bool primary_replica_only) {
-    const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
-    const auto full_token_range = dht::token_range::make_open_ended_both_sides();
-    auto& table = _db.local().find_column_family(table_id);
-    auto s = table.schema();
-    const auto cf_id = s->id();
-    const auto reason = streaming::stream_reason::repair;
-    auto erm = _db.local().find_column_family(s).get_effective_replication_map();
+class sstable_streamer {
+protected:
+    netw::messaging_service& _ms;
+    replica::database& _db;
+    replica::table& _table;
+    locator::effective_replication_map_ptr _erm;
+    std::vector<sstables::shared_sstable> _sstables;
+public:
+    sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, std::vector<sstables::shared_sstable> sstables)
+            : _ms(ms)
+            , _db(db)
+            , _table(db.find_column_family(table_id))
+            , _erm(_table.get_effective_replication_map())
+            , _sstables(std::move(sstables)) {
+        // By sorting SSTables by their primary key, we allow SSTable runs to be
+        // incrementally streamed.
+        // Overlapping run fragments can have their content deduplicated, reducing
+        // the amount of data we need to put on the wire.
+        // Elements are popped off from the back of the vector, therefore we're sorting
+        // it in descending order, to start from the smaller tokens.
+        std::ranges::sort(_sstables, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
+            return x->compare_by_first_key(*y) > 0;
+        });
+    }
 
-    // By sorting SSTables by their primary key, we allow SSTable runs to be
-    // incrementally streamed.
-    // Overlapping run fragments can have their content deduplicated, reducing
-    // the amount of data we need to put on the wire.
-    // Elements are popped off from the back of the vector, therefore we're sorting
-    // it in descending order, to start from the smaller tokens.
-    std::ranges::sort(sstables, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
-        return x->compare_by_first_key(*y) > 0;
+    virtual ~sstable_streamer() {}
+
+    virtual future<> stream(bool primary_replica_only);
+    virtual inet_address_vector_replica_set get_endpoints(const dht::token& token, bool primary_replica_only) const;
+protected:
+    future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, bool primary_replica_only);
+    future<> stream_sstable_mutations(const dht::partition_range&, std::vector<sstables::shared_sstable>, bool primary_replica_only);
+};
+
+class tablet_sstable_streamer : public sstable_streamer {
+    const locator::tablet_map& _tablet_map;
+public:
+    tablet_sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, std::vector<sstables::shared_sstable> sstables)
+        : sstable_streamer(ms, db, table_id, std::move(sstables))
+        , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table_id)) {
+    }
+
+    virtual future<> stream(bool primary_replica_only) override;
+    virtual inet_address_vector_replica_set get_endpoints(const dht::token& token, bool primary_replica_only) const override;
+private:
+    future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables,
+                                             bool primary_replica_only) {
+        // FIXME: fully contained sstables can be optimized.
+        return stream_sstables(pr, std::move(sstables), primary_replica_only);
+    }
+};
+
+inet_address_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token, bool primary_replica_only) const {
+    auto current_targets = _erm->get_natural_endpoints(token);
+    if (primary_replica_only && current_targets.size() > 1) {
+        current_targets.resize(1);
+    }
+    return current_targets;
+}
+
+inet_address_vector_replica_set tablet_sstable_streamer::get_endpoints(const dht::token& token, bool primary_replica_only) const {
+    auto current_targets = sstable_streamer::get_endpoints(token, primary_replica_only);
+
+    auto pending_replica_endpoint = std::invoke([&] () -> std::optional<gms::inet_address> {
+        auto tid = _tablet_map.get_tablet_id(token);
+        auto* tinfo = _tablet_map.get_tablet_transition_info(tid);
+        // No tablet in transit.
+        if (!tinfo) {
+            return std::nullopt;
+        }
+
+        auto leaving_replica = locator::get_leaving_replica(_tablet_map.get_tablet_info(tid), *tinfo);
+        auto& tm = _erm->get_token_metadata();
+        auto is_leaving = [&] (gms::inet_address target) {
+            return tm.get_host_id(target) == leaving_replica.host;
+        };
+        // If primary_replica_only is set, then it might happen the primary replica is not
+        // the one leaving through migration. Or migration is at such an advanced stage,
+        // that the next replica set is picked and none are leaving.
+        if (std::ranges::none_of(current_targets, is_leaving)) {
+            return std::nullopt;
+        }
+        // If intra-node migration is happening, we don't want to stream to same node twice.
+        if (leaving_replica.host == tinfo->pending_replica.host) {
+            return std::nullopt;
+        }
+        return tm.get_endpoint_for_host_id(tinfo->pending_replica.host);
     });
+    if (pending_replica_endpoint) {
+        current_targets.push_back(*pending_replica_endpoint);
+    }
 
-    size_t nr_sst_total = sstables.size();
-    size_t nr_sst_current = 0;
+    return current_targets;
+}
+
+future<> sstable_streamer::stream(bool primary_replica_only) {
+    const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
+
+    co_await stream_sstables(full_partition_range, std::move(_sstables), primary_replica_only);
+}
+
+future<> tablet_sstable_streamer::stream(bool primary_replica_only) {
+    // sstables are sorted by first key in reverse order.
+    auto sstable_it = _sstables.rbegin();
+
+    for (auto tablet_id : _tablet_map.tablet_ids()) {
+        auto tablet_range = _tablet_map.get_token_range(tablet_id);
+
+        auto sstable_token_range = [] (const sstables::shared_sstable& sst) {
+            return dht::token_range(sst->get_first_decorated_key().token(),
+                                    sst->get_last_decorated_key().token());
+        };
+
+        std::vector<sstables::shared_sstable> sstables_fully_contained;
+        std::vector<sstables::shared_sstable> sstables_partially_contained;
+
+        // sstable is exhausted if its last key is before the current tablet range
+        auto exhausted = [&tablet_range] (const sstables::shared_sstable& sst) {
+            return tablet_range.before(sst->get_last_decorated_key().token(), dht::token_comparator{});
+        };
+        while (sstable_it != _sstables.rend() && exhausted(*sstable_it)) {
+            sstable_it++;
+        }
+
+        for (; sstable_it != _sstables.rend(); sstable_it++) {
+            auto sst_token_range = sstable_token_range(*sstable_it);
+            // sstables are sorted by first key, so we're done with current tablet when
+            // the next sstable doesn't overlap with its owned token range.
+            if (!tablet_range.overlaps(sst_token_range, dht::token_comparator{})) {
+                break;
+            }
+
+            if (tablet_range.contains(sst_token_range, dht::token_comparator{})) {
+                sstables_fully_contained.push_back(*sstable_it);
+            } else {
+                sstables_partially_contained.push_back(*sstable_it);
+            }
+            co_await coroutine::maybe_yield();
+        }
+
+        auto tablet_pr = dht::to_partition_range(tablet_range);
+        co_await stream_sstables(tablet_pr, std::move(sstables_partially_contained), primary_replica_only);
+        co_await stream_fully_contained_sstables(tablet_pr, std::move(sstables_fully_contained), primary_replica_only);
+    }
+}
+
+future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables,
+                                           bool primary_replica_only) {
     while (!sstables.empty()) {
-        auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
-        auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
         size_t batch_sst_nr = 16;
-        std::vector<sstring> sst_names;
         std::vector<sstables::shared_sstable> sst_processed;
-        size_t estimated_partitions = 0;
+        sst_processed.reserve(std::min(sstables.size(), size_t(16)));
         while (batch_sst_nr-- && !sstables.empty()) {
             auto sst = sstables.back();
-            estimated_partitions += sst->estimated_keys_for_range(full_token_range);
-            sst_names.push_back(sst->get_filename());
-            sst_set->insert(sst);
             sst_processed.push_back(sst);
             sstables.pop_back();
         }
 
+        co_await stream_sstable_mutations(pr, std::move(sst_processed), primary_replica_only);
+    }
+}
+
+future<> sstable_streamer::stream_sstable_mutations(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables,
+                                                    bool primary_replica_only) {
+    const auto token_range = pr.transform(std::mem_fn(&dht::ring_position::token));
+    auto s = _table.schema();
+    const auto cf_id = s->id();
+    const auto reason = streaming::stream_reason::repair;
+
+    size_t nr_sst_total = _sstables.size();
+    size_t nr_sst_current = 0;
+
+        // FIXME: indentation
+        auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
+        auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
+        std::vector<sstring> sst_names;
+        size_t estimated_partitions = 0;
+        for (auto& sst : sstables) {
+            estimated_partitions += sst->estimated_keys_for_range(token_range);
+            sst_names.push_back(sst->get_filename());
+            sst_set->insert(sst);
+        }
+
         llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables={}",
-                ops_uuid, nr_sst_current, nr_sst_current + sst_processed.size(), nr_sst_total, sst_names);
+                ops_uuid, nr_sst_current, nr_sst_current + sstables.size(), nr_sst_total, sst_names);
 
         auto start_time = std::chrono::steady_clock::now();
         inet_address_vector_replica_set current_targets;
         std::unordered_map<gms::inet_address, send_meta_data> metas;
         size_t num_partitions_processed = 0;
         size_t num_bytes_read = 0;
-        nr_sst_current += sst_processed.size();
-        auto permit = co_await _db.local().obtain_reader_permit(table, "sstables_loader::load_and_stream()", db::no_timeout, {});
-        auto reader = mutation_fragment_v1_stream(table.make_streaming_reader(s, std::move(permit), full_partition_range, sst_set, gc_clock::now()));
+        nr_sst_current += sstables.size();
+        auto permit = co_await _db.obtain_reader_permit(_table, "sstables_loader::load_and_stream()", db::no_timeout, {});
+        auto reader = mutation_fragment_v1_stream(_table.make_streaming_reader(s, std::move(permit), pr, sst_set, gc_clock::now()));
         std::exception_ptr eptr;
         bool failed = false;
+
         try {
-            netw::messaging_service& ms = _messaging;
             while (auto mf = co_await reader()) {
                 bool is_partition_start = mf->is_partition_start();
                 if (is_partition_start) {
@@ -175,15 +320,12 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
                     auto& start = mf->as_partition_start();
                     const auto& current_dk = start.key();
 
-                    current_targets = erm->get_natural_endpoints(current_dk.token());
-                    if (primary_replica_only && current_targets.size() > 1) {
-                        current_targets.resize(1);
-                    }
+                    current_targets = get_endpoints(current_dk.token(), primary_replica_only);
                     llog.trace("load_and_stream: ops_uuid={}, current_dk={}, current_targets={}", ops_uuid,
                             current_dk.token(), current_targets);
                     for (auto& node : current_targets) {
                         if (!metas.contains(node)) {
-                            auto [sink, source] = co_await ms.make_sink_and_source_for_stream_mutation_fragments(reader.schema()->version(),
+                            auto [sink, source] = co_await _ms.make_sink_and_source_for_stream_mutation_fragments(reader.schema()->version(),
                                     ops_uuid, cf_id, estimated_partitions, reason, service::default_session_id, netw::messaging_service::msg_addr(node));
                             llog.debug("load_and_stream: ops_uuid={}, make sink and source for node={}", ops_uuid, node);
                             metas.emplace(node, send_meta_data(node, std::move(sink), std::move(source)));
@@ -201,7 +343,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
             failed = true;
             eptr = std::current_exception();
             llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, send_phase, err={}",
-                    ops_uuid, ks_name, cf_name, eptr);
+                    ops_uuid, s->ks_name(), s->cf_name(), eptr);
         }
         co_await reader.close();
         try {
@@ -213,37 +355,55 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
             failed = true;
             eptr = std::current_exception();
             llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, finish_phase, err={}",
-                    ops_uuid, ks_name, cf_name, eptr);
+                    ops_uuid, s->ks_name(), s->cf_name(), eptr);
         }
         if (!failed) {
             try {
-                co_await coroutine::parallel_for_each(sst_processed, [&] (sstables::shared_sstable& sst) {
+                co_await coroutine::parallel_for_each(sstables, [&] (sstables::shared_sstable& sst) {
                     llog.debug("load_and_stream: ops_uuid={}, ks={}, table={}, remove sst={}",
-                            ops_uuid, ks_name, cf_name, sst->component_filenames());
+                            ops_uuid, s->ks_name(), s->cf_name(), sst->component_filenames());
                     return sst->unlink();
                 });
             } catch (...) {
                 failed = true;
                 eptr = std::current_exception();
                 llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, del_sst_phase, err={}",
-                        ops_uuid, ks_name, cf_name, eptr);
+                        ops_uuid, s->ks_name(), s->cf_name(), eptr);
             }
         }
         auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start_time).count();
         for (auto& [node, meta] : metas) {
             llog.info("load_and_stream: ops_uuid={}, ks={}, table={}, target_node={}, num_partitions_sent={}, num_bytes_sent={}",
-                    ops_uuid, ks_name, cf_name, node, meta.num_partitions_sent(), meta.num_bytes_sent());
+                    ops_uuid, s->ks_name(), s->cf_name(), node, meta.num_partitions_sent(), meta.num_bytes_sent());
         }
         auto partition_rate = std::fabs(duration) > FLT_EPSILON ? num_partitions_processed / duration : 0;
         auto bytes_rate = std::fabs(duration) > FLT_EPSILON ? num_bytes_read / duration / 1024 / 1024 : 0;
         auto status = failed ? "failed" : "succeeded";
         llog.info("load_and_stream: finished ops_uuid={}, ks={}, table={}, partitions_processed={} partitions, bytes_processed={} bytes, partitions_per_second={} partitions/s, bytes_per_second={} MiB/s, duration={} s, status={}",
-                ops_uuid, ks_name, cf_name, num_partitions_processed, num_bytes_read, partition_rate, bytes_rate, duration, status);
+                ops_uuid, s->ks_name(), s->cf_name(), num_partitions_processed, num_bytes_read, partition_rate, bytes_rate, duration, status);
         if (failed) {
             std::rethrow_exception(eptr);
         }
-    }
+
     co_return;
+}
+
+template <typename... Args>
+static std::unique_ptr<sstable_streamer> make_sstable_streamer(bool uses_tablets, Args&&... args) {
+    if (uses_tablets) {
+        return std::make_unique<tablet_sstable_streamer>(std::forward<Args>(args)...);
+    }
+    return std::make_unique<sstable_streamer>(std::forward<Args>(args)...);
+}
+
+future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
+        ::table_id table_id, std::vector<sstables::shared_sstable> sstables, bool primary_replica_only) {
+    // streamer guarantees topology stability, for correctness, by holding effective_replication_map
+    // throughout its lifetime.
+    auto streamer = make_sstable_streamer(_db.local().find_column_family(table_id).uses_tablets(),
+                                          _messaging, _db.local(), table_id, std::move(sstables));
+
+    co_await streamer->stream(primary_replica_only);
 }
 
 // For more details, see distributed_loader::process_upload_dir().

@@ -19,6 +19,10 @@ import asyncio
 import logging
 import time
 import random
+import os
+import glob
+from typing import NamedTuple
+
 
 logger = logging.getLogger(__name__)
 
@@ -753,3 +757,75 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
     # And then tablet count metric is increased on dest_host - tablets have been moved to shard_3
     dest_expected_count_per_shard[3] += count_of_tokens_on_src_shard_to_move
     await assert_tablet_count_metric_value_for_shards(manager, dest_server, dest_expected_count_per_shard)
+
+async def test_tablet_load_and_stream(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'table=debug',
+        '--smp', '1',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    # Creates multiple tablets in the same shard
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}" \
+                        " AND tablets = {'initial': 5};") # 5 is rounded up to next power-of-two
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    # Populate tablets
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    async def check():
+        logger.info("Checking table")
+        cql = manager.get_cql()
+        rows = await cql.run_async("SELECT * FROM test.test BYPASS CACHE;")
+        assert len(rows) == len(keys)
+        for r in rows:
+            assert r.c == r.pk
+
+    await manager.api.flush_keyspace(servers[0].ip_addr, "test")
+    await check()
+
+    node_workdir = await manager.server_get_workdir(servers[0].server_id)
+
+    await manager.server_stop_gracefully(servers[0].server_id)
+
+    table_dir = glob.glob(os.path.join(node_workdir, "data", "test", "test-*"))[0]
+    logger.info(f"Table dir: {table_dir}")
+
+    def move_sstables_to_upload(table_dir: str):
+        logger.info("Moving sstables to upload dir")
+        table_upload_dir = os.path.join(table_dir, "upload")
+        for sst in glob.glob(os.path.join(table_dir, "*-Data.db")):
+            for src_path in glob.glob(os.path.join(table_dir, sst.removesuffix("-Data.db") + "*")):
+                dst_path = os.path.join(table_upload_dir, os.path.basename(src_path))
+                logger.info(f"Moving sstable file {src_path} to {dst_path}")
+                os.rename(src_path, dst_path)
+
+    move_sstables_to_upload(table_dir)
+
+    await manager.server_start(servers[0].server_id)
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    rows = await cql.run_async("SELECT * FROM test.test BYPASS CACHE;")
+    assert len(rows) == 0
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Adding new server")
+    servers.append(await manager.server_add(cmdline=cmdline))
+
+    # Trigger concurrent migration and load-and-stream
+
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    await manager.api.load_new_sstables(servers[0].ip_addr, "test", "test")
+
+    time.sleep(1)
+
+    await check()

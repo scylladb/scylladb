@@ -23,6 +23,7 @@
 #include "utils/directories.hh"
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
+#include "dht/auto_refreshing_sharder.hh"
 
 static logging::logger dirlog("sstable_directory");
 
@@ -67,7 +68,7 @@ sstable_directory::sstable_directory(replica::table& table,
     : sstable_directory(
         table.get_sstables_manager(),
         table.schema(),
-        table.get_effective_replication_map()->get_sharder(*table.schema()),
+        std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()),
         table.get_storage_options_ptr(),
         table.dir(),
         std::move(state),
@@ -82,6 +83,26 @@ sstable_directory::sstable_directory(sstables_manager& manager,
         sstring table_dir,
         sstable_state state,
         io_error_handler_gen error_handler_gen)
+    : sstable_directory(
+        manager,
+        std::move(schema),
+        &sharder,
+        std::move(storage_opts),
+        std::move(table_dir),
+        state,
+        std::move(error_handler_gen)
+    )
+{}
+
+using unique_sharder_ptr = std::unique_ptr<dht::sharder>;
+
+sstable_directory::sstable_directory(sstables_manager& manager,
+        schema_ptr schema,
+        std::variant<unique_sharder_ptr, const dht::sharder*> sharder,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
+        sstring table_dir,
+        sstable_state state,
+        io_error_handler_gen error_handler_gen)
     : _manager(manager)
     , _schema(std::move(schema))
     , _storage_opts(std::move(storage_opts))
@@ -91,7 +112,8 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _error_handler_gen(error_handler_gen)
     , _storage(make_storage(_manager, *_storage_opts, _table_dir, _state))
     , _lister(make_components_lister())
-    , _sharder(sharder)
+    , _sharder_ptr(std::holds_alternative<unique_sharder_ptr>(sharder) ? std::move(std::get<unique_sharder_ptr>(sharder)) : nullptr)
+    , _sharder(_sharder_ptr ? *_sharder_ptr : *std::get<const dht::sharder*>(sharder))
     , _unshared_remote_sstables(smp::count)
 {}
 
