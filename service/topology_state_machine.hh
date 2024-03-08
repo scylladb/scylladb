@@ -269,16 +269,10 @@ struct topology_request_state {
     sstring error;
 };
 
-std::ostream& operator<<(std::ostream& os, const fencing_token& fencing_token);
-std::ostream& operator<<(std::ostream& os, topology::transition_state s);
 topology::transition_state transition_state_from_string(const sstring& s);
-std::ostream& operator<<(std::ostream& os, node_state s);
 node_state node_state_from_string(const sstring& s);
-std::ostream& operator<<(std::ostream& os, const topology_request& req);
 topology_request topology_request_from_string(const sstring& s);
-std::ostream& operator<<(std::ostream&, const global_topology_request&);
 global_topology_request global_topology_request_from_string(const sstring&);
-std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd);
 cleanup_status cleanup_status_from_string(const sstring& s);
 topology::upgrade_state_type upgrade_state_from_string(const sstring&);
 }
@@ -291,4 +285,30 @@ template <> struct fmt::formatter<service::cleanup_status> {
 template <> struct fmt::formatter<service::topology::upgrade_state_type> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(service::topology::upgrade_state_type status, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<service::fencing_token> : fmt::formatter<std::string_view> {
+    auto format(const service::fencing_token& fencing_token, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{{}}}", fencing_token.topology_version);
+    }
+};
+
+template <> struct fmt::formatter<service::topology::transition_state> : fmt::formatter<std::string_view> {
+    auto format(service::topology::transition_state, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<service::node_state> : fmt::formatter<std::string_view> {
+    auto format(service::node_state, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<service::topology_request> : fmt::formatter<std::string_view> {
+    auto format(service::topology_request, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<service::global_topology_request> : fmt::formatter<std::string_view> {
+    auto format(service::global_topology_request, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<service::raft_topology_cmd::command> : fmt::formatter<std::string_view> {
+    auto format(service::raft_topology_cmd::command, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

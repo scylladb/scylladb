@@ -127,10 +127,6 @@ bool topology::is_empty() const {
     return size() == 0;
 }
 
-std::ostream& operator<<(std::ostream& os, const fencing_token& fencing_token) {
-    return os << "{" << fencing_token.topology_version << "}";
-}
-
 static std::unordered_map<topology::transition_state, sstring> transition_state_to_name_map = {
     {topology::transition_state::join_group0, "join group0"},
     {topology::transition_state::commit_cdc_generation, "commit cdc generation"},
@@ -141,14 +137,6 @@ static std::unordered_map<topology::transition_state, sstring> transition_state_
     {topology::transition_state::left_token_ring, "left token ring"},
     {topology::transition_state::rollback_to_normal, "rollback to normal"},
 };
-
-std::ostream& operator<<(std::ostream& os, topology::transition_state s) {
-    auto it = transition_state_to_name_map.find(s);
-    if (it == transition_state_to_name_map.end()) {
-        on_internal_error(tsmlogger, "cannot print transition_state");
-    }
-    return os << it->second;
-}
 
 topology::transition_state transition_state_from_string(const sstring& s) {
     for (auto&& e : transition_state_to_name_map) {
@@ -170,14 +158,6 @@ static std::unordered_map<node_state, sstring> node_state_to_name_map = {
     {node_state::none, "none"},
 };
 
-std::ostream& operator<<(std::ostream& os, node_state s) {
-    auto it = node_state_to_name_map.find(s);
-    if (it == node_state_to_name_map.end()) {
-        on_internal_error(tsmlogger, "cannot print node_state");
-    }
-    return os << it->second;
-}
-
 node_state node_state_from_string(const sstring& s) {
     for (auto&& e : node_state_to_name_map) {
         if (e.second == s) {
@@ -195,11 +175,6 @@ static std::unordered_map<topology_request, sstring> topology_request_to_name_ma
     {topology_request::rebuild, "rebuild"}
 };
 
-std::ostream& operator<<(std::ostream& os, const topology_request& req) {
-    os << topology_request_to_name_map[req];
-    return os;
-}
-
 topology_request topology_request_from_string(const sstring& s) {
     for (auto&& e : topology_request_to_name_map) {
         if (e.second == s) {
@@ -214,14 +189,6 @@ static std::unordered_map<global_topology_request, sstring> global_topology_requ
     {global_topology_request::cleanup, "cleanup"},
 };
 
-std::ostream& operator<<(std::ostream& os, const global_topology_request& req) {
-    auto it = global_topology_request_to_name_map.find(req);
-    if (it == global_topology_request_to_name_map.end()) {
-        on_internal_error(tsmlogger, format("cannot print global topology request {}", static_cast<uint8_t>(req)));
-    }
-    return os << it->second;
-}
-
 global_topology_request global_topology_request_from_string(const sstring& s) {
     for (auto&& e : global_topology_request_to_name_map) {
         if (e.second == s) {
@@ -230,24 +197,6 @@ global_topology_request global_topology_request_from_string(const sstring& s) {
     }
 
     on_internal_error(tsmlogger, format("cannot map name {} to global_topology_request", s));
-}
-
-std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd) {
-    switch (cmd) {
-        case raft_topology_cmd::command::barrier:
-            os << "barrier";
-            break;
-        case raft_topology_cmd::command::barrier_and_drain:
-            os << "barrier_and_drain";
-            break;
-        case raft_topology_cmd::command::stream_ranges:
-            os << "stream_ranges";
-            break;
-        case raft_topology_cmd::command::wait_for_ip:
-            os << "wait_for_ip";
-            break;
-    }
-    return os;
 }
 
 static std::unordered_map<cleanup_status, sstring> cleanup_status_to_name_map = {
@@ -290,4 +239,59 @@ auto fmt::formatter<service::cleanup_status>::format(service::cleanup_status sta
 auto fmt::formatter<service::topology::upgrade_state_type>::format(service::topology::upgrade_state_type state,
                                                      fmt::format_context& ctx) const -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "{}", service::upgrade_state_to_name_map.at(state));
+}
+
+auto fmt::formatter<service::topology::transition_state>::format(service::topology::transition_state s,
+                                                                 fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto it = service::transition_state_to_name_map.find(s);
+    if (it == service::transition_state_to_name_map.end()) {
+        on_internal_error(service::tsmlogger, "cannot print transition_state");
+    }
+    return formatter<std::string_view>::format(it->second, ctx);
+}
+
+auto fmt::formatter<service::node_state>::format(service::node_state s,
+                                                 fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto it = service::node_state_to_name_map.find(s);
+    if (it == service::node_state_to_name_map.end()) {
+        on_internal_error(service::tsmlogger, "cannot print node_state");
+    }
+    return formatter<std::string_view>::format(it->second, ctx);
+}
+
+
+auto fmt::formatter<service::topology_request>::format(service::topology_request req,
+                                                       fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return formatter<std::string_view>::format(service::topology_request_to_name_map[req], ctx);
+}
+
+auto fmt::formatter<service::global_topology_request>::format(service::global_topology_request req,
+                                                              fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto it = service::global_topology_request_to_name_map.find(req);
+    if (it == service::global_topology_request_to_name_map.end()) {
+        on_internal_error(service::tsmlogger, fmt::format("cannot print global topology request {}", static_cast<uint8_t>(req)));
+    }
+    return formatter<std::string_view>::format(it->second, ctx);
+}
+
+
+auto fmt::formatter<service::raft_topology_cmd::command>::format(service::raft_topology_cmd::command cmd,
+                                                     fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    std::string_view name;
+    using enum service::raft_topology_cmd::command;
+    switch (cmd) {
+        case barrier:
+            name = "barrier";
+            break;
+        case barrier_and_drain:
+            name = "barrier_and_drain";
+            break;
+        case stream_ranges:
+            name = "stream_ranges";
+            break;
+        case wait_for_ip:
+            name = "wait_for_ip";
+            break;
+    }
+    return formatter<std::string_view>::format(name, ctx);
 }
