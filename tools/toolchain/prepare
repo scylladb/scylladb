@@ -1,11 +1,11 @@
 #!/bin/bash -e
 
-bv=$(buildah --version)
-if (( $? != 0 )); then
+if ! command -v buildah > /dev/null; then
     echo install buildah 1.19.3 or later
     exit 1
 fi
 
+bv=$(buildah --version)
 # translate to array of version components
 bv="${bv#buildah version }"
 bv="${bv% (*}"
@@ -22,7 +22,7 @@ if (( ! ok )); then
     exit 1
 fi
 
-if ! reg version > /dev/null; then
+if ! command -v reg > /dev/null; then
     echo install the reg command for registry inspection
     exit 1
 fi
