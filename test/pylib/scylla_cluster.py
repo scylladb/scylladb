@@ -813,6 +813,7 @@ class ScyllaCluster:
             cmdline_from_test = cmdline or []
         )
 
+        server = None
         try:
             server = self.create_server(params)
             self.logger.info("Cluster %s adding server...", self)
@@ -821,8 +822,9 @@ class ScyllaCluster:
             else:
                 await server.install()
         except Exception as exc:
+            workdir = '<unknown>' if server is None else server.workdir.name
             self.logger.error("Failed to start Scylla server at host %s in %s: %s",
-                          ip_addr, server.workdir.name, str(exc))
+                          ip_addr, workdir, str(exc))
             if not replace_cfg or not replace_cfg.reuse_ip_addr:
                 self.leased_ips.remove(ip_addr)
                 await self.host_registry.release_host(Host(ip_addr))
