@@ -9,6 +9,7 @@
 #pragma once
 
 #include "mutation/frozen_mutation.hh"
+#include <fmt/core.h>
 
 namespace service {
 
@@ -45,8 +46,19 @@ inline bool operator>(const proposal& lhs, const proposal& rhs) {
     return lhs.ballot.timestamp() > rhs.ballot.timestamp();
 }
 
-// Used for logging and debugging.
-std::ostream& operator<<(std::ostream& os, const proposal& proposal);
-
 } // end of namespace "paxos"
 } // end of namespace "service"
+
+// Used for logging and debugging.
+template <> struct fmt::formatter<service::paxos::proposal> : fmt::formatter<std::string_view> {
+    auto format(const service::paxos::proposal&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+namespace service::paxos {
+
+static inline std::ostream& operator<<(std::ostream& os, const proposal& proposal) {
+    fmt::print(os, "{}", proposal);
+    return os;
+}
+
+}
