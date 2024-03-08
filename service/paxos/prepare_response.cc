@@ -9,17 +9,19 @@
 
 #include "prepare_response.hh"
 
-namespace service {
-
-namespace paxos {
-
-std::ostream& operator<<(std::ostream& os, const promise& promise) {
-    os << "prepare_promise(";
-    promise.most_recent_commit ? os << *promise.most_recent_commit : os << "empty";
-    os << ", ";
-    promise.accepted_proposal ? os << *promise.accepted_proposal : os << "empty";
-    return os << ")";
+auto fmt::formatter<service::paxos::promise>::format(const service::paxos::promise& promise,
+                                                     fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto out = fmt::format_to(ctx.out(), "prepare_promise(");
+    if (promise.most_recent_commit) {
+        out = fmt::format_to(out, "{}", *promise.most_recent_commit);
+    } else {
+        out = fmt::format_to(out, "empty");
+    }
+    out = fmt::format_to(out, ", ");
+    if (promise.accepted_proposal) {
+        out = fmt::format_to(out, "{}", *promise.accepted_proposal);
+    } else {
+        out = fmt::format_to(out, "empty");
+    }
+    return fmt::format_to(out, ")");
 }
-
-} // end of namespace "paxos"
-} // end of namespace "service"

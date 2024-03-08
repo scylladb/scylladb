@@ -9,6 +9,7 @@
 
 #pragma once
 #include <variant>
+#include <fmt/core.h>
 #include "query-result.hh"
 #include "service/paxos/proposal.hh"
 
@@ -68,8 +69,10 @@ struct promise {
 // round or repair the previous one.
 using prepare_response = std::variant<utils::UUID, promise>;
 
-std::ostream& operator<<(std::ostream& os, const promise& promise);
-
 } // end of namespace "paxos"
 
 } // end of namespace "service"
+
+template <> struct fmt::formatter<service::paxos::promise> : fmt::formatter<std::string_view> {
+    auto format(const service::paxos::promise&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
