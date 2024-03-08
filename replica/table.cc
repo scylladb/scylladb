@@ -1785,7 +1785,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
         co_await flush();
     }
 
-    auto& cg = *get_compaction_group(0);
+    auto& cg = *storage_group_for_id(0)->main_compaction_group().get();
     co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state(), info);
 }
 
