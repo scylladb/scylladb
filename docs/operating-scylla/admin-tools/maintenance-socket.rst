@@ -20,6 +20,12 @@ The maintenance socket path has to satisfy following restrictions:
 Option `maintenance-socket-group` sets the owning group of the maintenance socket. If not set, the group will be the same as the user running the scylla node.
 The user running the scylla node has to be in the group specified by `maintenance-socket-group` option or have root privileges.
 
+Usage
+-----
+To access the maintenance socket, the user must belong to the same group as the socket's owner group.
+By default, the maintenance socket is owned by the user running the scylla node. It can be changed by `maintenance-socket-group` option.
+To connect to the maintenance socket, the user can add themselves to the 'scylla' group, run cqlsh as 'scylla', or adjust ownership via the maintenance-socket-group flag.
+
 Connect to maintenance socket
 -----------------------------
 
