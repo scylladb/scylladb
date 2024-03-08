@@ -851,10 +851,6 @@ std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
     return ret;
 }
 
-compaction_group* table::single_compaction_group_if_available() const noexcept {
-    return _sg_manager->single_compaction_group_if_available();
-}
-
 compaction_group* table::get_compaction_group(size_t id) const noexcept {
     return storage_groups()[id]->main_compaction_group().get();
 }
