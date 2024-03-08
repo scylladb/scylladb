@@ -221,7 +221,7 @@ class TestSuite(ABC):
         pass
 
     @abstractmethod
-    async def add_test(self, shortname: str) -> None:
+    async def add_test(self, shortname: str, casename: str) -> None:
         pass
 
     async def run(self, test: 'Test', options: argparse.Namespace):
@@ -271,16 +271,21 @@ class TestSuite(ABC):
                 if any(skip_pattern in t for skip_pattern in options.skip_patterns):
                     continue
 
-            async def add_test(shortname) -> None:
+            async def add_test(shortname, casename) -> None:
                 # Add variants of the same test sequentially
                 # so that case cache has a chance to populate
                 for i in range(options.repeat):
-                    await self.add_test(shortname)
+                    await self.add_test(shortname, casename)
                     self.pending_test_count += 1
 
             for p in patterns:
-                if p in t:
-                    pending.add(asyncio.create_task(add_test(shortname)))
+                pn = p.split('::', 2)
+                if len(pn) == 1:
+                    if p in t:
+                        pending.add(asyncio.create_task(add_test(shortname, None)))
+                else:
+                    if pn[0] == t:
+                        pending.add(asyncio.create_task(add_test(shortname, pn[1])))
         if len(pending) == 0:
             return
         try:
@@ -311,7 +316,7 @@ class UnitTestSuite(TestSuite):
         test = UnitTest(self.next_id((shortname, self.suite_key)), shortname, suite, args)
         self.tests.append(test)
 
-    async def add_test(self, shortname) -> None:
+    async def add_test(self, shortname, casename) -> None:
         """Create a UnitTest class with possibly custom command line
         arguments and add it to the list of tests"""
         # Skip tests which are not configured, and hence are not built
@@ -475,8 +480,8 @@ class PythonTestSuite(TestSuite):
     def pattern(self) -> str:
         assert False
 
-    async def add_test(self, shortname) -> None:
-        test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, self)
+    async def add_test(self, shortname, casename) -> None:
+        test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, casename, self)
         self.tests.append(test)
 
 
@@ -489,7 +494,7 @@ class CQLApprovalTestSuite(PythonTestSuite):
     def build_test_list(self) -> List[str]:
         return TestSuite.build_test_list(self)
 
-    async def add_test(self, shortname: str) -> None:
+    async def add_test(self, shortname: str, casename: str) -> None:
         test = CQLApprovalTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
 
@@ -509,9 +514,9 @@ class TopologyTestSuite(PythonTestSuite):
         """Build list of Topology python tests"""
         return TestSuite.build_test_list(self)
 
-    async def add_test(self, shortname: str) -> None:
+    async def add_test(self, shortname: str, casename: str) -> None:
         """Add test to suite"""
-        test = TopologyTest(self.next_id((shortname, 'topology', self.mode)), shortname, self)
+        test = TopologyTest(self.next_id((shortname, 'topology', self.mode)), shortname, casename, self)
         self.tests.append(test)
 
     @property
@@ -532,7 +537,7 @@ class RunTestSuite(TestSuite):
 
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
-    async def add_test(self, shortname) -> None:
+    async def add_test(self, shortname, casename) -> None:
         test = RunTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
 
@@ -561,7 +566,7 @@ class ToolTestSuite(TestSuite):
     def pattern(self) -> str:
         assert False
 
-    async def add_test(self, shortname) -> None:
+    async def add_test(self, shortname, casename) -> None:
         test = ToolTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
 
@@ -901,9 +906,10 @@ class RunTest(Test):
 class PythonTest(Test):
     """Run a pytest collection of cases against a standalone Scylla"""
 
-    def __init__(self, test_no: int, shortname: str, suite) -> None:
+    def __init__(self, test_no: int, shortname: str, casename: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
         self.path = "pytest"
+        self.casename = casename
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
@@ -923,7 +929,11 @@ class PythonTest(Test):
             # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
-        self.args.append(str(self.suite.suite_path / (self.shortname + ".py")))
+
+        arg = str(self.suite.suite_path / (self.shortname + ".py"))
+        if self.casename is not None:
+            arg += '::' + self.casename
+        self.args.append(arg)
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
@@ -984,8 +994,8 @@ class TopologyTest(PythonTest):
     """Run a pytest collection of cases against Scylla clusters handling topology changes"""
     status: bool
 
-    def __init__(self, test_no: int, shortname: str, suite) -> None:
-        super().__init__(test_no, shortname, suite)
+    def __init__(self, test_no: int, shortname: str, casename: str, suite) -> None:
+        super().__init__(test_no, shortname, casename, suite)
 
     async def run(self, options: argparse.Namespace) -> Test:
 
