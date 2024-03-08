@@ -4,14 +4,13 @@ import os
 import sys
 import logging
 import pytest
-import shutil
-import tempfile
 import pathlib
 
 # use minio_server
 sys.path.insert(1, sys.path[0] + '/../..')
 from test.pylib.minio_server import MinioServer
 from test.pylib.cql_repl import conftest
+from test.topology.conftest import *
 
 
 def pytest_addoption(parser):
@@ -26,6 +25,15 @@ def pytest_addoption(parser):
     s3_options.addoption('--aws-secret-key')
     s3_options.addoption('--aws-region')
     s3_options.addoption('--s3-server-bucket')
+
+    parser.addoption('--manager-api', action='store', required=True,
+                     help='Manager unix socket path')
+    parser.addoption('--mode', action='store', required=True,
+                     help='Scylla build mode. Tests can use it to adjust their behavior.')
+    parser.addoption('--auth_username', action='store', default=None,
+                        help='username for authentication')
+    parser.addoption('--auth_password', action='store', default=None,
+                        help='password for authentication')
 
 
 class S3_Server:
@@ -58,27 +66,6 @@ class S3_Server:
 
     async def stop(self):
         pass
-
-
-@pytest.fixture(scope="function")
-def ssl(request):
-    yield request.config.getoption('--ssl')
-
-
-def _remove_all_but(tempdir, to_preserve):
-    orig_fn = os.path.join(tempdir, to_preserve)
-    # orig_fn does not exist
-    if not os.path.exists(orig_fn):
-        # it's fine if tempdir does not exist
-        shutil.rmtree(tempdir, ignore_errors=True)
-        return
-
-    with tempfile.TemporaryDirectory() as backup_tempdir:
-        backup_fn = os.path.join(backup_tempdir, to_preserve)
-        shutil.move(orig_fn, backup_fn)
-        shutil.rmtree(tempdir)
-        os.mkdir(tempdir)
-        shutil.move(backup_fn, orig_fn)
 
 
 @pytest.fixture(scope="function")
