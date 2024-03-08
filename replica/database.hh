@@ -594,7 +594,9 @@ private:
     storage_group* storage_group_for_token(dht::token token) const noexcept;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
+public:
     compaction_group* get_compaction_group(size_t id) const noexcept;
+private:
     // Select a compaction group from a given token.
     compaction_group& compaction_group_for_token(dht::token token) const noexcept;
     // Return compaction groups, present in this shard, that own a particular token range.
@@ -1218,8 +1220,6 @@ public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
 
-    // FIXME: get rid of it once no users.
-    compaction::table_state& as_table_state(size_t id = 0) const noexcept;
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
 
