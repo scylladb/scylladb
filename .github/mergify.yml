@@ -19,7 +19,7 @@ pull_request_rules:
           (cherry picked from commit {{ c.sha }})
           {% endfor %}
         branches:
-          - next-5.2
+          - branch-5.2
         assignees:
           - "{{ author }}"
   - name: Automate backport pull request 5.4
@@ -31,7 +31,7 @@ pull_request_rules:
           - base=master
           - base=next
       - label=backport/5.4 # The PR must have this label to trigger the backport
-      - label=promoted
+      - label=promoted-to-master
     actions:
       copy:
         title: "[Backport 5.4] {{ title }}"
@@ -42,6 +42,6 @@ pull_request_rules:
           (cherry picked from commit {{ c.sha }})
           {% endfor %}
         branches:
-          - next-5.4
+          - branch-5.4
         assignees:
           - "{{ author }}"
