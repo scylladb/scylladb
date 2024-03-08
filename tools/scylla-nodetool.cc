@@ -1126,6 +1126,7 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
 
 struct host_stat {
     sstring endpoint;
+    sstring address;
     std::optional<float> ownership;
     sstring token;
 };
@@ -1165,7 +1166,8 @@ public:
 using ownership_by_dc_t = std::map<sstring, std::vector<host_stat>>;
 ownership_by_dc_t get_ownership_by_dc(SnitchInfo& snitch,
                                       const std::vector<std::pair<sstring, std::string>>& token_to_endpoint,
-                                      const std::map<sstring, float>& endpoint_to_ownership) {
+                                      const std::map<sstring, float>& endpoint_to_ownership,
+                                      bool resolve_ip) {
     ownership_by_dc_t ownership_by_dc;
     std::map<std::string_view, std::string_view> endpoint_to_dc;
     for (auto& [token, endpoint] : token_to_endpoint) {
@@ -1175,7 +1177,16 @@ ownership_by_dc_t get_ownership_by_dc(SnitchInfo& snitch,
             found != endpoint_to_ownership.end()) {
             ownership = found->second;
         }
-        ownership_by_dc[dc].emplace_back(host_stat{endpoint, ownership, token});
+        host_stat stat {
+            .endpoint = endpoint,
+            .address = endpoint,
+            .ownership = ownership,
+            .token = token,
+        };
+        if (resolve_ip) {
+            stat.address = net::dns::resolve_addr(net::inet_address(endpoint)).get();
+        }
+        ownership_by_dc[dc].emplace_back(std::move(stat));
     }
     return ownership_by_dc;
 }
@@ -1246,7 +1257,6 @@ std::string last_token_in_hosts(const std::vector<std::pair<sstring, std::string
 void print_dc(scylla_rest_client& client,
               SnitchInfo& snitch,
               const sstring& dc,
-              unsigned max_endpoint_width,
               bool resolve_ip,
               const sstring& last_token,
               const std::multimap<std::string_view, std::string_view>& endpoints_to_tokens,
@@ -1255,6 +1265,17 @@ void print_dc(scylla_rest_client& client,
                "Datacenter: {}\n"
                "==========\n", dc);
     const auto fmt_str = fmt::runtime("{:<{}}  {:<12}{:<7}{:<8}{:<16}{:<20}{:<44}\n");
+    const auto max_endpoint_width = std::invoke([&] {
+        auto stat_with_max_addr_width = std::ranges::max_element(
+            host_stats,
+            [](auto& lhs, auto&& rhs) {
+                return lhs.address.size() < rhs.address.size();
+            });
+        if (stat_with_max_addr_width == host_stats.end()) {
+            return size_t(0);
+        }
+        return stat_with_max_addr_width->address.size();
+    });
     fmt::print(fmt_str,
                "Address", max_endpoint_width,
                "Rack", "Status", "State", "Load", "Owns", "Token");
@@ -1274,10 +1295,6 @@ void print_dc(scylla_rest_client& client,
     const auto moving_nodes = get_nodes_of_state(client, "moving");
     const auto load_map = rjson_to_map<double>(client.get("/storage_service/load_map"));
     for (auto& stat : host_stats) {
-        auto addr = stat.endpoint;
-        if (resolve_ip) {
-            addr = net::dns::resolve_addr(net::inet_address(addr)).get();
-        }
         auto rack = snitch.get_rack(stat.endpoint);
 
         sstring status = "?";
@@ -1308,24 +1325,22 @@ void print_dc(scylla_rest_client& client,
             ownership = fmt::format("{:.2f}%", *stat.ownership * 100);
         }
         fmt::print(fmt_str,
-                   stat.endpoint, max_endpoint_width,
+                   stat.address, max_endpoint_width,
                    rack, status, state, load, ownership, stat.token);
     }
 }
 
 void ring_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    bool resolve_ip = vm["resolve-ip"].as<bool>();
+    const bool resolve_ip = vm.contains("resolve-ip");
 
     std::multimap<std::string_view, std::string_view> endpoints_to_tokens;
     bool have_vnodes = false;
-    size_t max_endpoint_width = 0;
     auto tokens_endpoint = rjson_to_vector<std::string>(client.get("/storage_service/tokens_endpoint"));
     for (auto& [token, endpoint] : tokens_endpoint) {
         if (endpoints_to_tokens.contains(endpoint)) {
             have_vnodes = true;
         }
         endpoints_to_tokens.emplace(endpoint, token);
-        max_endpoint_width = std::max(max_endpoint_width, endpoint.size());
     }
     // Calculate per-token ownership of the ring
     std::string_view warnings;
@@ -1341,9 +1356,10 @@ void ring_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     SnitchInfo snitch{client};
     for (auto& [dc, host_stats] : get_ownership_by_dc(snitch,
                                                       tokens_endpoint,
-                                                      endpoint_to_ownership)) {
+                                                      endpoint_to_ownership,
+                                                      resolve_ip)) {
         auto last_token = last_token_in_hosts(tokens_endpoint, host_stats);
-        print_dc(client, snitch, dc, max_endpoint_width, resolve_ip,
+        print_dc(client, snitch, dc, resolve_ip,
                  last_token, endpoints_to_tokens, host_stats);
     }
 
@@ -2751,7 +2767,7 @@ R"(
 Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/ring.html
 )",
                 {
-                    typed_option<bool>("resolve-ip,r", false, "Show node domain names instead of IPs")
+                    typed_option<>("resolve-ip,r", "Show node domain names instead of IPs")
                 },
                 {
                     typed_option<sstring>("keyspace", "Specify a keyspace for accurate ownership information (topology awareness)", 1),

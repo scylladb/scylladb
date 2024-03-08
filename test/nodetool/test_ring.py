@@ -5,10 +5,13 @@
 #
 
 from typing import NamedTuple
+import functools
+import operator
+from socket import getnameinfo
 import pytest
-import subprocess
 from rest_api_mock import expected_request
 from utils import format_size
+
 
 class Host(NamedTuple):
     dc: str
@@ -18,6 +21,18 @@ class Host(NamedTuple):
     state: str
     load: float
     ownership: float
+    tokens: list[str]
+
+    def token_to_endpoint(self):
+        return {
+            token: self.endpoint for token in self.tokens
+        }
+
+    def get_address(self, resolve_ip):
+        if resolve_ip:
+            host, _ = getnameinfo((self.endpoint, 0), 0)
+            return host
+        return self.endpoint
 
 
 def map_to_json(mapper, mapped_type=None):
@@ -34,28 +49,30 @@ def format_stat(width, address, rack, status, state, load, owns, token):
     return f"{address:<{width}}  {rack:<12}{status:<7}{state:<8}{load:<16}{owns:<20}{token:<44}\n"
 
 
-@pytest.mark.parametrize("keyspace,host_status,host_state",
+@pytest.mark.parametrize("keyspace,resolve_ip,host_status,host_state",
                          [
-                             ('ks', 'live', 'joining'),
-                             ('ks', 'live', 'normal'),
-                             ('ks', 'live', 'leaving'),
-                             ('ks', 'live', 'moving'),
-                             ('ks', 'down', 'n/a'),
-                             ('', 'live', 'normal'),
+                             ('ks', '', 'live', 'joining'),
+                             ('ks', '', 'live', 'normal'),
+                             ('ks', '', 'live', 'leaving'),
+                             ('ks', '', 'live', 'moving'),
+                             ('ks', '', 'down', 'n/a'),
+                             ('', '', 'live', 'normal'),
+                             ('', '-r', 'live', 'normal'),
+                             ('', '--resolve-ip', 'live', 'normal'),
                          ])
-def test_ring(request, nodetool, keyspace, host_status, host_state):
+def test_ring(request, nodetool, keyspace, resolve_ip, host_status, host_state):
     host = Host('dc0', 'rack0', '127.0.0.1', host_status, host_state,
-                6414780.0, 1.0)
-    token_to_endpoint = {
-        "-9217327499541836964": host.endpoint,
-        "9066719992055809912": host.endpoint,
-        "50927788561116407": host.endpoint,
-    }
+                6414780.0, 1.0,
+                ["-9217327499541836964",
+                 "9066719992055809912",
+                 "50927788561116407"])
     endpoint_to_ownership = {
         host.endpoint: host.ownership,
     }
 
     all_hosts = [host]
+    token_to_endpoint = functools.reduce(operator.or_,
+                                         (h.token_to_endpoint() for h in all_hosts))
 
     def hosts_in_status(status):
         return list(h.endpoint for h in all_hosts if h.status == status)
@@ -109,14 +126,16 @@ def test_ring(request, nodetool, keyspace, host_status, host_state):
     ]
     args = []
     if keyspace:
-        args = [keyspace]
+        args.append(keyspace)
+    if resolve_ip:
+        args.append(resolve_ip)
     actual_output = nodetool('ring', *args, expected_requests=expected_requests)
 
     expected_output = f'''
 Datacenter: {host.dc}
 ==========
 '''
-    max_width = max(len(endpoint) for endpoint in token_to_endpoint.values())
+    max_width = max(len(h.get_address(resolve_ip)) for h in all_hosts)
     last_token = list(token_to_endpoint)[-1]
     expected_output += format_stat(max_width, 'Address', 'Rack',
                                    'Status', 'State', 'Load', 'Owns', 'Token')
@@ -158,8 +177,9 @@ Datacenter: {host.dc}
             ownership_percent = host.ownership * 100
             ownership = f'{ownership_percent:.2f}%'
 
-        expected_output += format_stat(max_width, endpoint, host.rack,
-                                       status, state, load, ownership, token)
+        expected_output += format_stat(max_width, host.get_address(resolve_ip),
+                                       host.rack, status, state, load,
+                                       ownership, token)
 
     expected_output += '\n'
 
