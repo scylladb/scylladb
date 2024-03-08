@@ -1762,7 +1762,10 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
         co_await flush();
     }
 
-    auto& cg = *get_compaction_group(0);
+    if (compaction_groups().size() != 1 || !storage_groups()[0]) {
+        on_internal_error(tlogger, "table::perform_cleanup_compaction: single compaction group expected");
+    }
+    auto& cg = *storage_groups()[0]->main_compaction_group().get();
     co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state(), info);
 }
 
