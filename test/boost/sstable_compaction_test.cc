@@ -4991,7 +4991,7 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
             ssts = {}; // releases references
             auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
             run_compaction(t, std::move(owned_ranges_ptr)).get();
-            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->as_table_state()).empty());
+            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_table_state_with_static_sharding()).empty());
             testlog.info("Cleanup has finished");
         }
 
@@ -5099,7 +5099,7 @@ SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
             ssts = {}; // releases references
             auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
             t->perform_cleanup_compaction(std::move(owned_ranges_ptr)).get();
-            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->as_table_state()).empty());
+            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_table_state_with_static_sharding()).empty());
             testlog.info("Cleanup has finished");
         }
 

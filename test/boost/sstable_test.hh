@@ -38,7 +38,7 @@ public:
             return _cf->add_sstable_and_update_cache(sstable, offstrategy);
         }
         auto new_sstables = { sstable };
-        return _cf->as_table_state().on_compaction_completion(sstables::compaction_completion_desc{ .new_sstables = new_sstables }, sstables::offstrategy::no);
+        return _cf->try_get_table_state_with_static_sharding().on_compaction_completion(sstables::compaction_completion_desc{ .new_sstables = new_sstables }, sstables::offstrategy::no);
     }
 
     future<> rebuild_sstable_list(compaction::table_state& table_s, const std::vector<sstables::shared_sstable>& new_sstables,

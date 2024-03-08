@@ -3326,9 +3326,11 @@ compaction::table_state& compaction_group::as_table_state() const noexcept {
     return *_table_state;
 }
 
-compaction::table_state& table::as_table_state(size_t id) const noexcept {
-    // FIXME: kill it once we're done with all remaining users.
-    return get_compaction_group(id)->as_table_state();
+compaction::table_state& table::try_get_table_state_with_static_sharding() const {
+    if (!uses_static_sharding()) {
+        throw std::runtime_error("Getting table state is allowed only with static sharding");
+    }
+    return get_compaction_group(0)->as_table_state();
 }
 
 future<> table::parallel_foreach_table_state(std::function<future<>(table_state&)> action) {

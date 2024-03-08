@@ -114,6 +114,10 @@ namespace gms {
 class gossiper;
 }
 
+namespace compaction {
+class shard_reshaping_compaction_task_impl;
+}
+
 namespace db {
 class commitlog;
 class config;
@@ -1196,6 +1200,7 @@ public:
 
     friend class distributed_loader;
     friend class table_populator;
+    friend class compaction::shard_reshaping_compaction_task_impl;
 
 private:
     timer<> _off_strategy_trigger;
@@ -1205,8 +1210,7 @@ public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
 
-    // FIXME: get rid of it once no users.
-    compaction::table_state& as_table_state(size_t id = 0) const noexcept;
+    compaction::table_state& try_get_table_state_with_static_sharding() const;
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
 
