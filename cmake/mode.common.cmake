@@ -127,11 +127,16 @@ set(Scylla_USE_LINKER
 if(Scylla_USE_LINKER)
     set(linkers "${Scylla_USE_LINKER}")
 else()
-    set(linkers "lld" "gold")
+    set(linkers "ld.lld" "gold")
 endif()
 
 foreach(linker ${linkers})
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set(linker_flag "--ld-path=${linker}")
+  else()
     set(linker_flag "-fuse-ld=${linker}")
+  endif()
+
     check_linker_flag(CXX ${linker_flag} "CXX_LINKER_HAVE_${linker}")
     if(CXX_LINKER_HAVE_${linker})
         add_link_options("${linker_flag}")
