@@ -1,1 +1,4 @@
 type: Python
+
+extra_scylla_cmdline_options:
+  - '--experimental-features=keyspace-storage-options'

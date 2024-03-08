@@ -1,1 +1,4 @@
 type: Run
+
+extra_scylla_cmdline_options:
+  - '--experimental-features=alternator-streams'
