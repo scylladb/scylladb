@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from cassandra.query import SimpleStatement, ConsistencyLevel
+from cassandra.query import SimpleStatement, ConsistencyLevel # type: ignore
 
 from test.pylib.manager_client import ManagerClient
 
@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 async def create_keyspace(cql, name, initial_tablets, rf):
     await cql.run_async(f"CREATE KEYSPACE {name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}"
                         f" AND tablets = {{'initial': {initial_tablets}}};")
+
+
+async def run_async_cl_all(cql, query: str):
+    stmt = SimpleStatement(query, consistency_level = ConsistencyLevel.ALL)
+    return await cql.run_async(stmt)
 
 
 @pytest.mark.asyncio
@@ -45,9 +50,9 @@ async def test_replace(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test2.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test3.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test2.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test3.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     async def check():
         # RF=1 table "test" will experience data loss so don't check it.
@@ -107,9 +112,9 @@ async def test_removenode(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test2.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test3.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test2.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test3.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     async def check():
         # RF=1 table "test" will experience data loss so don't check it.
@@ -162,7 +167,7 @@ async def test_removenode_with_ignored_node(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(512)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     async def check():
         logger.info("Checking")
