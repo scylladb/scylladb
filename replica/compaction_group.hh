@@ -253,10 +253,6 @@ public:
     // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
     storage_group* storage_group_for_id(const schema_ptr&, size_t i) const;
 
-    compaction_group* single_compaction_group_if_available() noexcept {
-        return _compaction_groups.size() == 1 ? &_compaction_groups.front() : nullptr;
-    }
-
     // Caller must keep the current effective_replication_map_ptr valid
     // until the storage_group_manager finishes update_effective_replication_map
     virtual future<> update_effective_replication_map(const locator::effective_replication_map& erm) = 0;

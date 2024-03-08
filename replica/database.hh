@@ -591,8 +591,6 @@ private:
     storage_group* storage_group_for_id(size_t i) const;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
-    // Return compaction group if table owns a single one. Otherwise, null is returned.
-    compaction_group* single_compaction_group_if_available() const noexcept;
     compaction_group* get_compaction_group(size_t id) const noexcept;
     // Select a compaction group from a given token.
     compaction_group& compaction_group_for_token(dht::token token) const noexcept;
