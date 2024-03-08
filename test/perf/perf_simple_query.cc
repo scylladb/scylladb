@@ -70,10 +70,12 @@ struct test_config {
     unsigned duration_in_seconds;
     bool counters;
     bool flush_memtables;
+    unsigned memtable_partitions = 0;
     unsigned operations_per_shard = 0;
     bool stop_on_error;
     sstring timeout;
     bool bypass_cache;
+    std::optional<unsigned> initial_tablets;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
@@ -105,11 +107,16 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
 
 static void create_partitions(cql_test_env& env, test_config& cfg) {
     std::cout << "Creating " << cfg.partitions << " partitions..." << std::endl;
+    unsigned next_flush = (cfg.memtable_partitions > 0 ? cfg.memtable_partitions : cfg.partitions);
     for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
         if (cfg.counters) {
             execute_counter_update_for_key(env, make_key(sequence));
         } else {
             execute_update_for_key(env, make_key(sequence));
+        }
+        if (sequence + 1 >= next_flush) {
+            env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+            next_flush += cfg.memtable_partitions;
         }
     }
 
@@ -426,6 +433,12 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
                 .build();
     }).get();
 
+    std::cout << "Disabling auto compaction" << std::endl;
+    env.db().invoke_on_all([] (auto& db) {
+        auto& cf = db.find_column_family("ks", "cf");
+        return cf.disable_auto_compaction();
+    }).get();
+
     switch (cfg.mode) {
     case test_config::run_mode::read:
         return test_read(env, cfg);
@@ -450,6 +463,9 @@ void write_json_result(std::string result_file, const test_config& cfg, perf_res
     params["cpus"] = smp::count;
     params["duration"] = cfg.duration_in_seconds;
     params["concurrency,partitions,cpus,duration"] = fmt::format("{},{},{},{}", cfg.concurrency, cfg.partitions, smp::count, cfg.duration_in_seconds);
+    if (cfg.initial_tablets) {
+        params["initial_tablets"] = cfg.initial_tablets.value();
+    }
     results["parameters"] = std::move(params);
 
     Json::Value stats;
@@ -517,6 +533,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("tablets", "use tablets")
         ("initial-tablets", bpo::value<unsigned>()->default_value(128), "initial number of tablets")
         ("flush", "flush memtables before test")
+        ("memtable-partitions", bpo::value<unsigned>(), "apply this number of partitions to memtable, then flush")
         ("json-result", bpo::value<std::string>(), "name of the json result file")
         ("enable-cache", bpo::value<bool>()->default_value(true), "enable row cache")
         ("alternator", bpo::value<std::string>(), "use alternator frontend instead of CQL with given write isolation")
@@ -555,6 +572,9 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.query_single_key = app.configuration().contains("query-single-key");
             cfg.counters = app.configuration().contains("counters");
             cfg.flush_memtables = app.configuration().contains("flush");
+            if (app.configuration().contains("tablets")) {
+                cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
+            }
             if (app.configuration().contains("write")) {
                 cfg.mode = test_config::run_mode::write;
             } else if (app.configuration().contains("delete")) {
@@ -569,6 +589,9 @@ int scylla_simple_query_main(int argc, char** argv) {
             }
             if (app.configuration().contains("operations-per-shard")) {
                 cfg.operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
+            }
+            if (app.configuration().contains("memtable-partitions")) {
+                cfg.memtable_partitions = app.configuration()["memtable-partitions"].as<unsigned>();
             }
             cfg.stop_on_error = app.configuration()["stop-on-error"].as<bool>();
             cfg.timeout = app.configuration()["timeout"].as<std::string>();
