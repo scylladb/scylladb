@@ -10,11 +10,8 @@
 
 #include "streaming/stream_summary.hh"
 
-namespace streaming {
+auto fmt::formatter<streaming::stream_summary>::format(const streaming::stream_summary& x, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "[ cf_id={} ]", x.cf_id);
 
-std::ostream& operator<<(std::ostream& os, const stream_summary& x) {
-    os << "[ cf_id=" << x.cf_id << " ]";
-    return os;
 }
-
-} // namespace streaming
