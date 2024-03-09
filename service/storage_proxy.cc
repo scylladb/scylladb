@@ -159,6 +159,35 @@ bool storage_proxy::only_me(const inet_address_vector_replica_set& replicas) con
     return replicas.size() == 1 && is_me(replicas[0]);
 }
 
+enum class storage_proxy_remote_read_verb {
+    read_data,
+    read_mutation_data,
+    read_digest
+};
+
+}
+
+template <> struct fmt::formatter<service::storage_proxy_remote_read_verb> : fmt::formatter<std::string_view> {
+    auto format(service::storage_proxy_remote_read_verb verb, fmt::format_context& ctx) const {
+        std::string_view name;
+        using enum service::storage_proxy_remote_read_verb;
+        switch (verb) {
+        case read_data:
+            name = "read_data";
+            break;
+        case read_mutation_data:
+            name = "read_mutation_data";
+            break;
+        case read_digest:
+            name = "read_digest";
+            break;
+        }
+        return formatter<std::string_view>::format(name, ctx);
+    }
+};
+
+namespace service {
+
 // This class handles all communication with other nodes in `storage_proxy`:
 // sending and receiving RPCs, checking the state of other nodes (e.g. by accessing gossiper state), fetching schema.
 //
@@ -662,25 +691,8 @@ private:
         });
     }
 
-    enum class read_verb {
-        read_data,
-        read_mutation_data,
-        read_digest
-    };
-    friend std::ostream& operator<<(std::ostream& os, const read_verb& verb) {
-        switch (verb) {
-            case read_verb::read_data:
-                os << "read_data";
-                break;
-            case read_verb::read_mutation_data:
-                os << "read_mutation_data";
-                break;
-            case read_verb::read_digest:
-                os << "read_digest";
-                break;
-        }
-        return os;
-    }
+    using read_verb = storage_proxy_remote_read_verb;
+
     template<typename Result, read_verb verb>
     future<Result> handle_read(const rpc::client_info& cinfo, rpc::opt_time_point t,
         query::read_command cmd1, ::compat::wrapping_partition_range pr,
@@ -2207,9 +2219,20 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
     return f;
 }
 
+} // namespace service
+
 // debug output in mutate_internal needs this
+template <>
+struct fmt::formatter<service::paxos_response_handler> : fmt::formatter<std::string_view> {
+    auto format(const service::paxos_response_handler& h, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "paxos_response_handler{{{}}}", h.id());
+    }
+};
+
+namespace service {
+
 std::ostream& operator<<(std::ostream& os, const paxos_response_handler& h) {
-    os << "paxos_response_handler{" << h.id() << "}";
+    fmt::print(os, "{}", h);
     return os;
 }
 
@@ -2824,18 +2847,27 @@ struct hint_wrapper {
     mutation mut;
 };
 
-inline std::ostream& operator<<(std::ostream& os, const hint_wrapper& h) {
-    return os << "hint_wrapper{" << h.mut << "}";
-}
-
 struct read_repair_mutation {
     std::unordered_map<gms::inet_address, std::optional<mutation>> value;
     locator::effective_replication_map_ptr ermp;
 };
 
-inline std::ostream& operator<<(std::ostream& os, const read_repair_mutation& m) {
-    return os << m.value;
 }
+
+template <> struct fmt::formatter<service::hint_wrapper> : fmt::formatter<std::string_view> {
+    auto format(const service::hint_wrapper& h, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "hint_wrapper{{{}}}", h.mut);
+    }
+};
+
+template <>
+struct fmt::formatter<service::read_repair_mutation> : fmt::formatter<std::string_view> {
+    auto format(const service::read_repair_mutation& m, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", m.value);
+    }
+};
+
+namespace service {
 
 using namespace std::literals::chrono_literals;
 
