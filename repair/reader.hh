@@ -6,6 +6,7 @@
 #include "reader_permit.hh"
 #include "utils/phased_barrier.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
+#include <fmt/core.h>
 
 class repair_reader {
 public:
@@ -15,17 +16,6 @@ public:
         multishard_filter
     };
 
-    friend std::ostream& operator<<(std::ostream& out, read_strategy s) {
-        switch (s) {
-            case read_strategy::local:
-                return out << "local";
-            case read_strategy::multishard_split:
-                return out << "multishard_split";
-            case read_strategy::multishard_filter:
-                return out << "multishard_filter";
-        };
-        return out << "unknown";
-    }
 private:
     schema_ptr _schema;
     reader_permit _permit;
@@ -85,4 +75,23 @@ public:
     void check_current_dk();
 
     void pause();
+};
+
+template <> struct fmt::formatter<repair_reader::read_strategy>  : fmt::formatter<std::string_view> {
+    auto format(repair_reader::read_strategy s, fmt::format_context& ctx) const {
+        using enum repair_reader::read_strategy;
+        std::string_view name = "unknown";
+        switch (s) {
+            case local:
+                name = "local";
+                break;
+            case multishard_split:
+                name = "multishard_split";
+                break;
+            case multishard_filter:
+                name = "multishard_filter";
+                break;
+        };
+        return formatter<std::string_view>::format(name, ctx);
+    }
 };
