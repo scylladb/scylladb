@@ -67,8 +67,6 @@ inline bool operator==(const reader_resources& a, const reader_resources& b) {
     return a.count == b.count && a.memory == b.memory;
 }
 
-std::ostream& operator<<(std::ostream& os, const reader_resources& r);
-
 class reader_concurrency_semaphore;
 
 /// A permit for a specific read.
@@ -212,8 +210,6 @@ public:
     reader_resources resources() const { return _resources; }
 };
 
-std::ostream& operator<<(std::ostream& os, reader_permit::state s);
-
 /// Mark a permit as needing CPU.
 ///
 /// Conceptually, a permit is considered as needing CPU, when at least one reader
@@ -325,3 +321,10 @@ template <typename T>
 bool operator==(const tracking_allocator<T>& a, const tracking_allocator<T>& b) {
     return a._semaphore == b._semaphore;
 }
+
+template <> struct fmt::formatter<reader_permit::state> : fmt::formatter<std::string_view> {
+    auto format(reader_permit::state, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+template <> struct fmt::formatter<reader_resources> : fmt::formatter<std::string_view> {
+    auto format(const reader_resources&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

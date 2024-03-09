@@ -69,9 +69,9 @@ void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& se
 
 }
 
-std::ostream& operator<<(std::ostream& os , const reader_resources& r) {
-    os << "{" << r.count << ", " << r.memory << "}";
-    return os;
+auto fmt::formatter<reader_resources>::format(const reader_resources& r, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{{{}, {}}}", r.count, r.memory);
 }
 
 reader_permit::resource_units::resource_units(reader_permit permit, reader_resources res, already_consumed_tag)
@@ -652,34 +652,36 @@ void reader_permit::on_finish_sstable_read() noexcept {
     _impl->on_finish_sstable_read();
 }
 
-std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
+auto fmt::formatter<reader_permit::state>::format(reader_permit::state s, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name;
     switch (s) {
         case reader_permit::state::waiting_for_admission:
-            os << "waiting_for_admission";
+            name = "waiting_for_admission";
             break;
         case reader_permit::state::waiting_for_memory:
-            os << "waiting_for_memory";
+            name = "waiting_for_memory";
             break;
         case reader_permit::state::waiting_for_execution:
-            os << "waiting_for_execution";
+            name = "waiting_for_execution";
             break;
         case reader_permit::state::active:
-            os << "active";
+            name = "active";
             break;
         case reader_permit::state::active_need_cpu:
-            os << "active/need_cpu";
+            name = "active/need_cpu";
             break;
         case reader_permit::state::active_await:
-            os << "active/await";
+            name = "active/await";
             break;
         case reader_permit::state::inactive:
-            os << "inactive";
+            name= "inactive";
             break;
         case reader_permit::state::evicted:
-            os << "evicted";
+            name = "evicted";
             break;
     }
-    return os;
+    return formatter<std::string_view>::format(name, ctx);
 }
 
 namespace {
