@@ -147,10 +147,6 @@ mutation_partition_view frozen_mutation::partition() const {
     return mutation_partition_view::from_view(mutation_view().partition());
 }
 
-std::ostream& operator<<(std::ostream& out, const frozen_mutation::printer& pr) {
-    return out << pr.self.unfreeze(pr.schema);
-}
-
 frozen_mutation::printer frozen_mutation::pretty_printer(schema_ptr s) const {
     return { *this, std::move(s) };
 }
