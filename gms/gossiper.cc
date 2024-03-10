@@ -1539,11 +1539,15 @@ bool gossiper::is_cql_ready(const inet_address& endpoint) const {
 }
 
 locator::host_id gossiper::get_host_id(inet_address endpoint) const {
-    auto app_state = get_application_state_ptr(endpoint, application_state::HOST_ID);
-    if (!app_state) {
+    auto eps = get_endpoint_state_ptr(endpoint);
+    if (!eps) {
+        throw std::runtime_error(format("Could not get host_id for endpoint {}: endpoint state not found", endpoint));
+    }
+    auto host_id = eps->get_host_id();
+    if (!host_id) {
         throw std::runtime_error(format("Host {} does not have HOST_ID application_state", endpoint));
     }
-    return locator::host_id(utils::UUID(app_state->value()));
+    return host_id;
 }
 
 std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id host_id) const {
