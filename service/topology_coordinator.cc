@@ -3494,8 +3494,8 @@ future<> topology_coordinator::stop() {
             co_await stop_background_action(barrier, gid, [stage] { return format("at stage {}", tablet_transition_stage_to_string(stage)); });
         }
 
-        co_await stop_background_action(tablet_state.streaming, gid, [] { return "when streaming"; });
-        co_await stop_background_action(tablet_state.cleanup, gid, [] { return "when cleanup"; });
+        co_await stop_background_action(tablet_state.streaming, gid, [] { return "during streaming"; });
+        co_await stop_background_action(tablet_state.cleanup, gid, [] { return "during cleanup"; });
     });
 }
 
