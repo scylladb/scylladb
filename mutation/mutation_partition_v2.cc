@@ -747,78 +747,78 @@ static auto prefixed(const sstring& prefix, const RangeOfPrintable& r) {
     return r | boost::adaptors::transformed([&] (auto&& e) { return format("{}{}", prefix, e); });
 }
 
-std::ostream&
-operator<<(std::ostream& os, const mutation_partition_v2::printer& p) {
-    const auto indent = "  ";
+auto fmt::formatter<mutation_partition_v2::printer>::format(const mutation_partition_v2::printer& p, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    const auto indent = "";
 
     auto& mp = p._mutation_partition;
-    os << "mutation_partition_v2: {\n";
+    auto out = fmt::format_to(ctx.out(), "mutation_partition_v2: {{\n");
     if (mp._tombstone) {
-        fmt::print(os, "{:2}tombstone: {},\n", "", mp._tombstone);
+        out = fmt::format_to(out, "{:2}tombstone: {},\n", indent, mp._tombstone);
     }
 
     if (!mp.static_row().empty()) {
-        os << indent << "static_row: {\n";
+        out = fmt::format_to(out, "{:2}static_row: {{\n", indent);
         const auto& srow = mp.static_row().get();
         srow.for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
             auto& column_def = p._schema.column_at(column_kind::static_column, c_id);
-            fmt::print(os, "{}{}'{}': {},\n",
-                       indent, indent, column_def.name_as_text(), atomic_cell_or_collection::printer(column_def, cell));
+            out = fmt::format_to(out, "{:4}'{}': {},\n",
+                       indent, column_def.name_as_text(), atomic_cell_or_collection::printer(column_def, cell));
         });
-        os << indent << "},\n";
+        out = fmt::format_to(out, "{:2}}},\n", indent);
     }
 
-    os << indent << "rows: [\n";
+    out = fmt::format_to(out, "{:2}rows: [\n", indent);
 
     for (const auto& re : mp.clustered_rows()) {
-        os << indent << indent << "{\n";
+        out = fmt::format_to(out, "{:4}{{\n", indent);
 
         const auto& row = re.row();
-        os << indent << indent << indent << "cont: " << re.continuous() << ",\n";
-        os << indent << indent << indent << "dummy: " << re.dummy() << ",\n";
+        out = fmt::format_to(out, "{:6}cont: {},\n", indent, re.continuous());
+        out = fmt::format_to(out, "{:6}dummy: {},\n", indent, re.dummy());
         if (!row.marker().is_missing()) {
-            os << indent << indent << indent << "marker: " << row.marker() << ",\n";
+            out = fmt::format_to(out, "{:6}marker: {},\n", indent, row.marker());
         }
         if (row.deleted_at()) {
-            os << indent << indent << indent << "tombstone: " << row.deleted_at() << ",\n";
+            out = fmt::format_to(out, "{:6}tombstone: {},\n", indent, row.deleted_at());
         }
         if (re.range_tombstone()) {
-            fmt::print(os, "{:6}rt: {},\n", "", re.range_tombstone());
+            out = fmt::format_to(out, "{:6}rt: {},\n", "", re.range_tombstone());
         }
 
         position_in_partition pip(re.position());
         if (pip.get_clustering_key_prefix()) {
-            os << indent << indent << indent << "position: {\n";
+            out = fmt::format_to(out, "{:6}position: {{\n", indent);
 
             auto ck = *pip.get_clustering_key_prefix();
             auto type_iterator = ck.get_compound_type(p._schema)->types().begin();
             auto column_iterator = p._schema.clustering_key_columns().begin();
 
-            os << indent << indent << indent << indent << "bound_weight: " << int32_t(pip.get_bound_weight()) << ",\n";
+            out = fmt::format_to(out, "{:8}bound_weight: {},\n",
+                                 indent, int32_t(pip.get_bound_weight()));
 
             for (auto&& e : ck.components(p._schema)) {
-                os << indent << indent << indent << indent << "'" << column_iterator->name_as_text() 
-                   << "': " << (*type_iterator)->to_string(to_bytes(e)) << ",\n";
+                out = fmt::format_to(out, "{:8}'{}': {},\n",
+                                     indent, column_iterator->name_as_text(),
+                                     (*type_iterator)->to_string(to_bytes(e)));
                 ++type_iterator;
                 ++column_iterator;
             }
 
-            os << indent << indent << indent << "},\n";
+            out = fmt::format_to(out, "{:6}}},\n", indent);
         }
 
         row.cells().for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
             auto& column_def = p._schema.column_at(column_kind::regular_column, c_id);
-            fmt::print(os, "{}{}{}'{}': {},\n",
-                       indent, indent, indent, column_def.name_as_text(),
+            out = fmt::format_to(out, "{:6}'{}': {},\n",
+                       indent, column_def.name_as_text(),
                        atomic_cell_or_collection::printer(column_def, cell));
         });
 
-        os << indent << indent << "},\n";
+        out = fmt::format_to(out, "{:4}}},\n", indent);
     }
 
-    os << indent << "]\n}";
-
-    return os;
+    return fmt::format_to(out, "{:2}]\n}}", indent);
 }
 
 bool mutation_partition_v2::equal(const schema& s, const mutation_partition_v2& p) const {

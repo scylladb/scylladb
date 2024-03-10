@@ -127,9 +127,9 @@ public:
         printer(const printer&) = delete;
         printer(printer&&) = delete;
 
-        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+        friend fmt::formatter<printer>;
     };
-    friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    friend fmt::formatter<printer>;
 public:
     // Makes sure there is a dummy entry after all clustered rows. Doesn't affect continuity.
     // Doesn't invalidate iterators.
@@ -281,3 +281,7 @@ mutation_partition_v2& mutation_partition_v2::container_of(rows_type& rows) {
 // Returns true iff the mutation contains dummy rows which are redundant,
 // meaning that they can be removed without affecting the set of writes represented by the mutation.
 bool has_redundant_dummies(const mutation_partition_v2&);
+
+template <> struct fmt::formatter<mutation_partition_v2::printer> : fmt::formatter<std::string_view> {
+    auto format(const mutation_partition_v2::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
