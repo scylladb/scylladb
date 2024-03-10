@@ -3179,6 +3179,8 @@ future<> topology_coordinator::stop() {
 
         co_await stop_background_action(tablet_state.streaming, gid, [] { return "during streaming"; });
         co_await stop_background_action(tablet_state.cleanup, gid, [] { return "during cleanup"; });
+        co_await stop_background_action(tablet_state.rebuild_repair, gid, [] { return "during rebuild_repair"; });
+        co_await stop_background_action(tablet_state.repair, gid, [] { return "during repair"; });
     });
 }
 
