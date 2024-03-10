@@ -715,7 +715,7 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
 
     if (was_alive && state) {
         try {
-            logger.info("InetAddress {} is now DOWN, status = {}", endpoint, get_gossip_status(*state));
+            logger.info("InetAddress {}/{} is now DOWN, status = {}", state->get_host_id(), endpoint, get_gossip_status(*state));
             co_await do_on_dead_notifications(endpoint, std::move(state), pid);
         } catch (...) {
             logger.warn("Fail to call on_dead callback: {}", std::current_exception());
@@ -1734,7 +1734,7 @@ future<> gossiper::real_mark_alive(inet_address addr) {
     }
 
     if (!is_in_shadow_round()) {
-        logger.info("InetAddress {} is now UP, status = {}", addr, status);
+        logger.info("InetAddress {}/{} is now UP, status = {}", es->get_host_id(), addr, status);
     }
 
     co_await _subscribers.for_each([addr, es, pid = permit.id()] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
@@ -1750,7 +1750,7 @@ future<> gossiper::mark_dead(inet_address addr, endpoint_state_ptr state, permit
         data.live.erase(addr);
         data.unreachable[addr] = now();
     });
-    logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(*state));
+    logger.info("InetAddress {}/{} is now DOWN, status = {}", state->get_host_id(), addr, get_gossip_status(*state));
     co_await do_on_dead_notifications(addr, std::move(state), pid);
 }
 
