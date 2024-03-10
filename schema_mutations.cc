@@ -140,13 +140,13 @@ bool schema_mutations::is_view() const {
 
 std::ostream& operator<<(std::ostream& out, const schema_mutations& sm) {
     out << "schema_mutations{\n";
-    out << " tables=" << sm.columnfamilies_mutation() << ",\n";
-    out << " scylla_tables=" << sm.scylla_tables() << ",\n";
-    out << " columns=" << sm.columns_mutation() << ",\n";
-    out << " dropped_columns=" << sm.dropped_columns_mutation() << ",\n";
-    out << " indices=" << sm.indices_mutation() << ",\n";
-    out << " computed_columns=" << sm.computed_columns_mutation() << ",\n";
-    out << " view_virtual_columns=" << sm.view_virtual_columns_mutation() << "\n";
+    fmt::print(out, " tables={},\n", sm.columnfamilies_mutation());
+    fmt::print(out, " scylla_tables={},\n", sm.scylla_tables());
+    fmt::print(out, " tables={},\n", sm.columns_mutation());
+    fmt::print(out, " dropped_columns={},\n", sm.dropped_columns_mutation());
+    fmt::print(out, " indices={},\n", sm.indices_mutation());
+    fmt::print(out, " computed_columns={},\n", sm.computed_columns_mutation());
+    fmt::print(out, " view_virtual_columns={},\n", sm.view_virtual_columns_mutation());
     out << "}";
     return out;
 }
