@@ -291,6 +291,8 @@ These exceptions are for commits that are administrative in nature.
 
 2. frozen toolchain updates (changes to tools/toolchain/image; these only refresh external package versions)
 
+3. backports (maintainers are already allowed to backport their own code, opening a PR to get a CI run for a backport doesn't change this)
+
 ## Guidelines for evaluating backports
 
 0. In general backports are only acceptable if they fix an
