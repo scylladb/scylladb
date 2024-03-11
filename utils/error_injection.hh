@@ -98,7 +98,7 @@ using error_injection_parameters = std::unordered_map<sstring, sstring>;
  *          }, f);
  *    Expected use case: emulate custom errors like timeouts.
  *
- * 4. inject_with_handler(name, func)
+ * 4. inject(name, future<> func(injection_handler&))
  *    Inserts code that can wait for an event.
  *    Requires func to be a function taking an injection_handler reference and
  *    returning a future<>.
@@ -127,7 +127,7 @@ class error_injection {
 public:
     /**
      * The injection handler class is used to wait for events inside the injected code.
-     * If multiple inject_with_handler are called concurrently for the same injection_name,
+     * If multiple inject (with handler) are called concurrently for the same injection_name,
      * all of them will have separate handlers.
      */
     class injection_handler: public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
@@ -393,7 +393,7 @@ public:
     // \param func function returning a future and taking an injection handler
     template <typename Func>
     requires std::is_invocable_r_v<future<>, Func, injection_handler&>
-    future<> inject_with_handler(const std::string_view& name,
+    future<> inject(const std::string_view& name,
                                  Func&& func) {
         auto* data = get_data(name);
         if (!data) {
@@ -537,7 +537,7 @@ public:
     template <typename Func>
     requires std::is_invocable_r_v<future<>, Func, error_injection<true>::injection_handler&>
     [[gnu::always_inline]]
-    future<> inject_with_handler(const std::string_view& name,
+    future<> inject(const std::string_view& name,
                                  Func&& func) {
         return make_ready_future<>();
     }

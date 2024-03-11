@@ -643,7 +643,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         rtlogger.debug("start CDC generation publisher fiber");
 
         while (!_as.abort_requested()) {
-            co_await utils::get_local_injector().inject_with_handler("cdc_generation_publisher_fiber", [] (auto& handler) -> future<> {
+            co_await utils::get_local_injector().inject("cdc_generation_publisher_fiber", [] (auto& handler) -> future<> {
                 rtlogger.info("CDC generation publisher fiber sleeps after injection");
                 co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
                 rtlogger.info("CDC generation publisher fiber finishes sleeping after injection");
@@ -2625,7 +2625,7 @@ future<> topology_coordinator::run() {
     while (!_as.abort_requested()) {
         bool sleep = false;
         try {
-            co_await utils::get_local_injector().inject_with_handler("topology_coordinator_pause_before_processing_backlog",
+            co_await utils::get_local_injector().inject("topology_coordinator_pause_before_processing_backlog",
                 [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(1)); });
             auto guard = co_await cleanup_group0_config_if_needed(co_await start_operation());
 
