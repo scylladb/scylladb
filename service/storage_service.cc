@@ -5541,6 +5541,11 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 }
 
 future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
+    utils::get_local_injector().inject("cleanup_tablet_crash", [] {
+        slogger.info("Crashing tablet cleanup");
+        _exit(1);
+    });
+
     return do_tablet_operation(tablet, "Cleanup", [this, tablet] (locator::tablet_metadata_guard& guard) {
         shard_id shard;
 
