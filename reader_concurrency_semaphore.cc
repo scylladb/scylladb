@@ -999,7 +999,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t me
                                sm::description("Holds the amount of memory consumed by current read operations. "),
                                {class_label(_name)}),
 
-                sm::make_gauge("queued_reads", [this] { return _stats.waiters; },
+                sm::make_gauge("queued_reads", _stats.waiters,
                                sm::description("Holds the number of currently queued read operations."),
                                {class_label(_name)}),
 
@@ -1018,11 +1018,11 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t me
                                                " When the queue is full, excessive reads are shed to avoid overload."),
                                {class_label(_name)}),
 
-                sm::make_gauge("disk_reads", [this] { return _stats.disk_reads; },
+                sm::make_gauge("disk_reads", _stats.disk_reads,
                                sm::description("Holds the number of currently active disk read operations. "),
                                {class_label(_name)}),
 
-                sm::make_gauge("sstables_read", [this] { return _stats.sstables_read; },
+                sm::make_gauge("sstables_read", _stats.sstables_read,
                                sm::description("Holds the number of currently read sstables. "),
                                {class_label(_name)}),
 
