@@ -185,6 +185,8 @@ public:
     };
 
 private:
+    using waiting_handler_fun = std::function<future<>(injection_handler&)>;
+
     /**
      * - there is a counter of received messages; it is shared between the injection_data,
      *   which is created once when enabling an injection on a given shard, and all injection_handlers,
@@ -391,10 +393,7 @@ public:
 
     // \brief Inject exception
     // \param func function returning a future and taking an injection handler
-    template <typename Func>
-    requires std::is_invocable_r_v<future<>, Func, injection_handler&>
-    future<> inject(const std::string_view& name,
-                                 Func&& func) {
+    future<> inject(const std::string_view& name, waiting_handler_fun func) {
         auto* data = get_data(name);
         if (!data) {
             co_return;
@@ -474,6 +473,7 @@ template <>
 class error_injection<false> {
     static thread_local error_injection _local;
     using handler_fun = std::function<void()>;
+    using waiting_handler_fun = std::function<future<>(error_injection<true>::injection_handler&)>;
 public:
     bool is_enabled(const std::string_view& name) const {
         return false;
@@ -534,11 +534,8 @@ public:
 
     // \brief Inject exception
     // \param func function returning a future and taking an injection handler
-    template <typename Func>
-    requires std::is_invocable_r_v<future<>, Func, error_injection<true>::injection_handler&>
     [[gnu::always_inline]]
-    future<> inject(const std::string_view& name,
-                                 Func&& func) {
+    future<> inject(const std::string_view& name, waiting_handler_fun func) {
         return make_ready_future<>();
     }
 
