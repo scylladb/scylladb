@@ -340,7 +340,9 @@ public:
             , _seed(seed)
             , _local_read_op(local_reader ? std::optional(cf.read_in_progress()) : std::nullopt)
             , _reader(make_reader(db, cf, local_reader))
-    { }
+    {
+        pause();
+    }
 
     future<mutation_fragment_opt>
     read_mutation_fragment() {
