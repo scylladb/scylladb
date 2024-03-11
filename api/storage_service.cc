@@ -20,6 +20,7 @@
 #include <time.h>
 #include <algorithm>
 #include <functional>
+#include <iterator>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/algorithm/string/trim_all.hpp>
@@ -88,6 +89,16 @@ static void ensure_tablets_disabled(const http_context& ctx, const sstring& ks_n
     if (ctx.db.local().find_keyspace(ks_name).uses_tablets()) {
         throw bad_param_exception{fmt::format("{} is per-table in keyspace '{}'. Please provide table name using 'cf' parameter.", api_endpoint_path, ks_name)};
     }
+}
+
+static bool any_of_keyspaces_use_tablets(const http_context& ctx) {
+    auto& db = ctx.db.local();
+    auto uses_tablets = [&db](const auto& ks_name) {
+        return db.find_keyspace(ks_name).uses_tablets();
+    };
+
+    auto keyspaces = db.get_all_keyspaces();
+    return std::any_of(std::begin(keyspaces), std::end(keyspaces), uses_tablets);
 }
 
 locator::host_id validate_host_id(const sstring& param) {
@@ -1359,7 +1370,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::get_ownership.set(r, [&ss] (std::unique_ptr<http::request> req) {
+    ss::get_ownership.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) {
+        if (any_of_keyspaces_use_tablets(ctx)) {
+            throw httpd::bad_param_exception("storage_service/ownership cannot be used when a keyspace uses tablets");
+        }
+
         return ss.local().get_ownership().then([] (auto&& ownership) {
             std::vector<storage_service_json::mapper> res;
             return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
@@ -1368,7 +1383,17 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::get_effective_ownership.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) {
         auto keyspace_name = req->param["keyspace"] == "null" ? "" : validate_keyspace(ctx, req->param);
-        return ss.local().effective_ownership(keyspace_name).then([] (auto&& ownership) {
+        auto table_name = req->get_query_param("cf");
+
+        if (!keyspace_name.empty()) {
+            if (table_name.empty()) {
+                ensure_tablets_disabled(ctx, keyspace_name, "storage_service/ownership");
+            } else {
+                validate_table(ctx, keyspace_name, table_name);
+            }
+        }
+
+        return ss.local().effective_ownership(keyspace_name, table_name).then([] (auto&& ownership) {
             std::vector<storage_service_json::mapper> res;
             return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
         });

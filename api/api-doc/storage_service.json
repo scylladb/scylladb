@@ -433,6 +433,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Column family name",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             }

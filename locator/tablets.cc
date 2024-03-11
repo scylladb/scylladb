@@ -15,6 +15,9 @@
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
 
+#include <algorithm>
+#include <iterator>
+
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -218,6 +221,18 @@ dht::token_range tablet_map::get_token_range(tablet_id id) const {
     } else {
         return dht::token_range::make({get_last_token(tablet_id(size_t(id) - 1)), false}, {get_last_token(id), true});
     }
+}
+
+future<std::vector<token>> tablet_map::get_sorted_tokens() const {
+    std::vector<token> tokens;
+    tokens.reserve(tablet_count());
+
+    for (auto id : tablet_ids()) {
+        tokens.push_back(get_last_token(id));
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return tokens;
 }
 
 void tablet_map::set_tablet(tablet_id id, tablet_info info) {
@@ -538,6 +553,23 @@ public:
         auto result = get_natural_endpoints(search_token);
         maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
         return result;
+    }
+
+    // FIXME: return a future object.
+    virtual dht::token_range_vector get_ranges(inet_address ep) const override {
+        dht::token_range_vector ret;
+
+        auto& tablet_map = get_tablet_map();
+        for (auto tablet_id : tablet_map.tablet_ids()) {
+            auto endpoints = get_natural_endpoints(tablet_map.get_last_token(tablet_id));
+            auto should_add_range = std::find(std::begin(endpoints), std::end(endpoints), ep) != std::end(endpoints);
+
+            if (should_add_range) {
+                ret.push_back(tablet_map.get_token_range(tablet_id));
+            }
+        }
+
+        return ret;
     }
 
     virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {

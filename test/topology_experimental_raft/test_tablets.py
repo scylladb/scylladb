@@ -829,3 +829,38 @@ async def test_tablet_load_and_stream(manager: ManagerClient):
     time.sleep(1)
 
     await check()
+
+@pytest.mark.asyncio
+async def test_storage_service_api_uneven_ownership_keyspace_and_table_params_used(manager: ManagerClient):
+    # Given two running servers
+    shards_count = 4
+    cmdline = ['--smp=4']
+    servers = await manager.servers_add(2, cmdline=cmdline)
+
+    # When table is created with initial tablets set to 1
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE testing WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE testing.mytable1 (col1 timestamp, col2 text, col3 blob, PRIMARY KEY (col1));")
+
+    # And when ownership for this table is queried
+    actual_ownerships = await manager.api.get_ownership(servers[0].ip_addr, "testing", "mytable1")
+
+    # Then ensure that returned ownerships is 0.0 and 1.0 (which node gets 0.0 and 1.0 is unspecified)
+    expected_ips = {servers[0].ip_addr, servers[1].ip_addr}
+    expected_ownerships = [0.0, 1.0]
+    delta = 0.0001
+    already_verified = set()
+
+    sorted_actual_ownerships = sorted(actual_ownerships, key=lambda e: e["value"])
+    assert len(sorted_actual_ownerships) == len(expected_ownerships)
+
+    for i in range(0, len(sorted_actual_ownerships)):
+        entry = sorted_actual_ownerships[i]
+        actual_ip = entry["key"]
+        actual_ownership = float(entry["value"])
+
+        assert actual_ip in expected_ips
+        assert actual_ip not in already_verified
+        assert actual_ownership == pytest.approx(expected_ownerships[i], abs=delta)
+
+        already_verified.add(actual_ip)

@@ -581,7 +581,7 @@ public:
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */
-    dht::token_range_vector get_ranges_for_endpoint(const locator::vnode_effective_replication_map_ptr& erm, const gms::inet_address& ep) const;
+    dht::token_range_vector get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const;
 
     /**
      * Get all ranges that span the ring given a set
@@ -680,7 +680,7 @@ public:
 
     future<std::map<gms::inet_address, float>> get_ownership();
 
-    future<std::map<gms::inet_address, float>> effective_ownership(sstring keyspace_name);
+    future<std::map<gms::inet_address, float>> effective_ownership(sstring keyspace_name, sstring table_name);
 
     // Must run on shard 0.
     future<> check_and_repair_cdc_streams();

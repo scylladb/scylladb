@@ -453,6 +453,35 @@ def test_range_to_endpoint_map_tablets_disabled_keyspace_param_only(cql, this_dc
         resp = rest_api.send("GET", f"storage_service/range_to_endpoint_map/{keyspace}")
         resp.raise_for_status()
 
+def verify_ownership(resp, expected_ip, expected_ownership, delta):
+    resp.raise_for_status()
+
+    entries = resp.json()
+    assert len(entries) == 1
+
+    actual_ip = entries[0]["key"]
+    actual_ownership = entries[0]["value"]
+
+    assert actual_ip == expected_ip
+    assert float(actual_ownership) == pytest.approx(expected_ownership, abs=delta)
+
+def test_get_ownership_tablets_disabled(cql, this_dc, rest_api):
+    resp = rest_api.send("GET", f"storage_service/ownership")
+    verify_ownership(resp=resp, expected_ip=rest_api.host, expected_ownership=1.0, delta=0.001)
+
+def test_get_effective_ownership_tablets_disabled_null_keyspace(cql, this_dc, rest_api):
+    # 'null' triggers a special handler path - effective ownership of non-system keyspaces.
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': false }}") as keyspace:
+        resp = rest_api.send("GET", f"storage_service/ownership/null")
+        actual_error_reason = resp.json()["message"]
+        expected_error_reason = f"std::runtime_error (Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless)"
+        assert expected_error_reason == actual_error_reason
+
+def test_get_effective_ownership_tablets_disabled_keyspace_param_used(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': false }}") as keyspace:
+        resp = rest_api.send("GET", f"storage_service/ownership/{keyspace}")
+        verify_ownership(resp=resp, expected_ip=rest_api.host, expected_ownership=1.0, delta=0.001)
+
 def test_describe_ring(cql, this_dc, rest_api, has_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
         if not has_tablets: # For keyspaces with tablets table must be specified.
@@ -464,6 +493,13 @@ def test_describe_ring(cql, this_dc, rest_api, has_tablets):
             table = t0.split('.')[1]
             resp = rest_api.send("GET", f"storage_service/describe_ring/{keyspace}", params={ "table": table })
             resp.raise_for_status()
+
+def test_get_effective_ownership_tablets_disabled(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': false }}") as keyspace:
+        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
+            cf = table.split('.')[1]
+            resp = rest_api.send("GET", f"storage_service/ownership/{keyspace}", params={"cf": cf})
+            verify_ownership(resp=resp, expected_ip=rest_api.host, expected_ownership=1.0, delta=0.001)
 
 def test_storage_service_keyspace_cleanup(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
@@ -616,3 +652,38 @@ def test_range_to_endpoint_map_with_table_param(cql,  rest_api, tablets_enabled,
                 endpoint = entry["value"]
 
                 assert endpoint == expected_endpoint, f"Unexpected endpoint={endpoint} for token_range={token_range}. Expected endpoint was {expected_endpoint}"
+
+def test_get_ownership_tablets_enabled(cql, this_dc, rest_api,  skip_without_tablets):
+    # If a keyspace that uses tablets exist, then 'storage_service/ownership' should return BAD_REQUEST.
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': true }}") as keyspace:
+        resp = rest_api.send("GET", "storage_service/ownership")
+        assert resp.status_code == requests.codes.bad_request
+
+        actual_error_reason = resp.json()["message"]
+        expected_error_reason = "storage_service/ownership cannot be used when a keyspace uses tablets"
+        assert expected_error_reason == actual_error_reason
+
+def test_get_effective_ownership_tablets_enabled_keyspace_param_used(cql, this_dc, rest_api, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': true }}") as keyspace:
+        resp = rest_api.send("GET", f"storage_service/ownership/{keyspace}")
+        assert resp.status_code == requests.codes.bad_request
+
+        actual_error_reason = resp.json()["message"]
+        expected_error_reason = f"storage_service/ownership is per-table in keyspace '{keyspace}'. Please provide table name using 'cf' parameter."
+        assert expected_error_reason == actual_error_reason
+
+def test_get_effective_ownership_tablets_enabled_keyspace_param_null(cql, this_dc, rest_api, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': true }}") as keyspace:
+        resp = rest_api.send("GET", f"storage_service/ownership/null")
+        assert resp.status_code == requests.codes.server_error
+
+        actual_error_reason = resp.json()["message"]
+        expected_error_reason = f"std::runtime_error (Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless)"
+        assert expected_error_reason == actual_error_reason
+
+def test_get_effective_ownership_tablets_enabled_keyspace_and_table_params_used(cql, this_dc, rest_api, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': true }}") as keyspace:
+        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
+            cf = table.split('.')[1]
+            resp = rest_api.send("GET", f"storage_service/ownership/{keyspace}", params={"cf": cf})
+            verify_ownership(resp=resp, expected_ip=rest_api.host, expected_ownership=1.0, delta=0.001)
