@@ -534,6 +534,10 @@ void decommission_operation(scylla_rest_client& client, const bpo::variables_map
 }
 
 void describering_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.contains("keyspace")) {
+        throw std::invalid_argument("keyspace must be specified");
+    }
+
     const auto keyspace = vm["keyspace"].as<sstring>();
     const auto schema_version_res = client.get("/storage_service/schema_version");
 
