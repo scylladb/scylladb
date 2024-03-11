@@ -197,7 +197,7 @@ void set_cache_service(http_context& ctx, routes& r) {
 
     cs::get_row_capacity.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return ctx.db.map_reduce0([](replica::database& db) -> uint64_t {
-            return db.row_cache_tracker().region().occupancy().used_space();
+            return memory::stats().total_memory();
         }, uint64_t(0), std::plus<uint64_t>()).then([](const int64_t& res) {
             return make_ready_future<json::json_return_type>(res);
         });
@@ -240,9 +240,9 @@ void set_cache_service(http_context& ctx, routes& r) {
 
     cs::get_row_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         // In origin row size is the weighted size.
-        // We currently do not support weights, so we use num entries instead
+        // We currently do not support weights, so we use raw size in bytes instead
         return ctx.db.map_reduce0([](replica::database& db) -> uint64_t {
-            return db.row_cache_tracker().partitions();
+            return db.row_cache_tracker().region().occupancy().used_space();
         }, uint64_t(0), std::plus<uint64_t>()).then([](const int64_t& res) {
             return make_ready_future<json::json_return_type>(res);
         });
