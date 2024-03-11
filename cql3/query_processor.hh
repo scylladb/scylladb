@@ -462,8 +462,7 @@ public:
 
     void reset_cache();
 
-    future<> alter_tablets_keyspace(sstring ks_name, std::map<sstring, sstring> replication_options,
-                                    std::optional<service::group0_guard>& guard);
+    service::raft_group0_client& get_group0();
 
 private:
     // Keep the holder until you stop using the `remote` services.

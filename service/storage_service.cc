@@ -5797,59 +5797,6 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
     });
 }
-}
-// TODO: remove this header. It's currently needed to throw cql3 exception if topology_global_queue_empty() == true
-//       maybe throw a different exception instead?
-// TODO: this function has been defined here, and not in the alter_keyspace_statement.cc,
-//       because that'd bring many dependencies into alter_keyspace_statement.cc,
-//       moreover it kind-of mimics the fact that we're handling cdc in storage_service.cc,
-//       but maybe that's not a good argument and it should stay in alter_keyspace_statement.cc.
-#include "cql3/cql_statement.hh"
-namespace service {
-    future<> storage_service::alter_tablets_keyspace(sstring ks_name, std::map<sstring, sstring> replication_options,
-                                                     std::optional<service::group0_guard>& guard) {
-        utils::UUID request_id;
-        if (this_shard_id() != 0) {
-            co_return;
-        }
-
-        bool had_guard = guard.has_value();
-
-        while (true) {
-            if (topology_global_queue_empty()) {
-                if (not guard.has_value())
-                    guard = co_await _group0->client().start_operation(&_group0_as);
-
-                topology_mutation_builder builder(guard->write_timestamp());
-                builder.set_global_topology_request(global_topology_request::keyspace_rf_change);
-                builder.set_new_keyspace_rf_change_data(ks_name, replication_options);
-                topology_change change{{builder.build()}};
-
-                group0_command g0_cmd = _group0->client().prepare_command(std::move(change), *guard, "alter_tablets_keyspace");
-                request_id = guard->new_group0_state_id();
-                try {
-                    co_await _group0->client().add_entry(std::move(g0_cmd), std::move(*guard), &_abort_source);
-
-                    // TODO: wait_for_topology_request_completion doesn't wait for global requests,
-                    //       but only for the non-global ones and cdc. This needs to be fixed
-//                    auto error = co_await wait_for_topology_request_completion(request_id);
-//
-//                    if (!error.empty()) {
-//                        throw std::runtime_error(fmt::format("alter_tablets_keyspace failed with: {}", error));
-//                    }
-
-                    if (had_guard)
-                        guard = co_await _group0->client().start_operation(&_group0_as);
-                    break;
-                } catch (group0_concurrent_modification &) {
-                    rtlogger.info("storage_service::alter_tablets_keyspace(): concurrent modification, retrying");
-                }
-            } else {
-                throw make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
-                        exceptions::invalid_request_exception("storage_service::alter_tablets_keyspace(): topology mutation cannot be performed while other request is ongoing"));
-            }
-        }
-    }
 
 future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables() {
     auto holder = _async_gate.hold();

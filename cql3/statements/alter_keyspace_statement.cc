@@ -8,11 +8,13 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <boost/range/algorithm.hpp>
 #include <seastar/core/coroutine.hh>
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/topology_mutation.hh"
 #include "db/system_keyspace.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
@@ -88,10 +90,27 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     try {
         auto old_ksm = qp.db().find_keyspace(_name).metadata();
+        auto s = qp.db().find_schema(_name, old_ksm->keypace_name());
         const auto& tm = *qp.proxy().get_token_metadata_ptr();
         const auto& feat = qp.proxy().features();
 
         auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(), _attrs->as_ks_metadata_update(old_ksm, tm, feat), ts);
+
+        auto&& replication_strategy = qp.db().find_keyspace(_name).get_replication_strategy();
+        if (replication_strategy.uses_tablets()) {
+            if (true) { // TODO: find a clean way to call storage_service.topology_global_queue_empty()
+                service::topology_mutation_builder builder(ts);
+                builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
+                builder.set_new_keyspace_rf_change_data(_name, _attrs->get_replication_map());
+                service::topology_change change{{builder.build()}};
+                boost::transform(change.mutations, std::back_inserter(m), [s](const canonical_mutation &cm) {
+                    return cm.to_mutation(s);
+                });
+            } else {
+                throw make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
+                        exceptions::invalid_request_exception("alter_keyspace_statement::prepare_schema_mutations(): topology mutation cannot be performed while other request is ongoing"));
+            }
+        }
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(
@@ -118,18 +137,6 @@ static logging::logger mylogger("alter_keyspace");
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::alter_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     std::vector<sstring> warnings = check_against_restricted_replication_strategies(qp, keyspace(), *_attrs, qp.get_cql_stats());
-
-    auto&& replication_strategy = qp.db().find_keyspace(_name).get_replication_strategy();
-    if (replication_strategy.uses_tablets()) {
-        // TODO: should we always bounce to shard 0? If yes, then alter_keyspace_statement's ctor
-        //       would need to set needs_guard = true
-        // TODO: alter_tablets_keyspace takes guard& as a parameter below. This guard can be "consumed" by its internal
-        //       implementation, and if that happens, a new guard will be created in its place,
-        //       so that later this guard can be safely moved to schema_altering_statement::execute,
-        //       but it also means this whole operation will NOT execute under a single raft guard.
-        //       A possible solution is to merge mutations created within this function with later mutations.
-        co_await qp.alter_tablets_keyspace(_name, _attrs->get_replication_map(), guard);
-    }
     co_return co_await schema_altering_statement::execute(qp, state, options, std::move(guard)).then(
             [warnings = std::move(warnings)](::shared_ptr<messages::result_message> msg) {
                 for (const auto &warning: warnings) {

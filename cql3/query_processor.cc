@@ -28,14 +28,6 @@
 #include "utils/error_injection.hh"
 #include "service/migration_manager.hh"
 
-namespace service {
-class storage_service {
-public:
-    future<> alter_tablets_keyspace(sstring ks_name, std::map<sstring, sstring> replication_options,
-                                    std::optional<service::group0_guard>& guard);
-};
-}
-
 namespace cql3 {
 
 using namespace statements;
@@ -62,9 +54,8 @@ struct query_processor::remote {
     seastar::gate gate;
 };
 
-future<> query_processor::alter_tablets_keyspace(sstring ks_name, std::map<sstring, sstring> replication_options,
-                                                 std::optional<service::group0_guard>& guard) {
-    return remote().first.get().ss.alter_tablets_keyspace(ks_name, replication_options, guard);
+service::raft_group0_client& query_processor::get_group0() {
+    return remote().first.get().group0_client;
 }
 
 static service::query_state query_state_for_internal_call() {
@@ -1036,10 +1027,21 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
     auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, guard->write_timestamp());
     warnings = std::move(cql_warnings);
 
+    auto request_id = guard->new_group0_state_id();
     if (!m.empty()) {
         auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
         co_await remote_.get().mm.announce(std::move(m), std::move(*guard), description);
     }
+
+    // TODO: if we're performing alter tablets ks, wait until global topology req finishes.
+    //       Whether we're performing alter tablets ks could be indicated
+    //       by a special value returned from prepare_schema_mutations()
+    // TODO: wait_for_topology_request_completion doesn't wait for global requests,
+    //       but only for the non-global ones and cdc. This needs to be fixed
+    // auto error = co_await wait_for_topology_request_completion(request_id);
+    // if (!error.empty()) {
+    //     throw std::runtime_error(fmt::format("alter_tablets_keyspace failed with: {}", error));
+    // }
 
     ce = std::move(ret);
 
