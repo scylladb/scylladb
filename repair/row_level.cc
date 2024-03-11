@@ -3251,6 +3251,7 @@ future<> repair_service::load_history() {
         rlogger.info("Loading repair history for keyspace={}, table={}, table_uuid={}",
                 table->schema()->ks_name(), table->schema()->cf_name(), table_uuid);
         co_await _sys_ks.local().get_repair_history(table_uuid, [this] (const auto& entry) -> future<> {
+            get_repair_module().check_in_shutdown();
             auto start = entry.range_start == std::numeric_limits<int64_t>::min() ? dht::minimum_token() : dht::token::from_int64(entry.range_start);
             auto end = entry.range_end == std::numeric_limits<int64_t>::min() ? dht::maximum_token() : dht::token::from_int64(entry.range_end);
             auto range = dht::token_range(dht::token_range::bound(start, false), dht::token_range::bound(end, true));
