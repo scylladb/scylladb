@@ -22,6 +22,7 @@ pull_request_rules:
           - branch-5.2
         assignees:
           - "{{ author }}"
+        bot_account: "{{ author }}"
   - name: Automate backport pull request 5.4
     conditions:
       - or:
@@ -45,3 +46,4 @@ pull_request_rules:
           - branch-5.4
         assignees:
           - "{{ author }}"
+        bot_account: "{{ author }}"
