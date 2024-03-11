@@ -51,6 +51,13 @@ bool endpoint_state::is_cql_ready() const noexcept {
     }
 }
 
+locator::host_id endpoint_state::get_host_id() const noexcept {
+    if (auto app_state = get_application_state_ptr(application_state::HOST_ID)) {
+        return locator::host_id(utils::UUID(app_state->value()));
+    }
+    return locator::host_id::create_null_id();
+}
+
 future<> i_endpoint_state_change_subscriber::on_application_state_change(inet_address endpoint,
         const gms::application_state_map& states, application_state app_state, permit_id pid,
         std::function<future<>(inet_address, const gms::versioned_value&, permit_id)> func) {

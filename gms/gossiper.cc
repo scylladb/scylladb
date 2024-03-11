@@ -715,7 +715,7 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
 
     if (was_alive && state) {
         try {
-            logger.info("InetAddress {} is now DOWN, status = {}", endpoint, get_gossip_status(*state));
+            logger.info("InetAddress {}/{} is now DOWN, status = {}", state->get_host_id(), endpoint, get_gossip_status(*state));
             co_await do_on_dead_notifications(endpoint, std::move(state), pid);
         } catch (...) {
             logger.warn("Fail to call on_dead callback: {}", std::current_exception());
@@ -752,15 +752,20 @@ future<> gossiper::do_status_check() {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
             co_await remove_endpoint(endpoint, pid); // will put it in _just_removed_endpoints to respect quarantine delay
             co_await evict_from_membership(endpoint, pid); // can get rid of the state immediately
+            continue;
         }
 
         // check for dead state removal
         auto expire_time = get_expire_time_for_endpoint(endpoint);
-        const auto host_id = get_host_id(endpoint);
-        if (!is_alive && (now > expire_time)
-             && (!get_token_metadata_ptr()->is_normal_token_owner(host_id))) {
-            logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
-            co_await evict_from_membership(endpoint, pid);
+        if (!is_alive && (now > expire_time)) {
+            const auto host_id = eps->get_host_id();
+            if (!host_id) {
+                on_internal_error_noexcept(logger, format("Endpoint {} is dead and expired, but unexpecteduly, it has no HOST_ID in endpoint state", endpoint));
+            }
+            if (!host_id || !get_token_metadata_ptr()->is_normal_token_owner(host_id)) {
+                logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
+                co_await evict_from_membership(endpoint, pid);
+            }
         }
     }
 
@@ -1538,11 +1543,15 @@ bool gossiper::is_cql_ready(const inet_address& endpoint) const {
 }
 
 locator::host_id gossiper::get_host_id(inet_address endpoint) const {
-    auto app_state = get_application_state_ptr(endpoint, application_state::HOST_ID);
-    if (!app_state) {
+    auto eps = get_endpoint_state_ptr(endpoint);
+    if (!eps) {
+        throw std::runtime_error(format("Could not get host_id for endpoint {}: endpoint state not found", endpoint));
+    }
+    auto host_id = eps->get_host_id();
+    if (!host_id) {
         throw std::runtime_error(format("Host {} does not have HOST_ID application_state", endpoint));
     }
-    return locator::host_id(utils::UUID(app_state->value()));
+    return host_id;
 }
 
 std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id host_id) const {
@@ -1729,7 +1738,7 @@ future<> gossiper::real_mark_alive(inet_address addr) {
     }
 
     if (!is_in_shadow_round()) {
-        logger.info("InetAddress {} is now UP, status = {}", addr, status);
+        logger.info("InetAddress {}/{} is now UP, status = {}", es->get_host_id(), addr, status);
     }
 
     co_await _subscribers.for_each([addr, es, pid = permit.id()] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
@@ -1745,7 +1754,7 @@ future<> gossiper::mark_dead(inet_address addr, endpoint_state_ptr state, permit
         data.live.erase(addr);
         data.unreachable[addr] = now();
     });
-    logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(*state));
+    logger.info("InetAddress {}/{} is now DOWN, status = {}", state->get_host_id(), addr, get_gossip_status(*state));
     co_await do_on_dead_notifications(addr, std::move(state), pid);
 }
 
