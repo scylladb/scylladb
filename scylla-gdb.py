@@ -3585,10 +3585,11 @@ class scylla_task_queues(gdb.Command):
         return ' '
 
     def invoke(self, arg, for_tty):
+        current_sg = gdb.parse_and_eval('(seastar::scheduling_group) \'seastar::internal::current_scheduling_group_ptr()::sg\'')
         gdb.write('   {:2} {:32} {:7} {}\n'.format("id", "name", "shares", "tasks"))
         for tq in get_local_task_queues():
             gdb.write('{}{} {:02} {:32} {:>7.2f} {}\n'.format(
-                    self._current(bool(tq['_current'])),
+                    self._current(current_sg['_id'] == tq['_id']),
                     self._active(bool(tq['_active'])),
                     int(tq['_id']),
                     str(tq['_name']),
