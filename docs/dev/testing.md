@@ -38,6 +38,13 @@ If you want to run only a specific test:
 
     $ ./test.py suitename/testname
 
+If you want to run only a specific test-case from a test:
+
+    $ ./test.py suitename/testname::casename
+
+Note that not all tests are divided into cases. Below sections will
+shed more light on this.
+
 Build artefacts, such as test output and harness output is stored
 in `./testlog`. Scylla data files are stored in `/tmp`.
 
@@ -117,6 +124,10 @@ The same unit test can be run in different seastar configurations, i.e. with
 different command line arguments. The custom arguments can be set in
 `custom_args` key of the `suite.yaml` file.
 
+Tests from boost suite are divided into test-cases. These are top-level
+functions wrapped by `BOOST_AUTO_TEST_CASE`, `SEASTAR_TEST_CASE` or alike.
+Boost tests support `suitename/testname::casename` selection described above.
+
 ### Debugging unit tests
 
 If a test fails, its log can be found in `testlog/${mode}/testname.log`.
@@ -137,6 +148,10 @@ down the server when all tests  using it end.
 
 Note that some suites have a convenience helper script called `run`. Find
 more information about it in [test/cql-pytest](../../test/cql-pytest/README.md) and [test/alternator](../../test/alternator/README.md).
+
+All tests in pytest suites consist of test-cases -- top-level functions
+starting with test_ -- and thus support the `suitename/testname::casename`
+selection described above.
 
 ## Sharing and pooling servers
 

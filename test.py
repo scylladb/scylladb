@@ -308,7 +308,7 @@ class UnitTestSuite(TestSuite):
         # Map of tests that cannot run with compaction groups
         self.all_can_run_compaction_groups_except = cfg.get("all_can_run_compaction_groups_except")
 
-    async def create_test(self, shortname, suite, args):
+    async def create_test(self, shortname, casename, suite, args):
         exe = path_to(suite.mode, "test", suite.name, shortname)
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Unit test executable {exe} not found."))
@@ -327,7 +327,7 @@ class UnitTestSuite(TestSuite):
         # are two cores and 2G of RAM
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
         for a in args:
-            await self.create_test(shortname, self, a)
+            await self.create_test(shortname, casename, self, a)
 
     @property
     def pattern(self) -> str:
@@ -344,14 +344,14 @@ class BoostTestSuite(UnitTestSuite):
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
 
-    async def create_test(self, shortname: str, suite, args) -> None:
+    async def create_test(self, shortname: str, casename: str, suite, args) -> None:
         exe = path_to(suite.mode, "test", suite.name, shortname)
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Boost test executable {exe} not found."))
             return
         options = self.options
         allows_compaction_groups = self.all_can_run_compaction_groups_except != None and shortname not in self.all_can_run_compaction_groups_except
-        if options.parallel_cases and (shortname not in self.no_parallel_cases):
+        if options.parallel_cases and (shortname not in self.no_parallel_cases) and casename is None:
             fqname = os.path.join(self.mode, self.name, shortname)
             if fqname not in self._case_cache:
                 process = await asyncio.create_subprocess_exec(
@@ -376,7 +376,7 @@ class BoostTestSuite(UnitTestSuite):
                     test = BoostTest(self.next_id((shortname, self.suite_key, case)), shortname, suite, args, case, allows_compaction_groups)
                     self.tests.append(test)
         else:
-            test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, None, allows_compaction_groups)
+            test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, casename, allows_compaction_groups)
             self.tests.append(test)
 
     def junit_tests(self) -> Iterable['Test']:
