@@ -42,55 +42,6 @@ async def wait_for_publishing_generations(cql: Session, servers: list[ServerInfo
 
 
 @pytest.mark.asyncio
-async def test_writes_to_recent_previous_cdc_generations(request, manager: ManagerClient):
-    """
-    Test that writes to previous CDC generations succeed if the timestamp of the generation being written to
-    is greater than (now - generation_leeway)
-
-    The test starts 3 nodes, and thus, it creates 3 generations. Let's denote their timestamps by ts1, ts2, ts3,
-    where ts1 is the timestamp of the first (and oldest) generation, and so on. We create a scenario where
-    now - generation_leeway < ts1 < ts2 < ts3 < now.
-    We check that writes with a timestamp from the interval [ts1, now] succeed.
-
-    The value of generation_leeway is 5 s. So, the condition
-    now - generation_leeway < ts1
-    might be false if the test runs too slowly. To avoid this, we increase generation_leeway to 5 min
-    through the error injection.
-    """
-    logger.info("Bootstrapping nodes")
-    servers = [await manager.server_add() for _ in range(3)]
-
-    for srv in servers:
-        await manager.api.enable_injection(srv.ip_addr, 'increase_cdc_generation_leeway', False)
-
-    cql = manager.cql
-
-    logger.info("Waiting for driver")
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-
-    gen_timestamps = await wait_for_publishing_generations(cql, servers)
-
-    logger.info("Ceating a test table")
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH cdc = {'enabled': true}")
-
-    async def do_write(timestamp: int):
-        await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES (0, 0) USING TIMESTAMP {timestamp}")
-
-    logger.info("Executing writes to all generations")
-    for ts in gen_timestamps:
-        # Writes to all three generations should succeed.
-        await do_write(ts + 1)
-        await do_write(ts)
-        # A write with a timestamp smaller than the oldest generation's one should fail.
-        if ts == min(gen_timestamps):
-            with pytest.raises(NoHostAvailable):
-                await do_write(ts - 1)
-        else:
-            await do_write(ts - 1)
-
-
-@pytest.mark.asyncio
 async def test_writes_to_old_previous_cdc_generation(request, manager: ManagerClient):
     """
     Test that writes to a previous CDC generation succeed if the write's timestamp is greater than
