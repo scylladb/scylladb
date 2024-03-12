@@ -9,7 +9,6 @@
 #pragma once
 
 #include <unordered_map>
-#include <ostream>
 
 #include "bytes.hh"
 #include "types/user.hh"
@@ -36,7 +35,6 @@ public:
     bool has_type(const bytes& name) const {
         return _user_types.contains(name);
     }
-    friend std::ostream& operator<<(std::ostream& os, const user_types_metadata& m);
 };
 
 class user_types_storage {
