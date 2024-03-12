@@ -98,7 +98,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
 
         auto&& replication_strategy = qp.db().find_keyspace(_name).get_replication_strategy();
         if (replication_strategy.uses_tablets()) {
-            if (true) { // TODO: find a clean way to call storage_service.topology_global_queue_empty()
+            if (qp.topology_global_queue_empty()) {
                 service::topology_mutation_builder builder(ts);
                 builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
                 builder.set_new_keyspace_rf_change_data(_name, _attrs->get_replication_map());

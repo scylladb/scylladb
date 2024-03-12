@@ -17,6 +17,7 @@
 #include "service/migration_manager.hh"
 #include "service/forward_service.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/storage_service.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
@@ -42,20 +43,20 @@ const sstring query_processor::CQL_VERSION = "3.3.1";
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
 struct query_processor::remote {
-    remote(service::migration_manager& mm, service::forward_service& fwd,
-           service::storage_service& ss, service::raft_group0_client& group0_client)
+    remote(service::migration_manager &mm, service::forward_service &fwd,
+           service::storage_service &ss, service::raft_group0_client &group0_client)
             : mm(mm), forwarder(fwd), ss(ss), group0_client(group0_client) {}
 
-    service::migration_manager& mm;
-    service::forward_service& forwarder;
-    service::storage_service& ss;
-    service::raft_group0_client& group0_client;
+    service::migration_manager &mm;
+    service::forward_service &forwarder;
+    service::storage_service &ss;
+    service::raft_group0_client &group0_client;
 
     seastar::gate gate;
 };
 
-service::raft_group0_client& query_processor::get_group0() {
-    return remote().first.get().group0_client;
+bool query_processor::topology_global_queue_empty() {
+    return remote().first.get().ss.topology_global_queue_empty();
 }
 
 static service::query_state query_state_for_internal_call() {

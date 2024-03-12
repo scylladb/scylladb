@@ -462,7 +462,7 @@ public:
 
     void reset_cache();
 
-    service::raft_group0_client& get_group0();
+    bool topology_global_queue_empty();
 
 private:
     // Keep the holder until you stop using the `remote` services.
