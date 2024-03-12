@@ -124,7 +124,8 @@ void migration_manager::init_messaging_service()
         return netw::messaging_service::no_wait();
     });
     _messaging.register_migration_request([this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
-        return container().invoke_on(0, std::bind_front(
+        shard_id shard = (options && options->group0_snapshot_transfer) ? 0 : this_shard_id();
+        return container().invoke_on(shard, std::bind_front(
             [] (netw::msg_addr, rpc::optional<netw::schema_pull_options> options, migration_manager& self)
                 -> future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> {
             const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
