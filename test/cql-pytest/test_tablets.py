@@ -107,3 +107,22 @@ def test_describe_initial_tablets(cql, skip_without_tablets):
     with new_test_keyspace(cql, ksdef) as keyspace:
         desc = cql.execute(f"DESCRIBE KEYSPACE {keyspace}")
         assert "and tablets = {'initial': 1}" in desc.one().create_statement.lower()
+
+
+def verify_tablets_presence(cql, keyspace_name, table_name, expected:bool=True):
+    res = cql.execute(f"SELECT * FROM system.tablets WHERE keyspace_name='{keyspace_name}' AND table_name='{table_name}' ALLOW FILTERING")
+    if expected:
+        assert res, f"{keyspace_name}.{table_name} not found in system.tablets"
+        assert res.one().tablet_count > 0, f"table {keyspace_name}.{table_name}: zero tablets allocated"
+    else:
+        assert not res, f"{keyspace_name}.{table_name} was found in system.tablets after it was dropped"
+
+# Test that when a tablets-enabled table is dropped, all of its tablets are dropped with it.
+def test_tablets_are_dropped_when_dropping_table(cql, test_keyspace, skip_without_tablets):
+    table_name = unique_name()
+    schema = "pk int PRIMARY KEY, c int"
+    cql.execute(f"CREATE TABLE {test_keyspace}.{table_name} ({schema})")
+    verify_tablets_presence(cql, test_keyspace, table_name)
+
+    cql.execute(f"DROP TABLE {test_keyspace}.{table_name}")
+    verify_tablets_presence(cql, test_keyspace, table_name, expected=False)
