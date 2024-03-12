@@ -235,7 +235,7 @@ public:
     }
 
     /** creates uuid from raw bytes. src must point to a region of 16 bytes*/
-    static UUID get_UUID(int8_t* src) {
+    static UUID get_UUID(const int8_t* src) {
         struct tmp { uint64_t msb, lsb; } t;
         std::copy(src, src + 16, reinterpret_cast<char*>(&t));
         return UUID(net::ntoh(t.msb), net::ntoh(t.lsb));
