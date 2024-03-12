@@ -256,7 +256,7 @@ then
     if ! [[ -f ${ARTIFACT_DIR}/${PACKAGE_FILE} ]]
     then
         log "Downloading relocatable package from ${PACKAGE_URL}"
-        curl ${CURL_QUIET_FLAG} --output ${ARTIFACT_DIR}/${PACKAGE_FILE} ${PACKAGE_URL}
+        curl -L ${CURL_QUIET_FLAG} --output ${ARTIFACT_DIR}/${PACKAGE_FILE} ${PACKAGE_URL}
     else
         log "Relocatable package ${PACKAGE_URL} already downloaded"
     fi
