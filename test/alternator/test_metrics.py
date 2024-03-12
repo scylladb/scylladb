@@ -4,8 +4,9 @@
 
 ##############################################################################
 # Tests for Scylla's metrics (see docs/dev/metrics.md) for Alternator
-# queries. Reproduces issue #9406, where although metrics was implemented for
-# Alternator requests, they were missing for some operations (BatchGetItem).
+# queries. Reproduces issues #9406 and #17615, where although metrics were
+# implemented for Alternator requests, they were missing for some operations
+# (BatchGetItem).
 # In the tests here we attempt to ensure that the metrics continue to work
 # for the relevant operations as the code evolves.
 #
@@ -53,7 +54,7 @@ def metrics(dynamodb):
 
 # Utility function for fetching all metrics from Scylla, using an HTTP request
 # to port 9180. The response format is defined by the Prometheus protocol.
-# Only use get_metrics() in a test using the metrics_available fixture.
+# get_metrics() needs the test to use the "metrics" fixture.
 def get_metrics(metrics):
     response = requests.get(metrics)
     assert response.status_code == 200
@@ -144,7 +145,7 @@ def test_item_operations(test_table_s, metrics):
         test_table_s.update_item(Key={'p': p})
 
 # Test counters for Query and Scan:
-def test_item_operations(test_table_s, metrics):
+def test_scan_operations(test_table_s, metrics):
     with check_increases_operation(metrics, ['Query', 'Scan']):
         # We don't care whether test_table_s contains any content when we scan
         # it. We just want the scan to be counted
@@ -152,11 +153,13 @@ def test_item_operations(test_table_s, metrics):
         test_table_s.query(Limit=1, KeyConditionExpression='p=:p',
             ExpressionAttributeValues={':p': 'dog'})
 
-def test_describe_endpoints(dynamodb, metrics):
+# Test counters for DescribeEndpoints:
+def test_describe_endpoints_operations(dynamodb, metrics):
     with check_increases_operation(metrics, ['DescribeEndpoints']):
         dynamodb.meta.client.describe_endpoints()
 
-def test_list_tables(dynamodb, metrics):
+# Test counters for ListTables:
+def test_list_tables_operations(dynamodb, metrics):
     with check_increases_operation(metrics, ['ListTables']):
         dynamodb.meta.client.list_tables(Limit=1)
 
@@ -207,6 +210,73 @@ def test_streams_operations(test_table_s, dynamodbstreams, metrics):
 # CreateGlobalTable, DescribeGlobalTable, DescribeGlobalTableSettings,
 # ListGlobalTables, UpdateGlobalTable, UpdateGlobalTableSettings,
 # DescribeLimits.
+
+###### Test metrics that are latency histograms of DynamoDB API operations:
+
+# Check that an operation sets the desired latency histograms to non-zero.
+# We don't know what this latency should be, but we can still check that
+# the desired latency metric gets updated.
+@contextmanager
+def check_sets_latency(metrics, operation_names):
+    the_metrics = get_metrics(metrics)
+    saved_latency_count = { x: get_metric(metrics, 'scylla_alternator_op_latency_count', {'op': x}, the_metrics) for x in operation_names }
+    saved_latency_sum = { x: get_metric(metrics, 'scylla_alternator_op_latency_sum', {'op': x}, the_metrics) for x in operation_names }
+    # TODO: Also look at the latency_bucket.
+    yield
+    the_metrics = get_metrics(metrics)
+    for op in operation_names:
+        # The total "count" and "sum" on all shards should strictly increase
+        assert saved_latency_count[op] < get_metric(metrics, 'scylla_alternator_op_latency_count', {'op': op}, the_metrics)
+        assert saved_latency_sum[op] < get_metric(metrics, 'scylla_alternator_op_latency_sum', {'op': op}, the_metrics)
+
+# Test latency metrics for PutItem, GetItem, DeleteItem, UpdateItem.
+# We can't check what exactly the latency is - just that it gets updated.
+def test_item_latency(test_table_s, metrics):
+    with check_sets_latency(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem']):
+        p = random_string()
+        test_table_s.put_item(Item={'p': p})
+        test_table_s.get_item(Key={'p': p})
+        test_table_s.delete_item(Key={'p': p})
+        test_table_s.update_item(Key={'p': p})
+
+# Test latency metrics for GetRecords. Other Streams-related operations -
+# ListStreams, DescribeStream, and GetShardIterator, have an operation
+# count (tested above) but do NOT currently have a latency histogram.
+def test_streams_latency(dynamodb, dynamodbstreams, metrics):
+    # Whereas the *count* metric for various operations also counts failed
+    # operations so we could write this test without a real stream, the
+    # latency metrics are only updated for *successful* operations so we
+    # need to use a real Alternator Stream in this test.
+    with new_test_table(dynamodb,
+        # Alternator Streams is expected to fail with tablets due to #16317.
+        # To ensure that this test still runs, instead of xfailing it, we
+        # temporarily coerce Altenator to avoid using default tablets
+        # setting, even if it's available. We do this by using the following
+        # tags when creating the table:
+        Tags=[{'Key': 'experimental:initial_tablets', 'Value': 'none'}],
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+        StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}
+        ) as table:
+        # Wait for the stream to become active. This should be instantenous
+        # in Alternator, so the following loop won't wait
+        stream_enabled = False
+        start_time = time.time()
+        while time.time() < start_time + 60:
+            desc = table.meta.client.describe_table(TableName=table.name)['Table']
+            if 'LatestStreamArn' in desc:
+                arn = desc['LatestStreamArn']
+                desc = dynamodbstreams.describe_stream(StreamArn=arn)
+                if desc['StreamDescription']['StreamStatus'] == 'ENABLED':
+                    stream_enabled = True
+                    break
+            time.sleep(1)
+        assert stream_enabled
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        shard_id = desc['StreamDescription']['Shards'][0]['ShardId'];
+        it = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
+        with check_sets_latency(metrics, ['GetRecords']):
+            dynamodbstreams.get_records(ShardIterator=it)
 
 ###### Test for other metrics, not counting specific DynamoDB API operations:
 
@@ -291,7 +361,6 @@ def test_ttl_stats(dynamodb, metrics, alternator_ttl_period_in_seconds):
             assert not 'Item' in table.get_item(Key={'p': p0})
 
 # TODO: there are additional metrics which we don't yet test here. At the
-# time of this writing they are: latency histograms
-# ({put,get,delete,update}_item_latency, get_records_latency),
+# time of this writing they are:
 # reads_before_write, write_using_lwt, shard_bounce_for_lwt,
 # requests_blocked_memory, requests_shed
