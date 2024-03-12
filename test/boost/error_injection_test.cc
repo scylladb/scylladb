@@ -213,12 +213,8 @@ SEASTAR_TEST_CASE(test_inject_exception) {
     utils::error_injection<true> errinj;
 
     errinj.enable("exc");
-    return errinj.inject("exc", [] () -> std::exception_ptr {
-        return std::make_exception_ptr(std::runtime_error("test"));
-    }).then_wrapped([] (auto f) {
-        BOOST_REQUIRE_THROW(f.get(), std::runtime_error);
-        return make_ready_future<>();
-    });
+    BOOST_REQUIRE_THROW(errinj.inject<std::runtime_error>("exc"), std::runtime_error);
+    return make_ready_future<>();
 }
 
 SEASTAR_TEST_CASE(test_inject_two) {

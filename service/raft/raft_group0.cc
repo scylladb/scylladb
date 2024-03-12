@@ -702,9 +702,7 @@ future<> raft_group0::setup_group0(
     // Start group 0 leadership monitor fiber.
     _leadership_monitor = leadership_monitor_fiber();
 
-    utils::get_local_injector().inject("stop_after_joining_group0", [&] {
-        throw std::runtime_error{"injection: stop_after_joining_group0"};
-    });
+    utils::get_local_injector().inject<std::runtime_error>("stop_after_joining_group0");
 
     // Enter `synchronize` upgrade state in case the cluster we're joining has recently enabled Raft
     // and is currently in the middle of `upgrade_to_group0()`. For that procedure to finish
@@ -1710,8 +1708,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
                     return make_ready_future<std::vector<gms::inet_address>>(members0.get_inet_addrs());
                 }, _ms.local(), _abort_source);
 
-        utils::get_local_injector().inject("group0_upgrade_before_synchronize",
-            [] { throw std::runtime_error("error injection before group 0 upgrade enters synchronize"); });
+        utils::get_local_injector().inject<std::runtime_error>("group0_upgrade_before_synchronize");
 
         upgrade_log.info("Entering synchronize state.");
         upgrade_log.warn("Schema changes are disabled in synchronize state."

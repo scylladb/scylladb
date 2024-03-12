@@ -1055,8 +1055,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // stage in case of coordinator failover.
                 case locator::tablet_transition_stage::streaming:
                     if (drain) {
-                        utils::get_local_injector().inject("stream_tablet_fail_on_drain",
-                                        [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
+                        utils::get_local_injector().inject<std::runtime_error>("stream_tablet_fail_on_drain");
                     }
 
                     if (action_failed(tablet_state.streaming)) {
