@@ -168,7 +168,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     // Return dead nodes and while at it checking if there are live nodes that either need cleanup
     // or running one already
-    std::unordered_set<raft::server_id> get_dead_node(bool& cleanup_running, bool& cleanup_needed) {
+    std::unordered_set<raft::server_id> get_dead_node(bool& cleanup_running, bool& cleanup_needed) const {
         std::unordered_set<raft::server_id> dead_set;
         cleanup_needed = cleanup_running = false;
         for (auto& n : _topo_sm._topology.normal_nodes) {
@@ -187,7 +187,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return dead_set;
     }
 
-    std::optional<request_param> get_request_param(raft::server_id id) {
+    std::optional<request_param> get_request_param(raft::server_id id) const {
         return _topo_sm._topology.get_request_param(id);
     };
 
@@ -254,7 +254,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return node_to_work_on(std::move(guard), &topo, id, &topo.find(id)->second, req, get_request_param(id));
     };
 
-    node_to_work_on get_node_to_work_on(group0_guard guard) {
+    node_to_work_on get_node_to_work_on(group0_guard guard) const {
         auto& topo = _topo_sm._topology;
 
         if (topo.transition_nodes.empty()) {
@@ -318,11 +318,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     };
 
-    raft::server_id parse_replaced_node(const std::optional<request_param>& req_param) {
+    raft::server_id parse_replaced_node(const std::optional<request_param>& req_param) const {
         return service::topology::parse_replaced_node(req_param);
     }
 
-    inet_address id2ip(locator::host_id id) {
+    inet_address id2ip(locator::host_id id) const {
         auto ip = _address_map.find(raft::server_id(id.uuid()));
         if (!ip) {
             throw std::runtime_error(::format("no ip address mapping for {}", id));
@@ -397,11 +397,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes(const topology_state_machine::topology_type& topo,
-                raft::server_id id, const std::optional<topology_request>& req) {
+                raft::server_id id, const std::optional<topology_request>& req) const {
         return topo.get_excluded_nodes(id, req);
     }
 
-    std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {
+    std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) const {
         return node.topology->get_excluded_nodes(node.id, node.request);
     }
 
@@ -891,7 +891,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
-    bool is_excluded(raft::server_id server_id) {
+    bool is_excluded(raft::server_id server_id) const {
         return _topo_sm._topology.get_excluded_nodes().contains(server_id);
     }
 
