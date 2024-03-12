@@ -28,8 +28,7 @@ static std::vector<dht::ring_position> make_ring(schema_ptr s, int n_keys) {
 }
 
 SEASTAR_TEST_CASE(test_get_restricted_ranges) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([] {
+    return do_with_cql_env_thread([](cql_test_env& e) {
             auto s = schema_builder("ks", "cf")
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("v", bytes_type, column_kind::regular_column)
@@ -99,7 +98,6 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
                     dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
                 });
             }
-        });
     });
 }
 
