@@ -13,6 +13,7 @@
 #include "types/types.hh"
 #include <vector>
 #include <optional>
+#include <fmt/ostream.h>
 
 namespace db {
 namespace functions {
@@ -73,3 +74,5 @@ operator<<(std::ostream& os, const function& f) {
 
 }
 }
+
+template <std::derived_from<db::functions::function> T> struct fmt::formatter<T> : fmt::ostream_formatter {};
