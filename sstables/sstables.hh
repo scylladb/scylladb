@@ -581,6 +581,11 @@ private:
     // information in their scylla metadata.
     std::optional<scylla_metadata::large_data_stats> _large_data_stats;
     sstring _origin;
+
+    // Total reclaimable memory from all the components of the SSTable.
+    // It is initialized to 0 to prevent the sstables manager from reclaiming memory
+    // from the components before the SSTable has been fully loaded.
+    mutable std::optional<size_t> _total_reclaimable_memory{0};
 public:
     const bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
@@ -670,6 +675,12 @@ private:
     future<> load_first_and_last_position_in_partition();
 
     future<> create_data() noexcept;
+
+    // Return the total reclaimable memory in this SSTable
+    size_t total_reclaimable_memory_size() const;
+    // Reclaim memory from the components back to the system.
+    // Note that only bloom filters are reclaimable.
+    size_t reclaim_memory_from_components();
 
 public:
     // Finds first position_in_partition in a given partition.
