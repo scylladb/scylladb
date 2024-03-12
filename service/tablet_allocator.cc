@@ -1156,7 +1156,6 @@ public:
     void on_before_drop_column_family(const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
         keyspace& ks = _db.find_keyspace(s.ks_name());
         auto&& rs = ks.get_replication_strategy();
-        std::vector<mutation> result;
         if (rs.uses_tablets()) {
             auto tm = _db.get_shared_token_metadata().get();
             muts.emplace_back(make_drop_tablet_map_mutation(s.id(), ts));
