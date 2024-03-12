@@ -1595,7 +1595,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
 future<std::tuple<reconcilable_result, cache_temperature>>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
-    const auto reversed = cmd.slice.options.contains(query::partition_slice::option::reversed);
+    const auto reversed = cmd.slice.is_reversed();
     if (reversed) {
         s = s->make_reversed();
     }

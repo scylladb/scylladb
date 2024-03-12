@@ -163,7 +163,7 @@ public:
         , _tombstone_gc_state(gc_state)
         , _underlying(_cache, *this)
     {
-        if (_slice.options.contains(query::partition_slice::option::reversed)) {
+        if (_slice.is_reversed()) {
             _native_slice = query::legacy_reverse_slice_to_native_reverse_slice(*_schema, _slice);
         }
         ++_cache._tracker._stats.reads;
@@ -186,7 +186,7 @@ public:
     reader_permit permit() const { return _permit; }
     const dht::partition_range& range() const { return _range; }
     const query::partition_slice& slice() const { return _slice; }
-    bool is_reversed() const { return _slice.options.contains(query::partition_slice::option::reversed); }
+    bool is_reversed() const { return _slice.is_reversed(); }
     // Returns a slice in the native format (for reversed reads, in native-reversed format).
     const query::partition_slice& native_slice() const { return is_reversed() ? *_native_slice : _slice; }
     tracing::trace_state_ptr trace_state() const { return _trace_state; }

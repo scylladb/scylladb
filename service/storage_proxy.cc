@@ -2358,7 +2358,7 @@ query::max_result_size storage_proxy::get_max_result_size(const query::partition
     // FIXME: Remove the code below once SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT
     //        cluster feature is released for more than 2 years and can be
     //        retired.
-    if (!slice.options.contains<query::partition_slice::option::allow_short_read>() || slice.options.contains<query::partition_slice::option::reversed>()) {
+    if (!slice.options.contains<query::partition_slice::option::allow_short_read>() || slice.is_reversed()) {
         return _db.local().get_query_max_result_size().without_page_limit();
     } else {
         return query::max_result_size(query::result_memory_limiter::maximum_result_size);
@@ -4613,7 +4613,7 @@ private:
         // and clustering keys of the last row that is going to be returned to the client and check if
         // it is in range of rows returned by each replicas that returned as many rows as they were
         // asked for (if a replica returned less rows it means it returned everything it has).
-        auto is_reversed = cmd.slice.options.contains(query::partition_slice::option::reversed);
+        auto is_reversed = cmd.slice.is_reversed();
 
         auto rows_left = original_row_limit;
         auto partitions_left = original_partition_limit;

@@ -155,7 +155,7 @@ public:
     // Expects table schema (non-reversed) and half-reversed (legacy) slice when building results for reverse query.
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
                                 query::result_memory_accounter&& accounter) noexcept
-        : _schema(s), _slice(slice), _reversed(_slice.options.contains(query::partition_slice::option::reversed))
+        : _schema(s), _slice(slice), _reversed(_slice.is_reversed())
         , _query_schema(_reversed ? _schema.make_reversed() : _schema.shared_from_this())
         , _memory_accounter(std::move(accounter))
     { }

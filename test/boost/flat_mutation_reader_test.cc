@@ -1132,7 +1132,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_v2_is_mutation_source) {
             std::vector<mutation>* selected_muts;
 
             schema = schema->make_reversed();
-            const auto reversed = slice.options.contains(query::partition_slice::option::reversed);
+            const auto reversed = slice.is_reversed();
             if (reversed) {
                 reversed_slice = std::make_unique<query::partition_slice>(query::half_reverse_slice(*schema, slice));
                 selected_muts = &muts;

@@ -334,7 +334,7 @@ void evictable_reader_v2::update_next_position() {
 }
 
 void evictable_reader_v2::adjust_partition_slice() {
-    const auto reversed = _ps.options.contains(query::partition_slice::option::reversed);
+    const auto reversed = _ps.is_reversed();
     _slice_override = reversed ? query::legacy_reverse_slice_to_native_reverse_slice(*_schema, _ps) : _ps;
 
     auto ranges = _slice_override->default_row_ranges();
@@ -473,7 +473,7 @@ void evictable_reader_v2::validate_position_in_partition(position_in_partition_v
             pos);
 
     if (_slice_override && pos.region() == partition_region::clustered) {
-        const auto reversed = _ps.options.contains(query::partition_slice::option::reversed);
+        const auto reversed = _ps.is_reversed();
         std::optional<query::partition_slice> native_slice;
         if (reversed) {
             native_slice = query::legacy_reverse_slice_to_native_reverse_slice(*_schema, *_slice_override);
