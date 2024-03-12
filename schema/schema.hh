@@ -58,8 +58,6 @@ using column_id = column_count_type;
 // mixing with column id.
 enum class ordinal_column_id: column_count_type {};
 
-std::ostream& operator<<(std::ostream& os, ordinal_column_id id);
-
 // Maintains a set of columns used in a query. The columns are
 // identified by ordinal_id.
 //
@@ -353,7 +351,7 @@ public:
     const sstring& name_as_text() const;
     const bytes& name() const;
     sstring name_as_cql_string() const;
-    friend std::ostream& operator<<(std::ostream& os, const column_definition& cd);
+    friend fmt::formatter<column_definition>;
     bool has_component_index() const {
         return is_primary_key();
     }
@@ -440,7 +438,6 @@ public:
     const column_mapping_entry& column_at(column_kind kind, column_id id) const;
     const column_mapping_entry& static_column_at(column_id id) const;
     const column_mapping_entry& regular_column_at(column_id id) const;
-    friend std::ostream& operator<<(std::ostream& out, const column_mapping& cm);
 };
 
 bool operator==(const column_mapping& lhs, const column_mapping& rhs);
@@ -474,11 +471,10 @@ public:
     }
 
     friend bool operator==(const raw_view_info&, const raw_view_info&);
-    friend std::ostream& operator<<(std::ostream& os, const raw_view_info& view);
+    friend fmt::formatter<raw_view_info>;
 };
 
 bool operator==(const raw_view_info&, const raw_view_info&);
-std::ostream& operator<<(std::ostream& os, const raw_view_info& view);
 
 class view_info;
 
@@ -925,7 +921,7 @@ public:
     bool has_index(const sstring& index_name) const;
     // Search for an existing index with same kind and options.
     std::optional<index_metadata> find_index_noname(const index_metadata& target) const;
-    friend std::ostream& operator<<(std::ostream& os, const schema& s);
+    friend fmt::formatter<schema>;
     virtual sstring keypace_name() const override { return ks_name(); }
     virtual sstring element_name() const override { return cf_name(); }
     virtual sstring element_type(replica::database& db) const override;
@@ -1020,8 +1016,6 @@ public:
     explicit operator bool() const noexcept {
         return bool(_schema);
     }
-
-    friend std::ostream& operator<<(std::ostream& os, const view_ptr& s);
 };
 
 std::ostream& operator<<(std::ostream& os, const view_ptr& view);
@@ -1043,3 +1037,30 @@ inline void check_schema_version(table_schema_version expected, const schema& ac
         throw_with_backtrace<schema_mismatch_error>(expected, access);
     }
 }
+
+template <> struct fmt::formatter<ordinal_column_id> : fmt::formatter<std::string_view> {
+    auto format(ordinal_column_id id, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", static_cast<column_count_type>(id));
+    }
+};
+
+template <> struct fmt::formatter<column_definition> : fmt::formatter<std::string_view> {
+    auto format(const column_definition&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<column_mapping> : fmt::formatter<std::string_view> {
+    auto format(const column_mapping&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<raw_view_info> : fmt::formatter<std::string_view> {
+    auto format(const raw_view_info&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<schema> : fmt::formatter<std::string_view> {
+    auto format(const schema&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+std::ostream& operator<<(std::ostream& os, const schema& s);
+
+template <> struct fmt::formatter<view_ptr> : fmt::formatter<std::string_view> {
+    auto format(const view_ptr& view, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
