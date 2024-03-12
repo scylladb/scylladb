@@ -111,3 +111,11 @@ extern std::mutex boost_logger_mutex;
 #define THREADSAFE_BOOST_REQUIRE_EQUAL( L, R ) THREADSAFE_BOOST_CHECK(BOOST_REQUIRE_EQUAL( L, R ))
 
 }
+
+namespace std {
+
+std::ostream& boost_test_print_type(std::ostream& os, const std::strong_ordering& order);
+std::ostream& boost_test_print_type(std::ostream& os, const std::weak_ordering& order);
+std::ostream& boost_test_print_type(std::ostream& os, const std::partial_ordering& order);
+
+}

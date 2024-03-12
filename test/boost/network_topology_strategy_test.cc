@@ -31,6 +31,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 #include <seastar/core/coroutine.hh>
 #include "db/schema_tables.hh"
 

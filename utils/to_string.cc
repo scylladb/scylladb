@@ -8,41 +8,37 @@
 
 #include "utils/to_string.hh"
 
-namespace std {
-
-std::ostream& operator<<(std::ostream& os, const std::strong_ordering& order) {
+auto fmt::formatter<std::strong_ordering>::format(std::strong_ordering order, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     if (order > 0) {
-        os << "gt";
+        return fmt::format_to(ctx.out(), "gt");
     } else if (order < 0) {
-        os << "lt";
+        return fmt::format_to(ctx.out(), "lt");
     } else {
-        os << "eq";
+        return fmt::format_to(ctx.out(), "eq");
     }
-    return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const std::weak_ordering& order) {
+auto fmt::formatter<std::weak_ordering>::format(std::weak_ordering order, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     if (order > 0) {
-        os << "gt";
+        return fmt::format_to(ctx.out(), "gt");
     } else if (order < 0) {
-        os << "lt";
+        return fmt::format_to(ctx.out(), "lt");
     } else {
-        os << "eq";
+        return fmt::format_to(ctx.out(), "eq");
     }
-    return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const std::partial_ordering& order) {
+auto fmt::formatter<std::partial_ordering>::format(std::partial_ordering order, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     if (order == std::partial_ordering::unordered) {
-        os << "unordered";
+        return fmt::format_to(ctx.out(), "unordered");
     } else if (order > 0) {
-        os << "gt";
+        return fmt::format_to(ctx.out(), "gt");
     } else if (order < 0) {
-        os << "lt";
+        return fmt::format_to(ctx.out(), "lt");
     } else {
-        os << "eq";
+        return fmt::format_to(ctx.out(), "eq");
     }
-    return os;
 }
-
-} // namespace std

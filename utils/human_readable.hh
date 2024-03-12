@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include <cinttypes>
-#include <iosfwd>
+#include <cstdint>
+#include <fmt/core.h>
 
 namespace utils {
 
@@ -17,8 +17,6 @@ struct human_readable_value {
     uint16_t value;  // [0, 1024)
     char suffix; // 0 -> no suffix
 };
-
-std::ostream& operator<<(std::ostream& os, const human_readable_value& val);
 
 /// Convert a size to a human readable representation.
 ///
@@ -38,3 +36,7 @@ std::ostream& operator<<(std::ostream& os, const human_readable_value& val);
 human_readable_value to_hr_size(uint64_t size);
 
 } // namespace utils
+
+template <> struct fmt::formatter<utils::human_readable_value> : fmt::formatter<std::string_view> {
+    auto format(const utils::human_readable_value&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

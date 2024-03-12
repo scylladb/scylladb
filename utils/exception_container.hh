@@ -141,12 +141,6 @@ public:
     }
 };
 
-template<typename... Exs>
-inline std::ostream& operator<<(std::ostream& os, const exception_container<Exs...>& ec) {
-    ec.accept([&os] (const auto& ex) { os << ex; });
-    return os;
-}
-
 template<typename T>
 struct is_exception_container : std::false_type {};
 
@@ -157,3 +151,11 @@ template<typename T>
 concept ExceptionContainer = is_exception_container<T>::value;
 
 }
+
+template <typename... Exs> struct fmt::formatter<utils::exception_container<Exs...>> : fmt::formatter<std::string_view> {
+    auto format(const auto& ec, fmt::format_context& ctx) const {
+        auto out = ctx.out();
+        ec.accept([&out] (const auto& ex) { out = fmt::format_to(out, "{}", ex); });
+        return out;
+    }
+};
