@@ -14,6 +14,11 @@
 #include "db/schema_tables.hh"
 #include "transport/messages/result_message.hh"
 
+std::ostream& boost_test_print_type(std::ostream& os, const column_mapping& cm) {
+    fmt::print(os, "{}", cm);
+    return os;
+}
+
 SEASTAR_TEST_CASE(test_column_mapping_persistence) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         // Check that column mapping history is empty initially

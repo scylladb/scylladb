@@ -117,26 +117,21 @@ get_column_types(const Sequence& column_definitions) {
     return result;
 }
 
-std::ostream& operator<<(std::ostream& out, const column_mapping& cm) {
+auto fmt::formatter<column_mapping>::format(const column_mapping& cm, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     column_id n_static = cm.n_static();
     column_id n_regular = cm.columns().size() - n_static;
 
     auto pr_entry = [] (column_id i, const column_mapping_entry& e) {
         // Without schema we don't know if name is UTF8. If we had schema we could use
         // s->regular_column_name_type()->to_string(e.name()).
-        return format("{{id={}, name=0x{}, type={}}}", i, e.name(), e.type()->name());
+        return fmt::format("{{id={}, name=0x{}, type={}}}", i, e.name(), e.type()->name());
     };
-    fmt::print(out, "{{static=[{}], regular=[{}]}}",
+    return fmt::format_to(ctx.out(), "{{static=[{}], regular=[{}]}}",
                fmt::join(boost::irange<column_id>(0, n_static) |
                          boost::adaptors::transformed([&] (column_id i) { return pr_entry(i, cm.static_column_at(i)); }), ", "),
                fmt::join(boost::irange<column_id>(0, n_regular) |
                          boost::adaptors::transformed([&] (column_id i) { return pr_entry(i, cm.regular_column_at(i)); }), ", "));
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& os, ordinal_column_id id)
-{
-    return os << static_cast<column_count_type>(id);
 }
 
 thread_local std::map<sstring, std::unique_ptr<dht::i_partitioner>> partitioners;
@@ -655,21 +650,20 @@ column_definition::column_definition(bytes name, data_type type, column_kind kin
         , kind(kind)
 {}
 
-std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
-    os << "ColumnDefinition{";
-    os << "name=" << cd.name_as_text();
-    os << ", type=" << cd.type->name();
-    os << ", kind=" << to_sstring(cd.kind);
+auto fmt::formatter<column_definition>::format(const column_definition& cd, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "ColumnDefinition{{name={}, type={}, kind={}",
+                         cd.name_as_text(), cd.type->name(), to_sstring(cd.kind));
     if (cd.is_view_virtual()) {
-        os << ", view_virtual";
+        out = fmt::format_to(out, ", view_virtual");
     }
     if (cd.is_computed()) {
-        os << ", computed:" << cd.get_computation().serialize();
+        out = fmt::format_to(out, ", computed:{}", cd.get_computation().serialize());
     }
-    os << ", componentIndex=" << (cd.has_component_index() ? std::to_string(cd.component_index()) : "null");
-    os << ", droppedAt=" << cd._dropped_at;
-    os << "}";
-    return os;
+    out = fmt::format_to(out, ", componentIndex={}", cd.has_component_index() ? std::to_string(cd.component_index()) : "null");
+    out = fmt::format_to(out, ", droppedAt={}", cd._dropped_at);
+    return fmt::format_to(out, "}}");
 }
 
 const column_definition*
@@ -695,91 +689,102 @@ schema::column_at(ordinal_column_id ordinal_id) const {
     return _raw._columns.at(static_cast<column_count_type>(ordinal_id));
 }
 
-std::ostream& operator<<(std::ostream& os, const schema& s) {
-    os << "org.apache.cassandra.config.CFMetaData@" << &s << "[";
-    os << "cfId=" << s._raw._id;
-    os << ",ksName=" << s._raw._ks_name;
-    os << ",cfName=" << s._raw._cf_name;
-    os << ",cfType=" << cf_type_to_sstring(s._raw._type);
-    os << ",comparator=" << cell_comparator::to_sstring(s);
-    os << ",comment=" << s._raw._comment;
-    os << ",readRepairChance=" << s._raw._read_repair_chance;
-    os << ",dcLocalReadRepairChance=" << s._raw._dc_local_read_repair_chance;
-    os << ",tombstoneGcOptions=" << s.tombstone_gc_options().to_sstring();
-    os << ",gcGraceSeconds=" << s._raw._gc_grace_seconds;
-    os << ",keyValidator=" << s.thrift_key_validator();
-    os << ",minCompactionThreshold=" << s._raw._min_compaction_threshold;
-    os << ",maxCompactionThreshold=" << s._raw._max_compaction_threshold;
-    os << ",columnMetadata=[";
+auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "org.apache.cassandra.config.CFMetaData@{}[", fmt::ptr(&s));
+    out = fmt::format_to(out, "cfId={}", s._raw._id);
+    out = fmt::format_to(out, ",ksName=={}", s._raw._ks_name);
+    out = fmt::format_to(out, ",cfName={}", s._raw._cf_name);
+    out = fmt::format_to(out, ",cfType={}", cf_type_to_sstring(s._raw._type));
+    out = fmt::format_to(out, ",comparator={}", cell_comparator::to_sstring(s));
+    out = fmt::format_to(out, ",comment={}", s._raw._comment);
+    out = fmt::format_to(out, ",readRepairChance={}", s._raw._read_repair_chance);
+    out = fmt::format_to(out, ",dcLocalReadRepairChance={}", s._raw._dc_local_read_repair_chance);
+    out = fmt::format_to(out, ",tombstoneGcOptions={}", s.tombstone_gc_options().to_sstring());
+    out = fmt::format_to(out, ",gcGraceSeconds={}", s._raw._gc_grace_seconds);
+    out = fmt::format_to(out, ",keyValidator={}", s.thrift_key_validator());
+    out = fmt::format_to(out, ",minCompactionThreshold={}", s._raw._min_compaction_threshold);
+    out = fmt::format_to(out, ",maxCompactionThreshold={}", s._raw._max_compaction_threshold);
+    out = fmt::format_to(out, ",columnMetadata=[");
     int n = 0;
     for (auto& cdef : s._raw._columns) {
         if (n++ != 0) {
-            os << ", ";
+            out = fmt::format_to(out, ", ");
         }
-        os << cdef;
+        out = fmt::format_to(out, "{}", cdef);
     }
-    os << "]";
-    os << ",compactionStrategyClass=class org.apache.cassandra.db.compaction." << sstables::compaction_strategy::name(s._raw._compaction_strategy);
-    os << ",compactionStrategyOptions={";
+    out = fmt::format_to(out, "]");
+
+    out = fmt::format_to(out, ",compactionStrategyClass=class org.apache.cassandra.db.compaction.{}",
+                         sstables::compaction_strategy::name(s._raw._compaction_strategy));
+
+    out = fmt::format_to(out, ",compactionStrategyOptions={{");
     n = 0;
     for (auto& p : s._raw._compaction_strategy_options) {
-        os << p.first << "=" << p.second;
-        os << ", ";
+        out = fmt::format_to(out, "{}={}", p.first, p.second);
+        out = fmt::format_to(out, ", ");
     }
-    os << "enabled=" << std::boolalpha << s._raw._compaction_enabled;
-    os << "}";
-    os << ",compressionParameters={";
+    out = fmt::format_to(out, "enabled={}", s._raw._compaction_enabled);
+    out = fmt::format_to(out, "}}");
+
+    out = fmt::format_to(out, ",compressionParameters={{");
     n = 0;
     for (auto& p : s._raw._compressor_params.get_options() ) {
         if (n++ != 0) {
-            os << ", ";
+            out = fmt::format_to(out, ", ");
         }
-        os << p.first << "=" << p.second;
+        out = fmt::format_to(out, "{}={}", p.first, p.second);
     }
-    os << "}";
-    os << ",bloomFilterFpChance=" << s._raw._bloom_filter_fp_chance;
-    os << ",memtableFlushPeriod=" << s._raw._memtable_flush_period;
-    os << ",caching=" << s._raw._caching_options.to_sstring();
-    os << ",cdc=" << s.cdc_options().to_sstring();
-    os << ",defaultTimeToLive=" << s._raw._default_time_to_live.count();
-    os << ",minIndexInterval=" << s._raw._min_index_interval;
-    os << ",maxIndexInterval=" << s._raw._max_index_interval;
-    os << ",speculativeRetry=" << s._raw._speculative_retry.to_sstring();
-    os << ",triggers=[]";
-    os << ",isDense=" << std::boolalpha << s._raw._is_dense;
-    os << ",version=" << s.version();
-    os << ",droppedColumns={";
+    out = fmt::format_to(out, "}}");
+
+    out = fmt::format_to(out, ",bloomFilterFpChance={}", s._raw._bloom_filter_fp_chance);
+    out = fmt::format_to(out, ",memtableFlushPeriod={}", s._raw._memtable_flush_period);
+    out = fmt::format_to(out, ",caching={}", s._raw._caching_options.to_sstring());
+    out = fmt::format_to(out, ",cdc={}", s.cdc_options().to_sstring());
+    out = fmt::format_to(out, ",defaultTimeToLive={}", s._raw._default_time_to_live.count());
+    out = fmt::format_to(out, ",minIndexInterval={}", s._raw._min_index_interval);
+    out = fmt::format_to(out, ",maxIndexInterval={}", s._raw._max_index_interval);
+    out = fmt::format_to(out, ",speculativeRetry={}", s._raw._speculative_retry.to_sstring());
+    out = fmt::format_to(out, ",triggers=[]");
+    out = fmt::format_to(out, ",isDense={}", s._raw._is_dense);
+    out = fmt::format_to(out, ",version={}", s.version());
+
+    out = fmt::format_to(out, ",droppedColumns={{");
     n = 0;
     for (auto& dc : s._raw._dropped_columns) {
         if (n++ != 0) {
-            os << ", ";
+            out = fmt::format_to(out, ", ");
         }
-        os << dc.first << " : { " << dc.second.type->name() << ", " << dc.second.timestamp << " }";
+        out = fmt::format_to(out,"{} : {{ {}, {} }}",
+                             dc.first, dc.second.type->name(), dc.second.timestamp);
     }
-    os << "}";
-    os << ",collections={";
+    out = fmt::format_to(out, "}}");
+
+    out = fmt::format_to(out, ",collections={{");
     n = 0;
     for (auto& c : s._raw._collections) {
         if (n++ != 0) {
-            os << ", ";
+            out = fmt::format_to(out, ", ");
         }
-        os << c.first << " : " << c.second->name();
+        out = fmt::format_to(out,"{} : {}", c.first, c.second->name());
     }
-    os << "}";
-    os << ",indices={";
+    out = fmt::format_to(out, "}}");
+
+    out = fmt::format_to(out, ",indices={{");
     n = 0;
     for (auto& c : s._raw._indices_by_name) {
         if (n++ != 0) {
-            os << ", ";
+            out = fmt::format_to(out, ", ");
         }
-        os << c.first << " : " << c.second.id();
+        out = fmt::format_to(out,"{} : {}", c.first, c.second.id());
     }
-    os << "}";
+    out = fmt::format_to(out, "}}");
+
     if (s.is_view()) {
-        fmt::print(os, ", viewInfo={}", *s.view_info());
+        out = fmt::format_to(out, ", viewInfo={}", *s.view_info());
     }
-    os << "]";
-    return os;
+    return fmt::format_to(out, "]");
 }
 
 static std::ostream& map_as_cql_param(std::ostream& os, const std::map<sstring, sstring>& map, bool first = true) {
@@ -792,6 +797,11 @@ static std::ostream& map_as_cql_param(std::ostream& os, const std::map<sstring, 
         os << "'" << i.first << "': '" << i.second << "'";
     }
 
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const schema& s) {
+    fmt::print(os, "{}", s);
     return os;
 }
 
@@ -2028,18 +2038,20 @@ bool operator==(const raw_view_info& x, const raw_view_info& y) {
         && x._where_clause == y._where_clause;
 }
 
-std::ostream& operator<<(std::ostream& os, const raw_view_info& view) {
-    os << "ViewInfo{";
-    os << "baseTableId=" << view._base_id;
-    os << ", baseTableName=" << view._base_name;
-    os << ", includeAllColumns=" << view._include_all_columns;
-    os << ", whereClause=" << view._where_clause;
-    os << "}";
-    return os;
+auto fmt::formatter<raw_view_info>::format(const raw_view_info& view, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(),
+                          "ViewInfo{{baseTableId={}, baseTableName={}, includeAllColumns={}, whereClause={}}}",
+                          view._base_id, view._base_name, view._include_all_columns, view._where_clause);
 }
 
-std::ostream& operator<<(std::ostream& os, const view_ptr& view) {
-    return view ? os << *view : os << "null";
+auto fmt::formatter<view_ptr>::format(const view_ptr& view, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    if (view) {
+        return fmt::format_to(ctx.out(), "{}", *view);
+    } else {
+        return fmt::format_to(ctx.out(), "null");
+    }
 }
 
 namespace std {
