@@ -28,78 +28,76 @@ static std::vector<dht::ring_position> make_ring(schema_ptr s, int n_keys) {
 }
 
 SEASTAR_TEST_CASE(test_get_restricted_ranges) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([] {
-            auto s = schema_builder("ks", "cf")
-                    .with_column("pk", bytes_type, column_kind::partition_key)
-                    .with_column("v", bytes_type, column_kind::regular_column)
-                    .build();
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto s = schema_builder("ks", "cf")
+                .with_column("pk", bytes_type, column_kind::partition_key)
+                .with_column("v", bytes_type, column_kind::regular_column)
+                .build();
 
-            std::vector<dht::ring_position> ring = make_ring(s, 10);
+        std::vector<dht::ring_position> ring = make_ring(s, 10);
 
-            auto check = [&s](locator::token_metadata_ptr tmptr, dht::partition_range input,
-                              dht::partition_range_vector expected) {
-                query_ranges_to_vnodes_generator ranges_to_vnodes(locator::make_splitter(tmptr), s, {input});
-                auto actual = ranges_to_vnodes(1000);
-                if (!std::equal(actual.begin(), actual.end(), expected.begin(), [&s](auto&& r1, auto&& r2) {
-                    return r1.equal(r2, dht::ring_position_comparator(*s));
-                })) {
-                    BOOST_FAIL(format("Ranges differ, expected {} but got {}", expected, actual));
-                }
-            };
-
-            {
-                // Ring with minimum token
-                auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
-                const auto host_id = locator::host_id{utils::UUID(0, 1)};
-                tmptr->update_topology(host_id, locator::endpoint_dc_rack{"dc1", "rack1"});
-                tmptr->update_normal_tokens(std::unordered_set<dht::token>({dht::minimum_token()}), host_id).get();
-
-                check(tmptr, dht::partition_range::make_singular(ring[0]), {
-                        dht::partition_range::make_singular(ring[0])
-                });
-
-                check(tmptr, dht::partition_range({ring[2]}, {ring[3]}), {
-                        dht::partition_range({ring[2]}, {ring[3]})
-                });
+        auto check = [&s](locator::token_metadata_ptr tmptr, dht::partition_range input,
+                          dht::partition_range_vector expected) {
+            query_ranges_to_vnodes_generator ranges_to_vnodes(locator::make_splitter(tmptr), s, {input});
+            auto actual = ranges_to_vnodes(1000);
+            if (!std::equal(actual.begin(), actual.end(), expected.begin(), [&s](auto&& r1, auto&& r2) {
+                return r1.equal(r2, dht::ring_position_comparator(*s));
+            })) {
+                BOOST_FAIL(format("Ranges differ, expected {} but got {}", expected, actual));
             }
+        };
 
-            {
-                auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
-                const auto id1 = locator::host_id{utils::UUID(0, 1)};
-                const auto id2 = locator::host_id{utils::UUID(0, 2)};
-                tmptr->update_topology(id1, locator::endpoint_dc_rack{"dc1", "rack1"});
-                tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[2].token()}), id1).get();
-                tmptr->update_topology(id2, locator::endpoint_dc_rack{"dc1", "rack1"});
-                tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[5].token()}), id2).get();
+        {
+            // Ring with minimum token
+            auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
+            const auto host_id = locator::host_id{utils::UUID(0, 1)};
+            tmptr->update_topology(host_id, locator::endpoint_dc_rack{"dc1", "rack1"});
+            tmptr->update_normal_tokens(std::unordered_set<dht::token>({dht::minimum_token()}), host_id).get();
 
-                check(tmptr, dht::partition_range::make_singular(ring[0]), {
-                        dht::partition_range::make_singular(ring[0])
-                });
+            check(tmptr, dht::partition_range::make_singular(ring[0]), {
+                    dht::partition_range::make_singular(ring[0])
+            });
 
-                check(tmptr, dht::partition_range::make_singular(ring[2]), {
-                        dht::partition_range::make_singular(ring[2])
-                });
+            check(tmptr, dht::partition_range({ring[2]}, {ring[3]}), {
+                    dht::partition_range({ring[2]}, {ring[3]})
+            });
+        }
 
-                check(tmptr, dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]}), {
-                        dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
-                });
+        {
+            auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
+            const auto id1 = locator::host_id{utils::UUID(0, 1)};
+            const auto id2 = locator::host_id{utils::UUID(0, 2)};
+            tmptr->update_topology(id1, locator::endpoint_dc_rack{"dc1", "rack1"});
+            tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[2].token()}), id1).get();
+            tmptr->update_topology(id2, locator::endpoint_dc_rack{"dc1", "rack1"});
+            tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[5].token()}), id2).get();
 
-                check(tmptr, dht::partition_range({ring[3]}, {ring[4]}), {
-                    dht::partition_range({ring[3]}, {ring[4]})
-                });
+            check(tmptr, dht::partition_range::make_singular(ring[0]), {
+                    dht::partition_range::make_singular(ring[0])
+            });
 
-                check(tmptr, dht::partition_range({ring[2]}, {ring[3]}), {
-                    dht::partition_range({ring[2]}, {dht::ring_position::ending_at(ring[2].token())}),
+            check(tmptr, dht::partition_range::make_singular(ring[2]), {
+                    dht::partition_range::make_singular(ring[2])
+            });
+
+            check(tmptr, dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]}), {
                     dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
-                });
+            });
 
-                check(tmptr, dht::partition_range({{ring[2], false}}, {ring[3]}), {
-                    dht::partition_range({{ring[2], false}}, {dht::ring_position::ending_at(ring[2].token())}),
-                    dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
-                });
-            }
-        });
+            check(tmptr, dht::partition_range({ring[3]}, {ring[4]}), {
+                dht::partition_range({ring[3]}, {ring[4]})
+            });
+
+            check(tmptr, dht::partition_range({ring[2]}, {ring[3]}), {
+                dht::partition_range({ring[2]}, {dht::ring_position::ending_at(ring[2].token())}),
+                dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
+            });
+
+            check(tmptr, dht::partition_range({{ring[2], false}}, {ring[3]}), {
+                dht::partition_range({{ring[2], false}}, {dht::ring_position::ending_at(ring[2].token())}),
+                dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
+            });
+        }
     });
 }
 
