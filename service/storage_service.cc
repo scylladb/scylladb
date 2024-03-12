@@ -451,6 +451,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, host_id, info));
             if (!prev_normal.contains(id)) {
                 co_await notify_joined(*ip);
+                co_await remove_rpc_client_with_ignored_topology(*ip);
             }
 
             if (const auto it = host_id_to_ip_map.find(host_id); it != host_id_to_ip_map.end() && it->second != *ip) {
@@ -2282,6 +2283,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     // Send joined notification only when this node was not a member prior to this
     if (do_notify_joined) {
         co_await notify_joined(endpoint);
+        co_await remove_rpc_client_with_ignored_topology(endpoint);
     }
 
     if (slogger.is_enabled(logging::log_level::debug)) {
@@ -6541,10 +6543,15 @@ future<> storage_service::notify_joined(inet_address endpoint) {
         "storage_service_notify_joined_sleep", std::chrono::milliseconds{500});
 
     co_await container().invoke_on_all([endpoint] (auto&& ss) {
-        ss._messaging.local().remove_rpc_client_with_ignored_topology(netw::msg_addr{endpoint, 0});
         return ss._lifecycle_notifier.notify_joined(endpoint);
     });
     slogger.debug("Notify node {} has joined the cluster", endpoint);
+}
+
+future<> storage_service::remove_rpc_client_with_ignored_topology(inet_address endpoint) {
+    return container().invoke_on_all([endpoint] (auto&& ss) {
+        ss._messaging.local().remove_rpc_client_with_ignored_topology(netw::msg_addr{endpoint, 0});
+    });
 }
 
 future<> storage_service::notify_cql_change(inet_address endpoint, bool ready) {
