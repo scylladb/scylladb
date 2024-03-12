@@ -776,7 +776,7 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
     }
     os << "}";
     if (s.is_view()) {
-        os << ", viewInfo=" << *s.view_info();
+        fmt::print(os, ", viewInfo={}", *s.view_info());
     }
     os << "]";
     return os;

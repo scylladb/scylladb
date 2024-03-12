@@ -74,7 +74,11 @@ public:
     friend bool operator==(const view_info& x, const view_info& y) {
         return x._raw == y._raw;
     }
-    friend std::ostream& operator<<(std::ostream& os, const view_info& view) {
-        return os << view._raw;
+    friend fmt::formatter<view_info>;
+};
+
+template <> struct fmt::formatter<view_info> : fmt::formatter<std::string_view> {
+    auto format(const view_info& view, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", view._raw);
     }
 };
