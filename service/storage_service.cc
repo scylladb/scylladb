@@ -5760,6 +5760,7 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 if (leaving_replica->host != tm->get_my_id()) {
                     throw std::runtime_error(fmt::format("Tablet {} has leaving replica different than this one", tablet));
                 }
+                shard = leaving_replica->shard;
             } else if (trinfo->stage == locator::tablet_transition_stage::cleanup_target) {
                 if (!trinfo->pending_replica) {
                     throw std::runtime_error(fmt::format("Tablet {} has no pending replica", tablet));
@@ -5767,15 +5768,10 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 if (trinfo->pending_replica->host != tm->get_my_id()) {
                     throw std::runtime_error(fmt::format("Tablet {} has pending replica different than this one", tablet));
                 }
+                shard = trinfo->pending_replica->shard;
             } else {
                 throw std::runtime_error(fmt::format("Tablet {} stage is not at cleanup/cleanup_target", tablet));
             }
-
-            auto shard_opt = tmap.get_shard(tablet.tablet, tm->get_my_id());
-            if (!shard_opt) {
-                on_internal_error(rtlogger, format("Tablet {} has no shard on this node", tablet));
-            }
-            shard = *shard_opt;
         }
         return _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks] (replica::database& db) {
             auto& table = db.find_column_family(tablet.table);
