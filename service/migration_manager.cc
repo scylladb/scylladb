@@ -854,6 +854,9 @@ future<std::vector<mutation>> prepare_column_family_drop_announcement(storage_pr
 
         // notifiers must run in seastar thread
         co_await seastar::async([&] {
+            for (auto& view : views) {
+                db.get_notifier().before_drop_column_family(*view, mutations, ts);
+            }
             db.get_notifier().before_drop_column_family(*schema, mutations, ts);
         });
         co_return co_await include_keyspace(sp, *keyspace, std::move(mutations));
@@ -935,7 +938,11 @@ future<std::vector<mutation>> prepare_view_drop_announcement(storage_proxy& sp, 
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
         auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), ts);
-        return include_keyspace(sp, *keyspace, std::move(mutations));
+        // notifiers must run in seastar thread
+        co_await seastar::async([&] {
+            db.get_notifier().before_drop_column_family(*view, mutations, ts);
+        });
+        co_return co_await include_keyspace(sp, *keyspace, std::move(mutations));
     } catch (const replica::no_such_column_family& e) {
         throw exceptions::configuration_exception(format("Cannot drop non existing materialized view '{}' in keyspace '{}'.",
                                                          cf_name, ks_name));

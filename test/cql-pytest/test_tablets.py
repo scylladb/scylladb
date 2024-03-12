@@ -126,3 +126,47 @@ def test_tablets_are_dropped_when_dropping_table(cql, test_keyspace, skip_withou
 
     cql.execute(f"DROP TABLE {test_keyspace}.{table_name}")
     verify_tablets_presence(cql, test_keyspace, table_name, expected=False)
+
+
+# Test that when a view of a tablets-enabled table is dropped, all of its tablets are dropped with it.
+#
+# Reproduces https://github.com/scylladb/scylladb/issues/17627
+# with materialized views, which were not part of the original scope of this issue.
+def test_tablets_are_dropped_when_dropping_table_with_view(cql, test_keyspace):
+    table_name = unique_name()
+    schema = "pk int PRIMARY KEY, c int"
+    # new_test_table is not used since we want to test a failure to drop the table
+    cql.execute(f"CREATE TABLE {test_keyspace}.{table_name} ({schema})")
+    try:
+        view_name = unique_name()
+        where = "c is not null and pk is not null"
+        view_pk = "c, pk"
+        cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{view_name} AS SELECT * FROM {table_name} WHERE {where} PRIMARY KEY ({view_pk})")
+        verify_tablets_presence(cql, test_keyspace, table_name)
+        verify_tablets_presence(cql, test_keyspace, view_name)
+
+        # When attempting to drop the table while it has views depending on, table drop is expected to fail.
+        # Verify that all of their tablets still exist after the error is returned.
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DROP TABLE {test_keyspace}.{table_name}")
+
+        # failure to drop the table should keep its tablets intact
+        verify_tablets_presence(cql, test_keyspace, table_name)
+        verify_tablets_presence(cql, test_keyspace, view_name)
+
+        cql.execute(f"DROP MATERIALIZED VIEW {test_keyspace}.{view_name}")
+        verify_tablets_presence(cql, test_keyspace, view_name, expected=False)
+        verify_tablets_presence(cql, test_keyspace, table_name, expected=True)
+
+        cql.execute(f"DROP TABLE {test_keyspace}.{table_name}")
+        verify_tablets_presence(cql, test_keyspace, table_name, expected=False)
+    except Exception as e:
+        try:
+            cql.execute(f"DROP MATERIALIZED VIEW {test_keyspace}.{view_name}")
+        except:
+            pass
+        try:
+            cql.execute(f"DROP TABLE {test_keyspace}.{table_name}")
+        except:
+            pass
+        raise e
