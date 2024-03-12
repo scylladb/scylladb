@@ -2,6 +2,8 @@
 
 {% for group in data %}
 {% if group.value_status_count[value_status] > 0 %}
+.. _confgroup_{{ group.name }}:
+
 {{ group.name }}
 {{ '-' * (group.name|length) }}
 
@@ -11,6 +13,8 @@
 
 {% for item in group.properties %}
 {% if item.value_status == value_status %}
+.. _confprop_{{ item.name }}:
+
 .. confval:: {{ item.name }}
 {% endif %}
 {% endfor %}
