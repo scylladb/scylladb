@@ -47,6 +47,17 @@ async def repair_on_node(manager: ManagerClient, server: ServerInfo, servers: li
     logger.info(f"Repair table on node {node} live_nodes={live_nodes} live_nodes_wanted={live_nodes_wanted}")
     await manager.api.repair(node, "test", "test", ranges)
 
+async def load_repair_history(cql, hosts):
+    all_rows = []
+    for host in hosts:
+        logging.info(f'Query hosts={host}');
+        rows = await cql.run_async("SELECT * from system.repair_history", host=host)
+        all_rows += rows
+    for row in all_rows:
+        logging.info(f"Got repair_history_entry={row}")
+    return all_rows
+
+
 @pytest.mark.asyncio
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ManagerClient):
     """Test that you can create a table and insert and query data"""
@@ -454,17 +465,8 @@ async def test_tablet_repair_history(manager: ManagerClient):
 
     await repair_on_node(manager, servers[0], servers)
 
-    async def check_repair_history():
-        all_rows = []
-        for host in hosts:
-            logging.info(f'Query hosts={host}');
-            rows = await cql.run_async("SELECT * from system.repair_history", host=host)
-            all_rows += rows
-        for row in all_rows:
-            logging.info(f"Got repair_history_entry={row}")
-        assert len(all_rows) == rf * tablets
-
-    await check_repair_history()
+    all_rows = await load_repair_history(cql, hosts)
+    assert len(all_rows) == rf * tablets
 
     await cql.run_async("DROP KEYSPACE test;")
 
@@ -503,17 +505,8 @@ async def test_tablet_repair_ranges_selection(manager: ManagerClient):
     # range=(4611686018427387903,9223372036854775807] ranges_specified={(3000,+inf), (-inf, -3000]} intersection_ranges=(4611686018427387903,9223372036854775807]
     nr_ranges = nr_ranges + 4
 
-    async def check_repair_history():
-        all_rows = []
-        for host in hosts:
-            logging.info(f'Query hosts={host}');
-            rows = await cql.run_async("SELECT * from system.repair_history", host=host)
-            all_rows += rows
-        for row in all_rows:
-            logging.info(f"Got repair_history_entry={row}")
-        assert len(all_rows) == rf * nr_ranges;
-
-    await check_repair_history()
+    all_rows = await load_repair_history(cql, hosts)
+    assert len(all_rows) == rf * nr_ranges;
 
     await cql.run_async("DROP KEYSPACE test;")
 
