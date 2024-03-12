@@ -680,12 +680,12 @@ public:
         storage_group_map ret;
 
         auto& tmap = tablet_map();
+        auto local_replica = locator::tablet_replica{_my_host_id, this_shard_id()};
 
         for (auto tid : tmap.tablet_ids()) {
             auto range = tmap.get_token_range(tid);
 
-            auto shard = tmap.get_shard(tid, _my_host_id);
-            if (shard && *shard == this_shard_id()) {
+            if (tmap.has_replica(tid, local_replica)) {
                 tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
                 auto cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
                 ret[tid.value()] = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
@@ -2184,10 +2184,10 @@ int64_t table::calculate_tablet_count() const {
     const auto this_host_id = token_metadata.get_topology().my_host_id();
 
     int64_t new_tablet_count{0};
+    auto local_replica = locator::tablet_replica{this_host_id, this_shard_id()};
 
     for (auto tablet_id : tablet_map.tablet_ids()) {
-        const std::optional<shard_id> shard_id = tablet_map.get_shard(tablet_id, this_host_id);
-        if (shard_id == this_shard_id()) {
+        if (tablet_map.has_replica(tablet_id, local_replica)) {
             ++new_tablet_count;
         }
     }

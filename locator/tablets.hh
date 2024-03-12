@@ -382,11 +382,9 @@ public:
         return tablet_id(size_t(t) + 1);
     }
 
-    /// Returns shard id which is a replica for a given tablet on a given host.
-    /// If there is no replica on a given host, returns nullopt.
-    /// If the topology is transitional, also considers the new replica set.
-    /// The old replica set is preferred in case of ambiguity.
-    std::optional<shard_id> get_shard(tablet_id, host_id) const;
+    /// Returns true iff tablet has a given replica.
+    /// If tablet is in transition, considers both previous and next replica set.
+    bool has_replica(tablet_id, tablet_replica) const;
 
     const tablet_container& tablets() const {
         return _tablets;
