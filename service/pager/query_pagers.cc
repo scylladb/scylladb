@@ -104,7 +104,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
         auto dpk = dht::decorate_key(*_schema, *_last_pkey);
         dht::ring_position lo(dpk);
 
-        auto reversed = _cmd->slice.options.contains<query::partition_slice::option::reversed>();
+        auto reversed = _cmd->slice.is_reversed();
 
         qlogger.trace("PKey={}, Pos={}, reversed={}", dpk, _last_pos, reversed);
 

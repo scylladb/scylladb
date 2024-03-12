@@ -56,7 +56,7 @@ static mutation_source make_source(std::vector<mutation> mutations) {
             tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
         assert(range.is_full()); // slicing not implemented yet
         for (auto&& m : mutations) {
-            if (slice.options.contains(query::partition_slice::option::reversed)) {
+            if (slice.is_reversed()) {
                 assert(m.schema()->make_reversed()->version() == s->version());
             } else {
                 assert(m.schema() == s);
@@ -86,7 +86,7 @@ static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, co
 
     auto querier = query::querier(source, s, std::move(permit), range, slice, {});
     auto close_querier = deferred_close(querier);
-    auto table_schema = slice.options.contains(query::partition_slice::option::reversed) ? s->make_reversed() : s;
+    auto table_schema = slice.is_reversed() ? s->make_reversed() : s;
     auto rrb = reconcilable_result_builder(*table_schema, slice, make_accounter());
     return querier.consume_page(std::move(rrb), row_limit, partition_limit, query_time).get();
 }

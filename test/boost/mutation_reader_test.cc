@@ -4157,7 +4157,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
-            auto reversed = slice.options.contains(query::partition_slice::option::reversed);
+            auto reversed = slice.is_reversed();
             std::map<dht::decorated_key, flat_mutation_reader_v2, dht::decorated_key::less_comparator>
                 good_readers{dht::decorated_key::less_comparator(s)};
             for (auto& [k, ms]: good) {

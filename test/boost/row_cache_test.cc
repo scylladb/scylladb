@@ -3361,7 +3361,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
 
         auto pr = dht::partition_range::make_singular(m0.decorated_key());
         auto make_reader = [&] (const query::partition_slice& slice) {
-            auto reversed = slice.options.contains<query::partition_slice::option::reversed>();
+            auto reversed = slice.is_reversed();
             auto rd = cache.make_reader(reversed ? rev_s : s, semaphore.make_permit(), pr, slice);
             rd.set_max_buffer_size(3);
             rd.fill_buffer().get();
