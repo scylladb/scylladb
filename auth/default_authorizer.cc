@@ -196,7 +196,7 @@ default_authorizer::modify(
                 cql3::query_processor::cache_internal::no).discard_result();
     }
     co_return co_await announce_mutations(_qp, _group0_client, query,
-        {permissions::to_strings(set), sstring(role_name), resource.name()}, &_as);
+        {permissions::to_strings(set), sstring(role_name), resource.name()}, &_as, ::service::raft_timeout{});
 }
 
 
@@ -249,7 +249,7 @@ future<> default_authorizer::revoke_all(std::string_view role_name) {
                     {sstring(role_name)},
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
-            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as);
+            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as, ::service::raft_timeout{});
         }
     } catch (exceptions::request_execution_exception& e) {
         alogger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", role_name, e);
@@ -336,11 +336,13 @@ future<> default_authorizer::revoke_all(const resource& resource) {
                 co_yield std::move(muts[0]);
             }
         };
+        const auto timeout = ::service::raft_timeout{};
         co_await announce_mutations_with_batching(
                 _group0_client,
-                [this](abort_source* as) { return _group0_client.start_operation(as); },
+                [this, timeout](abort_source* as) { return _group0_client.start_operation(as, timeout); },
                 std::move(gen),
-                &_as);
+                &_as,
+            timeout);
     } catch (exceptions::request_execution_exception& e) {
         alogger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", name, e);
     }

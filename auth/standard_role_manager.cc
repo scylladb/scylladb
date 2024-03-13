@@ -190,7 +190,7 @@ future<> standard_role_manager::create_default_role_if_missing() {
                     {_superuser},
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
-            co_await announce_mutations(_qp, _group0_client, query, {_superuser}, &_as);
+            co_await announce_mutations(_qp, _group0_client, query, {_superuser}, &_as, ::service::raft_timeout{});
         }
         log.info("Created default superuser role '{}'.", _superuser);
     } catch(const exceptions::unavailable_exception& e) {
@@ -279,7 +279,7 @@ future<> standard_role_manager::create_or_replace(std::string_view role_name, co
                 {sstring(role_name), c.is_superuser, c.can_login},
                 cql3::query_processor::cache_internal::yes).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name), c.is_superuser, c.can_login}, &_as);
+        co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name), c.is_superuser, c.can_login}, &_as, ::service::raft_timeout{});
     }
 }
 
@@ -327,7 +327,7 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
                     {sstring(role_name)},
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
-            return announce_mutations(_qp, _group0_client, std::move(query), {sstring(role_name)}, &_as);
+            return announce_mutations(_qp, _group0_client, std::move(query), {sstring(role_name)}, &_as, ::service::raft_timeout{});
         }
     });
 }
@@ -377,7 +377,7 @@ future<> standard_role_manager::drop(std::string_view role_name) {
             co_await _qp.execute_internal(query, {sstring(role_name)},
                 cql3::query_processor::cache_internal::yes).discard_result();
         } else {
-            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as);
+            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as, ::service::raft_timeout{});
         }
     };
     // Finally, delete the role itself.
@@ -395,7 +395,7 @@ future<> standard_role_manager::drop(std::string_view role_name) {
                     {sstring(role_name)},
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
-            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as);
+            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as, ::service::raft_timeout{});
         }
     };
 
@@ -428,7 +428,7 @@ standard_role_manager::modify_membership(
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
             co_await announce_mutations(_qp, _group0_client, std::move(query),
-                    {role_set{sstring(role_name)}, sstring(grantee_name)}, &_as);
+                    {role_set{sstring(role_name)}, sstring(grantee_name)}, &_as, ::service::raft_timeout{});
         }
     };
 
@@ -447,7 +447,7 @@ standard_role_manager::modify_membership(
                             cql3::query_processor::cache_internal::no).discard_result();
                 } else {
                     co_return co_await announce_mutations(_qp, _group0_client, insert_query,
-                            {sstring(role_name), sstring(grantee_name)}, &_as);
+                            {sstring(role_name), sstring(grantee_name)}, &_as, ::service::raft_timeout{});
                 }
             }
 
@@ -464,7 +464,7 @@ standard_role_manager::modify_membership(
                             cql3::query_processor::cache_internal::no).discard_result();
                 } else {
                     co_return co_await announce_mutations(_qp, _group0_client, delete_query,
-                            {sstring(role_name), sstring(grantee_name)}, &_as);
+                            {sstring(role_name), sstring(grantee_name)}, &_as, ::service::raft_timeout{});
                 }
             }
         }
@@ -638,7 +638,7 @@ future<> standard_role_manager::set_attribute(std::string_view role_name, std::s
         co_await _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name), sstring(attribute_value)}, cql3::query_processor::cache_internal::yes).discard_result();
     } else {
         co_await announce_mutations(_qp, _group0_client, query,
-                {sstring(role_name), sstring(attribute_name), sstring(attribute_value)}, &_as);
+                {sstring(role_name), sstring(attribute_name), sstring(attribute_value)}, &_as, ::service::raft_timeout{});
     }
 }
 
@@ -653,7 +653,7 @@ future<> standard_role_manager::remove_attribute(std::string_view role_name, std
         co_await _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name)}, cql3::query_processor::cache_internal::yes).discard_result();
     } else {
         co_await announce_mutations(_qp, _group0_client, query,
-                {sstring(role_name), sstring(attribute_name)}, &_as);
+                {sstring(role_name), sstring(attribute_name)}, &_as, ::service::raft_timeout{});
     }
 }
 }

@@ -705,7 +705,8 @@ future<> migrate_to_auth_v2(cql3::query_processor& qp, ::service::raft_group0_cl
     co_await announce_mutations_with_batching(g0,
             start_operation_func,
             std::move(gen),
-            &as);
+            &as,
+            std::nullopt);
 }
 
 }

@@ -125,7 +125,8 @@ static future<> announce_mutations_with_guard(
         ::service::raft_group0_client& group0_client,
         std::vector<canonical_mutation> muts,
         ::service::group0_guard group0_guard,
-        seastar::abort_source* as) {
+        seastar::abort_source* as,
+        std::optional<::service::raft_timeout> timeout) {
     auto group0_cmd = group0_client.prepare_command(
         ::service::write_mutations{
             .mutations{std::move(muts)},
@@ -133,14 +134,15 @@ static future<> announce_mutations_with_guard(
         group0_guard,
         "auth: modify internal data"
     );
-    return group0_client.add_entry(std::move(group0_cmd), std::move(group0_guard), as);
+    return group0_client.add_entry(std::move(group0_cmd), std::move(group0_guard), as, timeout);
 }
 
 future<> announce_mutations_with_batching(
         ::service::raft_group0_client& group0_client,
         start_operation_func_t start_operation_func,
         std::function<mutations_generator(api::timestamp_type& t)> gen,
-        seastar::abort_source* as) {
+        seastar::abort_source* as,
+        std::optional<::service::raft_timeout> timeout) {
     // account for command's overhead, it's better to use smaller threshold than constantly bounce off the limit
     size_t memory_threshold = group0_client.max_command_size() * 0.75;
     utils::get_local_injector().inject("auth_announce_mutations_command_max_size",
@@ -170,7 +172,7 @@ future<> announce_mutations_with_batching(
                 group0_guard = co_await start_operation_func(as);
                 timestamp = group0_guard->write_timestamp();
             }
-            co_await announce_mutations_with_guard(group0_client, std::move(muts), std::move(*group0_guard), as);
+            co_await announce_mutations_with_guard(group0_client, std::move(muts), std::move(*group0_guard), as, timeout);
             group0_guard = std::nullopt;
             memory_usage = 0;
             muts = {};
@@ -181,7 +183,7 @@ future<> announce_mutations_with_batching(
             group0_guard = co_await start_operation_func(as);
             timestamp = group0_guard->write_timestamp();
         }
-        co_await announce_mutations_with_guard(group0_client, std::move(muts), std::move(*group0_guard), as);
+        co_await announce_mutations_with_guard(group0_client, std::move(muts), std::move(*group0_guard), as, timeout);
     }
 }
 
@@ -190,8 +192,9 @@ future<> announce_mutations(
         ::service::raft_group0_client& group0_client,
         const sstring query_string,
         std::vector<data_value_or_unset> values,
-        seastar::abort_source* as) {
-    auto group0_guard = co_await group0_client.start_operation(as);
+        seastar::abort_source* as,
+        std::optional<::service::raft_timeout> timeout) {
+    auto group0_guard = co_await group0_client.start_operation(as, timeout);
     auto timestamp = group0_guard.write_timestamp();
     auto muts = co_await qp.get_mutations_internal(
             query_string,
@@ -199,7 +202,7 @@ future<> announce_mutations(
             timestamp,
             std::move(values));
     std::vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
-    co_await announce_mutations_with_guard(group0_client, std::move(cmuts), std::move(group0_guard), as);
+    co_await announce_mutations_with_guard(group0_client, std::move(cmuts), std::move(group0_guard), as, timeout);
 }
 
 }
