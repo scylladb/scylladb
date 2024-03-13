@@ -185,8 +185,6 @@ public:
     mutation compacted() const;
 
     size_t memory_usage(const ::schema& s) const;
-private:
-    friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
 
 template<consume_in_reverse reverse, FlattenedConsumerV2 Consumer>
@@ -457,3 +455,9 @@ boost::iterator_range<std::vector<mutation>::const_iterator> slice(
 // Reverses the mutation as if it was created with a schema with reverse
 // clustering order. The resulting mutation will contain a reverse schema too.
 mutation reverse(mutation mut);
+
+template <> struct fmt::formatter<mutation> : fmt::formatter<std::string_view> {
+    auto format(const mutation&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+std::ostream& operator<<(std::ostream& os, const mutation& m);

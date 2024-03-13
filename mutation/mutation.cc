@@ -194,22 +194,28 @@ mutation reverse(mutation mut) {
     return *std::move(mut).consume(reverse_rebuilder, consume_in_reverse::yes).result;
 }
 
-std::ostream& operator<<(std::ostream& os, const mutation& m) {
+auto fmt::formatter<mutation>::format(const mutation& m, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     const ::schema& s = *m.schema();
     const auto& dk = m.decorated_key();
 
-    fmt::print(os, "{{table: '{}.{}', key: {{", s.ks_name(), s.cf_name());
+    auto out = ctx.out();
+    out = fmt::format_to(out, "{{table: '{}.{}', key: {{", s.ks_name(), s.cf_name());
 
     auto type_iterator = dk._key.get_compound_type(s)->types().begin();
     auto column_iterator = s.partition_key_columns().begin();
 
     for (auto&& e : dk._key.components(s)) {
-        os << "'" << column_iterator->name_as_text() << "': " << (*type_iterator)->to_string(to_bytes(e)) << ", ";
+        fmt::format_to(out, "'{}': {}, ", column_iterator->name_as_text(), (*type_iterator)->to_string(to_bytes(e)));
         ++type_iterator;
         ++column_iterator;
     }
 
-    fmt::print(os, "token: {}}}, {}\n}}", dk._token, mutation_partition::printer(s, m.partition()));
+    return fmt::format_to(out, "token: {}}}, {}\n}}", dk._token, mutation_partition::printer(s, m.partition()));
+}
+
+std::ostream& operator<<(std::ostream& os, const mutation& m) {
+    fmt::print(os, "{}", m);
     return os;
 }
 
