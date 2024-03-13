@@ -14,6 +14,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
+#include "utils/composite_abort_source.hh"
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
@@ -327,6 +328,14 @@ raft::server& raft_group_registry::get_server(raft::group_id gid) {
     return *ptr;
 }
 
+raft_server_with_timeouts raft_group_registry::get_server_with_timeouts(raft::group_id gid) {
+    auto& group_server = server_for_group(gid);
+    if (!group_server.server.get()) {
+        on_internal_error(rslog, format("get_server(): no server for group {}", gid));
+    }
+    return raft_server_with_timeouts(group_server, *this);
+}
+
 raft::server* raft_group_registry::find_server(raft::group_id gid) {
     auto it = _servers.find(gid);
     if (it == _servers.end()) {
@@ -349,6 +358,13 @@ raft::server& raft_group_registry::group0() {
         on_internal_error(rslog, "group0(): _group0_id not present");
     }
     return get_server(*_group0_id);
+}
+
+raft_server_with_timeouts raft_group_registry::group0_with_timeouts() {
+    if (!_group0_id) {
+        on_internal_error(rslog, "group0(): _group0_id not present");
+    }
+    return get_server_with_timeouts(*_group0_id);
 }
 
 future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp) {
@@ -407,6 +423,82 @@ shared_ptr<raft::failure_detector> raft_group_registry::failure_detector() {
 }
 
 raft_group_registry::~raft_group_registry() = default;
+
+namespace {
+    auto fmt_loc(const seastar::compat::source_location& l) {
+        return fmt::format("{}({}:{}) `{}`", l.file_name(), l.line(), l.column(), l.function_name());
+    };
+}
+
+raft_server_with_timeouts::raft_server_with_timeouts(raft_server_for_group& group_server, raft_group_registry& registry)
+    : _group_server(group_server)
+    , _registry(registry)
+{
+}
+
+template <std::invocable<abort_source*> Op>
+std::invoke_result_t<Op, abort_source*>
+raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
+    seastar::abort_source* as, std::optional<raft_timeout> timeout)
+{
+    if (!timeout) {
+        co_await op(as);
+        co_return;
+    }
+    if (!timeout->value) {
+        if (!_group_server.default_op_timeout) {
+            on_internal_error(rslog, ::format("raft operation [{}], timeout requested at [{}],"
+                                              "but no value for it has been defined",
+                op_name, fmt_loc(timeout->loc)));
+        }
+        timeout->value = lowres_clock::now() + _group_server.default_op_timeout.value();
+    }
+    utils::composite_abort_source composite_as;
+
+    abort_on_expiry<> expiry{*timeout->value};
+    composite_as.add(expiry.abort_source());
+
+    if (as) {
+        composite_as.add(*as);
+    }
+
+    try {
+        co_return co_await op(&composite_as.abort_source());
+    } catch (const raft::request_aborted& e) {
+        if (!expiry.abort_source().abort_requested() || (as && as->abort_requested())) {
+            throw;
+        }
+        // TODO: improve error message (check for quorum loss etc)
+        const auto message = ::format("group [{}] raft operation [{}] timed out", _group_server.gid, op_name);
+        static thread_local logger::rate_limit rate_limit{std::chrono::seconds(1)};
+        rslog.log(log_level::warn, rate_limit, "{}; timeout requested at [{}], original error {}",
+            message, fmt_loc(timeout->loc), std::current_exception());
+        throw raft_operation_timeout_error(message.c_str());
+    }
+}
+
+future<> raft_server_with_timeouts::add_entry(raft::command command, raft::wait_type type,
+        seastar::abort_source* as, std::optional<raft_timeout> timeout)
+{
+    return run_with_timeout([&](abort_source* as) {
+            return _group_server.server->add_entry(std::move(command), type, as);
+        }, "add_entry", as, timeout);
+}
+
+future<> raft_server_with_timeouts::modify_config(std::vector<raft::config_member> add, std::vector<raft::server_id> del,
+        seastar::abort_source* as, std::optional<raft_timeout> timeout)
+{
+    return run_with_timeout([&](abort_source* as) {
+            return _group_server.server->modify_config(std::move(add), std::move(del), as);
+        }, "modify_config", as, timeout);
+}
+
+future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std::optional<raft_timeout> timeout)
+{
+    return run_with_timeout([&](abort_source* as) {
+        return _group_server.server->read_barrier(as);
+    }, "read_barrier", as, timeout);
+}
 
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
     auto dst_id = raft::server_id{std::move(id)};

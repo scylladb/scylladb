@@ -226,13 +226,17 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
 
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
-
+    lowres_clock::duration default_op_timeout = std::chrono::minutes(1);
+    if (const auto ms = utils::get_local_injector().inject_parameter<int64_t>("group0-raft-op-timeout-in-ms"); ms) {
+        default_op_timeout = std::chrono::milliseconds(*ms);
+    }
     return raft_server_for_group{
         .gid = std::move(gid),
         .server = std::move(server),
         .ticker = std::move(ticker),
         .rpc = rpc_ref,
         .persistence = persistence_ref,
+        .default_op_timeout = default_op_timeout
     };
 }
 

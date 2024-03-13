@@ -283,6 +283,11 @@ public:
         return _raft_gr.group0();
     }
 
+    // Returns a wrapper for the group0_server() with timeouts support.
+    raft_server_with_timeouts group0_server_with_timeouts() {
+        return _raft_gr.group0_with_timeouts();
+    }
+
     // Returns true after the group 0 server has been started.
     bool joined_group0() const;
 
