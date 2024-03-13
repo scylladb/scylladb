@@ -5,7 +5,6 @@
 #
 
 import asyncio
-import time
 from test.pylib.manager_client import ManagerClient
 import pytest
 from test.pylib.rest_client import inject_error, inject_error_one_shot
@@ -18,10 +17,7 @@ Tests case when bigger auth operation is split into multiple raft commands.
 @pytest.mark.asyncio
 async def test_auth_raft_command_split(manager: ManagerClient) -> None:
     servers = await manager.servers_add(3)
-
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    await manager.servers_see_each_other(servers)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     initial_perms = await cql.run_async("SELECT * FROM system_auth_v2.role_permissions")
 
@@ -37,10 +33,12 @@ async def test_auth_raft_command_split(manager: ManagerClient) -> None:
     # this will trigger cascade of deletes which should be packed
     # into raft commands in a way that none exceeds max_command_size
     await manager.driver_connect(server=servers[0])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([servers[0]])
     async with inject_error(manager.api, servers[0].ip_addr,
                             'auth_announce_mutations_command_max_size'):
         await cql.run_async(f"DROP ROLE IF EXISTS {shared_role}", execution_profile='whitelist')
+
+    cql, hosts = await manager.get_ready_cql(servers)
 
     # auth reads are eventually consistent so we need to sync all nodes
     await asyncio.gather(*(read_barrier(cql, host) for host in hosts))

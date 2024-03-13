@@ -15,8 +15,7 @@ from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
-from test.pylib.util import wait_for
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, Host
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
@@ -80,6 +79,16 @@ class ManagerClient():
         """Precondition: driver is connected"""
         assert self.cql
         return self.cql
+
+    # More robust version of get_cql, when topology changes
+    # or cql statement is executed immediately after driver_connect
+    # it may fail unless we perform additional readiness checks
+    async def get_ready_cql(self, servers: List[ServerInfo]) -> tuple[CassandraSession, list[Host]]:
+        """Precondition: driver is connected"""
+        cql = self.get_cql()
+        await self.servers_see_each_other(servers)
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
+        return cql, hosts
 
     # Make driver update endpoints from remote connection
     def _driver_update(self) -> None:
