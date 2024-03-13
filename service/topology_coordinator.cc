@@ -816,7 +816,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // action is idempotent, it is costly, so we want to avoid
     // re-executing it if it was already started by this coordinator,
     // that's why we track it.
-    using background_action_holder = std::optional<future<>>;
+    enum class background_action_holder : int8_t { idle, running, succeeded, failed };
 
     // Transient state of tablet migration which lives on this coordinator.
     // It is guaranteed to die when migration is finished.
@@ -836,7 +836,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     seastar::gate _async_gate;
 
     bool action_failed(background_action_holder& holder) const {
-        return holder && holder->failed();
+        return holder == background_action_holder::failed;
     }
 
     // This function drives background_action_holder towards "executed successfully"
@@ -845,19 +845,21 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Returns true iff background_action_holder reached the "executed successfully" state.
     bool advance_in_background(locator::global_tablet_id gid, background_action_holder& holder, const char* name,
                                std::function<future<>()> action) {
-        if (!holder || holder->failed()) {
-            if (action_failed(holder)) {
-                // Prevent warnings about abandoned failed future. Logged below.
-                holder->ignore_ready_future();
-            }
-            holder = futurize_invoke(action).then_wrapped([this, gid, name] (future<> f) {
+        switch (holder) {
+        case background_action_holder::idle:
+        case background_action_holder::failed:
+            // Run in background
+            // This is safe since we hold the _async_gate
+            holder = background_action_holder::running;
+            (void)futurize_invoke(action).then_wrapped([this, gid, name, &holder] (future<> f) {
                 if (f.failed()) {
                     auto ep = f.get_exception();
                     rtlogger.warn("{} for tablet {} failed: {}", name, gid, ep);
-                    return seastar::sleep_abortable(std::chrono::seconds(1), _as).then([ep] () mutable {
-                        std::rethrow_exception(ep);
+                    return seastar::sleep_abortable(std::chrono::seconds(1), _as).then([&holder] () mutable {
+                        holder = background_action_holder::failed;
                     });
                 }
+                holder = background_action_holder::succeeded;
                 return f;
             }).finally([this, g = _async_gate.hold(), gid, name] () noexcept {
                 rtlogger.debug("{} for tablet {} resolved.", name, gid);
@@ -865,14 +867,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 _topo_sm.event.broadcast();
             });
             return false;
-        }
-
-        if (!holder->available()) {
+        case background_action_holder::running:
             rtlogger.debug("Tablet {} still doing {}", gid, name);
             return false;
+        case background_action_holder::succeeded:
+            return true;
         }
-
-        return true;
     }
 
     future<> for_each_tablet_transition(std::function<void(const locator::tablet_map&,
