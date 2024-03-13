@@ -53,11 +53,7 @@ namespace {
     const auto set_null_sharder = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
         // tables in the "system" keyspace which need to use null sharder
         static const std::unordered_set<sstring> tables = {
-            schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
-            system_keyspace::BROADCAST_KV_STORE,
-            system_keyspace::TOPOLOGY,
-            system_keyspace::TOPOLOGY_REQUESTS,
-            system_keyspace::CDC_GENERATIONS_V3,
+                // empty
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.use_null_sharder = true;
@@ -66,10 +62,6 @@ namespace {
     const auto set_wait_for_sync_to_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
         static const std::unordered_set<sstring> tables = {
             system_keyspace::PAXOS,
-            system_keyspace::BROADCAST_KV_STORE,
-            system_keyspace::TOPOLOGY,
-            system_keyspace::TOPOLOGY_REQUESTS,
-            system_keyspace::CDC_GENERATIONS_V3,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.wait_for_sync_to_commitlog = true;
@@ -77,12 +69,17 @@ namespace {
     });
     const auto set_use_schema_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
         static const std::unordered_set<sstring> tables = {
+            schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
+            system_keyspace::BROADCAST_KV_STORE,
+            system_keyspace::CDC_GENERATIONS_V3,
             system_keyspace::RAFT,
             system_keyspace::RAFT_SNAPSHOTS,
             system_keyspace::RAFT_SNAPSHOT_CONFIG,
             system_keyspace::GROUP0_HISTORY,
             system_keyspace::DISCOVERY,
             system_keyspace::TABLETS,
+            system_keyspace::TOPOLOGY,
+            system_keyspace::TOPOLOGY_REQUESTS,
             system_keyspace::LOCAL,
             system_keyspace::PEERS,
             system_keyspace::SCYLLA_LOCAL,
