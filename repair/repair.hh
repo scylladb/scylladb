@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <exception>
 #include <absl/container/btree_set.h>
+#include <fmt/core.h>
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
@@ -284,3 +285,9 @@ struct hash<node_repair_meta_id> {
 };
 
 }
+
+template <> struct fmt::formatter<row_level_diff_detect_algorithm> : fmt::formatter<std::string_view> {
+    auto format(row_level_diff_detect_algorithm algo, fmt::format_context& ctx) const {
+        return formatter<std::string_view>::format(format_as(algo), ctx);
+    }
+};
