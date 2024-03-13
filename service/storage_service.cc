@@ -5683,6 +5683,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         streaming::stream_reason reason = std::invoke([&] {
             switch (trinfo->transition) {
                 case locator::tablet_transition_kind::migration: return streaming::stream_reason::tablet_migration;
+                case locator::tablet_transition_kind::intranode_migration: return streaming::stream_reason::tablet_migration;
                 case locator::tablet_transition_kind::rebuild: return streaming::stream_reason::rebuild;
                 default:
                     throw std::runtime_error(fmt::format("stream_tablet(): Invalid tablet transition: {}", trinfo->transition));

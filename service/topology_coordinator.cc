@@ -1128,7 +1128,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 excluded_new++;
                             }
                         }
-                        if (excluded_new > excluded_old) {
+                        // Cannot revert if this is intra-node migration.
+                        // We will lose data if the migrating node restarted, in which case the leaving replica
+                        // doesn't contain writes anymore as sstables are attached only on the pending replica.
+                        // Luckily, this we never reach this condition since excluded_new cannot be larger
+                        // than excluded_old for intra-node migration.
+                        if (excluded_new > excluded_old && trinfo.transition != locator::tablet_transition_kind::intranode_migration) {
                             rtlogger.debug("During {} stage of {} {} new nodes and {} old nodes were excluded", trinfo.stage, gid, excluded_new, excluded_old);
                             next_stage = locator::tablet_transition_stage::cleanup_target;
                         }

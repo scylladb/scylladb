@@ -220,7 +220,9 @@ e.g. run full table repair with tablet migration disabled.
 Tablets can undergo a process called "transition", which performs some maintenance action on the tablet which is
 globally driven by the topology change coordinator and serialized per-tablet. Transition can be one of:
 
- * migration - tablet replica is moved from one shard to another (possibly on a different node)
+ * migration - tablet replica is moved from one shard to another on a different node
+
+ * intranode_migration - tablet replica is moved from one shard to another within the same node
 
  * rebuild - new tablet replica is rebuilt from existing ones, possibly dropping old replica afterwards (on node removal or replace)
 
@@ -301,6 +303,12 @@ stateDiagram-v2
     cleanup_target --> revert_migration
     revert_migration --> [*]
 ```
+
+The above state transition state machine is the same for different tablet transition kinds: migration, intranode_migration, rebuild.
+
+The behavioral difference between "migration" and "intranode_migration" transitions is in the way "streaming" stage
+is performed. In case of intra-node migration, streaming is done by fast duplication of data by creating hard links to
+sstable files on the destination shard. Original sstable files on the source shard will be removed by the standard "cleanup" stage.
 
 When tablet is not in transition, the following invariants hold:
 

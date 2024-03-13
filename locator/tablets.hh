@@ -177,6 +177,9 @@ enum class tablet_transition_kind {
     // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
     migration,
 
+    // Like migration, but the new pending replica is on the same host as leaving replica.
+    intranode_migration,
+
     // New tablet replica is replacing a dead one.
     // The new replica is (tablet_transition_info::next - tablet_info::replicas).
     // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).

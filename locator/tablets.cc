@@ -100,6 +100,8 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_transition_info& trinfo) {
     tablet_migration_streaming_info result;
     switch (trinfo.transition) {
+        case tablet_transition_kind::intranode_migration:
+            [[fallthrough]];
         case tablet_transition_kind::migration:
             result.read_from = substract_sets(tinfo.replicas, trinfo.next);
             result.written_to = substract_sets(trinfo.next, tinfo.replicas);
@@ -346,6 +348,7 @@ tablet_transition_stage tablet_transition_stage_from_string(const sstring& name)
 // The names are persisted in system tables so should not be changed.
 static const std::unordered_map<tablet_transition_kind, sstring> tablet_transition_kind_to_name = {
         {tablet_transition_kind::migration, "migration"},
+        {tablet_transition_kind::intranode_migration, "intranode_migration"},
         {tablet_transition_kind::rebuild, "rebuild"},
 };
 
@@ -633,7 +636,7 @@ public:
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto&& info = tablets.get_tablet_transition_info(tablet);
-        if (!info) {
+        if (!info || info->transition == tablet_transition_kind::intranode_migration) {
             return {};
         }
         switch (info->writes) {
