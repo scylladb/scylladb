@@ -40,6 +40,7 @@
 #include "log.hh"
 #include "tools/format_printers.hh"
 #include "tools/utils.hh"
+#include "utils/estimated_histogram.hh"
 #include "utils/http.hh"
 #include "utils/pretty_printers.hh"
 #include "utils/rjson.hh"
@@ -62,9 +63,14 @@ static std::ostream& operator<<(std::ostream& os, const std::vector<sstring>& v)
 struct file_size_printer {
     uint64_t value;
     bool human_readable;
-    file_size_printer(uint64_t value, bool human_readable = true)
+    bool use_correct_units;
+    // Cassandra nodetool uses base_2 and base_10 units interchangeably, some
+    // commands use this, some that. Let's accomodate this for now, and maybe
+    // fix this mess at one point in the future, after the rewrite is done.
+    file_size_printer(uint64_t value, bool human_readable = true, bool use_correct_units = false)
         : value{value}
         , human_readable{human_readable}
+        , use_correct_units{use_correct_units}
     {}
 };
 
@@ -75,17 +81,18 @@ struct fmt::formatter<file_size_printer> : fmt::formatter<std::string_view> {
             return fmt::format_to(ctx.out(), "{}", size.value);
         }
 
-        using unit_t = std::pair<uint64_t, std::string_view>;
+        using unit_t = std::tuple<uint64_t, std::string_view, std::string_view>;
         const unit_t units[] = {
-            {1UL << 40, "TB"},
-            {1UL << 30, "GB"},
-            {1UL << 20, "MB"},
-            {1UL << 10, "KB"},
+            {1UL << 40, "TiB", "TB"},
+            {1UL << 30, "GiB", "GB"},
+            {1UL << 20, "MiB", "MB"},
+            {1UL << 10, "KiB", "KB"},
         };
-        for (auto [n, prefix] : units) {
+        for (auto [n, base_2, base_10] : units) {
             if (size.value > n) {
                 auto d = static_cast<float>(size.value) / n;
-                return fmt::format_to(ctx.out(), "{:.2f} {}", d, prefix);
+                auto postfix = size.use_correct_units ? base_2 : base_10;
+                return fmt::format_to(ctx.out(), "{:.2f} {}", d, postfix);
             }
         }
         return fmt::format_to(ctx.out(), "{} bytes", size.value);
@@ -182,6 +189,56 @@ public:
     }
 };
 
+// Based on origin's org.apache.cassandra.tools.NodeProbe.BufferSamples
+class buffer_samples {
+    std::vector<uint64_t> _samples;
+
+public:
+    explicit buffer_samples(std::vector<uint64_t> samples) : _samples(std::move(samples)) {
+        std::sort(_samples.begin(), _samples.end());
+    }
+
+    const std::vector<uint64_t>& values() const { return _samples; }
+
+    double min() const { return _samples.empty() ? 0.0 : double(_samples.front()); }
+
+    double max() const { return _samples.empty() ? 0.0 : double(_samples.back()); }
+
+    double value(double quantile) const {
+        if (quantile < 0.0 || quantile > 1.0) {
+            throw std::runtime_error(fmt::format("quantile {} is not in [0..1]", quantile));
+        }
+
+        if (_samples.empty()) {
+            return 0.0;
+        }
+
+        const double pos = quantile * (_samples.size() + 1);
+
+        if (pos < 1) {
+            return _samples.front();
+        }
+
+        if (pos >= _samples.size()) {
+            return _samples.back();
+        }
+
+        const double lower = _samples.at(size_t(pos) - 1);
+        const double upper = _samples.at(size_t(pos));
+        return lower + (pos - floor(pos)) * (upper - lower);
+    }
+
+    static buffer_samples retrieve_from_api(scylla_rest_client& client, sstring path) {
+        const auto res = client.get(std::move(path));
+        const auto res_object = res.GetObject();
+        std::vector<uint64_t> samples;
+        for (const auto& sample : res_object["hist"]["sample"].GetArray()) {
+            samples.push_back(sample.GetInt());
+        }
+        return buffer_samples(std::move(samples));
+    }
+};
+
 std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}) {
     std::unordered_map<sstring, sstring> params;
     if (type) {
@@ -240,6 +297,51 @@ keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const 
     }
 
     return ret;
+}
+
+struct keyspace_and_table {
+    sstring keyspace;
+    sstring table;
+};
+
+// Parses keyspace and table for commands which take a single keyspace and table.
+// The accepted formats are:
+// command keyspace table
+// command keyspace.table
+// command keyspace/table
+//
+// keyspace is allowed to contain a ".", if the keyspace and table is separated by a /
+keyspace_and_table parse_keyspace_and_table(scylla_rest_client& client, const bpo::variables_map& vm, std::string_view option_name) {
+    auto args = vm[std::string(option_name)].as<std::vector<sstring>>();
+
+    const auto error_msg = "single argument must be keyspace and table separated by \".\" or \"/\"";
+
+    auto split_by = [error_msg] (std::string_view arg, std::string_view by) {
+        const auto pos = arg.find(by);
+        if (pos == sstring::npos || pos == 0 || pos == arg.size() - 1) {
+            throw std::invalid_argument(error_msg);
+        }
+        return std::pair(sstring(arg.substr(0, pos)), sstring(arg.substr(pos + 1)));
+    };
+
+    sstring keyspace, table;
+    switch (args.size()) {
+        case 1:
+            if (args[0].find("/") == sstring::npos) {
+                std::tie(keyspace, table) = split_by(args[0], ".");
+            } else {
+                std::tie(keyspace, table) = split_by(args[0], "/");
+            }
+            break;
+        case 2:
+            keyspace = args[0];
+            table = args[1];
+            break;
+        default:
+            throw std::invalid_argument(error_msg);
+    }
+
+    return {keyspace, table};
 }
 
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
@@ -903,6 +1005,147 @@ void move_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     throw std::invalid_argument("This operation is not supported");
 }
 
+void print_stream_session(
+        const rjson::value& summaries,
+        const rjson::value& files,
+        std::string_view action_continuous,
+        std::string_view action_perfect,
+        std::string_view target,
+        bool human_readable) {
+    if (summaries.GetArray().Empty()) {
+        return;
+    }
+
+    uint64_t total_count{}, total_size{}, done_count{}, done_size{};
+    for (const auto& tbl : summaries.GetArray()) {
+        total_count += tbl["files"].GetInt();
+        total_size += tbl["total_size"].GetInt();
+    }
+    for (const auto& file_entry : files.GetArray()) {
+        const auto& file = file_entry["value"];
+        if (file["current_bytes"].GetInt() == file["total_bytes"].GetInt()) {
+            ++done_count;
+        }
+        done_size += file["current_bytes"].GetInt();
+    }
+
+    auto format_bytes = [] (uint64_t value, bool human_readable) {
+        if (!human_readable) {
+            return format("{} bytes", value);
+        }
+        return format("{}", file_size_printer(value, true, true));
+    };
+
+    fmt::print(std::cout, "        {} {} files, {} total. Already {} {} files, {} total\n",
+            action_continuous,
+            total_count,
+            format_bytes(total_size, human_readable),
+            action_perfect,
+            done_count,
+            format_bytes(done_size, human_readable));
+
+    for (const auto& file_entry : files.GetArray()) {
+        const auto& file = file_entry["value"];
+        fmt::print(std::cout, "            {} {}/{} bytes({}%) {} {} idx:{}/{}\n",
+                rjson::to_string_view(file["file_name"]),
+                file["current_bytes"].GetInt(),
+                file["total_bytes"].GetInt(),
+                uint64_t(file["current_bytes"].GetDouble() / file["total_bytes"].GetDouble() * 100.0),
+                action_perfect,
+                target,
+                file["session_index"].GetInt(),
+                rjson::to_string_view(file["peer"]));
+    }
+}
+
+void netstats_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto mode = sstring(rjson::to_string_view(client.get("/storage_service/operation_mode")));
+    const bool human_readable = vm.count("human-readable");
+
+    fmt::print(std::cout, "Mode: {}\n", mode);
+
+    const auto streams_res = client.get("/stream_manager/");
+    if (streams_res.GetArray().Empty()) {
+        fmt::print(std::cout, "Not sending any streams.\n");
+    } else {
+        for (const auto& stream : streams_res.GetArray()) {
+            fmt::print(std::cout, "{} {}\n", rjson::to_string_view(stream["description"]), rjson::to_string_view(stream["plan_id"]));
+
+            for (const auto& session : stream["sessions"].GetArray()) {
+                const auto ip = rjson::to_string_view(session["peer"]);
+                const auto private_ip = rjson::to_string_view(session["connecting"]);
+                fmt::print(std::cout, "    /{}", ip);
+                if (ip != private_ip) {
+                    fmt::print(std::cout, " (using /{})", private_ip);
+                }
+                fmt::print(std::cout, "\n");
+                print_stream_session(session["receiving_summaries"], session["receiving_files"], "Receiving", "received", "from", human_readable);
+                print_stream_session(session["sending_summaries"], session["sending_files"], "Sending", "sent", "to", human_readable);
+            }
+        }
+    }
+
+    if (client.get("/storage_service/is_starting").GetBool()) {
+        return;
+    }
+
+    fmt::print(std::cout, "Read Repair Statistics:\n");
+    fmt::print(std::cout, "Attempted: {}\n", client.get("/storage_proxy/read_repair_attempted").GetInt());
+    fmt::print(std::cout, "Mismatch (Blocking): {}\n", client.get("/storage_proxy/read_repair_repaired_blocking").GetInt());
+    fmt::print(std::cout, "Mismatch (Background): {}\n", client.get("/storage_proxy/read_repair_repaired_background").GetInt());
+
+    constexpr auto line_fmt = "{:<25}{:>10}{:>10}{:>15}{:>10}\n";
+
+    auto sum_nodes = [] (auto&& res) {
+        uint64_t sum = 0;
+        for (const auto& node : res.GetArray()) {
+            sum += node["value"].GetInt();
+        }
+        return sum;
+    };
+
+    fmt::print(std::cout, line_fmt, "Pool Name", "Active", "Pending", "Completed", "Dropped");
+    fmt::print(std::cout, line_fmt, "Large messages", "n/a",
+            sum_nodes(client.get("/messaging_service/messages/pending")),
+            sum_nodes(client.get("/messaging_service/messages/sent")),
+            0);
+    fmt::print(std::cout, line_fmt, "Small messages", "n/a",
+            sum_nodes(client.get("/messaging_service/messages/respond_pending")),
+            sum_nodes(client.get("/messaging_service/messages/respond_completed")),
+            0);
+    fmt::print(std::cout, line_fmt, "Gossip messages", "n/a", 0, 0, 0);
+}
+
+void proxyhistograms_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto read_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/read/moving_average_histogram");
+    const auto write_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/write/moving_average_histogram");
+    const auto range_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/range/moving_average_histogram");
+    const auto cas_read_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/cas_read/moving_average_histogram");
+    const auto cas_write_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/cas_write/moving_average_histogram");
+    const auto view_write_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/view_write/moving_average_histogram");
+
+    fmt::print(std::cout, "proxy histograms\n");
+    fmt::print(std::cout, "{:>10}{:>19}{:>19}{:>19}{:>19}{:>19}{:>19}\n", "Percentile", "Read Latency", "Write Latency", "Range Latency", "CAS Read Latency", "CAS Write Latency", "View Write Latency");
+    fmt::print(std::cout, "{:>10}{:>19}{:>19}{:>19}{:>19}{:>19}{:>19}\n", "", "(micros)", "(micros)", "(micros)", "(micros)", "(micros)", "(micros)");
+    for (const auto percentile : {0.5, 0.75, 0.95, 0.98, 0.99}) {
+        fmt::print(
+                std::cout,
+                "{}%       {:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n",
+                int(percentile * 100),
+                read_hg.value(percentile),
+                write_hg.value(percentile),
+                range_hg.value(percentile),
+                cas_read_hg.value(percentile),
+                cas_write_hg.value(percentile),
+                view_write_hg.value(percentile));
+    }
+    fmt::print(std::cout, "{:<10}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n", "Min", read_hg.min(), write_hg.min(), range_hg.min(),
+            cas_read_hg.min(), cas_write_hg.min(), view_write_hg.min());
+    fmt::print(std::cout, "{:<10}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n", "Max", read_hg.max(), write_hg.max(), range_hg.max(),
+            cas_read_hg.max(), cas_write_hg.max(), view_write_hg.max());
+    fmt::print(std::cout, "\n");
+}
+
 void help_operation(const tool_app_template::config& cfg, const bpo::variables_map& vm) {
     if (vm.count("command")) {
         const auto command = vm["command"].as<sstring>();
@@ -1554,6 +1797,58 @@ void stop_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     }
 
     client.post("/compaction_manager/stop_compaction", {{"type", compaction_type}});
+}
+
+void tablehistograms_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto [keyspace, table] = parse_keyspace_and_table(client, vm, "table");
+
+    auto get_estimated_histogram = [&client, &keyspace, &table] (std::string_view histogram) {
+        const auto res = client.get(format("/column_family/metrics/{}/{}:{}", histogram, keyspace, table));
+        const auto res_object = res.GetObject();
+        const auto& buckets_array = res["buckets"].GetArray();
+        const auto& bucket_offsets_array = res["bucket_offsets"].GetArray();
+
+        if (bucket_offsets_array.Size() + 1 != buckets_array.Size()) {
+            throw std::runtime_error(format("invalid estimated histogram {}, buckets must have one more element than bucket_offsets", histogram));
+        }
+
+        std::vector<int64_t> bucket_offsets, buckets;
+        for (size_t i = 0; i < bucket_offsets_array.Size(); ++i) {
+            buckets.emplace_back(buckets_array[i].GetInt64());
+            bucket_offsets.emplace_back(bucket_offsets_array[i].GetInt64());
+        }
+        buckets.emplace_back(buckets_array[buckets_array.Size() - 1].GetInt64());
+
+        return utils::estimated_histogram(std::move(bucket_offsets), std::move(buckets));
+    };
+
+    const auto row_size_hg = get_estimated_histogram("estimated_row_size_histogram");
+    const auto column_count_hg = get_estimated_histogram("estimated_column_count_histogram");
+    const auto read_latency_hg = buffer_samples::retrieve_from_api(client,
+            format("/column_family/metrics/read_latency/moving_average_histogram/{}:{}", keyspace, table));
+    const auto write_latency_hg = buffer_samples::retrieve_from_api(client,
+            format("/column_family/metrics/write_latency/moving_average_histogram/{}:{}", keyspace, table));
+    const auto sstables_per_read_hg = get_estimated_histogram("sstables_per_read_histogram");
+
+    fmt::print(std::cout, "{}/{} histograms\n", keyspace, table);
+    fmt::print(std::cout, "{:>10}{:>10}{:>18}{:>18}{:>18}{:>18}\n", "Percentile", "SSTables", "Write Latency", "Read Latency", "Partition Size", "Cell Count");
+    fmt::print(std::cout, "{:>10}{:>10}{:>18}{:>18}{:>18}{:>18}\n", "", " ", "(micros)", "(micros)", "(bytes)", "");
+    for (const auto percentile : {0.5, 0.75, 0.95, 0.98, 0.99}) {
+        fmt::print(
+                std::cout,
+                "{}%       {:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n",
+                int(percentile * 100),
+                double(sstables_per_read_hg.percentile(percentile)),
+                write_latency_hg.value(percentile),
+                read_latency_hg.value(percentile),
+                row_size_hg.percentile(percentile),
+                column_count_hg.percentile(percentile));
+    }
+    fmt::print(std::cout, "{:<10}{:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n", "Min", double(sstables_per_read_hg.min()), write_latency_hg.min(),
+            read_latency_hg.min(), row_size_hg.min(), column_count_hg.min());
+    fmt::print(std::cout, "{:<10}{:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n", "Max", double(sstables_per_read_hg.max()), write_latency_hg.max(),
+            read_latency_hg.max(), row_size_hg.max(), column_count_hg.max());
+    fmt::print(std::cout, "\n");
 }
 
 class table_metrics {
@@ -2662,6 +2957,37 @@ This operation is not supported.
         },
         {
             {
+                "netstats",
+                "Print network information on provided host (connecting node by default)",
+R"(
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/netstats.html
+)",
+                {
+                    typed_option<>("human-readable,H", "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
+                },
+                { },
+            },
+            netstats_operation
+        },
+        {
+            {
+                "proxyhistograms",
+                "Print statistic histograms for network operations",
+R"(
+Provide the latency request that is recorded by the coordinator.
+This command is helpful if you encounter slow node operations.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/proxyhistograms.html
+)",
+                { },
+                {
+                    typed_option<std::vector<sstring>>("table", "<keyspace> <table>, <keyspace>.<table> or <keyspace>-<table>", 2),
+                }
+            },
+            proxyhistograms_operation
+        },
+        {
+            {
                 "rebuild",
                 "Rebuilds a node’s data by streaming data from other nodes in the cluster (similarly to bootstrap)",
 R"(
@@ -2919,6 +3245,27 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             stop_operation
+        },
+        {
+            {
+                "tablehistograms",
+                {"cfhistograms"},
+                "Provides statistics about a table",
+R"(
+Provides statistics about a table, including number of SSTables, read/write
+latency, partition size and column count. cfhistograms covers all operations
+since the last time you ran the nodetool cfhistograms command.
+
+Also invokable as "cfhistograms".
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/cfhistograms.html
+)",
+                { },
+                {
+                    typed_option<std::vector<sstring>>("table", "<keyspace> <table>, <keyspace>.<table> or <keyspace>-<table>", 2),
+                }
+            },
+            tablehistograms_operation
         },
         {
             {
