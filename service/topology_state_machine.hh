@@ -212,9 +212,6 @@ struct raft_topology_snapshot {
     std::vector<canonical_mutation> topology_requests_mutations;
 };
 
-struct raft_topology_pull_params {
-};
-
 struct raft_snapshot {
     // FIXME: handle this with rpc streaming instead as we can't guarantee size bounds.
     utils::chunked_vector<canonical_mutation> mutations;

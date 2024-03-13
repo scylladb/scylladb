@@ -185,7 +185,7 @@ enum class messaging_verb : int32_t {
     GET_GROUP0_UPGRADE_STATE = 62,
     DIRECT_FD_PING = 63,
     RAFT_TOPOLOGY_CMD = 64,
-    RAFT_PULL_TOPOLOGY_SNAPSHOT = 65,
+    RAFT_PULL_SNAPSHOT = 65,
     TABLET_STREAM_DATA = 66,
     TABLET_CLEANUP = 67,
     JOIN_NODE_REQUEST = 68,
@@ -194,8 +194,7 @@ enum class messaging_verb : int32_t {
     STREAM_BLOB = 71,
     TABLE_LOAD_STATS = 72,
     JOIN_NODE_QUERY = 73,
-    RAFT_PULL_SNAPSHOT = 74,
-    LAST = 75,
+    LAST = 74,
 };
 
 } // namespace netw

@@ -878,7 +878,7 @@ private:
     future<> topology_state_load();
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
-    future<> merge_topology_snapshot(raft_topology_snapshot snp);
+    future<> merge_topology_snapshot(raft_snapshot snp);
 
     std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard);
     std::unordered_set<raft::server_id> ignored_nodes_from_join_params(const join_node_request_params& params);

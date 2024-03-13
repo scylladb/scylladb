@@ -57,8 +57,6 @@ struct raft_topology_snapshot {
     std::vector<canonical_mutation> topology_requests_mutations;
 };
 
-struct raft_topology_pull_params {};
-
 struct raft_snapshot {
     utils::chunked_vector<canonical_mutation> mutations;
 };
@@ -68,7 +66,6 @@ struct raft_snapshot_pull_params {
 };
 
 verb raft_topology_cmd (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, service::raft_topology_cmd) -> service::raft_topology_cmd_result;
-verb [[cancellable]] raft_pull_topology_snapshot (raft::server_id dst_id, service::raft_topology_pull_params) -> service::raft_topology_snapshot;
 verb [[cancellable]] raft_pull_snapshot (raft::server_id dst_id, service::raft_snapshot_pull_params) -> service::raft_snapshot;
 verb [[cancellable]] tablet_stream_data (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] tablet_cleanup (raft::server_id dst_id, locator::global_tablet_id);
