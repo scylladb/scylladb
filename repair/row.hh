@@ -50,6 +50,9 @@ public:
         }
         return *_mf;
     }
+    void reset_mutation_fragment() {
+        _mf = nullptr;
+    }
     frozen_mutation_fragment& get_frozen_mutation() {
         if (!_fm) {
             throw std::runtime_error("empty frozen_mutation_fragment");
@@ -69,7 +72,14 @@ public:
         if (!_fm) {
             throw std::runtime_error("empty size due to empty frozen_mutation_fragment");
         }
-        return _fm->representation().size();
+        auto size = sizeof(repair_row) + _fm->representation().size();
+        if (_boundary) {
+            size += _boundary->pk.external_memory_usage() + _boundary->position.external_memory_usage();
+        }
+        if (_mf) {
+            size += _mf->memory_usage();
+        }
+        return size;
     }
     const repair_sync_boundary& boundary() const {
         if (!_boundary) {
