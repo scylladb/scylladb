@@ -184,6 +184,28 @@ The invariants of stages, which hold as soon as the stage is committed to group0
 
     Precondition: No write request will reach tablet replica in the database layer which does not belong to the new replica set.
 
+State transition diagram for tablet migration stages:
+```mermaid
+stateDiagram-v2
+    state if_state <<choice>>
+    [*] --> allow_write_both_read_old
+    allow_write_both_read_old --> write_both_read_old
+    write_both_read_old --> streaming
+    streaming --> write_both_read_new
+    write_both_read_new --> use_new
+    use_new --> cleanup
+    cleanup --> end_migration
+    end_migration --> [*]
+    allow_write_both_read_old --> revert_migration: error
+    write_both_read_old --> cleanup_target: error
+    streaming --> cleanup_target: error
+    write_both_read_new --> if_state: error
+    if_state --> use_new: more new replicas
+    if_state --> cleanup_target: more old replicas
+    cleanup_target --> revert_migration
+    revert_migration --> [*]
+```
+
 When tablet is not in transition, the following invariants hold:
 
 1. The storage layer (database) on any node contains writes for keys which belong to the tablet only if
