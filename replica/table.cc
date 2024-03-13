@@ -2643,6 +2643,15 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
         }
         tracing::trace(tr_state, "Generated {} view update mutations", updates->size());
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(*updates));
+        if (_config.view_update_concurrency_semaphore->current() == 0) {
+            // We don't have resources to propagate view updates for this write. If we reached this point, we failed to
+            // throttle the client. The memory queue is already full, waiting on the semaphore would block view updates
+            // that we've already started applying, and generating hints would ultimately result in the disk queue being
+            // full. Instead, we drop the base write, which will create inconsistencies between base replicas, but we
+            // will fix them using repair.
+            err = std::make_exception_ptr(exceptions::overloaded_exception("Too many view updates started concurrently"));
+            break;
+        }
         try {
             co_await gen->mutate_MV(base, base_token, std::move(*updates), _view_stats, *_config.cf_stats, tr_state,
                 std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no);
@@ -3209,15 +3218,6 @@ future<row_locker::lock_holder> table::push_view_replica_updates(shared_ptr<db::
 
 future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<db::view::view_update_generator> gen, schema_ptr s, mutation m, db::timeout_clock::time_point timeout, mutation_source source,
         tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, query::partition_slice::option_set custom_opts) const {
-    if (!_config.view_update_concurrency_semaphore->current()) {
-        // We don't have resources to generate view updates for this write. If we reached this point, we failed to
-        // throttle the client. The memory queue is already full, waiting on the semaphore would cause this node to
-        // run out of memory, and generating hints would ultimately result in the disk queue being full too. We don't
-        // drop the base write, which could create inconsistencies between base replicas. So we dolefully continue,
-        // and note the fact we dropped a view update.
-        ++_config.cf_stats->dropped_view_updates;
-        co_return row_locker::lock_holder();
-    }
     schema_ptr base = schema();
     m.upgrade(base);
     gc_clock::time_point now = gc_clock::now();
