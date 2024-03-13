@@ -14,4 +14,4 @@ jobs:
         with:
           only_warn: 1
           ignore_words_list: "ans,datas,fo,ser,ue,crate,nd,reenable,strat,stap,te"
-          skip: "./.git,./build,./tools,*.js,*.thrift,*.lock,./test,./licenses,*.svg"
+          skip: "./.git,./build,./tools,*.js,*.thrift,*.lock,./test,./licenses,./redis/lolwut.cc,*.svg"
