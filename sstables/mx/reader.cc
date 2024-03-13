@@ -1899,6 +1899,7 @@ private:
                 }
             }
             if (cmp_end == 0) {
+                sstlog.trace("validating_consumer {}: {}() current block is done", fmt::ptr(this), __FUNCTION__);
                 _expected_clustering_block->done = true;
             }
         }
@@ -1934,6 +1935,9 @@ public:
     void set_index_expected_clustering_block(position_in_partition_view start, position_in_partition_view end) {
         _expected_clustering_block.emplace(start, end);
     }
+    bool in_expected_clustering_block() const {
+        return _expected_clustering_block && !_expected_clustering_block->done;
+    }
 
     void report_error(sstring what) {
         ++_error_count;
@@ -1953,6 +1957,7 @@ public:
             report_error(res.what());
             _validator.reset(dk);
         }
+        _expected_clustering_block.reset();
         if (_stop_after_partition_header) {
             _stop_after_partition_header = false;
             return data_consumer::proceed::no;
@@ -2002,13 +2007,17 @@ public:
     data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp, bound_kind kind, tombstone tomb) {
         auto ck = from_fragmented_buffer(ecp);
         _current_pos = position_in_partition(position_in_partition::range_tag_t(), kind, std::move(ck));
-        std::optional<tombstone> new_current_tomb;
+        tombstone new_current_tomb;
         if (kind == bound_kind::incl_start || kind == bound_kind::excl_start) {
             new_current_tomb = tomb;
         }
-        sstlog.trace("validating_consumer {}: {}({}, {})", fmt::ptr(this), __FUNCTION__, _current_pos, tomb);
+        sstlog.trace("validating_consumer {}: {}({}, {})", fmt::ptr(this), __FUNCTION__, _current_pos, new_current_tomb);
         validate_fragment_order(mutation_fragment_v2::kind::range_tombstone_change, new_current_tomb);
-        return data_consumer::proceed(!need_preempt());
+        if (_expected_clustering_block) {
+            return data_consumer::proceed(!_expected_clustering_block->done);
+        } else {
+            return data_consumer::proceed(!need_preempt());
+        }
     }
 
     data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp, sstables::bound_kind_m kind, tombstone end_tombstone, tombstone start_tombstone) {
@@ -2099,13 +2108,13 @@ future<uint64_t> validate(
             bool first_block = true;
 
             do {
-                if (idx_cursor && (current_pi_block = co_await idx_cursor->next_entry())) {
+                if (!consumer.in_expected_clustering_block() && idx_cursor && (current_pi_block = co_await idx_cursor->next_entry())) {
                     // The mx format always has position-in-partition in the variant.
                     const auto start = std::get<position_in_partition_view>(current_pi_block->start);
                     const auto end = std::get<position_in_partition_view>(current_pi_block->end);
                     const auto index_pos = current_partition_pos + current_pi_block->offset;
                     const auto data_pos = context->position();
-                    sstlog.trace("validate(): index-data position check for clustering block (first={}) [{}, {}]: {} == {}", first_block, start, end, data_pos, index_pos);
+                    sstlog.trace("validate(): index-data position check for clustering block (first={}) [{}, {}]: {} == {}, partition starts at {}", first_block, start, end, index_pos, data_pos, current_partition_pos);
                     // We cannot reliably position the parser at the start of
                     // the first block, because there is no way to check what
                     // the next element is (static row or clustering row)
