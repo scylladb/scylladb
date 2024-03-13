@@ -1128,10 +1128,11 @@ private:
         auto hash = _repair_hasher.do_hash_for_mf(*_repair_reader->get_current_dk(), mf);
         repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader->get_current_dk(), hash, is_dirty_on_master::no);
         rlogger.trace("Reading: r.boundary={}, r.hash={}", r.boundary(), r.hash());
+        auto sz = r.size();
         _metrics.row_from_disk_nr++;
-        _metrics.row_from_disk_bytes += r.size();
-        cur_size += r.size();
-        new_rows_size += r.size();
+        _metrics.row_from_disk_bytes += sz;
+        cur_size += sz;
+        new_rows_size += sz;
         cur_rows.push_back(std::move(r));
     }
 
