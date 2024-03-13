@@ -795,8 +795,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     while (true) {
                         auto& tablet_info = new_tablet_map.get_tablet_info(tablet_id);
                         auto last_token = new_tablet_map.get_last_token(tablet_id);
-
-                        // TODO: correctly handle setting next replicas
                         updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table->id())
                                                  .set_new_replicas(last_token, tablet_info.replicas)
                                                  .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)

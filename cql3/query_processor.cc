@@ -1029,6 +1029,8 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
     warnings = std::move(cql_warnings);
 
     auto request_id = guard->new_group0_state_id();
+    log.info("smaron request_id: {}", request_id);
+
     if (!m.empty()) {
         auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
         co_await remote_.get().mm.announce(std::move(m), std::move(*guard), description);
@@ -1039,10 +1041,15 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
     //       by a special value returned from prepare_schema_mutations()
     // TODO: wait_for_topology_request_completion doesn't wait for global requests,
     //       but only for the non-global ones and cdc. This needs to be fixed
-    // auto error = co_await wait_for_topology_request_completion(request_id);
-    // if (!error.empty()) {
-    //     throw std::runtime_error(fmt::format("alter_tablets_keyspace failed with: {}", error));
-    // }
+    log.info("smaron warnings: {}", warnings);
+    if (not warnings.empty())
+        log.info("smaron warnings.back(): {}", warnings.back());
+    if (not warnings.empty() && warnings.back() == "ALTER TABLETS KS") {
+         auto error = co_await remote_.get().ss.wait_for_topology_request_completion(request_id);
+         if (!error.empty()) {
+             throw std::runtime_error(fmt::format("alter_tablets_keyspace failed with: {}", error));
+         }
+     }
 
     ce = std::move(ret);
 

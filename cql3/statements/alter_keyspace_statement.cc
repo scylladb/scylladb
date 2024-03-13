@@ -86,26 +86,40 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 #endif
 }
 
+static logging::logger mylogger("alter_keyspace");
+
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     try {
         auto old_ksm = qp.db().find_keyspace(_name).metadata();
-        auto s = qp.db().find_schema(_name, old_ksm->keypace_name());
+
         const auto& tm = *qp.proxy().get_token_metadata_ptr();
         const auto& feat = qp.proxy().features();
-
-        auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(), _attrs->as_ks_metadata_update(old_ksm, tm, feat), ts);
+        auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(),
+                                                               _attrs->as_ks_metadata_update(old_ksm, tm, feat), ts);
+        std::vector<sstring> warnings;
 
         auto&& replication_strategy = qp.db().find_keyspace(_name).get_replication_strategy();
         if (replication_strategy.uses_tablets()) {
             if (qp.topology_global_queue_empty()) {
-                service::topology_mutation_builder builder(ts);
-                builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
-                builder.set_new_keyspace_rf_change_data(_name, _attrs->get_replication_map());
-                service::topology_change change{{builder.build()}};
-                boost::transform(change.mutations, std::back_inserter(m), [s](const canonical_mutation &cm) {
-                    return cm.to_mutation(s);
-                });
+                for (auto& [_, cf_schema] : old_ksm->cf_meta_data()) {
+                    mylogger.warn("smaron prepare loop for {}", _);
+                    service::topology_mutation_builder builder(ts);
+                    builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
+                    builder.set_new_keyspace_rf_change_data(_name, _attrs->get_replication_map());
+                    service::topology_change change{{builder.build()}};
+                    mylogger.warn("smaron prepare after change");
+//                    boost::transform(change.mutations, std::back_inserter(m), [cf_schema](const canonical_mutation &cm) {
+//                        mylogger.warn("smaron prepare transform {}", cm);
+//                        return cm.to_mutation(cf_schema);
+//                    });
+                    auto s = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+                    boost::transform(change.mutations, std::back_inserter(m), [s] (const canonical_mutation& cm) {
+                        return cm.to_mutation(s);
+                    });
+                    mylogger.warn("smaron prepare end for loop");
+                }
+                warnings.emplace_back("ALTER TABLETS KS");
             } else {
                 throw make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
                         exceptions::invalid_request_exception("alter_keyspace_statement::prepare_schema_mutations(): topology mutation cannot be performed while other request is ongoing"));
@@ -118,10 +132,14 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 event::schema_change::target_type::KEYSPACE,
                 keyspace());
 
-        return make_ready_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>()));
+        return make_ready_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(std::make_tuple(std::move(ret), std::move(m), warnings));
     } catch (data_dictionary::no_such_keyspace& e) {
         return make_exception_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(exceptions::invalid_request_exception("Unknown keyspace " + _name));
+    } catch (std::exception& e) {
+        mylogger.warn("smaron prepare {}", e.what());
+        throw;
     }
+
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
@@ -129,7 +147,6 @@ cql3::statements::alter_keyspace_statement::prepare(data_dictionary::database db
     return std::make_unique<prepared_statement>(make_shared<alter_keyspace_statement>(*this));
 }
 
-static logging::logger mylogger("alter_keyspace");
 
 // TODO: when we execute 2 ALTER KS statements fast enough,
 //       cqlsh returns `NoHostAvailable:` error,
