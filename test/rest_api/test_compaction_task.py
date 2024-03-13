@@ -1,3 +1,4 @@
+import requests
 import sys
 
 # Use the util.py library from ../cql-pytest:
@@ -8,6 +9,11 @@ from task_manager_utils import wait_for_task, list_tasks, check_child_parent_rel
 
 module_name = "compaction"
 long_time = 1000000000
+
+def get_status_if_exists(rest_api, task_id):
+    resp = rest_api.send("GET", f"task_manager/task_status/{task_id}")
+    if resp.status_code == requests.codes.ok:
+        return resp.json()
 
 # depth parameter means the number of edges in the longest path from root to leaves in task tree.
 def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_type, depth, allow_no_children=False):
@@ -100,7 +106,8 @@ def test_regular_compaction_task(cql, this_dc, rest_api):
                     resp = rest_api.send("POST", f"column_family/autocompaction/{keyspace}:{table}")
                     resp.raise_for_status()
 
-                    statuses = [get_task_status(rest_api, task["task_id"]) for task in list_tasks(rest_api, "compaction", internal=True) if task["type"] == "regular compaction" and task["keyspace"] == keyspace and task["table"] == table]
+                    statuses = [get_status_if_exists(rest_api, task["task_id"]) for task in list_tasks(rest_api, "compaction", internal=True) if task["type"] == "regular compaction" and task["keyspace"] == keyspace and task["table"] == table]
+                    statuses = [s for s in statuses if s is not None]
                     assert statuses, f"regular compaction task for {t0} was not created"
                     assert all([s["state"] != "done" and s["state"] != "failed" for s in statuses]), "Regular compaction task isn't unregiatered after it completes"
 
