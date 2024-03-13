@@ -2759,6 +2759,7 @@ static void make_update_indices_mutations(
         schema_ptr view;
         try {
             view = db.find_schema(old_table->ks_name(), secondary_index::index_table_name(name));
+            db.get_notifier().before_drop_column_family(*view, mutations, timestamp);
         } catch (const replica::no_such_column_family&) {
             on_internal_error(slogger, format("Could not find schema for dropped index {}.{}",
                     old_table->ks_name(), secondary_index::index_table_name(name)));

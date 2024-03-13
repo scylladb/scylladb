@@ -190,6 +190,9 @@ def new_secondary_index(cql, table, column, name='', extra=''):
     finally:
         cql.execute(f"DROP INDEX {keyspace}.{name}")
 
+def index_table_name(index_name : str):
+    return f"{index_name}_index"
+
 # Helper function for establishing a connection with given username and password
 @contextmanager
 def cql_session(host, port, is_ssl, username, password, request_timeout=120):
