@@ -1156,12 +1156,6 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
         }
         if (is_tablet) {
             // Reject unsupported options for tablet repair
-            if (!options.hosts.empty()) {
-                throw std::runtime_error("The hosts option is not supported for tablet repair");
-            }
-            if (!options.ignore_nodes.empty()) {
-                throw std::runtime_error("The ignore_nodes option is not supported for tablet repair");
-            }
             if (!options.start_token.empty()) {
                 throw std::runtime_error("The startToken option is not supported for tablet repair");
             }
@@ -1172,6 +1166,14 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
                 throw std::runtime_error("The small_table_optimization option is not supported for tablet repair");
             }
 
+            // Reject unsupported option combinations.
+            if (!options.data_centers.empty() && !options.hosts.empty()) {
+                throw std::runtime_error("Cannot combine dataCenters and hosts options.");
+            }
+            if (!options.ignore_nodes.empty() && !options.hosts.empty()) {
+                throw std::runtime_error("Cannot combine ignore_nodes and hosts options.");
+            }
+
             auto host2ip = [&addr_map = _addr_map] (locator::host_id host) -> future<gms::inet_address> {
                 auto ip = addr_map.local().find(raft::server_id(host.uuid()));
                 if (!ip) {
@@ -1179,8 +1181,31 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
                 }
                 co_return *ip;
             };
+
+
+            std::unordered_set<gms::inet_address> hosts;
+            for (const auto& n : options.hosts) {
+                try {
+                    auto node = gms::inet_address(n);
+                    hosts.insert(node);
+                } catch(...) {
+                    throw std::runtime_error(format("Failed to parse node={} in hosts={} specified by user: {}",
+                        n, options.hosts, std::current_exception()));
+                }
+            }
+            std::unordered_set<gms::inet_address> ignore_nodes;
+            for (const auto& n : options.ignore_nodes) {
+                try {
+                    auto node = gms::inet_address(n);
+                    ignore_nodes.insert(node);
+                } catch(...) {
+                    throw std::runtime_error(format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
+                        n, options.ignore_nodes, std::current_exception()));
+                }
+            }
+
             bool primary_replica_only = options.primary_range;
-            co_await repair_tablets(id, keyspace, cfs, host2ip, primary_replica_only, options.ranges, options.data_centers);
+            co_await repair_tablets(id, keyspace, cfs, host2ip, primary_replica_only, options.ranges, options.data_centers, hosts, ignore_nodes);
             co_return id.id;
         }
     }
@@ -2054,7 +2079,7 @@ static std::unordered_set<gms::inet_address> get_nodes_in_dcs(std::vector<sstrin
 }
 
 // Repair all tablets belong to this node for the given table
-future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers) {
+future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> hosts, std::unordered_set<gms::inet_address> ignore_nodes) {
     std::vector<tablet_repair_task_meta> task_metas;
     for (auto& table_name : table_names) {
         lw_shared_ptr<replica::table> t;
@@ -2081,6 +2106,27 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         std::vector<repair_tablet_meta> metas;
         auto myhostid = erm->get_token_metadata_ptr()->get_my_id();
         auto myip = erm->get_topology().my_address();
+        auto mydc = erm->get_topology().get_datacenter();
+        bool select_primary_ranges_within_dc = false;
+        // If the user specified the ranges option, ignore the primary_replica_only option.
+        if (!ranges_specified.empty()) {
+            primary_replica_only = false;
+        }
+        if (primary_replica_only) {
+            // The logic below follows existing vnode table repair.
+            // When "primary_range" option is on, neither data_centers nor hosts
+            // may be set, except data_centers may contain only local DC (-local)
+            if (data_centers.size() == 1 && data_centers[0] == mydc) {
+                select_primary_ranges_within_dc = true;
+            } else if (data_centers.size() > 0 || hosts.size() > 0) {
+                throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
+            }
+        }
+        if (!hosts.empty()) {
+            if (!hosts.contains(myip)) {
+                throw std::runtime_error("The current host must be part of the repair");
+            }
+        }
         co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
             auto range = tmap.get_token_range(id);
             auto& replicas = info.replicas;
@@ -2088,6 +2134,12 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             shard_id master_shard_id;
             // Repair all tablets belong to this node
             for (auto& r : replicas) {
+                if (select_primary_ranges_within_dc) {
+                    auto dc = erm->get_topology().get_datacenter(r.host);
+                    if (dc != mydc) {
+                        continue;
+                    }
+                }
                 if (r.host == myhostid) {
                     master_shard_id = r.shard;
                     found = true;
@@ -2155,6 +2207,15 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
                 auto ip = co_await host2ip(r.host);
                 if (r.host != myhostid) {
                     bool select = data_centers.empty() ? true : dc_endpoints.contains(ip);
+
+                    if (select && !hosts.empty()) {
+                        select = hosts.contains(ip);
+                    }
+
+                    if (select && !ignore_nodes.empty()) {
+                        select = !ignore_nodes.contains(ip);
+                    }
+
                     if (select) {
                         rlogger.debug("repair[{}] Repair get neighbors table={}.{} hostid={} shard={} ip={} myip={} myhostid={}",
                                 rid.uuid(), keyspace_name, table_name, r.host, shard, ip, myip, myhostid);
