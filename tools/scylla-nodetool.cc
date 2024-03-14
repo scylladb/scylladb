@@ -1199,7 +1199,7 @@ void help_operation(const tool_app_template::config& cfg, const bpo::variables_m
             opts_desc.add(op_opts_desc);
         }
 
-        fmt::print(std::cout, "{}\n", opts_desc);
+        fmt::print(std::cout, "{}\n", fmt::streamed(opts_desc));
     } else {
         fmt::print(std::cout, "usage: nodetool [(-p <port> | --port <port>)] [(-h <host> | --host <host>)] <command> [<args>]\n\n");
         fmt::print(std::cout, "The most commonly used nodetool commands are:\n");
