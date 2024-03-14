@@ -652,7 +652,7 @@ This can be relaxed, for example, if you want to produce intentionally corrupt S
 shard-of
 ^^^^^^^^
 
-Pint out the shards which own the specified SSTables.
+Print out the shards which own the specified SSTables.
 
 The content is dumped in JSON, using the following schema:
 
