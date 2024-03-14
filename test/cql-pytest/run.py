@@ -180,6 +180,7 @@ def cleanup_all():
             print('\nSubprocess output:\n')
             sys.stdout.flush()
             shutil.copyfileobj(f, sys.stdout.buffer)
+        f.close()
     scylla_set = set()
     print(summary)
 
