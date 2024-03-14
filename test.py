@@ -409,6 +409,8 @@ class PythonTestSuite(TestSuite):
                which would delete the log file and directory - we might want to preserve
                these if it came from a failed test.
             """
+            for srv in cluster.running.values():
+                srv.log_file.close()
             await cluster.stop()
             await cluster.release_ips()
 
