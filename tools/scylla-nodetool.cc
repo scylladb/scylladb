@@ -1326,6 +1326,10 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         repair_params["primaryRange"] = "true";
     }
 
+    if (vm.contains("job-threads")) {
+        repair_params["jobThreads"] = fmt::to_string(vm["job-threads"].as<unsigned>());
+    }
+
     auto log = [&]<typename... Args> (fmt::format_string<Args...> fmt, Args&&... param) {
         const auto msg = fmt::format(fmt, param...);
         using clock = std::chrono::system_clock;
@@ -3075,7 +3079,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                     typed_option<>("in-local-dc", "Constrain repair to the local datacenter only"),
                     typed_option<std::vector<sstring>>("in-hosts", "Constrain repair to the specific host(s)"),
                     typed_option<>("ignore-unreplicated-keyspaces", "Ignore keyspaces which are not replicated, without this repair will fail on such keyspaces"),
-                    typed_option<unsigned>("job-threads,j", "Number of threads to run repair on. "),
+                    typed_option<unsigned>("job-threads,j", "Number of threads to run repair on"),
                     typed_option<>("partitioner-range", "Repair only the first range returned by the partitioner"),
                     typed_option<>("pull", "Fix local node only"),
                     typed_option<>("sequential", "Perform repair sequentially"),

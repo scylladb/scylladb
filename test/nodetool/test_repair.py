@@ -478,6 +478,11 @@ def test_repair_unused_options(request, nodetool, jobs, full):
     if full:
         args.append(full)
 
+    if jobs:
+        job_threads = jobs[1]
+    else:
+        job_threads = "1"
+
     res = nodetool(*args, expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         JMX_COLUMN_FAMILIES_REQUEST,
@@ -492,7 +497,7 @@ def test_repair_unused_options(request, nodetool, jobs, full):
                 "incremental": "false",
                 "pullRepair": "false",
                 "primaryRange": "false",
-                "jobThreads": "1"},
+                "jobThreads": job_threads},
             response=1),
         expected_request("GET", "/storage_service/repair_async/ks", params={"id": "1"}, response="SUCCESSFUL")])
 
