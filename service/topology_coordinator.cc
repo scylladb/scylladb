@@ -1061,7 +1061,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                     if (action_failed(tablet_state.streaming)) {
                         if (check_excluded_replicas()) {
-                            transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                            if (do_barrier()) {
+                                rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
+                                updates.emplace_back(get_mutation_builder()
+                                        .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
+                                        .del_session(last_token)
+                                        .build());
+                            }
                             break;
                         }
                     }
