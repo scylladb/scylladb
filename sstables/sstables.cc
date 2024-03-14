@@ -1543,15 +1543,8 @@ populate_statistics_offsets(sstable_version_types v, statistics& s) {
 
 static
 sharding_metadata
-create_sharding_metadata(schema_ptr schema, const dht::sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
-    auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
+create_sharding_metadata(utils::chunked_vector<dht::partition_range> ranges) {
     auto sm = sharding_metadata();
-    auto ranges = dht::split_range_to_single_shard(*schema, sharder, prange, shard).get();
-    if (ranges.empty()) {
-        auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema, sharder);
-        sstlog.warn("create_sharding_metadata: range={} has no intersection with shard={} first_key={} last_key={} ranges_single_shard={} ranges_all_shards={}",
-                prange, shard, first_key, last_key, ranges, split_ranges_all_shards);
-    }
     sm.token_ranges.elements.reserve(ranges.size());
     for (auto&& range : std::move(ranges)) {
         if (true) { // keep indentation
@@ -1568,6 +1561,31 @@ create_sharding_metadata(schema_ptr schema, const dht::sharder& sharder, const d
         }
     }
     return sm;
+}
+
+static
+sharding_metadata
+create_sharding_metadata(schema_ptr schema, const dht::sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
+    auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
+    auto ranges = dht::split_range_to_single_shard(*schema, sharder, prange, shard).get();
+    if (ranges.empty()) {
+        auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema, sharder);
+        sstlog.warn("create_sharding_metadata: range={} has no intersection with shard={} first_key={} last_key={} ranges_single_shard={} ranges_all_shards={}",
+                    prange, shard, first_key, last_key, ranges, split_ranges_all_shards);
+    }
+    return create_sharding_metadata(std::move(ranges));
+}
+
+static
+sharding_metadata
+create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
+    auto* sharder_opt = schema->try_get_static_sharder();
+    if (sharder_opt) {
+        return create_sharding_metadata(std::move(schema), *sharder_opt, first_key, last_key, shard);
+    }
+    utils::chunked_vector<dht::partition_range> r;
+    r.push_back(dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key)));
+    return create_sharding_metadata(std::move(r));
 }
 
 // In the beginning of the statistics file, there is a disk_hash used to
@@ -1634,12 +1652,11 @@ sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
 
-    auto* sharder_opt = _schema->try_get_static_sharder();
-    auto sm = sharder_opt ? std::optional(create_sharding_metadata(_schema, *sharder_opt, first_key, last_key, shard)) : std::nullopt;
+    auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
 
     // sstable write may fail to generate empty metadata if mutation source has only data from other shard.
     // see https://github.com/scylladb/scylla/issues/2932 for details on how it can happen.
-    if (sm && sm->token_ranges.elements.empty()) {
+    if (sm.token_ranges.elements.empty()) {
         throw std::runtime_error(format("Failed to generate sharding metadata for {}", get_filename()));
     }
 
@@ -1647,9 +1664,7 @@ sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features
         _components->scylla_metadata.emplace();
     }
 
-    if (sm) {
-        _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(*sm));
-    }
+    _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
     _components->scylla_metadata->data.set<scylla_metadata_type::Features>(std::move(features));
     _components->scylla_metadata->data.set<scylla_metadata_type::RunIdentifier>(std::move(identifier));
     if (ld_stats) {
