@@ -613,6 +613,7 @@ future<> storage_service::topology_state_load() {
     // is the source of truth about enabled features.
     co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.enabled_features, false);
 
+    auto saved_tmpr = get_token_metadata_ptr();
     {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = make_token_metadata_ptr(token_metadata::config {
@@ -682,6 +683,19 @@ future<> storage_service::topology_state_load() {
         if (!_gossiper.get_endpoint_state_ptr(ep)) {
             co_await _gossiper.add_saved_endpoint(ep, permit.id());
         }
+    }
+
+    // As soon as a node joins token_metadata.topology we
+    // need to drop all its rpc connections with ignored_topology flag.
+    {
+        std::vector<future<>> futures;
+        tmptr->get_topology().for_each_node([&](const locator::node* n) {
+            const auto ep = n->endpoint();
+            if (ep != inet_address{} && !saved_tmpr->get_topology().has_endpoint(ep)) {
+                futures.push_back(remove_rpc_client_with_ignored_topology(ep));
+            }
+        });
+        co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
     }
 
     for (const auto& gen_id : _topology_state_machine._topology.committed_cdc_generations) {
@@ -2282,6 +2296,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     // Send joined notification only when this node was not a member prior to this
     if (do_notify_joined) {
         co_await notify_joined(endpoint);
+        co_await remove_rpc_client_with_ignored_topology(endpoint);
     }
 
     if (slogger.is_enabled(logging::log_level::debug)) {
@@ -6541,10 +6556,15 @@ future<> storage_service::notify_joined(inet_address endpoint) {
         "storage_service_notify_joined_sleep", std::chrono::milliseconds{500});
 
     co_await container().invoke_on_all([endpoint] (auto&& ss) {
-        ss._messaging.local().remove_rpc_client_with_ignored_topology(netw::msg_addr{endpoint, 0});
         return ss._lifecycle_notifier.notify_joined(endpoint);
     });
     slogger.debug("Notify node {} has joined the cluster", endpoint);
+}
+
+future<> storage_service::remove_rpc_client_with_ignored_topology(inet_address endpoint) {
+    return container().invoke_on_all([endpoint] (auto&& ss) {
+        ss._messaging.local().remove_rpc_client_with_ignored_topology(netw::msg_addr{endpoint, 0});
+    });
 }
 
 future<> storage_service::notify_cql_change(inet_address endpoint, bool ready) {

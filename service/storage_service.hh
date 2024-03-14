@@ -729,6 +729,7 @@ private:
     future<> notify_up(inet_address endpoint);
     future<> notify_joined(inet_address endpoint);
     future<> notify_cql_change(inet_address endpoint, bool ready);
+    future<> remove_rpc_client_with_ignored_topology(inet_address endpoint);
 public:
     future<bool> is_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
