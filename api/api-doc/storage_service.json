@@ -2580,7 +2580,7 @@
             {
                "nickname":"tablet_balancing_enable",
                "method":"POST",
-               "summary":"Moves a tablet replica",
+               "summary":"Controls tablet load-balancing",
                "type":"void",
                "produces":[
                   "application/json"
