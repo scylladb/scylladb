@@ -399,6 +399,7 @@ class load_balancer {
     token_metadata_ptr _tm;
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
+    std::unordered_set<host_id> _skiplist;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -436,11 +437,12 @@ private:
     }
 
 public:
-    load_balancer(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, load_balancer_stats_manager& stats, uint64_t target_tablet_size)
+    load_balancer(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, load_balancer_stats_manager& stats, uint64_t target_tablet_size, std::unordered_set<host_id> skiplist)
         : _target_tablet_size(target_tablet_size)
         , _tm(std::move(tm))
         , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
+        , _skiplist(std::move(skiplist))
     { }
 
     future<migration_plan> make_plan() {
@@ -615,9 +617,9 @@ public:
                 if (is_drained) {
                     lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc);
                     nodes_to_drain.emplace(node_ptr->host_id());
-                } else if (node_ptr->is_excluded()) {
+                } else if (node_ptr->is_excluded() || _skiplist.contains(node_ptr->host_id())) {
                     // Excluded nodes should not be chosen as targets for migration.
-                    lblogger.debug("Ignoring excluded node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
+                    lblogger.debug("Ignoring excluded or dead node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
                     nodes.erase(node_ptr->host_id());
                 }
             }
@@ -1138,8 +1140,8 @@ public:
         _stopped = true;
     }
 
-    future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats) {
-        load_balancer lb(tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes());
+    future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
+        load_balancer lb(tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes(), std::move(skiplist));
         co_return co_await lb.make_plan();
     }
 
@@ -1216,8 +1218,8 @@ future<> tablet_allocator::stop() {
     return impl().stop();
 }
 
-future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats) {
-    return impl().balance_tablets(std::move(tm), std::move(load_stats));
+future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats, std::unordered_set<host_id> skiplist) {
+    return impl().balance_tablets(std::move(tm), std::move(load_stats), std::move(skiplist));
 }
 
 future<locator::tablet_map> tablet_allocator::split_tablets(locator::token_metadata_ptr tm, table_id table) {
