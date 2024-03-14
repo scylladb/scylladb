@@ -60,10 +60,24 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
 
         co_return json_void{};
     });
+    r::get_leader_host.set(r, [&raft_gr] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+        return smp::submit_to(0, [&] {
+            auto& srv = std::invoke([&] () -> raft::server& {
+                if (req->query_parameters.contains("group_id")) {
+                    raft::group_id id{utils::UUID{req->get_query_param("group_id")}};
+                    return raft_gr.local().get_server(id);
+                } else {
+                    return raft_gr.local().group0();
+                }
+            });
+            return json_return_type(srv.current_leader().to_sstring());
+        });
+    });
 }
 
 void unset_raft(http_context&, httpd::routes& r) {
     r::trigger_snapshot.unset(r);
+    r::get_leader_host.unset(r);
 }
 
 }
