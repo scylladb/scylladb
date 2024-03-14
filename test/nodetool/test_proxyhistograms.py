@@ -50,3 +50,36 @@ Min                     10.00              10.00              10.00             
 Max                     95.00              95.00              95.00              95.00              95.00              17.00
 
 """
+
+
+def test_proxyhistograms_empty_histogram(nodetool):
+    empty_histogram = {"meter": {"rates": [0,0,0], "mean_rate": 0, "count": 0}, "hist": {"count": 0, "sum": 0, "min": 0, "max": 0, "variance": 0, "mean": 0}}
+    expected_requests = [
+            expected_request("GET", "/storage_proxy/metrics/read/moving_average_histogram",
+                             response=empty_histogram),
+            expected_request("GET", "/storage_proxy/metrics/write/moving_average_histogram",
+                             response=empty_histogram),
+            expected_request("GET", "/storage_proxy/metrics/range/moving_average_histogram",
+                             response=empty_histogram),
+            expected_request("GET", "/storage_proxy/metrics/cas_read/moving_average_histogram",
+                             response=empty_histogram),
+            expected_request("GET", "/storage_proxy/metrics/cas_write/moving_average_histogram",
+                             response=empty_histogram),
+            expected_request("GET", "/storage_proxy/metrics/view_write/moving_average_histogram",
+                             response=empty_histogram),
+    ]
+
+    res = nodetool("proxyhistograms", expected_requests=expected_requests)
+
+    assert res == """proxy histograms
+Percentile       Read Latency      Write Latency      Range Latency   CAS Read Latency  CAS Write Latency View Write Latency
+                     (micros)           (micros)           (micros)           (micros)           (micros)           (micros)
+50%                      0.00               0.00               0.00               0.00               0.00               0.00
+75%                      0.00               0.00               0.00               0.00               0.00               0.00
+95%                      0.00               0.00               0.00               0.00               0.00               0.00
+98%                      0.00               0.00               0.00               0.00               0.00               0.00
+99%                      0.00               0.00               0.00               0.00               0.00               0.00
+Min                      0.00               0.00               0.00               0.00               0.00               0.00
+Max                      0.00               0.00               0.00               0.00               0.00               0.00
+
+"""
