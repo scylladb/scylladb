@@ -209,13 +209,12 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
         sys.stdout.write(res.stdout)
         sys.stderr.write(res.stderr)
 
-        unconsumed_expected_requests = rest_api_mock.get_expected_requests(rest_api_mock_server)
+        expected_requests = [r for r in rest_api_mock.get_expected_requests(rest_api_mock_server) if not r.exhausted()]
         # Clear up any unconsumed requests, so the next test starts with a clean slate
         rest_api_mock.clear_expected_requests(rest_api_mock_server)
 
         # Check the return-code first, if the command failed probably not all requests were consumed
         res.check_returncode()
-        expected_requests = [req for req in unconsumed_expected_requests if req.multiple >= 0]
         assert len(expected_requests) == 0, ''.join(str(r) for r in expected_requests)
 
         return res.stdout
