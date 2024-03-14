@@ -1640,6 +1640,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
         set_mode(mode::NORMAL);
 
+        utils::get_local_injector().inject("stop_after_setting_mode_to_normal",
+            [] { std::raise(SIGSTOP); });
+
         if (get_token_metadata().sorted_tokens().empty()) {
             auto err = ::format("join_token_ring: Sorted token in token_metadata is empty");
             slogger.error("{}", err);
@@ -1803,6 +1806,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     co_await set_gossip_tokens(_gossiper, bootstrap_tokens, cdc_gen_id);
 
     set_mode(mode::NORMAL);
+
+    utils::get_local_injector().inject("stop_after_setting_mode_to_normal",
+        [] { std::raise(SIGSTOP); });
 
     if (get_token_metadata().sorted_tokens().empty()) {
         auto err = ::format("join_token_ring: Sorted token in token_metadata is empty");

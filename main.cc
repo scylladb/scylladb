@@ -1821,6 +1821,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 group0_service.abort().get();
             });
 
+            utils::get_local_injector().inject("stop_after_starting_group0_service",
+                [] { std::raise(SIGSTOP); });
+
             // Set up group0 service earlier since it is needed by group0 setup just below
             ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
@@ -1880,6 +1883,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             std::any stop_auth_service;
             start_auth_service(auth_service, stop_auth_service, "auth service");
+
+            utils::get_local_injector().inject("stop_after_starting_auth_service",
+                [] { std::raise(SIGSTOP); });
 
             api::set_server_authorization_cache(ctx, auth_service).get();
             auto stop_authorization_cache_api = defer_verbose_shutdown("authorization cache api", [&ctx] {

@@ -36,6 +36,7 @@
 #include <seastar/util/defer.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <stdexcept>
+#include <csignal>
 
 #include "idl/group0.dist.hh"
 
@@ -748,6 +749,8 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
         auto my_id = load_my_id();
         if (!_raft_gr.group0().get_configuration().can_vote(my_id)) {
+            utils::get_local_injector().inject("stop_before_becoming_raft_voter",
+                [] { std::raise(SIGSTOP); });
             group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
             // Just bootstrapped and joined as non-voter. Become a voter.
             auto pause_shutdown = _shutdown_gate.hold();
