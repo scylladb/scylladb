@@ -166,6 +166,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         group0_guard guard;
     };
 
+    // Return dead nodes
+    std::unordered_set<locator::host_id> get_dead_nodes() const {
+        std::unordered_set<locator::host_id> dead_set;
+        for (auto& n : _topo_sm._topology.normal_nodes) {
+            bool alive = false;
+            try {
+                alive = _gossiper.is_alive(id2ip(locator::host_id(n.first.uuid())));
+            } catch (...) {}
+
+            if (!alive) {
+                dead_set.insert(locator::host_id(n.first.uuid()));
+            }
+        }
+        return dead_set;
+    }
+
     // Return dead nodes and while at it checking if there are live nodes that either need cleanup
     // or running one already
     std::unordered_set<raft::server_id> get_dead_node(bool& cleanup_running, bool& cleanup_needed) const {
@@ -1175,7 +1191,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
         }
         if (!preempt) {
-            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), _tablet_load_stats);
+            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), _tablet_load_stats, get_dead_nodes());
             if (!drain || plan.has_nodes_to_drain()) {
                 co_await generate_migration_updates(updates, guard, plan);
             }
@@ -2214,7 +2230,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     }
 
     auto tm = get_token_metadata_ptr();
-    auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats);
+    auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats, get_dead_nodes());
     if (plan.empty()) {
         rtlogger.debug("Tablets are balanced");
         co_return false;
