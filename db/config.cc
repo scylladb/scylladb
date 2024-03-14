@@ -1224,11 +1224,6 @@ std::istream& operator>>(std::istream& is, db::seed_provider_type& s) {
     return is;
 }
 
-std::ostream& operator<<(std::ostream& os, const error_injection_at_startup& eias) {
-    fmt::print(os, "{}", eias);
-    return os;
-}
-
 std::istream& operator>>(std::istream& is, error_injection_at_startup& eias) {
     eias = error_injection_at_startup();
     is >> eias.name;

@@ -78,7 +78,6 @@ struct error_injection_at_startup {
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const error_injection_at_startup&);
 std::istream& operator>>(std::istream& is, error_injection_at_startup&);
 
 }
