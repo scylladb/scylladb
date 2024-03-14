@@ -98,7 +98,7 @@ using error_injection_parameters = std::unordered_map<sstring, sstring>;
  *          }, f);
  *    Expected use case: emulate custom errors like timeouts.
  *
- * 4. inject_with_handler(name, func)
+ * 4. inject(name, future<> func(injection_handler&))
  *    Inserts code that can wait for an event.
  *    Requires func to be a function taking an injection_handler reference and
  *    returning a future<>.
@@ -127,7 +127,7 @@ class error_injection {
 public:
     /**
      * The injection handler class is used to wait for events inside the injected code.
-     * If multiple inject_with_handler are called concurrently for the same injection_name,
+     * If multiple inject (with handler) are called concurrently for the same injection_name,
      * all of them will have separate handlers.
      */
     class injection_handler: public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
@@ -185,6 +185,8 @@ public:
     };
 
 private:
+    using waiting_handler_fun = std::function<future<>(injection_handler&)>;
+
     /**
      * - there is a counter of received messages; it is shared between the injection_data,
      *   which is created once when enabling an injection on a given shard, and all injection_handlers,
@@ -391,10 +393,7 @@ public:
 
     // \brief Inject exception
     // \param func function returning a future and taking an injection handler
-    template <typename Func>
-    requires std::is_invocable_r_v<future<>, Func, injection_handler&>
-    future<> inject_with_handler(const std::string_view& name,
-                                 Func&& func) {
+    future<> inject(const std::string_view& name, waiting_handler_fun func) {
         auto* data = get_data(name);
         if (!data) {
             co_return;
@@ -474,6 +473,7 @@ template <>
 class error_injection<false> {
     static thread_local error_injection _local;
     using handler_fun = std::function<void()>;
+    using waiting_handler_fun = std::function<future<>(error_injection<true>::injection_handler&)>;
 public:
     bool is_enabled(const std::string_view& name) const {
         return false;
@@ -534,11 +534,8 @@ public:
 
     // \brief Inject exception
     // \param func function returning a future and taking an injection handler
-    template <typename Func>
-    requires std::is_invocable_r_v<future<>, Func, error_injection<true>::injection_handler&>
     [[gnu::always_inline]]
-    future<> inject_with_handler(const std::string_view& name,
-                                 Func&& func) {
+    future<> inject(const std::string_view& name, waiting_handler_fun func) {
         return make_ready_future<>();
     }
 

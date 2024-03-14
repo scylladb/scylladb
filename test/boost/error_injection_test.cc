@@ -50,7 +50,7 @@ SEASTAR_TEST_CASE(test_inject_noop) {
     BOOST_REQUIRE(f.available() && !f.failed());
 
     errinj.enable("noop3");
-    f = errinj.inject_with_handler("noop3", [] (auto& handler) -> future<> {
+    f = errinj.inject("noop3", [] (auto& handler) -> future<> {
         throw std::runtime_error("shouldn't happen");
     });
 
@@ -277,7 +277,7 @@ SEASTAR_TEST_CASE(test_inject_message) {
     errinj.enable("injection1");
     {
         // Test timeout
-        auto f = errinj.inject_with_handler("injection1", [] (auto& handler) {
+        auto f = errinj.inject("injection1", [] (auto& handler) {
             return handler.wait_for_message(db::timeout_clock::now());
         });
 
@@ -285,7 +285,7 @@ SEASTAR_TEST_CASE(test_inject_message) {
     }
     {
         // Test receiving multiple messages
-        auto f = errinj.inject_with_handler("injection1", std::bind_front([] (auto timeout, auto& handler) -> future<> {
+        auto f = errinj.inject("injection1", std::bind_front([] (auto timeout, auto& handler) -> future<> {
             for (size_t i = 0; i < 3; ++i) {
                 co_await handler.wait_for_message(timeout);
             }
@@ -304,7 +304,7 @@ SEASTAR_TEST_CASE(test_inject_message) {
         // Test receiving message before waiting for it
         errinj.receive_message("injection2");
 
-        auto f = errinj.inject_with_handler("injection2", [] (auto& handler) {
+        auto f = errinj.inject("injection2", [] (auto& handler) {
             return handler.wait_for_message(db::timeout_clock::now());
         });
         BOOST_REQUIRE_NO_THROW(co_await std::move(f));
@@ -314,10 +314,10 @@ SEASTAR_TEST_CASE(test_inject_message) {
     errinj.enable("multiple_injections");
     {
         // Test concurrent injections
-        auto f1 = errinj.inject_with_handler("multiple_injections", [timeout] (auto& handler) {
+        auto f1 = errinj.inject("multiple_injections", [timeout] (auto& handler) {
             return handler.wait_for_message(timeout);
         });
-        auto f2 = errinj.inject_with_handler("multiple_injections", [timeout] (auto& handler) {
+        auto f2 = errinj.inject("multiple_injections", [timeout] (auto& handler) {
             return handler.wait_for_message(timeout);
         });
         errinj.receive_message("multiple_injections");
@@ -329,10 +329,10 @@ SEASTAR_TEST_CASE(test_inject_message) {
     errinj.enable("one_shot", true);
     {
         // Test concurrent one shot injections
-        auto f1 = errinj.inject_with_handler("one_shot", [timeout] (auto& handler) {
+        auto f1 = errinj.inject("one_shot", [timeout] (auto& handler) {
             return handler.wait_for_message(timeout);
         });
-        auto f2 = errinj.inject_with_handler("one_shot", std::bind_front([] (auto timeout, auto& handler) -> future<> {
+        auto f2 = errinj.inject("one_shot", std::bind_front([] (auto timeout, auto& handler) -> future<> {
             co_await handler.wait_for_message(timeout);
             co_await handler.wait_for_message(timeout);
         }, timeout));
@@ -349,7 +349,7 @@ SEASTAR_TEST_CASE(test_inject_with_parameters) {
 
     errinj.enable("injection", false, { { "x", "42" } });
 
-    auto f = errinj.inject_with_handler("injection", [] (auto& handler) {
+    auto f = errinj.inject("injection", [] (auto& handler) {
         auto x = handler.get("x");
         auto y = handler.get("y");
         BOOST_REQUIRE(x && *x == "42");

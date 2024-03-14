@@ -163,7 +163,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                         sm.local().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
                         offstrategy_update->update();
 
-                        return utils::get_local_injector().inject_with_handler("stream_mutation_fragments", [&guard, &as] (auto& handler) -> future<> {
+                        return utils::get_local_injector().inject("stream_mutation_fragments", [&guard, &as] (auto& handler) -> future<> {
                             auto& guard_ = guard;
                             auto& as_ = as;
                             sslog.info("stream_mutation_fragments: waiting");

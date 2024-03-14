@@ -726,7 +726,7 @@ private:
         }
         schema_ptr s = f_s.get();
 
-        co_await utils::get_local_injector().inject_with_handler("storage_proxy::handle_read", [s] (auto& handler) -> future<> {
+        co_await utils::get_local_injector().inject("storage_proxy::handle_read", [s] (auto& handler) -> future<> {
             const auto cf_name = handler.get("cf_name");
             assert(cf_name);
             if (s->cf_name() != cf_name) {

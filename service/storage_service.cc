@@ -5151,7 +5151,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     rtlogger.debug("raft_topology_cmd::barrier_and_drain done");
                 });
 
-                co_await utils::get_local_injector().inject_with_handler("raft_topology_barrier_and_drain_fail", [this] (auto& handler) -> future<> {
+                co_await utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail", [this] (auto& handler) -> future<> {
                     auto ks = handler.get("keyspace");
                     auto cf = handler.get("table");
                     auto last_token = dht::token::from_int64(std::atoll(handler.get("last_token")->data()));

@@ -1676,7 +1676,7 @@ void gossiper::mark_alive(inet_address addr) {
 }
 
 future<> gossiper::real_mark_alive(inet_address addr) {
-    co_await utils::get_local_injector().inject_with_handler("gossiper::real_mark_alive", [this, endpoint = addr] (auto& handler) -> future<> {
+    co_await utils::get_local_injector().inject("gossiper::real_mark_alive", [this, endpoint = addr] (auto& handler) -> future<> {
         auto app_state_ptr = get_application_state_ptr(endpoint, application_state::HOST_ID);
         if (!app_state_ptr) {
             co_return;

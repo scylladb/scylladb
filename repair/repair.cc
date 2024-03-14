@@ -1035,7 +1035,7 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
             auto user_permit = _user_ranges_parallelism ? co_await seastar::get_units(*_user_ranges_parallelism, 1) : semaphore_units<>();
             co_await repair_range(range, table_info);
             if (2 * (_ranges_complete + 1) > ranges_size()) {
-                co_await utils::get_local_injector().inject_with_handler("repair_shard_repair_task_impl_do_repair_ranges",
+                co_await utils::get_local_injector().inject("repair_shard_repair_task_impl_do_repair_ranges",
                 [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
             }
             ++_ranges_complete;

@@ -1187,7 +1187,7 @@ protected:
 
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         if (!is_system_keyspace(_status.keyspace)) {
-            co_await utils::get_local_injector().inject_with_handler("compaction_regular_compaction_task_executor_do_run",
+            co_await utils::get_local_injector().inject("compaction_regular_compaction_task_executor_do_run",
                 [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
         }
 
