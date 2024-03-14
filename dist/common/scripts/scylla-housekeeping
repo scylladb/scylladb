@@ -149,9 +149,9 @@ def check_version(ar):
             traceln("Your current Scylla release is " + current_version + ", while the latest patch release is " + latest_patch_version +
                     ", and the latest minor release is " + latest_version + " (recommended)")
         else:
-            traceln("You current Scylla release is ", current_version, " the latest minor release is ", latest_version, " go to http://www.scylladb.com for upgrade instructions")
+            traceln("Your current Scylla release is ", current_version, " the latest minor release is ", latest_version, " go to http://www.scylladb.com for upgrade instructions")
     elif version_compare(current_version, latest_patch_version):
-            traceln("You current Scylla release is ", current_version, " while the latest patch release is ", latest_patch_version, ", update for the latest bug fixes and improvements")
+            traceln("Your current Scylla release is ", current_version, " while the latest patch release is ", latest_patch_version, ", update for the latest bug fixes and improvements")
 
 
 parser = argparse.ArgumentParser(description='ScyllaDB help report tool', conflict_handler="resolve")
