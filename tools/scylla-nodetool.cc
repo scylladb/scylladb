@@ -230,10 +230,12 @@ public:
 
     static buffer_samples retrieve_from_api(scylla_rest_client& client, sstring path) {
         const auto res = client.get(std::move(path));
-        const auto res_object = res.GetObject();
+        const auto histogram_object = res["hist"].GetObject();
         std::vector<uint64_t> samples;
-        for (const auto& sample : res_object["hist"]["sample"].GetArray()) {
-            samples.push_back(sample.GetInt());
+        if (histogram_object.HasMember("sample")) {
+            for (const auto& sample : histogram_object["sample"].GetArray()) {
+                samples.push_back(sample.GetInt());
+            }
         }
         return buffer_samples(std::move(samples));
     }
@@ -1901,6 +1903,9 @@ void tablehistograms_operation(scylla_rest_client& client, const bpo::variables_
     auto get_estimated_histogram = [&client, &keyspace, &table] (std::string_view histogram) {
         const auto res = client.get(format("/column_family/metrics/{}/{}:{}", histogram, keyspace, table));
         const auto res_object = res.GetObject();
+        if (!res.HasMember("bucket_offsets")) {
+            return utils::estimated_histogram(0);
+        }
         const auto& buckets_array = res["buckets"].GetArray();
         const auto& bucket_offsets_array = res["bucket_offsets"].GetArray();
 
