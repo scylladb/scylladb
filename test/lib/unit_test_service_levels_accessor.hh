@@ -27,19 +27,19 @@ public:
                 : _sl_controller(sl_controller)
                 , _sys_dist_ks(sys_dist_ks)
         {}
-        virtual future<qos::service_levels_info> get_service_levels() const {
+        virtual future<qos::service_levels_info> get_service_levels() const override {
             return _sys_dist_ks.local().get_service_levels();
         }
-        virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const {
+        virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const override {
             return _sys_dist_ks.local().get_service_level(service_level_name);
         }
-        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const {
+        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const override {
             return _sys_dist_ks.local().set_service_level(service_level_name, slo).then([this] () {
                 return _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
             });
 
         }
-        virtual future<> drop_service_level(sstring service_level_name) const {
+        virtual future<> drop_service_level(sstring service_level_name) const override {
             return _sys_dist_ks.local().drop_service_level(service_level_name).then([this] () {
                 return _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
             });
