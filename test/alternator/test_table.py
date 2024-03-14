@@ -452,7 +452,7 @@ def check_pre_consistent_cluster_management(dynamodb):
     from util import is_aws
     # If not running on Scylla, return false.
     if is_aws(dynamodb):
-        return false
+        return False
     # In Scylla, we check Raft mode by inspecting the configuration via a
     # system table (which is also visible in Alternator)
     config_table = dynamodb.Table('.scylla.alternator.system.config')
