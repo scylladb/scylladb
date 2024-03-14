@@ -49,6 +49,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/algorithm/copy.hpp>
@@ -2755,8 +2756,14 @@ static void make_update_indices_mutations(
     for (auto&& name : diff.entries_only_on_left) {
         const index_metadata& index = old_table->all_indices().at(name);
         drop_index_from_schema_mutation(old_table, index, timestamp, mutations);
-        auto& cf = db.find_column_family(old_table);
-        auto view = cf.get_index_manager().create_view_for_index(index, new_token_column_computation);
+        schema_ptr view;
+        try {
+            view = db.find_schema(old_table->ks_name(), secondary_index::index_table_name(name));
+            db.get_notifier().before_drop_column_family(*view, mutations, timestamp);
+        } catch (const replica::no_such_column_family&) {
+            on_internal_error(slogger, format("Could not find schema for dropped index {}.{}",
+                    old_table->ks_name(), secondary_index::index_table_name(name)));
+        }
         make_drop_table_or_view_mutations(views(), view, timestamp, mutations);
     }
 

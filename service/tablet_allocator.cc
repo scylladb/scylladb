@@ -1150,6 +1150,7 @@ public:
         auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
             auto tm = _db.get_shared_token_metadata().get();
+            lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
             auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, _config.initial_tablets_scale).get();
             muts.emplace_back(tablet_map_to_mutation(map, s.id(), s.keypace_name(), s.cf_name(), ts).get());
         }
@@ -1158,9 +1159,9 @@ public:
     void on_before_drop_column_family(const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
         keyspace& ks = _db.find_keyspace(s.ks_name());
         auto&& rs = ks.get_replication_strategy();
-        std::vector<mutation> result;
         if (rs.uses_tablets()) {
             auto tm = _db.get_shared_token_metadata().get();
+            lblogger.debug("Dropping tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
             muts.emplace_back(make_drop_tablet_map_mutation(s.id(), ts));
         }
     }
@@ -1169,6 +1170,7 @@ public:
         keyspace& ks = _db.find_keyspace(keyspace_name);
         auto&& rs = ks.get_replication_strategy();
         if (rs.uses_tablets()) {
+            lblogger.debug("Dropping tablets for keyspace {}", keyspace_name);
             auto tm = _db.get_shared_token_metadata().get();
             for (auto&& [name, s] : ks.metadata()->cf_meta_data()) {
                 muts.emplace_back(make_drop_tablet_map_mutation(s->id(), ts));
