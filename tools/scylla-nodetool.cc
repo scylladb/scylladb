@@ -11,6 +11,7 @@
 #include <chrono>
 #include <concepts>
 #include <limits>
+#include <iterator>
 #include <numeric>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -1772,11 +1773,36 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
     fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
 }
 
+static bool keyspace_uses_tablets(scylla_rest_client& client, const sstring& keyspace) {
+    const std::unordered_map<sstring, sstring> params = {{"replication", "tablets"}};
+    const auto res = client.get("/storage_service/keyspaces", params);
+
+    const auto& ks_array = res.GetArray();
+    const auto is_same_ks = [&] (const auto& json_ks) { return rjson::to_string_view(json_ks) == keyspace; };
+    return std::find_if(ks_array.begin(), ks_array.end(), is_same_ks) != ks_array.end();
+}
+
+static std::map<sstring, double> get_effective_ownership(scylla_rest_client& client, const sstring& keyspace, const std::optional<sstring>& table) {
+    const sstring request_str = format("/storage_service/ownership/{}", keyspace);
+    std::unordered_map<sstring, sstring> params{};
+    if (table) {
+        params["cf"] = *table;
+    }
+
+    return rjson_to_map<double>(client.get(request_str, params));
+}
+
 void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::optional<sstring> keyspace;
     if (vm.count("keyspace")) {
         keyspace.emplace(vm["keyspace"].as<sstring>());
     }
+
+    std::optional<sstring> table;
+    if (vm.count("table")) {
+        table.emplace(vm["table"].as<sstring>());
+    }
+
     const auto resolve_ips = vm.count("resolve-ip");
 
     const auto live = get_endpoints_of_status(client, "live");
@@ -1786,9 +1812,11 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     const auto moving = get_nodes_of_state(client, "moving");
     const auto endpoint_load = rjson_to_map<size_t>(client.get("/storage_service/load_map"));
     const auto endpoint_host_id = rjson_to_map<sstring>(client.get("/storage_service/host_id"));
-    const auto endpoint_ownership = keyspace
-        ? rjson_to_map<double>(client.get(format("/storage_service/ownership/{}", *keyspace)))
-        : std::map<sstring, double>{};
+
+    const auto is_effective_ownership_unknown = (!keyspace || (!table && keyspace_uses_tablets(client, *keyspace)));
+    const auto endpoint_ownership = is_effective_ownership_unknown
+        ? std::map<sstring, double>{}
+        : get_effective_ownership(client, *keyspace, table);
 
     std::unordered_map<sstring, sstring> endpoint_rack;
     std::map<sstring, std::set<sstring>> dc_endpoints;
@@ -1844,7 +1872,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
                     address,
                     load,
                     endpoint_tokens.at(ep),
-                    keyspace ? format("{:.1f}%", endpoint_ownership.at(ep) * 100) : "?",
+                    !is_effective_ownership_unknown ? format("{:.1f}%", endpoint_ownership.at(ep) * 100) : "?",
                     endpoint_host_id.contains(ep) ? endpoint_host_id.at(ep) : "?",
                     endpoint_rack.at(ep));
         }
@@ -3283,7 +3311,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
         {
             {
                 "status",
-                "Displays cluster information for a single keyspace or all keyspaces",
+                "Displays cluster information for a table in a keyspace, a single keyspace or all keyspaces",
 R"(
 Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/status.html
 )",
@@ -3292,6 +3320,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
                 {
                     typed_option<sstring>("keyspace", "The keyspace name", 1),
+                    typed_option<sstring>("table", "The table name (needed to display load information, if the keyspace uses tablets)", 1),
                 },
             },
             status_operation

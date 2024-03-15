@@ -36,12 +36,16 @@ class Node(NamedTuple):
     status: NodeStatus
     state: NodeState
 
+class StatusQueryTarget(NamedTuple):
+    keyspace: str
+    table: str
+    uses_tablets: bool
 
 null_ownership_error = ("Non-system keyspaces don't have the same replication settings, "
                         "effective ownership information is meaningless")
 
 
-def validate_status_output(res, keyspace, nodes, ownership, resolve):
+def validate_status_output(res, keyspace, nodes, ownership, resolve, effective_ownership_unknown):
     datacenters = sorted(list(set([node.datacenter for node in nodes.values()])))
     load_multiplier = {"bytes": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
 
@@ -103,7 +107,7 @@ def validate_status_output(res, keyspace, nodes, ownership, resolve):
                 assert load_unit is not None
                 assert load == "{:.2f}".format(int(node.load) / load_multiplier[load_unit])
             assert int(tokens) == len(node.tokens)
-            if keyspace is None:
+            if effective_ownership_unknown:
                 assert owns == "?"
             else:
                 assert owns == "{:.1f}%".format(float(ownership[ep]) * 100)
@@ -170,7 +174,18 @@ def _get_ownership(nodes):
     return ownership
 
 
-def _do_test_status(nodetool, keyspace, node_list, resolve=None):
+def _do_test_status(request, nodetool, status_query_target, node_list, resolve=None):
+    uses_cassandra_nodetool = request.config.getoption("nodetool") == "cassandra"
+
+    if status_query_target:
+        keyspace = status_query_target.keyspace
+        table = status_query_target.table
+        keyspace_uses_tablets = status_query_target.uses_tablets
+    else:
+        keyspace = None
+        table = None
+        keyspace_uses_tablets = False
+
     nodes = {node.endpoint: node for node in node_list}
 
     joining = [n.endpoint for n in node_list if n.state == NodeState.Joining]
@@ -212,9 +227,18 @@ def _do_test_status(nodetool, keyspace, node_list, resolve=None):
                                  response={"message": f"std::runtime_error({null_ownership_error})", "code": 500}),
                 expected_request("GET", "/storage_service/ownership", multiple=expected_request.ANY,
                                  response=ownership_response)]
+    elif table is None:
+        if not uses_cassandra_nodetool:
+            keyspaces_using_tablets = [keyspace] if keyspace_uses_tablets else []
+            expected_requests.append(
+                expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, multiple=expected_request.ONE, response=keyspaces_using_tablets))
+
+        if not keyspace_uses_tablets:
+            expected_requests.append(
+                expected_request("GET", f"/storage_service/ownership/{keyspace}", multiple=expected_request.ONE, response=ownership_response))
     else:
         expected_requests.append(
-                expected_request("GET", f"/storage_service/ownership/{keyspace}", response=ownership_response))
+                expected_request("GET", f"/storage_service/ownership/{keyspace}", params={"cf": table}, response=ownership_response))
 
     for ep, node in nodes.items():
         expected_requests += [
@@ -229,15 +253,19 @@ def _do_test_status(nodetool, keyspace, node_list, resolve=None):
     if keyspace is not None:
         args.append(keyspace)
 
+    if table is not None:
+        args.append(table)
+
     if resolve is not None:
         args.append(resolve)
 
     res = nodetool(*args, expected_requests=expected_requests)
 
-    validate_status_output(res, keyspace, nodes, ownership, bool(resolve))
+    effective_ownership_unknown = keyspace is None or (table is None and keyspace_uses_tablets)
+    validate_status_output(res, keyspace, nodes, ownership, bool(resolve), effective_ownership_unknown)
 
 
-def test_status_no_keyspace_single_dc(nodetool):
+def test_status_no_keyspace_single_dc(request, nodetool):
     nodes = [
         Node(
             endpoint="127.0.0.1",
@@ -271,10 +299,15 @@ def test_status_no_keyspace_single_dc(nodetool):
         ),
     ]
 
-    _do_test_status(nodetool, None, nodes)
+    _do_test_status(request, nodetool, None, nodes)
 
 
-def test_status_keyspace_single_dc(nodetool):
+@pytest.mark.parametrize("uses_tablets", (False, True))
+@pytest.mark.parametrize("table", (None, "cf"))
+def test_status_keyspace_single_dc(request, nodetool, uses_tablets, table):
+    if request.config.getoption("nodetool") == "cassandra" and (uses_tablets or table):
+        pytest.skip("skipping tablets-related test with Cassandra nodetool")
+
     nodes = [
         Node(
             endpoint="127.0.0.1",
@@ -308,10 +341,11 @@ def test_status_keyspace_single_dc(nodetool):
         ),
     ]
 
-    _do_test_status(nodetool, "ks", nodes)
+    status_target = StatusQueryTarget(keyspace="ks", table=table, uses_tablets=uses_tablets)
+    _do_test_status(request, nodetool, status_target, nodes)
 
 
-def test_status_no_keyspace_multi_dc(nodetool):
+def test_status_no_keyspace_multi_dc(request, nodetool):
     nodes = [
         Node(
             endpoint="127.1.0.1",
@@ -355,10 +389,14 @@ def test_status_no_keyspace_multi_dc(nodetool):
         ),
     ]
 
-    _do_test_status(nodetool, None, nodes)
+    _do_test_status(request, nodetool, None, nodes)
 
+@pytest.mark.parametrize("uses_tablets", (False, True))
+@pytest.mark.parametrize("table", (None, "cf"))
+def test_status_keyspace_multi_dc(request, nodetool, uses_tablets, table):
+    if request.config.getoption("nodetool") == "cassandra" and (uses_tablets or table):
+        pytest.skip("skipping tablets-related test with Cassandra nodetool")
 
-def test_status_keyspace_multi_dc(nodetool):
     nodes = [
         Node(
             endpoint="127.1.0.1",
@@ -402,10 +440,11 @@ def test_status_keyspace_multi_dc(nodetool):
         ),
     ]
 
-    _do_test_status(nodetool, "ks", nodes)
+    status_target = StatusQueryTarget(keyspace="ks", table=table, uses_tablets=uses_tablets)
+    _do_test_status(request, nodetool, status_target, nodes)
 
 
-def test_status_keyspace_joining_node(nodetool):
+def test_status_keyspace_joining_node(request, nodetool):
     """ Joining nodes do not have some attributes available yet:
     * load
     * host_id
@@ -433,11 +472,12 @@ def test_status_keyspace_joining_node(nodetool):
         ),
     ]
 
-    _do_test_status(nodetool, "ks", nodes)
+    status_target = StatusQueryTarget(keyspace="ks", table=None, uses_tablets=False)
+    _do_test_status(request, nodetool, status_target, nodes)
 
 
 @pytest.mark.parametrize("resolve", (None, '-r', '--resolve-ip'))
-def test_status_resolve(nodetool, resolve):
+def test_status_resolve(request, nodetool, resolve):
     nodes = [
         Node(
             endpoint="127.0.0.1",
@@ -451,4 +491,4 @@ def test_status_resolve(nodetool, resolve):
         ),
     ]
 
-    _do_test_status(nodetool, None, nodes, resolve)
+    _do_test_status(request, nodetool, None, nodes, resolve)
