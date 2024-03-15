@@ -43,7 +43,7 @@ null_ownership_error = ("Non-system keyspaces don't have the same replication se
 
 def validate_status_output(res, keyspace, nodes, ownership, resolve):
     datacenters = sorted(list(set([node.datacenter for node in nodes.values()])))
-    load_multiplier = {"KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+    load_multiplier = {"bytes": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
 
     lines = res.split('\n')
     i = 0
@@ -81,7 +81,11 @@ def validate_status_output(res, keyspace, nodes, ownership, resolve):
 
             assert lines[i] != ""
 
-            status_state, ep, load, load_unit, tokens, owns, host_id, rack = lines[i].split()
+            pieces = tuple(lines[i].split())
+            if len(pieces) == 8:
+                status_state, ep, load, load_unit, tokens, owns, host_id, rack = pieces
+            else:
+                status_state, ep, load, tokens, owns, host_id, rack = pieces
 
             if resolve:
                 assert ep in name_to_ep
@@ -93,7 +97,11 @@ def validate_status_output(res, keyspace, nodes, ownership, resolve):
             node = nodes[ep]
 
             assert status_state == "{}{}".format(nodes[ep].status.value, nodes[ep].state.value)
-            assert load == "{:.2f}".format(int(node.load) / load_multiplier[load_unit])
+            if node.load is None:
+                assert load == "?"
+            else:
+                assert load_unit is not None
+                assert load == "{:.2f}".format(int(node.load) / load_multiplier[load_unit])
             assert int(tokens) == len(node.tokens)
             if keyspace is None:
                 assert owns == "?"
@@ -168,7 +176,7 @@ def _do_test_status(nodetool, keyspace, node_list, resolve=None):
     live = [n.endpoint for n in node_list if n.status == NodeStatus.Up]
     down = [n.endpoint for n in node_list if n.status == NodeStatus.Down]
 
-    load_map = [{"key": ep, "value": node.load} for ep, node in nodes.items()]
+    load_map = [{"key": ep, "value": node.load} for ep, node in nodes.items() if node.load is not None]
 
     host_id_map = [{"key": ep, "value": node.host_id} for ep, node in nodes.items()]
 
@@ -387,6 +395,33 @@ def test_status_keyspace_multi_dc(nodetool):
             datacenter="datacenter2",
             rack="rack2",
             status=NodeStatus.Up,
+            state=NodeState.Normal,
+        ),
+    ]
+
+    _do_test_status(nodetool, "ks", nodes)
+
+
+def test_status_keyspace_no_load(nodetool):
+    nodes = [
+        Node(
+            endpoint="127.0.0.1",
+            host_id="78a9c1d0-b341-467e-a076-9eff4cf7ffc6",
+            load=206015,
+            tokens=["-9175818098208185248", "-3983536194780899528"],
+            datacenter="datacenter1",
+            rack="rack1",
+            status=NodeStatus.Unknown,
+            state=NodeState.Joining,
+        ),
+        Node(
+            endpoint="127.0.0.2",
+            host_id="ed341f60-b12a-4fd4-9917-e80977ded0f9",
+            load=None,
+            tokens=["-1810801828328238220", "2983536194780899528"],
+            datacenter="datacenter1",
+            rack="rack2",
+            status=NodeStatus.Down,
             state=NodeState.Normal,
         ),
     ]
