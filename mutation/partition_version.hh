@@ -704,9 +704,9 @@ public:
         printer(const printer&) = delete;
         printer(printer&&) = delete;
 
-        friend std::ostream& operator<<(std::ostream& os, const printer& p);
+        friend fmt::formatter<printer>;
     };
-    friend std::ostream& operator<<(std::ostream& os, const printer& p);
+    friend fmt::formatter<printer>;
 };
 
 // Monotonic exception guarantees
@@ -729,3 +729,7 @@ inline const partition_version_ref& partition_snapshot::version() const
         return _entry->_version;
     }
 }
+
+template <> struct fmt::formatter<partition_entry::printer> : fmt::formatter<std::string_view> {
+    auto format(const partition_entry::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

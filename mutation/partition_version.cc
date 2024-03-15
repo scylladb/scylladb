@@ -692,15 +692,16 @@ void partition_snapshot::touch() noexcept {
     }
 }
 
-std::ostream& operator<<(std::ostream& out, const partition_entry::printer& p) {
+auto fmt::formatter<partition_entry::printer>::format(const partition_entry::printer& p, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     auto& e = p._partition_entry;
-    out << "{";
+    auto out = fmt::format_to(ctx.out(), "{{");
     bool first = true;
     if (e._version) {
         const partition_version* v = &*e._version;
         while (v) {
             if (!first) {
-                out << ", ";
+                out = fmt::format_to(out, ", ");
             }
             if (v->is_referenced()) {
                 partition_snapshot* snp = nullptr;
@@ -709,20 +710,19 @@ std::ostream& operator<<(std::ostream& out, const partition_entry::printer& p) {
                 } else {
                     snp = &partition_snapshot::container_of(&v->back_reference());
                 }
-                out << "(*";
+                out = fmt::format_to(out, "(*");
                 if (snp) {
-                    out << " snp=" << snp << ", phase=" << snp->phase();
+                    out = fmt::format_to(out, " snp={}, phase={}", fmt::ptr(snp), snp->phase());
                 }
-                out << ") ";
+                out = fmt::format_to(out, ") ");
             }
-            fmt::print(out, "{}: {}",
+            out = fmt::format_to(out, "{}: {}",
                        fmt::ptr(v), mutation_partition_v2::printer(*v->get_schema(), v->partition()));
             v = v->next();
             first = false;
         }
     }
-    out << "}";
-    return out;
+    return fmt::format_to(out, "}}");
 }
 
 void partition_entry::evict(mutation_cleaner& cleaner) noexcept {
