@@ -137,3 +137,6 @@ public:
     friend std::ostream& operator<<(std::ostream&, const schema_mutations&);
 };
 
+template <> struct fmt::formatter<schema_mutations> : fmt::formatter<std::string_view> {
+    auto format(const schema_mutations&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
