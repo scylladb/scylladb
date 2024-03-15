@@ -138,17 +138,17 @@ bool schema_mutations::is_view() const {
     return _columnfamilies.schema() == db::schema_tables::views();
 }
 
-std::ostream& operator<<(std::ostream& out, const schema_mutations& sm) {
-    out << "schema_mutations{\n";
-    fmt::print(out, " tables={},\n", sm.columnfamilies_mutation());
-    fmt::print(out, " scylla_tables={},\n", sm.scylla_tables());
-    fmt::print(out, " tables={},\n", sm.columns_mutation());
-    fmt::print(out, " dropped_columns={},\n", sm.dropped_columns_mutation());
-    fmt::print(out, " indices={},\n", sm.indices_mutation());
-    fmt::print(out, " computed_columns={},\n", sm.computed_columns_mutation());
-    fmt::print(out, " view_virtual_columns={},\n", sm.view_virtual_columns_mutation());
-    out << "}";
-    return out;
+auto fmt::formatter<schema_mutations>::format(const schema_mutations& sm, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = fmt::format_to(ctx.out(), "schema_mutations{{\n");
+    out = fmt::format_to(out, " tables={},\n", sm.columnfamilies_mutation());
+    out = fmt::format_to(out, " scylla_tables={},\n", sm.scylla_tables());
+    out = fmt::format_to(out, " tables={},\n", sm.columns_mutation());
+    out = fmt::format_to(out, " dropped_columns={},\n", sm.dropped_columns_mutation());
+    out = fmt::format_to(out, " indices={},\n", sm.indices_mutation());
+    out = fmt::format_to(out, " computed_columns={},\n", sm.computed_columns_mutation());
+    out = fmt::format_to(out, " view_virtual_columns={},\n", sm.view_virtual_columns_mutation());
+    return fmt::format_to(out, "}}");
 }
 
 schema_mutations& schema_mutations::operator+=(schema_mutations&& sm) {
