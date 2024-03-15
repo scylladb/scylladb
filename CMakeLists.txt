@@ -136,11 +136,17 @@ option(Scylla_CHECK_HEADERS
   "Add check-headers target for checking the self-containness of headers")
 if(Scylla_CHECK_HEADERS)
     add_custom_target(check-headers)
-    # compatibility target used by CI, which builds "dev-headers" for building
-    # "headers" of the "dev" mode. but we don't have such an alias. what we
-    # have is check-headers:Dev, and we don't want to build check-headers
-    # for all "CMAKE_DEFAULT_CONFIGS". so, before we , let's add an target
-    # which only build build check-headers for Dev, and skip it otherwise.
+    # compatibility target used by CI, which builds "check-headers" only for
+    # the "Dev" mode.
+    # our CI currently builds "dev-headers" using ninja without specify a build
+    # mode. where "dev" is actually a prefix encoded in the target name for the
+    # underlying "headers" target. while we don't have this convention in CMake
+    # targets. in contrast, the "check-headers" which is built for all
+    # configurations defined by "CMAKE_DEFAULT_CONFIGS". however, we only need
+    # to build "check-headers" for the "Dev" configuration. Therefore, before
+    # updating the CI to use build "check-headers:Dev", let's add a new target
+    # that specifically builds "check-headers" only for Dev configuration. The
+    # new target will do nothing for other configurations.
     add_custom_target(dev-headers
         COMMAND ${CMAKE_COMMAND}
           "$<IF:$<CONFIG:Dev>,--build;${CMAKE_BINARY_DIR};--config;$<CONFIG>;--target;check-headers,-E;echo;skipping;dev-headers;in;$<CONFIG>>"
