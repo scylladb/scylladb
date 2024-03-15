@@ -12,6 +12,7 @@ from test.pylib.rest_client import inject_error_one_shot, inject_error
 import pytest
 from cassandra.query import SimpleStatement              # type: ignore # pylint: disable=no-name-in-module
 
+from test.pylib.util import gather_safely
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ async def test_snapshot(manager, random_tables):
     # Reduce the snapshot thresholds
     errs = [inject_error_one_shot(manager.api, s.ip_addr, 'raft_server_snapshot_reduce_threshold')
             for s in [server_a, server_b, server_c]]
-    await asyncio.gather(*errs)
+    await gather_safely(*errs)
 
     t = await random_tables.add_table(ncolumns=5, pks=1)
 
@@ -41,8 +42,8 @@ async def test_snapshot(manager, random_tables):
     logger.info("Started D %s", server_d)
 
     logger.info("Stopping A %s, B %s, and C %s", server_a, server_b, server_c)
-    await asyncio.gather(*[manager.server_stop_gracefully(s.server_id)
-                           for s in [server_a, server_b, server_c]])
+    await gather_safely(*[manager.server_stop_gracefully(s.server_id)
+                          for s in [server_a, server_b, server_c]])
 
     logger.info("Driver connecting to D %s", server_d)
     await manager.driver_connect()

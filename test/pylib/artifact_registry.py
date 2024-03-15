@@ -8,6 +8,8 @@ from typing import Callable, Coroutine, List, Dict, Optional
 import asyncio
 import logging
 
+from test.pylib.util import gather_safely
+
 Artifact = Coroutine
 
 
@@ -32,12 +34,10 @@ class ArtifactRegistry:
     async def cleanup_before_exit(self) -> None:
         logging.info("Cleaning up before exit...")
         for artifacts in self.suite_artifacts.values():
-            for artifact in artifacts:
-                artifact.close()
-            await asyncio.gather(*artifacts, return_exceptions=True)
+            await gather_safely(*artifacts, return_exceptions=True)
         self.suite_artifacts = {}
         for artifacts in self.exit_artifacts.values():
-            await asyncio.gather(*artifacts, return_exceptions=True)
+            await gather_safely(*artifacts, return_exceptions=True)
         self.exit_artifacts = {}
         logging.info("Done cleaning up before exit...")
 
@@ -50,10 +50,10 @@ class ArtifactRegistry:
         logging.info("Cleaning up after suite %s...", suite.suite_key)
         # Only drop suite artifacts if the suite executed successfully.
         if not failed and suite in self.suite_artifacts:
-            await asyncio.gather(*self.suite_artifacts[suite])
+            await gather_safely(*self.suite_artifacts[suite])
             del self.suite_artifacts[suite]
         if suite in self.exit_artifacts:
-            await asyncio.gather(*self.exit_artifacts[suite])
+            await gather_safely(*self.exit_artifacts[suite])
             del self.exit_artifacts[suite]
         logging.info("Done cleaning up after suite %s...", suite.suite_key)
 

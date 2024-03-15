@@ -40,8 +40,7 @@ from typing import Optional, Type, List, Set, Union, TYPE_CHECKING
 if TYPE_CHECKING:
     from cassandra.cluster import Session as CassandraSession            # type: ignore
     from test.pylib.manager_client import ManagerClient
-from test.pylib.util import get_available_host, read_barrier
-
+from test.pylib.util import get_available_host, read_barrier, gather_safely
 
 logger = logging.getLogger('random_tables')
 
@@ -275,7 +274,7 @@ class RandomTables():
         ntables specifies how many tables.
         ncolumns specifies how many random columns per table."""
         tables = [RandomTable(self.manager, self.keyspace, ncolumns) for _ in range(ntables)]
-        await asyncio.gather(*(t.create(if_not_exists) for t in tables))
+        await gather_safely(*(t.create(if_not_exists) for t in tables))
         self.tables.extend(tables)
 
     async def add_table(self, ncolumns: int = None, columns: List[Column] = None,

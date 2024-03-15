@@ -8,8 +8,7 @@ import asyncio
 from test.pylib.manager_client import ManagerClient
 import pytest
 from test.pylib.rest_client import inject_error, inject_error_one_shot
-from test.pylib.util import read_barrier, unique_name, wait_for_cql_and_get_hosts
-
+from test.pylib.util import read_barrier, unique_name, wait_for_cql_and_get_hosts, gather_safely
 
 """
 Tests case when bigger auth operation is split into multiple raft commands.
@@ -41,7 +40,7 @@ async def test_auth_raft_command_split(manager: ManagerClient) -> None:
     cql, hosts = await manager.get_ready_cql(servers)
 
     # auth reads are eventually consistent so we need to sync all nodes
-    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+    await gather_safely(*(read_barrier(cql, host) for host in hosts))
 
     # confirm that deleted shared_role is not attached to any other role
     assert await cql.run_async(f"SELECT * FROM system_auth_v2.role_permissions WHERE resource = 'role/{shared_role}' ALLOW FILTERING") == []
@@ -49,6 +48,6 @@ async def test_auth_raft_command_split(manager: ManagerClient) -> None:
     # cleanup
     for user in users:
         await cql.run_async(f"DROP ROLE IF EXISTS {user}")
-    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+    await gather_safely(*(read_barrier(cql, host) for host in hosts))
     current_perms = await cql.run_async("SELECT * FROM system_auth_v2.role_permissions")
     assert initial_perms == current_perms

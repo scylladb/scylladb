@@ -7,7 +7,7 @@
 # Tests for interaction of materialized views with *tablets*
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier
+from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier, gather_safely
 from test.pylib.internal_types import ServerInfo
 from test.topology.conftest import skip_mode
 
@@ -168,7 +168,7 @@ def full_query(table, ConsistentRead=True, **kwargs):
 
 async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
-    await asyncio.gather(*errs)
+    await gather_safely(*errs)
 
 # FIXME: boto3 is NOT async. So this test is not async. We could use
 # the aioboto3 library to write a really asynchronous test, or implement

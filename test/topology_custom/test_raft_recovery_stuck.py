@@ -10,7 +10,7 @@ import logging
 import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, gather_safely
 from test.topology.util import reconnect_driver, restart, enter_recovery_state, wait_for_upgrade_state, \
         wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
@@ -37,8 +37,8 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logging.info(f"Setting recovery state on {hosts}")
-    await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
-    await asyncio.gather(*(restart(manager, srv) for srv in servers))
+    await gather_safely(*(enter_recovery_state(cql, h) for h in hosts))
+    await gather_safely(*(restart(manager, srv) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
@@ -46,17 +46,17 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     logging.info(f"Driver reconnected, hosts: {hosts}")
 
     logging.info(f"Deleting Raft data and upgrade state on {hosts}")
-    await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
+    await gather_safely(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
     logging.info(f"Stopping {servers}")
-    await asyncio.gather(*(manager.server_stop_gracefully(srv.server_id) for srv in servers))
+    await gather_safely(*(manager.server_stop_gracefully(srv.server_id) for srv in servers))
 
     logging.info(f"Starting {srv1} with injected group 0 upgrade error")
     await manager.server_update_config(srv1.server_id, 'error_injections_at_startup', ['group0_upgrade_before_synchronize'])
     await manager.server_start(srv1.server_id)
 
     logging.info(f"Starting {others}")
-    await asyncio.gather(*(manager.server_start(srv.server_id) for srv in others))
+    await gather_safely(*(manager.server_start(srv.server_id) for srv in others))
     cql = await reconnect_driver(manager)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
@@ -64,17 +64,17 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     logging.info(f"Driver reconnected, hosts: {hosts}")
 
     logging.info(f"Waiting until {hosts} enter 'synchronize' state")
-    await asyncio.gather(*(wait_for_upgrade_state('synchronize', cql, h, time.time() + 60) for h in hosts))
+    await gather_safely(*(wait_for_upgrade_state('synchronize', cql, h, time.time() + 60) for h in hosts))
     logging.info(f"{hosts} entered synchronize")
 
     # TODO ensure that srv1 failed upgrade - look at logs?
     # '[shard 0] raft_group0_upgrade - Raft upgrade failed: std::runtime_error (error injection before group 0 upgrade enters synchronize).'
 
     logging.info(f"Setting recovery state on {hosts}")
-    await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
+    await gather_safely(*(enter_recovery_state(cql, h) for h in hosts))
 
     logging.info(f"Restarting {others}")
-    await asyncio.gather(*(restart(manager, srv) for srv in others))
+    await gather_safely(*(restart(manager, srv) for srv in others))
     cql = await reconnect_driver(manager)
 
     logging.info(f"{others} restarted, waiting until driver reconnects to them")
@@ -98,16 +98,16 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     await manager.remove_node(others[0].server_id, srv1.server_id)
 
     logging.info(f"Deleting Raft data and upgrade state on {hosts} and restarting")
-    await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
+    await gather_safely(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
-    await asyncio.gather(*(restart(manager, srv) for srv in others))
+    await gather_safely(*(restart(manager, srv) for srv in others))
     cql = await reconnect_driver(manager)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
     hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
 
     logging.info(f"Driver reconnected, hosts: {hosts}, waiting until upgrade finishes")
-    await asyncio.gather(*(wait_until_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
+    await gather_safely(*(wait_until_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
 
     logging.info("Checking if previously created table still exists")
     await cql.run_async(f"select * from {table.full_name}")

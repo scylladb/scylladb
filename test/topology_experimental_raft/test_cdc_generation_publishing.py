@@ -5,7 +5,7 @@
 #
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.rest_client import inject_error
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, gather_safely
 
 from cassandra.cluster import ConsistencyLevel # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement # type: ignore # pylint: disable=no-name-in-module
@@ -69,7 +69,7 @@ async def test_cdc_generations_are_published(request, manager: ManagerClient):
     # Performing multiple cdc_streams_check_and_repair requests concurrently after removing a node should result
     # in creating exactly one CDC generation, because cdc_streams_check_and_repair doesn't create a new generation
     # if the current one is optimal.
-    await asyncio.gather(*[manager.api.client.post("/storage_service/cdc_streams_check_and_repair", servers[i % 2].ip_addr)
+    await gather_safely(*[manager.api.client.post("/storage_service/cdc_streams_check_and_repair", servers[i % 2].ip_addr)
                           for i in range(10)])
     gen_timestamps = await wait_for(new_gen_appeared, time.time() + 60)
     logger.info(f"Timestamps after check_and_repair: {gen_timestamps}")

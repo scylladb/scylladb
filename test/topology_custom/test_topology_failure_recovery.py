@@ -10,11 +10,13 @@ import pytest
 import logging
 import asyncio
 
+from test.pylib.util import gather_safely
+
 logger = logging.getLogger(__name__)
 
 async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, True) for s in servers]
-    await asyncio.gather(*errs)
+    await gather_safely(*errs)
 
 @pytest.mark.asyncio
 async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
@@ -32,7 +34,7 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     await inject_error_on(manager, "stream_tablet_fail_on_drain", servers)
 

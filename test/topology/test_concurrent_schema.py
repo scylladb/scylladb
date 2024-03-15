@@ -7,7 +7,7 @@ import asyncio
 import logging
 import pytest
 from test.pylib.random_tables import Column, UUIDType, IntType
-
+from test.pylib.util import gather_safely
 
 logger = logging.getLogger('schema-test')
 
@@ -57,7 +57,7 @@ async def test_cassandra_issue_10250(random_tables):
             aws.append(tables_i[n].add_index(f"c{a}", f"ix_index_me_{n}_c{a}"))
 
     # Run everything in parallel
-    await asyncio.gather(*aws)
+    await gather_safely(*aws)
     logger.debug("Done running concurrent schema changes")
     # Sleep to settle; original Cassandra issue repro sleeps 20 seconds
     await asyncio.sleep(1)

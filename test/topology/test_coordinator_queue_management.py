@@ -8,6 +8,8 @@ import pytest
 import logging
 import asyncio
 
+from test.pylib.util import gather_safely
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
@@ -44,7 +46,7 @@ async def test_coordinator_queue_management(manager: ManagerClient):
 
     [await manager.api.message_injection(s.ip_addr, inj) for s in servers[:3]]
 
-    await asyncio.gather(*tasks)
+    await gather_safely(*tasks)
 
     servers = await manager.running_servers()
     await manager.server_stop_gracefully(servers[3].server_id)
@@ -65,4 +67,4 @@ async def test_coordinator_queue_management(manager: ManagerClient):
 
     [await manager.api.message_injection(s.ip_addr, inj) for s in servers[:3]]
 
-    await asyncio.gather(*tasks)
+    await gather_safely(*tasks)

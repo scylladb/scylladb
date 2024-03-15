@@ -11,7 +11,7 @@ import time
 
 from test.pylib.rest_client import HTTPError
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, gather_safely
 from test.topology.util import log_run_time, wait_until_topology_upgrade_finishes, \
         wait_for_cdc_generations_publishing, check_system_topology_and_cdc_generations_v3_consistency
 
@@ -46,7 +46,7 @@ async def test_topology_upgrade_basic(request, manager: ManagerClient):
     await manager.api.upgrade_to_raft_topology(hosts[0].address)
 
     logging.info("Waiting until upgrade finishes")
-    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+    await gather_safely(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
 
     logging.info("Waiting for CDC generations publishing")
     await wait_for_cdc_generations_publishing(cql, hosts, time.time() + 60)

@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 from test.pylib.rest_client import inject_error_one_shot, inject_error
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, gather_safely
 import pytest
 from cassandra.cluster import ConsistencyLevel           # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement              # type: ignore # pylint: disable=no-name-in-module
@@ -37,7 +37,7 @@ async def test_mutation_schema_change(manager, random_tables):
     await manager.mark_dirty()
     errs = [inject_error_one_shot(manager.api, s.ip_addr, 'raft_server_snapshot_reduce_threshold')
             for s in [server_a, server_b, server_c]]
-    await asyncio.gather(*errs)
+    await gather_safely(*errs)
 
 
     logger.info("Stopping C %s", server_c)
@@ -98,7 +98,7 @@ async def test_mutation_schema_change_restart(manager, random_tables):
     await manager.mark_dirty()
     errs = [inject_error_one_shot(manager.api, s.ip_addr, 'raft_server_snapshot_reduce_threshold')
             for s in [server_a, server_b, server_c]]
-    await asyncio.gather(*errs)
+    await gather_safely(*errs)
 
     logger.info("Stopping C %s", server_c)
     await manager.server_stop_gracefully(server_c.server_id)

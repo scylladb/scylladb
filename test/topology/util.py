@@ -16,7 +16,7 @@ from cassandra.cluster import Session  # type: ignore # pylint: disable=no-name-
 from cassandra.pool import Host        # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier, get_available_host
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier, get_available_host, gather_safely
 
 
 logger = logging.getLogger(__name__)
@@ -194,7 +194,7 @@ async def wait_for_cdc_generations_publishing(cql: Session, hosts: list[Host], d
 async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host]):
     assert len(hosts) != 0
 
-    topo_results = await asyncio.gather(*(manager.cql.run_async("SELECT * FROM system.topology", host=host) for host in hosts))
+    topo_results = await gather_safely(*(manager.cql.run_async("SELECT * FROM system.topology", host=host) for host in hosts))
 
     for host, topo_res in zip(hosts, topo_results):
         logging.info(f"Dumping the state of system.topology as seen by {host}:")

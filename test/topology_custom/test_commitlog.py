@@ -10,7 +10,7 @@ import logging
 import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, gather_safely
 from test.topology.util import reconnect_driver
 from test.topology.conftest import skip_mode
 from test.pylib.random_tables import Column, TextType
@@ -58,7 +58,7 @@ async def test_reboot(request, manager: ManagerClient):
     futures = []
     for i in range(0, test_rows_count):
         futures.append(save_table(f'key_{i}', f'value_{i}'))
-    await asyncio.gather(*futures)
+    await gather_safely(*futures)
     logger.info("Some data is written into test table")
 
     await cql.run_async("truncate table ks.t")
@@ -76,7 +76,7 @@ async def test_reboot(request, manager: ManagerClient):
     futures = []
     for i in range(0, test_rows_count):
         futures.append(save_table(f'new_key_{i}', f'new_value_{i}'))
-    await asyncio.gather(*futures)
+    await gather_safely(*futures)
     logger.info("Some new data is written into test table")
 
     table_content_before_crash = await load_table()

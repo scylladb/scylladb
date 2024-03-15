@@ -15,7 +15,7 @@ from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, Host
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, Host, gather_safely
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession, \
@@ -468,7 +468,7 @@ class ManagerClient():
     async def servers_see_each_other(self, servers: List[ServerInfo], interval: float = 45.):
         """Wait till all servers see all other servers in the list"""
         others = [self.server_sees_others(srv.server_id, len(servers) - 1, interval) for srv in servers]
-        await asyncio.gather(*others)
+        await gather_safely(*others)
 
     async def server_not_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
                                            interval: float = 45.):
@@ -482,8 +482,8 @@ class ManagerClient():
     async def others_not_see_server(self, server_ip: IPAddress, interval: float = 45.):
         """Wait till a server is seen as dead by all other running servers in the cluster"""
         others_ips = [srv.ip_addr for srv in await self.running_servers() if srv.ip_addr != server_ip]
-        await asyncio.gather(*(self.server_not_sees_other_server(ip, server_ip, interval)
-                               for ip in others_ips))
+        await gather_safely(*(self.server_not_sees_other_server(ip, server_ip, interval)
+                              for ip in others_ips))
 
     async def server_open_log(self, server_id: ServerNum) -> ScyllaLogFile:
         logger.debug("ManagerClient getting log filename for %s", server_id)

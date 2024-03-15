@@ -10,7 +10,7 @@ import logging
 import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, gather_safely
 from test.topology.util import reconnect_driver, restart, enter_recovery_state, \
         wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
@@ -38,12 +38,12 @@ async def test_recovery_after_majority_loss(request, manager: ManagerClient):
 
     logging.info("Creating a bunch of tables")
     random_tables = RandomTables(request.node.name, manager, unique_name(), 1)
-    tables = await asyncio.gather(*(random_tables.add_table(ncolumns=5) for _ in range(5)))
+    tables = await gather_safely(*(random_tables.add_table(ncolumns=5) for _ in range(5)))
 
     srv1, *others = servers
 
     logging.info(f"Killing all nodes except {srv1}")
-    await asyncio.gather(*(manager.server_stop_gracefully(srv.server_id) for srv in others))
+    await gather_safely(*(manager.server_stop_gracefully(srv.server_id) for srv in others))
 
     logging.info(f"Entering recovery state on {srv1}")
     host1 = next(h for h in hosts if h.address == srv1.ip_addr)
@@ -72,7 +72,7 @@ async def test_recovery_after_majority_loss(request, manager: ManagerClient):
     await wait_until_upgrade_finishes(cql, host1, time.time() + 60)
 
     logging.info("Checking if previously created tables still exist")
-    await asyncio.gather(*(cql.run_async(f"select * from {t.full_name}") for t in tables))
+    await gather_safely(*(cql.run_async(f"select * from {t.full_name}") for t in tables))
 
     logging.info("Creating another table")
     await random_tables.add_table(ncolumns=5)

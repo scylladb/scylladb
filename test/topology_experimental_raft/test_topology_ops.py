@@ -6,7 +6,7 @@
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, gather_safely
 from test.topology.util import check_token_ring_and_group0_consistency, reconnect_driver
 
 from cassandra.cluster import Session, ConsistencyLevel
@@ -121,6 +121,6 @@ async def start_writes(cql: Session, concurrency: int = 3):
     async def finish():
         logger.info("Stopping write workers")
         stop_event.set()
-        await asyncio.gather(*tasks)
+        await gather_safely(*tasks)
 
     return finish

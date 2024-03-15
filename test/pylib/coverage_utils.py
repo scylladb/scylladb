@@ -35,6 +35,8 @@ import logging
 import sys
 import inspect
 
+from test.pylib.util import gather_safely
+
 # So the module can be imported outside of this directory
 sys.path.insert(0, os.path.dirname(__file__))
 import lcov_utils
@@ -344,7 +346,7 @@ async def gather_limited_concurrency(
 
     coros = [asyncio.ensure_future(with_semaphore(coro)) for coro in args]
     try:
-        return await asyncio.gather(*coros, **kwargs)
+        return await gather_safely(*coros, **kwargs)
     except:
         raise
     finally:
@@ -733,7 +735,7 @@ async def lcov_combine_traces(
                 ]
                 merge_funcs = [partial(merge_lcovs, chunk) for chunk in files_to_merge]
                 # We use "normal" gather here since we have the concurrency limited by the executor
-                files_to_merge = await asyncio.gather(
+                files_to_merge = await gather_safely(
                     *(loop.run_in_executor(executor, func) for func in merge_funcs)
                 )
             result: List[lcov_utils.LcovFile] = await loop.run_in_executor(

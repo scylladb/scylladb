@@ -10,11 +10,13 @@ import pytest
 import logging
 import asyncio
 
+from test.pylib.util import gather_safely
+
 logger = logging.getLogger(__name__)
 
 async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, True) for s in servers]
-    await asyncio.gather(*errs)
+    await gather_safely(*errs)
 
 @pytest.mark.asyncio
 async def test_topology_streaming_failure(request, manager: ManagerClient):

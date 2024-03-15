@@ -8,12 +8,14 @@ from test.pylib.manager_client import ManagerClient
 import asyncio
 import pytest
 
+from test.pylib.util import gather_safely
+
 
 @pytest.mark.asyncio
 async def test_replacing_alive_node_fails(manager: ManagerClient) -> None:
     """Try replacing an alive node and check that it fails"""
     servers = await manager.running_servers()
-    await asyncio.gather(*(manager.server_sees_others(srv.server_id, len(servers) - 1) for srv in servers))
+    await gather_safely(*(manager.server_sees_others(srv.server_id, len(servers) - 1) for srv in servers))
 
     # We test for every server because we expect a different error depending on
     # whether we try to replace the topology coordinator. We want to test both cases.

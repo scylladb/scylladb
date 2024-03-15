@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from test.pylib.util import gather_safely
 from test.topology.util import wait_for_token_ring_and_group0_consistency
 
 if TYPE_CHECKING:
@@ -73,8 +74,8 @@ async def test_change_rpc_address(two_nodes_cluster: list[ServerNum],
 
     manager.driver_close()
 
-    await asyncio.gather(*[manager.server_stop_gracefully(server_id) for server_id in two_nodes_cluster])
-    await asyncio.gather(*[manager.server_change_rpc_address(server_id) for server_id in two_nodes_cluster])
+    await gather_safely(*[manager.server_stop_gracefully(server_id) for server_id in two_nodes_cluster])
+    await gather_safely(*[manager.server_change_rpc_address(server_id) for server_id in two_nodes_cluster])
     for server_id in two_nodes_cluster:
         await manager.server_start(server_id)
 

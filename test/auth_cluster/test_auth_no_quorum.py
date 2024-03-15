@@ -10,7 +10,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 import pytest
 from cassandra.auth import PlainTextAuthProvider
-from test.pylib.util import read_barrier, unique_name, wait_for_cql_and_get_hosts
+from test.pylib.util import read_barrier, unique_name, wait_for_cql_and_get_hosts, gather_safely
 from test.topology.util import trigger_snapshot
 
 
@@ -39,7 +39,7 @@ async def test_auth_no_quorum(manager: ManagerClient) -> None:
         await cql.run_async(f"CREATE ROLE IF NOT EXISTS {role} WITH PASSWORD = '{role}' AND LOGIN = true")
 
     # auth reads are eventually consistent so we need to sync all nodes
-    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+    await gather_safely(*(read_barrier(cql, host) for host in hosts))
 
     # check if users are replicated everywhere
     for role in roles:
@@ -47,7 +47,7 @@ async def test_auth_no_quorum(manager: ManagerClient) -> None:
             await manager.driver_connect(server=server,
                 auth_provider=PlainTextAuthProvider(username=role, password=role))
     # lost quorum
-    await asyncio.gather(*(
+    await gather_safely(*(
         manager.server_stop_gracefully(srv.server_id) for srv in servers[0:2]))
     alive_server = servers[2]
     # can still login on remaining node - whole auth data is local

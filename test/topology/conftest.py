@@ -5,7 +5,6 @@
 #
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use
-
 import ssl
 import platform
 from typing import List, Optional

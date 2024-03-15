@@ -95,8 +95,7 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
 
     # Take only hosts from `ip_set` (there may be more)
     hosts = [h for h in hosts if h.address in ip_set]
-    await asyncio.gather(*(wait_for_cql(cql, h, deadline) for h in hosts))
-
+    await gather_safely(*(wait_for_cql(cql, h, deadline) for h in hosts))
     return hosts
 
 def read_last_line(file_path: pathlib.Path, max_line_bytes = 512):
@@ -129,6 +128,31 @@ async def get_available_host(cql: Session, deadline: float) -> Host:
             return h
         return None
     return await wait_for(find_host, deadline)
+
+
+async def gather_safely(*awaitables: Awaitable, return_exceptions: bool = False):
+    """
+    Developers using asyncio.gather() often assume that it waits for all futures (awaitables) givens. But this isn't
+    true when the return_exceptions parameter is False (which is the default): In that case, as soon as one future
+    completes with an exception, the gather() call will return this exception immediately, and some of the finished
+    tasks may continue to run in the background. This is bad for applications that use gather() to ensure that a list
+    of background tasks has all completed. So such applications must use asyncio.gather() with
+    return_exceptions=True, to wait for all given futures to complete (either successfully or unsuccessfully).
+
+    Alternatively, this gather_safely is a wrapper for asyncio.gather() which fixes the return_exceptions=False
+    implementation to be more useful: If return_exceptions=False, gather_safely waits for all futures to complete,
+    but then if any of them returned an exception, the first one will be thrown (asyncio.gather() returns the results
+    in the same order as awaitables were given).
+    """
+    if return_exceptions:
+        return await asyncio.gather(*awaitables, return_exceptions=True)
+    else:
+        results = await asyncio.gather(*awaitables, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result from None
+        return results
+
 
 
 async def read_barrier(cql: Session, host: Host):

@@ -16,7 +16,8 @@ from cassandra.pool import Host        # type: ignore # pylint: disable=no-name-
 
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature, get_supported_features, get_enabled_features
+from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature, get_supported_features, get_enabled_features, \
+    gather_safely
 from test.topology.util import reconnect_driver
 import pytest
 
@@ -54,9 +55,9 @@ async def change_support_for_test_feature_and_restart(manager: ManagerClient, sr
             injections.remove(TEST_FEATURE_ENABLE_ERROR_INJECTION)
         await manager.server_update_config(srv.server_id, ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY, list(injections))
 
-    await asyncio.gather(*(manager.server_stop(srv.server_id) for srv in srvs))
-    await asyncio.gather(*(adjust_feature_in_config(manager, srv, enable) for srv in srvs))
-    await asyncio.gather(*(manager.server_start(srv.server_id, expected_error) for srv in srvs))
+    await gather_safely(*(manager.server_stop(srv.server_id) for srv in srvs))
+    await gather_safely(*(adjust_feature_in_config(manager, srv, enable) for srv in srvs))
+    await gather_safely(*(manager.server_start(srv.server_id, expected_error) for srv in srvs))
 
 
 @pytest.mark.asyncio
@@ -89,7 +90,7 @@ async def test_rolling_upgrade_happy_path(manager: ManagerClient) -> None:
     # The feature should become enabled on all nodes soon.
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     logging.info(f"Waiting until {TEST_FEATURE_NAME} is enabled on all nodes")
-    await asyncio.gather(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 60) for h in hosts))
+    await gather_safely(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 60) for h in hosts))
 
 
 @pytest.mark.asyncio
@@ -140,7 +141,7 @@ async def test_joining_old_node_fails(manager: ManagerClient) -> None:
     cql = manager.cql
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     logging.info(f"Waiting until {TEST_FEATURE_NAME} is enabled on all nodes")
-    await asyncio.gather(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 60) for h in hosts))
+    await gather_safely(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 60) for h in hosts))
 
     # Try to add a node that doesn't support the feature - should fail
     new_server_info = await manager.server_add(start=False)
@@ -171,7 +172,7 @@ async def test_downgrade_after_successful_upgrade_fails(manager: ManagerClient) 
     # Wait until the feature is considered enabled by all nodes
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     logging.info(f"Waiting until {TEST_FEATURE_NAME} is enabled on all nodes")
-    await asyncio.gather(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 60) for h in hosts))
+    await gather_safely(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 60) for h in hosts))
 
     # Stop all servers to disable the feature, then restart - all should fail
     await change_support_for_test_feature_and_restart(manager, servers, enable=False, \
@@ -206,4 +207,4 @@ async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerC
     # The feature should eventually become enabled
     hosts = await wait_for_cql_and_get_hosts(cql, servers[:-1], time.time() + 60)
     logging.info(f"Waiting until {TEST_FEATURE_NAME} is enabled on all nodes")
-    await asyncio.gather(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 300) for h in hosts))
+    await gather_safely(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 300) for h in hosts))

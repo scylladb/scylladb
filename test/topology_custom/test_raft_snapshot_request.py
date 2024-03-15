@@ -10,7 +10,7 @@ import time
 import logging
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier, gather_safely
 from test.topology.util import reconnect_driver, trigger_snapshot
 
 
@@ -62,7 +62,7 @@ async def test_raft_snapshot_request(manager: ManagerClient):
     await manager.server_stop_gracefully(s2.server_id)
     logger.info(f"Stopped {s2}")
     # Restarting the two servers will cause a newly elected leader to append a dummy command.
-    await asyncio.gather(*(manager.server_restart(s.server_id) for s in servers[:2]))
+    await gather_safely(*(manager.server_restart(s.server_id) for s in servers[:2]))
     logger.info(f"Restarted {servers[:2]}")
     cql = await reconnect_driver(manager)
     # Wait for one server to append the command and do a read_barrier on the other

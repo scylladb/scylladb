@@ -10,7 +10,7 @@ import pytest
 import time
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, gather_safely
 from test.topology.util import reconnect_driver, restart, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, log_run_time, wait_until_upgrade_finishes as wait_until_schema_upgrade_finishes, \
         wait_until_topology_upgrade_finishes, delete_raft_topology_state, wait_for_cdc_generations_publishing, \
@@ -28,7 +28,7 @@ async def test_topology_recovery_basic(request, manager: ManagerClient):
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logging.info(f"Restarting hosts {hosts} in recovery mode")
-    await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
+    await gather_safely(*(enter_recovery_state(cql, h) for h in hosts))
     # Restart sequentially, as it tests how nodes operating in legacy mode
     # react to raft topology mode nodes and vice versa
     for srv in servers:
@@ -40,8 +40,8 @@ async def test_topology_recovery_basic(request, manager: ManagerClient):
     logging.info(f"Driver reconnected, hosts: {hosts}")
 
     logging.info(f"Deleting Raft data and upgrade state on {hosts}")
-    await asyncio.gather(*(delete_raft_topology_state(cql, h) for h in hosts))
-    await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
+    await gather_safely(*(delete_raft_topology_state(cql, h) for h in hosts))
+    await gather_safely(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
     logging.info(f"Restarting hosts {hosts}")
     for srv in servers:
@@ -52,7 +52,7 @@ async def test_topology_recovery_basic(request, manager: ManagerClient):
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logging.info("Waiting until upgrade to raft schema finishes")
-    await asyncio.gather(*(wait_until_schema_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
+    await gather_safely(*(wait_until_schema_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
 
     logging.info("Checking the topology upgrade state on all nodes")
     for host in hosts:
@@ -66,7 +66,7 @@ async def test_topology_recovery_basic(request, manager: ManagerClient):
     await manager.api.upgrade_to_raft_topology(hosts[0].address)
 
     logging.info("Waiting until upgrade finishes")
-    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+    await gather_safely(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
 
     logging.info("Waiting for CDC generations publishing")
     await wait_for_cdc_generations_publishing(cql, hosts, time.time() + 60)

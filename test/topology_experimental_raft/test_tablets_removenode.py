@@ -13,6 +13,7 @@ import asyncio
 import logging
 
 from test.pylib.scylla_cluster import ReplaceConfig
+from test.pylib.util import gather_safely
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +55,9 @@ async def test_replace(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test2.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test3.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[run_async_cl_all(cql, f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[run_async_cl_all(cql, f"INSERT INTO test2.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[run_async_cl_all(cql, f"INSERT INTO test3.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     async def check_ks(ks):
         logger.info(f"Checking {ks}")
@@ -122,9 +123,9 @@ async def test_removenode(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test2.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test3.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[run_async_cl_all(cql, f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[run_async_cl_all(cql, f"INSERT INTO test2.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[run_async_cl_all(cql, f"INSERT INTO test3.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     async def check():
         # RF=1 table "test" will experience data loss so don't check it.
@@ -177,7 +178,7 @@ async def test_removenode_with_ignored_node(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(512)
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[run_async_cl_all(cql, f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     async def check():
         logger.info("Checking")

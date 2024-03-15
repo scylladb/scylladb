@@ -9,7 +9,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError
 from test.pylib.rest_client import inject_error
-from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier
+from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier, gather_safely
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.topology.conftest import skip_mode
 from test.topology.util import reconnect_driver
@@ -29,12 +29,12 @@ logger = logging.getLogger(__name__)
 
 async def inject_error_one_shot_on(manager, error_name, servers):
     errs = [inject_error_one_shot(manager.api, s.ip_addr, error_name) for s in servers]
-    await asyncio.gather(*errs)
+    await gather_safely(*errs)
 
 
 async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
-    await asyncio.gather(*errs)
+    await gather_safely(*errs)
 
 async def repair_on_node(manager: ManagerClient, server: ServerInfo, servers: list[ServerInfo], ranges: str = ''):
     node = server.ip_addr
@@ -89,7 +89,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
 
     keys = range(10)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 1);") for k in keys])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 1);") for k in keys])
 
     rows = await cql.run_async("SELECT * FROM test.test;")
     assert len(list(rows)) == len(keys)
@@ -105,8 +105,8 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     # Trigger a schema change to invoke schema agreement waiting to make sure that s0 has the latest schema
     await cql.run_async("CREATE KEYSPACE test_dummy WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
 
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 2);", execution_profile='whitelist')
-                           for k in keys])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 2);", execution_profile='whitelist')
+                          for k in keys])
 
     rows = await cql.run_async("SELECT * FROM test.test;")
     assert len(rows) == len(keys)
@@ -123,8 +123,8 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
 
         await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
 
-        await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 3);", execution_profile='whitelist')
-                               for k in keys])
+        await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 3);", execution_profile='whitelist')
+                              for k in keys])
 
         rows = await cql.run_async("SELECT * FROM test.test;")
         assert len(rows) == len(keys)
@@ -147,7 +147,7 @@ async def test_scans(manager: ManagerClient):
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
 
     keys = range(100)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     rows = await cql.run_async("SELECT count(*) FROM test.test;")
     assert rows[0].count == len(keys)
@@ -192,7 +192,7 @@ async def test_topology_changes(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     async def check():
         logger.info("Checking table")
@@ -385,7 +385,7 @@ async def test_tablet_repair(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     await repair_on_node(manager, servers[0], servers)
 
@@ -423,8 +423,8 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
     async def insert_with_down(down_server):
         logger.info(f"Stopped server {down_server.server_id}")
         logger.info(f"Insert into server {down_server.server_id}")
-        await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});")
-                               for k in keys_for_server[down_server.server_id]])
+        await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});")
+                              for k in keys_for_server[down_server.server_id]])
 
     await manager.rolling_restart(servers, with_down=insert_with_down)
 
@@ -458,7 +458,7 @@ async def test_tablet_repair_history(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     logging.info(f'Got hosts={hosts}');
@@ -526,7 +526,7 @@ async def test_tablet_cleanup(manager: ManagerClient):
     await manager.servers_see_each_other(servers)
     await cql.run_async("CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {}}};".format(n_tablets))
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY);")
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk) VALUES ({k});") for k in range(1000)])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk) VALUES ({k});") for k in range(1000)])
 
     logger.info("Start second node")
     servers.append(await manager.server_add())
@@ -594,7 +594,7 @@ async def test_tablet_resharding(manager: ManagerClient):
     n_partitions = 1000
     await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}};")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY);")
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk) VALUES ({k});") for k in range(n_partitions)])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk) VALUES ({k});") for k in range(n_partitions)])
 
     await manager.server_stop_gracefully(server.server_id, timeout=120)
     await manager.server_update_cmdline(server.server_id, ['--smp=2'])
@@ -634,7 +634,7 @@ async def test_tablet_split(manager: ManagerClient):
 
     # enough to trigger multiple splits with max size of 1024 bytes.
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     async def check():
         logger.info("Checking table")

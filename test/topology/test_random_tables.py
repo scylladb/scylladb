@@ -8,6 +8,8 @@ import time
 import pytest
 from cassandra.protocol import InvalidRequest, ReadFailure                         # type: ignore
 from cassandra.query import SimpleStatement                                        # type: ignore
+
+from test.pylib.util import gather_safely
 from test.topology.util import wait_for_token_ring_and_group0_consistency
 
 
@@ -111,7 +113,7 @@ async def test_paged_result(manager, random_tables):
                 f"({','.join(c.name for c in table.columns)})"
                 f"VALUES ({', '.join(['%s'] * len(table.columns))})",
                 parameters=[c.val(i) for c in table.columns]))
-    await asyncio.gather(*inserts)
+    await gather_safely(*inserts)
 
     # Check only 1 page
     stmt = SimpleStatement(f"SELECT * FROM {table} ALLOW FILTERING", fetch_size = fetch_size)

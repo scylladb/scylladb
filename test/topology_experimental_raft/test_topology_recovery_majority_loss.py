@@ -10,7 +10,7 @@ import pytest
 import time
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, gather_safely
 from test.topology.util import reconnect_driver, restart, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, log_run_time, wait_until_upgrade_finishes as wait_until_schema_upgrade_finishes, \
         wait_until_topology_upgrade_finishes, delete_raft_topology_state, wait_for_cdc_generations_publishing, \
@@ -30,7 +30,7 @@ async def test_topology_recovery_after_majority_loss(request, manager: ManagerCl
     srv1, *others = servers
 
     logging.info(f"Killing all nodes except {srv1}")
-    await asyncio.gather(*(manager.server_stop_gracefully(srv.server_id) for srv in others))
+    await gather_safely(*(manager.server_stop_gracefully(srv.server_id) for srv in others))
 
     logging.info(f"Entering recovery state on {srv1}")
     host1 = next(h for h in hosts if h.address == srv1.ip_addr)

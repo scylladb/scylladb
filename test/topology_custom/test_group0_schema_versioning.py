@@ -15,7 +15,7 @@ from cassandra.query import SimpleStatement # type: ignore
 from cassandra.pool import Host # type: ignore
 
 from test.pylib.manager_client import ManagerClient, ServerInfo
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, gather_safely
 from test.pylib.log_browsing import ScyllaLogFile
 from test.topology.util import reconnect_driver, restart, wait_until_upgrade_finishes, \
         enter_recovery_state, delete_raft_data_and_upgrade_state
@@ -240,7 +240,7 @@ async def test_schema_versioning_with_recovery(manager: ManagerClient):
     for h in [h2, h3]:
         await cql.run_async(
                 "update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'", host=h)
-    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in [srv2, srv3]))
+    await gather_safely(*(manager.server_restart(srv.server_id) for srv in [srv2, srv3]))
 
     cql = await reconnect_driver(manager)
     logger.info("Waiting for driver")
@@ -250,7 +250,7 @@ async def test_schema_versioning_with_recovery(manager: ManagerClient):
         await delete_raft_data_and_upgrade_state(cql, h)
 
     logger.info("Restarting servers")
-    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in servers))
+    await gather_safely(*(manager.server_restart(srv.server_id) for srv in servers))
 
     cql = await reconnect_driver(manager)
     logger.info("Waiting for driver")
@@ -301,8 +301,8 @@ async def test_upgrade(manager: ManagerClient):
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logging.info(f"Setting recovery state on {hosts} and restarting")
-    await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
-    await asyncio.gather(*(restart(manager, srv) for srv in servers))
+    await gather_safely(*(enter_recovery_state(cql, h) for h in hosts))
+    await gather_safely(*(restart(manager, srv) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logging.info("Waiting until driver connects to every server")
@@ -315,17 +315,17 @@ async def test_upgrade(manager: ManagerClient):
     await cql.run_async("create table ks.t (pk int primary key)")
 
     logging.info(f"Deleting Raft data and upgrade state on {hosts}")
-    await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
+    await gather_safely(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
     logging.info(f"Restarting {servers}")
-    await asyncio.gather(*(restart(manager, srv) for srv in servers))
+    await gather_safely(*(restart(manager, srv) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logger.info("Waiting for driver")
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logging.info(f"Waiting until Raft upgrade procedure finishes")
-    await asyncio.gather(*(wait_until_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
+    await gather_safely(*(wait_until_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
 
     logs = [await manager.server_open_log(srv.server_id) for srv in servers]
 

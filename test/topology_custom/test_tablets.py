@@ -12,6 +12,8 @@ import pytest
 import logging
 import asyncio
 
+from test.pylib.util import gather_safely
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,7 +48,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
 
     logger.info("Populating table")
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
     logger.info("Decommission some node")
     await manager.decommission_node(servers[0].server_id)
@@ -80,7 +82,7 @@ async def test_reshape_with_tablets(manager: ManagerClient):
     logger.info("Populating table")
     loop_count = 32
     for _ in range(loop_count):
-        await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in range(64)])
+        await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in range(64)])
         await manager.api.keyspace_flush(server.ip_addr, "test", "test")
     # After populating the table, expect loop_count number of sstables per tablet
     sstable_info = await manager.api.get_sstable_info(server.ip_addr, "test", "test")

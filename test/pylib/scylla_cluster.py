@@ -25,7 +25,7 @@ from io import BufferedWriter
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
-from test.pylib.util import LogPrefixAdapter, read_last_line
+from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
 import aiohttp
 import aiohttp.web
@@ -712,9 +712,9 @@ class ScyllaCluster:
         self.is_dirty = True
         self.logger.info("Uninstalling cluster %s", self)
         await self.stop()
-        await asyncio.gather(*(srv.uninstall() for srv in self.stopped.values()))
-        await asyncio.gather(*(self.host_registry.release_host(Host(ip))
-                               for ip in self.leased_ips))
+        await gather_safely(*(srv.uninstall() for srv in self.stopped.values()))
+        await gather_safely(*(self.host_registry.release_host(Host(ip))
+                              for ip in self.leased_ips))
 
     async def release_ips(self) -> None:
         """Release all IPs leased from the host registry by this cluster.
@@ -736,7 +736,7 @@ class ScyllaCluster:
                 self.logger.info("Cluster %s stopping", self)
                 self.is_dirty = True
                 # If self.running is empty, no-op
-                await asyncio.gather(*(server.stop() for server in self.running.values()))
+                await gather_safely(*(server.stop() for server in self.running.values()))
                 self.stopped.update(self.running)
                 self.running.clear()
 
@@ -747,7 +747,7 @@ class ScyllaCluster:
             self.logger.info("Cluster %s stopping gracefully", self)
             self.is_dirty = True
             # If self.running is empty, no-op
-            await asyncio.gather(*(server.stop_gracefully() for server in self.running.values()))
+            await gather_safely(*(server.stop_gracefully() for server in self.running.values()))
             self.stopped.update(self.running)
             self.running.clear()
 
@@ -853,8 +853,8 @@ class ScyllaCluster:
         """Add multiple servers to the cluster concurrently"""
         assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
 
-        return await asyncio.gather(*(self.add_server(None, cmdline, config, property_file, start, expected_error)
-                                      for _ in range(servers_num)))
+        return await gather_safely(*(self.add_server(None, cmdline, config, property_file, start, expected_error)
+                                     for _ in range(servers_num)))
 
     def endpoint(self) -> str:
         """Get a server id (IP) from running servers"""

@@ -36,7 +36,7 @@ from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
-from test.pylib.util import LogPrefixAdapter
+from test.pylib.util import LogPrefixAdapter, gather_safely
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
@@ -289,11 +289,11 @@ class TestSuite(ABC):
         if len(pending) == 0:
             return
         try:
-            await asyncio.gather(*pending)
+            await gather_safely(*pending)
         except asyncio.CancelledError:
             for task in pending:
                 task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            await gather_safely(*pending, return_exceptions=True)
             raise
     def need_coverage(self):
         return self.options.coverage and (self.mode in self.options.coverage_modes) and bool(self.cfg.get("coverage",True))
@@ -1412,7 +1412,7 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     async def cancel(pending):
         for task in pending:
             task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
+        await gather_safely(*pending, return_exceptions=True)
         print("... done.")
         raise asyncio.CancelledError
 

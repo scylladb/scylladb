@@ -3,10 +3,9 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_all_tablet_replicas
+from test.pylib.util import gather_safely
 from test.topology.conftest import skip_mode
 import pytest
 import logging
@@ -44,7 +43,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
 
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await gather_safely(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
     await make_server()
 
     if fail_stage in ["cleanup_target", "revert_migration"]:
