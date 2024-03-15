@@ -12,11 +12,12 @@ import functools
 import operator
 import pytest
 import time
-from cassandra.cluster import Session  # type: ignore # pylint: disable=no-name-in-module
-from cassandra.pool import Host        # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
+from cassandra.util import datetime_from_uuid1           # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier, get_available_host
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier, get_available_host, unique_name
 
 
 logger = logging.getLogger(__name__)
@@ -241,6 +242,56 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
         # Check that the contents fetched from the current host are the same as for other nodes
         assert topo_results[0] == topo_res
 
+async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
+    logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")
+
+    stop_event = asyncio.Event()
+
+    ks_name = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{ 'enabled': false }}")
+    await cql.run_async(f"CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled':true}}")
+
+    stmt = cql.prepare(f"INSERT INTO {ks_name}.tbl (pk, v) VALUES (?, 0)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+
+    async def do_writes():
+        iteration = 0
+        while not stop_event.is_set():
+            start_time = time.time()
+            try:
+                await cql.run_async(stmt, [iteration])
+            except NoHostAvailable as e:
+                for _, err in e.errors.items():
+                    # ConnectionException can be raised when the node is shutting down.
+                    if not isinstance(err, ConnectionException):
+                        logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
+                        raise
+            except Exception as e:
+                logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
+                raise
+            iteration += 1
+            await asyncio.sleep(0.01)
+
+    tasks = [asyncio.create_task(do_writes()) for _ in range(concurrency)]
+
+    async def verify():
+        generations = await cql.run_async("SELECT * FROM system_distributed.cdc_streams_descriptions_v2")
+
+        stream_to_timestamp = { stream: gen.time for gen in generations for stream in gen.streams}
+
+        cdc_log = await cql.run_async(f"SELECT * FROM {ks_name}.tbl_scylla_cdc_log")
+        for log_entry in cdc_log:
+            assert log_entry.cdc_stream_id in stream_to_timestamp
+            timestamp = stream_to_timestamp[log_entry.cdc_stream_id]
+            assert timestamp <= datetime_from_uuid1(log_entry.cdc_time)
+
+    async def finish_and_verify():
+        logger.info("Stopping write workers")
+        stop_event.set()
+        await asyncio.gather(*tasks)
+        await verify()
+
+    return finish_and_verify
 
 def log_run_time(f):
     @functools.wraps(f)
