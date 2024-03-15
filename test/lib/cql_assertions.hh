@@ -45,8 +45,8 @@ public:
 
 result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg);
 
-template<typename... T>
-void assert_that_failed(future<T...>& f)
+template<typename T>
+void assert_that_failed(future<T>& f)
 {
     try {
         f.get();
@@ -56,8 +56,8 @@ void assert_that_failed(future<T...>& f)
     }
 }
 
-template<typename... T>
-void assert_that_failed(future<T...>&& f)
+template<typename T>
+void assert_that_failed(future<T>&& f)
 {
     try {
         f.get();
