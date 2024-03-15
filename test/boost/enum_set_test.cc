@@ -14,19 +14,30 @@
 #include <unordered_set>
 
 #include <boost/test/unit_test.hpp>
+#include <fmt/ostream.h>
+#include <fmt/ranges.h>
 
-#include "utils/to_string.hh"
 
 enum class fruit { apple = 3, pear = 7, banana = 8 };
 
-static std::ostream& operator<<(std::ostream& os, fruit f) {
-    switch (f) {
-        case fruit::apple: os << "apple"; break;
-        case fruit::pear: os << "pear"; break;
-        case fruit::banana: os << "banana"; break;
+template <> struct fmt::formatter<fruit> : fmt::formatter<std::string_view> {
+    auto format(fruit f, fmt::format_context& ctx) const {
+        std::string_view name;
+        using enum fruit;
+        switch (f) {
+            case apple: name = "apple"; break;
+            case pear: name = "pear"; break;
+            case banana: name = "banana"; break;
+        }
+        return formatter<string_view>::format(name, ctx);
     }
+};
 
+namespace std {
+std::ostream& boost_test_print_type(std::ostream& os, const std::unordered_set<fruit>& fruits) {
+    fmt::print(os, "{}", fruits);
     return os;
+}
 }
 
 using fruit_enum = super_enum<fruit, fruit::apple, fruit::pear, fruit::banana>;
