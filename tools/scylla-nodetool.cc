@@ -1842,10 +1842,11 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
                 state = 'N';
             }
             sstring address = resolve_ips ? net::dns::resolve_addr(net::inet_address(ep)).get() : ep;
+            const std::string load = endpoint_load.contains(ep) ? fmt::to_string(file_size_printer(endpoint_load.at(ep))) : "?";
             table.add(
                     fmt::format("{}{}", status, state),
                     address,
-                    file_size_printer(endpoint_load.at(ep)),
+                    load,
                     endpoint_tokens.at(ep),
                     keyspace ? format("{:.1f}%", endpoint_ownership.at(ep) * 100) : "?",
                     endpoint_host_id.at(ep),
