@@ -18,7 +18,7 @@
 #include "dht/token.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/to_string.hh"
-#include "version.hh"
+#include "release.hh"
 #include "cdc/generation_id.hh"
 #include <unordered_set>
 
@@ -170,7 +170,7 @@ public:
     }
 
     static versioned_value release_version() {
-        return versioned_value(version::release());
+        return versioned_value(scylla_version());
     }
 
     static versioned_value network_version();

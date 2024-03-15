@@ -48,7 +48,7 @@
 #include <seastar/core/thread.hh>
 #include <algorithm>
 #include "locator/local_strategy.hh"
-#include "version.hh"
+#include "release.hh"
 #include "dht/range_streamer.hh"
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
@@ -1169,7 +1169,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     // TODO: include more metadata here
     auto local_shard_count = smp::count;
     auto local_ignore_msb = _db.local().get_config().murmur3_partitioner_ignore_msb_bits();
-    auto local_release_version = version::release();
+    auto local_release_version = scylla_version();
     auto local_supported_features = boost::copy_range<std::set<sstring>>(_feature_service.supported_feature_set());
 
     auto synchronized = [&] () {
@@ -1539,7 +1539,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         .snitch_name = _db.local().get_snitch_name(),
         .datacenter = _snitch.local()->get_datacenter(),
         .rack = _snitch.local()->get_rack(),
-        .release_version = version::release(),
+        .release_version = scylla_version(),
         .num_tokens = _db.local().get_config().num_tokens(),
         .shard_count = smp::count,
         .ignore_msb =  _db.local().get_config().murmur3_partitioner_ignore_msb_bits(),
@@ -3203,7 +3203,7 @@ void storage_service::set_mode(mode m) {
 }
 
 sstring storage_service::get_release_version() {
-    return version::release();
+    return scylla_version();
 }
 
 sstring storage_service::get_schema_version() {

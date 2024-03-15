@@ -23,16 +23,6 @@ public:
         return seastar::format("{:d}.{:d}.{:d}", std::get<0>(_version), std::get<1>(_version), std::get<2>(_version));
     }
 
-    static version current() {
-        static version v(3, 0, 8);
-        return v;
-    }
-
     std::strong_ordering operator<=>(const version&) const = default;
 };
-
-inline const seastar::sstring& release() {
-    static thread_local auto str_ver = version::current().to_sstring();
-    return str_ver;
-}
 }

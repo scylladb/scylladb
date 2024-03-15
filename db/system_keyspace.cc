@@ -1429,7 +1429,7 @@ future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_
     return execute_cql(req, sstring(db::system_keyspace::LOCAL),
                             sysinfo.host_id.uuid(),
                             sysinfo.cluster_name,
-                            version::release(),
+                            scylla_version(),
                             cql3::query_processor::CQL_VERSION,
                             ::cassandra::thrift_version,
                             to_sstring(unsigned(cql_serialization_format::latest().protocol_version())),
