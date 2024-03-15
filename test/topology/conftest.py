@@ -50,7 +50,14 @@ def pytest_addoption(parser):
                         help='username for authentication')
     parser.addoption('--auth_password', action='store', default=None,
                         help='password for authentication')
-
+    parser.addoption('--raft-failure-injections-seed', action='store', default=None, type=int,
+                     help='seed for RAFT randomized failure injections')
+    parser.addoption('--raft-failure-injections-tests-count', action='store', default=None, type=int,
+                     help='how many tests to generate for RAFT randomized failure injections')
+    parser.addoption('--raft-errors-last-index', action='store', default=None, type=int,
+                     help='last index for RAFT failure injection types')
+    parser.addoption('--raft-events-last-index', action='store', default=None, type=int,
+                     help='last index for event types during RAFT failure injections')
 
 # This is a constant used in `pytest_runtest_makereport` below to store a flag
 # indicating test failure in a stash which can then be accessed from fixtures.
