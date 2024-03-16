@@ -81,7 +81,6 @@ public:
 
 public:
     gms::feature user_defined_functions { *this, "UDF"sv };
-    gms::feature cdc { *this, "CDC"sv };
     gms::feature nonfrozen_udts { *this, "NONFROZEN_UDTS"sv };
     gms::feature hinted_handoff_separate_connection { *this, "HINTED_HANDOFF_SEPARATE_CONNECTION"sv };
     gms::feature lwt { *this, "LWT"sv };
