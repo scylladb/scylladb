@@ -342,12 +342,11 @@ schema_ptr tables() {
 
 // Holds Scylla-specific table metadata.
 schema_ptr scylla_tables(schema_features features) {
-    static thread_local schema_ptr schemas[2][2]{};
+    static thread_local schema_ptr schemas[2]{};
 
-    bool has_per_table_partitioners = features.contains(schema_feature::PER_TABLE_PARTITIONERS);
     bool has_group0_schema_versioning = features.contains(schema_feature::GROUP0_SCHEMA_VERSIONING);
 
-    schema_ptr& s = schemas[has_per_table_partitioners][has_group0_schema_versioning];
+    schema_ptr& s = schemas[has_group0_schema_versioning];
     if (!s) {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
         auto sb = schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
@@ -361,10 +360,10 @@ schema_ptr scylla_tables(schema_features features) {
         // CDC_OPTIONS
         sb.with_column("cdc", map_type_impl::get_instance(utf8_type, utf8_type, false));
         offset |= 0b1;
-        if (has_per_table_partitioners) {
-            sb.with_column("partitioner", utf8_type);
-            offset |= 0b10;
-        }
+
+        // PER_TABLE_PARTITIONERS
+        sb.with_column("partitioner", utf8_type);
+        offset |= 0b10;
 
         // 0b100 reserved for Scylla Enterprise
 
@@ -774,9 +773,9 @@ schema_ptr scylla_table_schema_history() {
 static
 mutation
 redact_columns_for_missing_features(mutation&& m, schema_features features) {
-    if (features.contains(schema_feature::PER_TABLE_PARTITIONERS)) {
-        return std::move(m);
-    }
+    return std::move(m);
+    // The following code is needed if there are new schema features that require redaction.
+#if 0
     if (m.schema()->cf_name() != SCYLLA_TABLES) {
         return std::move(m);
     }
@@ -785,6 +784,7 @@ redact_columns_for_missing_features(mutation&& m, schema_features features) {
     global_schema_ptr redacted_schema{scylla_tables(features)};
     m.upgrade(redacted_schema);
     return std::move(m);
+#endif
 }
 
 /**

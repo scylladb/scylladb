@@ -830,7 +830,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             }
         };
 
-        schema_features sf = schema_features::of<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY, schema_feature::PER_TABLE_PARTITIONERS>();
+        schema_features sf = schema_features::of<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
 
         expect_digest(sf, expected_digests[0]);
 

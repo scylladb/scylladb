@@ -18,7 +18,6 @@ enum class schema_feature {
     // See https://github.com/scylladb/scylla/issues/4485
     DIGEST_INSENSITIVE_TO_EXPIRY,
     COMPUTED_COLUMNS,
-    PER_TABLE_PARTITIONERS,
     SCYLLA_KEYSPACES,
     SCYLLA_AGGREGATES,
 
@@ -33,7 +32,6 @@ enum class schema_feature {
 using schema_features = enum_set<super_enum<schema_feature,
     schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY,
     schema_feature::COMPUTED_COLUMNS,
-    schema_feature::PER_TABLE_PARTITIONERS,
     schema_feature::SCYLLA_KEYSPACES,
     schema_feature::SCYLLA_AGGREGATES,
     schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY,

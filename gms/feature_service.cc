@@ -139,6 +139,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "DIGEST_INSENSITIVE_TO_EXPIRY"sv,
         "CDC"sv,
         "NONFROZEN_UDTS"sv,
+        "PER_TABLE_PARTITIONERS"sv,
     };
 
     if (is_test_only_feature_deprecated()) {
@@ -196,7 +197,6 @@ db::schema_features feature_service::cluster_schema_features() const {
     db::schema_features f;
     f.set<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
     f.set<db::schema_feature::COMPUTED_COLUMNS>();
-    f.set_if<db::schema_feature::PER_TABLE_PARTITIONERS>(per_table_partitioners);
     f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(keyspace_storage_options);
     f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(tablets);
     f.set_if<db::schema_feature::SCYLLA_AGGREGATES>(aggregate_storage_options);

@@ -83,7 +83,6 @@ public:
     gms::feature user_defined_functions { *this, "UDF"sv };
     gms::feature hinted_handoff_separate_connection { *this, "HINTED_HANDOFF_SEPARATE_CONNECTION"sv };
     gms::feature lwt { *this, "LWT"sv };
-    gms::feature per_table_partitioners { *this, "PER_TABLE_PARTITIONERS"sv };
     gms::feature per_table_caching { *this, "PER_TABLE_CACHING"sv };
     gms::feature digest_for_null_values { *this, "DIGEST_FOR_NULL_VALUES"sv };
     gms::feature correct_idx_token_in_secondary_index { *this, "CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX"sv };
