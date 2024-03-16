@@ -1,4 +1,12 @@
 pull_request_rules:
+  - name: put PR in draft if conflicts
+    conditions:
+      - label = conflicts
+      - author = mergify[bot]
+      - head ~= ^mergify/
+    actions:
+      edit:
+         draft: true
   - name: Automate backport pull request 5.2
     conditions:
       - or:
