@@ -22,16 +22,13 @@ struct noop_hasher {
 };
 
 class digester final {
-    std::variant<noop_hasher, xx_hasher, legacy_xx_hasher_without_null_digest> _impl;
+    std::variant<noop_hasher, xx_hasher> _impl;
 
 public:
     explicit digester(digest_algorithm algo) {
         switch (algo) {
         case digest_algorithm::xxHash:
             _impl = xx_hasher();
-            break;
-        case digest_algorithm::legacy_xxHash_without_null_digest:
-            _impl = legacy_xx_hasher_without_null_digest();
             break;
         case digest_algorithm ::none:
             _impl = noop_hasher();

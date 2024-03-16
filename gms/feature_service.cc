@@ -143,6 +143,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "LWT"sv,
         "PER_TABLE_PARTITIONERS"sv,
         "PER_TABLE_CACHING"sv,
+        "DIGEST_FOR_NULL_VALUES"sv,
     };
 
     if (is_test_only_feature_deprecated()) {

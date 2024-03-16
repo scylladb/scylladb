@@ -947,9 +947,7 @@ using namespace exceptions;
 
 static inline
 query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
-    return proxy.features().digest_for_null_values
-            ? query::digest_algorithm::xxHash
-            : query::digest_algorithm::legacy_xxHash_without_null_digest;
+    return query::digest_algorithm::xxHash;
 }
 
 static inline
