@@ -81,7 +81,6 @@ public:
 
 public:
     gms::feature user_defined_functions { *this, "UDF"sv };
-    gms::feature md_sstable { *this, "MD_SSTABLE_FORMAT"sv };
     gms::feature me_sstable { *this, "ME_SSTABLE_FORMAT"sv };
     gms::feature view_virtual_columns { *this, "VIEW_VIRTUAL_COLUMNS"sv };
     gms::feature digest_insensitive_to_expiry { *this, "DIGEST_INSENSITIVE_TO_EXPIRY"sv };

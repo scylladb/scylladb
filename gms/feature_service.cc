@@ -133,6 +133,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "MC_SSTABLE_FORMAT"sv,
         "COMPUTED_COLUMNS"sv,
         "SCHEMA_COMMITLOG"sv,
+        "MD_SSTABLE_FORMAT"sv,
     };
 
     if (is_test_only_feature_deprecated()) {
