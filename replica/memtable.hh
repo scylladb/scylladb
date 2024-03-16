@@ -220,6 +220,8 @@ public:
     mutation_cleaner& cleaner() noexcept {
         return _cleaner;
     }
+
+    bool contains_partition(const dht::decorated_key& key) const;
 public:
     memtable_list* get_memtable_list() noexcept {
         return _memtable_list;

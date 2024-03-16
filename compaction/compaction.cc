@@ -134,12 +134,21 @@ std::string_view to_string(compaction_type_options::scrub::quarantine_mode quara
 }
 
 static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
-        const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks) {
+        const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
+        const api::timestamp_type compacting_max_timestamp) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
         return api::min_timestamp;
     }
 
-    auto timestamp = table_s.min_memtable_timestamp();
+    auto timestamp = api::max_timestamp;
+    auto memtable_min_timestamp = table_s.min_memtable_timestamp();
+    // Use memtable timestamp if it contains data older than the sstables being compacted,
+    // and if the memtable also contains the key we're calculating max purgeable timestamp for.
+    // First condition helps to not penalize the common scenario where memtable only contains
+    // newer data.
+    if (memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
+        timestamp = memtable_min_timestamp;
+    }
     std::optional<utils::hashed_key> hk;
     for (auto&& sst : boost::range::join(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
         if (compacting_set.contains(sst)) {
@@ -467,6 +476,7 @@ protected:
     uint64_t _end_size = 0;
     // fully expired files, which are skipped, aren't taken into account.
     uint64_t _compacting_data_file_size = 0;
+    api::timestamp_type _compacting_max_timestamp = api::min_timestamp;
     uint64_t _estimated_partitions = 0;
     uint64_t _bloom_filter_checks = 0;
     db::replay_position _rp;
@@ -774,6 +784,7 @@ private:
             // sstable than just adding up the lengths of individual sstables.
             _estimated_partitions += sst->get_estimated_key_count();
             _compacting_data_file_size += sst->ondisk_data_size();
+            _compacting_max_timestamp = std::max(_compacting_max_timestamp, sst->get_stats_metadata().max_timestamp);
             if (sst->originated_on_this_node().value_or(false) && sst_stats.position.shard_id() == this_shard_id()) {
                 _rp = std::max(_rp, sst_stats.position);
             }
@@ -897,7 +908,7 @@ private:
             };
         }
         return [this] (const dht::decorated_key& dk) {
-            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks);
+            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp);
         };
     }
 
