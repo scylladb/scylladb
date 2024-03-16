@@ -832,12 +832,10 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
 
         schema_features sf = schema_features::of<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
 
-        expect_digest(sf, expected_digests[0]);
+        // note: expected_digests[0] is for schemas without SCHEMA_FEATURES::VIEW_VIRTUAL_COLUMNS, which no longer exists
 
-        sf.set<schema_feature::VIEW_VIRTUAL_COLUMNS>();
         expect_digest(sf, expected_digests[1]);
 
-        sf.set<schema_feature::VIEW_VIRTUAL_COLUMNS>();
         expect_digest(sf, expected_digests[2]);
 
         sf = schema_features::full();

@@ -3736,9 +3736,7 @@ std::vector<schema_ptr> all_tables(schema_features features) {
         keyspaces(), tables(), scylla_tables(), columns(), dropped_columns(), triggers(),
         views(), types(), functions(), aggregates(), indexes()
     };
-    if (features.contains<schema_feature::VIEW_VIRTUAL_COLUMNS>()) {
-        result.emplace_back(view_virtual_columns());
-    }
+    result.emplace_back(view_virtual_columns());
     if (features.contains<schema_feature::COMPUTED_COLUMNS>()) {
         result.emplace_back(computed_columns());
     }
