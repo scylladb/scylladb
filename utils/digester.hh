@@ -9,7 +9,6 @@
 #pragma once
 
 #include "utils/digest_algorithm.hh"
-#include "utils/hashers.hh"
 #include "utils/xx_hasher.hh"
 
 #include <type_traits>
@@ -23,14 +22,11 @@ struct noop_hasher {
 };
 
 class digester final {
-    std::variant<noop_hasher, md5_hasher, xx_hasher, legacy_xx_hasher_without_null_digest> _impl;
+    std::variant<noop_hasher, xx_hasher, legacy_xx_hasher_without_null_digest> _impl;
 
 public:
     explicit digester(digest_algorithm algo) {
         switch (algo) {
-        case digest_algorithm::MD5:
-            _impl = md5_hasher();
-            break;
         case digest_algorithm::xxHash:
             _impl = xx_hasher();
             break;
@@ -61,7 +57,7 @@ public:
 using default_hasher = xx_hasher;
 
 template<typename Hasher>
-using using_hash_of_hash = std::negation<std::disjunction<std::is_same<Hasher, md5_hasher>, std::is_same<Hasher, noop_hasher>>>;
+using using_hash_of_hash = std::negation<std::is_same<Hasher, noop_hasher>>;
 
 template<typename Hasher>
 inline constexpr bool using_hash_of_hash_v = using_hash_of_hash<Hasher>::value;

@@ -749,7 +749,10 @@ private:
                 }
                 auto erm = s->table().get_effective_replication_map();
                 p->get_stats().replica_data_reads++;
-                auto da = oda.value_or(query::digest_algorithm::MD5);
+                if (!oda) {
+                    throw std::runtime_error("READ_DATA called without digest algorithm");
+                }
+                auto da = oda.value();
                 query::result_options opts;
                 opts.digest_algo = da;
                 opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
@@ -764,7 +767,10 @@ private:
                 }
                 auto erm = s->table().get_effective_replication_map();
                 p->get_stats().replica_digest_reads++;
-                auto da = oda.value_or(query::digest_algorithm::MD5);
+                if (!oda) {
+                    throw std::runtime_error("READ_DIGEST called without digest algorithm");
+                }
+                auto da = oda.value();
                 return p->query_result_local_digest(erm, std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info);
             } else {
                 static_assert(verb == static_cast<read_verb>(-1), "Unsupported verb");
