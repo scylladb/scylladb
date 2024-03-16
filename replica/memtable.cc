@@ -245,6 +245,11 @@ memtable::find_or_create_partition(const dht::decorated_key& key) {
     return i->partition();
 }
 
+bool
+memtable::contains_partition(const dht::decorated_key& key) const {
+    return partitions.find(key, dht::ring_position_comparator(*_schema)) != partitions.end();
+}
+
 boost::iterator_range<memtable::partitions_type::const_iterator>
 memtable::slice(const dht::partition_range& range) const {
     if (query::is_single_partition(range)) {

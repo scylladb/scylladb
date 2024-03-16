@@ -111,6 +111,7 @@ public:
     virtual sstables::shared_sstable make_sstable() const override { return _sstable_factory(); }
     virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return _sst_man.configure_writer(std::move(origin)); }
     virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
+    virtual bool memtable_has_key(const dht::decorated_key& key) const override { return false; }
     virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         testlog.info("Adding {} sstable(s), removing {} sstables", desc.new_sstables.size(), desc.old_sstables.size());
         rebuild_main_set(desc.new_sstables, desc.old_sstables);
