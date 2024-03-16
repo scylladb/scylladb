@@ -81,7 +81,6 @@ public:
 
 public:
     gms::feature user_defined_functions { *this, "UDF"sv };
-    gms::feature nonfrozen_udts { *this, "NONFROZEN_UDTS"sv };
     gms::feature hinted_handoff_separate_connection { *this, "HINTED_HANDOFF_SEPARATE_CONNECTION"sv };
     gms::feature lwt { *this, "LWT"sv };
     gms::feature per_table_partitioners { *this, "PER_TABLE_PARTITIONERS"sv };

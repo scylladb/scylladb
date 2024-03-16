@@ -138,6 +138,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "VIEW_VIRTUAL_COLUMNS"sv,
         "DIGEST_INSENSITIVE_TO_EXPIRY"sv,
         "CDC"sv,
+        "NONFROZEN_UDTS"sv,
     };
 
     if (is_test_only_feature_deprecated()) {
