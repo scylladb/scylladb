@@ -41,6 +41,7 @@ public:
     virtual sstables::shared_sstable make_sstable() const = 0;
     virtual sstables::sstable_writer_config configure_writer(sstring origin) const = 0;
     virtual api::timestamp_type min_memtable_timestamp() const = 0;
+    virtual bool memtable_has_key(const dht::decorated_key& key) const = 0;
     virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) = 0;
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept = 0;

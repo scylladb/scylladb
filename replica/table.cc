@@ -342,6 +342,14 @@ api::timestamp_type compaction_group::min_memtable_timestamp() const {
     );
 }
 
+bool compaction_group::memtable_has_key(const dht::decorated_key& key) const {
+    if (_memtables->empty()) {
+        return false;
+    }
+    return std::ranges::any_of(*_memtables,
+        std::bind(&memtable::contains_partition, std::placeholders::_1, std::ref(key)));
+}
+
 api::timestamp_type table::min_memtable_timestamp() const {
     return *boost::range::min_element(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::min_memtable_timestamp)));
 }
@@ -2678,6 +2686,9 @@ public:
     }
     api::timestamp_type min_memtable_timestamp() const override {
         return _cg.min_memtable_timestamp();
+    }
+    bool memtable_has_key(const dht::decorated_key& key) const override {
+        return _cg.memtable_has_key(key);
     }
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         if (offstrategy) {
