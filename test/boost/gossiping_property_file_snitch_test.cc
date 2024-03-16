@@ -19,6 +19,15 @@
 
 static std::filesystem::path test_files_subdir("test/resource/snitch_property_files");
 
+namespace std {
+
+std::ostream& boost_test_print_type(std::ostream& os, const std::pair<sstring, sstring>& p) {
+    fmt::print(os, "{}:{}", p.first, p.second);
+    return os;
+}
+
+}
+
 future<> one_test(const std::string& property_fname, bool exp_result) {
     using namespace locator;
 
