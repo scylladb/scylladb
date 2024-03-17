@@ -20,6 +20,7 @@
 #include "db/config.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/exception_utils.hh"
+#include "test/lib/test_utils.hh"
 
 using ire = exceptions::invalid_request_exception;
 using exception_predicate::message_equals;

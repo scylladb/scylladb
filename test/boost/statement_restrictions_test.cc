@@ -16,6 +16,7 @@
 #include "cql3/util.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/test_utils.hh"
 
 using namespace cql3;
 

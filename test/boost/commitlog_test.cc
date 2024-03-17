@@ -42,6 +42,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/key_utils.hh"
+#include "test/lib/test_utils.hh"
 
 using namespace db;
 

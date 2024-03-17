@@ -15,6 +15,7 @@
 #include "schema/schema_builder.hh"
 
 #include "locator/token_metadata.hh"
+#include "test/lib/test_utils.hh"
 
 // yuck, but what can one do?  needed for BOOST_REQUIRE_EQUAL
 namespace std {

@@ -14,6 +14,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 
+#include <fmt/std.h>
 #include <seastar/net/inet_address.hh>
 
 #include "test/lib/scylla_test_case.hh"

@@ -16,6 +16,7 @@
 #include "schema/schema_builder.hh"
 
 #include "locator/token_metadata.hh"
+#include "test/lib/test_utils.hh"
 
 using ring_position = dht::ring_position;
 

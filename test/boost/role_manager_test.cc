@@ -9,8 +9,8 @@
 #include "auth/standard_role_manager.hh"
 
 #include "test/lib/scylla_test_case.hh"
-
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/test_utils.hh"
 
 auto make_manager(cql_test_env& env) {
     auto stop_role_manager = [] (auth::standard_role_manager* m) {

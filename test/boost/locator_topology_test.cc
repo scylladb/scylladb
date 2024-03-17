@@ -13,6 +13,7 @@
 
 #include "locator/types.hh"
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/test_utils.hh"
 
 #include "locator/host_id.hh"
 #include "locator/topology.hh"

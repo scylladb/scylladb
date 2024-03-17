@@ -10,6 +10,7 @@
 #include "test/lib/scylla_test_case.hh"
 #include <string>
 #include <boost/range/adaptor/map.hpp>
+#include <fmt/std.h>
 
 #include "cdc/log.hh"
 #include "cdc/cdc_options.hh"
@@ -18,6 +19,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
+#include "test/lib/test_utils.hh"
 #include "transport/messages/result_message.hh"
 
 #include "types/types.hh"

@@ -12,6 +12,7 @@
 #include "utils/top_k.hh"
 #include <vector>
 #include <algorithm>
+#include "test/lib/test_utils.hh"
 
 //---------------------------------------------------------------------------------------------
 

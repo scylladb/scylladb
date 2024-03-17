@@ -15,6 +15,9 @@
 #include <vector>
 #include <optional>
 
+#include <fmt/ranges.h>
+
+#include "test/lib/test_utils.hh"
 #include "bytes.hh"
 #include "bytes_ostream.hh"
 
@@ -51,9 +54,16 @@ public:
 thread_local int non_final_composite_test_object::construction_count = 0;
 thread_local int final_composite_test_object::construction_count = 0;
 
+template <> struct fmt::formatter<simple_compound> : fmt::formatter<std::string_view> {
+    auto format(const simple_compound& sc, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), " {{ foo: {}, bar: {} }}", sc.foo, sc.bar);
+    }
+};
+
 std::ostream& operator<<(std::ostream& os, const simple_compound& sc)
 {
-    return os << " { foo: " << sc.foo << ", bar: " << sc.bar << " }";
+    fmt::print(os, "{}", sc);
+    return os;
 }
 
 struct compound_with_optional {
@@ -69,11 +79,11 @@ std::ostream& operator<<(std::ostream& os, const compound_with_optional& v)
 {
     os << " { first: ";
     if (v.first) {
-        os << *v.first;
+        fmt::print(os, "{}", *v.first);
     } else {
-        os << "<disengaged>";
+        fmt::print(os, "<disengaged>");
     }
-    os << ", second: " << v.second << " }";
+    fmt::print(os, ", second: {}}}", v.second);
     return os;
 }
 
@@ -87,7 +97,8 @@ struct wrapped_vector {
 
 std::ostream& operator<<(std::ostream& os, const wrapped_vector& v)
 {
-    return os << v.vector;
+    fmt::print(os, "{}", v.vector);
+    return os;
 }
 
 struct vectors_of_compounds {

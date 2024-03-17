@@ -12,6 +12,7 @@
 #include "transport/response.hh"
 
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 
 namespace cql3 {
 
