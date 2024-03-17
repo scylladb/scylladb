@@ -143,6 +143,16 @@ std::vector<mutation> unfreeze(const std::vector<frozen_mutation>& muts) {
     }));
 }
 
+
+future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation> muts) {
+    std::vector<mutation> result;
+    result.reserve(muts.size());
+    for (auto& fm : muts) {
+        result.push_back(co_await fm.unfreeze_gently(local_schema_registry().get(fm.schema_version())));
+    }
+    co_return result;
+}
+
 mutation_partition_view frozen_mutation::partition() const {
     return mutation_partition_view::from_view(mutation_view().partition());
 }

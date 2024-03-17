@@ -17,6 +17,8 @@
 #include "range_tombstone_change_generator.hh"
 #include "schema/schema.hh"
 
+#include <span>
+
 class mutation;
 class flat_mutation_reader_v2;
 
@@ -231,6 +233,8 @@ public:
 frozen_mutation freeze(const mutation& m);
 std::vector<frozen_mutation> freeze(const std::vector<mutation>&);
 std::vector<mutation> unfreeze(const std::vector<frozen_mutation>&);
+// Caller is responsible for keeping the argument stable in memory
+future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation>);
 
 struct frozen_mutation_and_schema {
     frozen_mutation fm;
