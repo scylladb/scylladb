@@ -9,6 +9,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/core/smp.hh>
+#include <fmt/ranges.h>
 
 #include "db/hints/sync_point.hh"
 
@@ -21,9 +22,8 @@ std::ostream& operator<<(std::ostream& out, const replay_position& p) {
 
 namespace db::hints {
 std::ostream& operator<<(std::ostream& out, const sync_point& sp) {
-    out << "{regular_per_shard_rps: " << sp.regular_per_shard_rps
-        << ", mv_per_shard_rps: " << sp.mv_per_shard_rps
-        << "}";
+    fmt::print(out, "{{regular_per_shard_rps: {}, mv_per_shard_rps: {}}}",
+               sp.regular_per_shard_rps, sp.mv_per_shard_rps);
     return out;
 }
 }
