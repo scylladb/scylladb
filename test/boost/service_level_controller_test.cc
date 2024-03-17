@@ -9,10 +9,11 @@
 
 #include <boost/test/unit_test.hpp>
 #include <stdlib.h>
-#include <iostream>
+#include <fmt/std.h>
 
 #include "seastarx.hh"
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/test_utils.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
 #include "service/qos/service_level_controller.hh"
@@ -62,26 +63,33 @@ struct qos_configuration_change_suscriber_simple : public qos_configuration_chan
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const add_op& op) {
-    return os << "Service Level: added '" << op.name << "' with " << op.slo.workload;
-}
+template <> struct fmt::formatter<add_op> : fmt::formatter<std::string_view> {
+    auto format(const add_op& op, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "Service Level: added '{}' with {}",
+                              op.name, op.slo.workload);
+    }
+};
 
-std::ostream& operator<<(std::ostream& os, const change_op& op) {
-    return os << "Service Level: changed '" << op.name << "' from " << op.slo_before.workload << " to " << op.slo_after.workload;
-}
+template <> struct fmt::formatter<change_op> : fmt::formatter<std::string_view> {
+    auto format(const change_op& op, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "Service Level: changed '{}' from {} to {}",
+                              op.name, op.slo_before.workload, op.slo_after.workload);
+    }
+};
 
-std::ostream& operator<<(std::ostream& os, const remove_op& op) {
-    return os << "Service Level: removed '" << op.name << "'";
-}
+template <> struct fmt::formatter<remove_op> : fmt::formatter<std::string_view> {
+    auto format(const remove_op& op, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "Service Level: removed '{}'", op.name);
+    }
+};
 
-std::ostream& operator<<(std::ostream& os, const service_level_op& op) {
-     std::visit(overloaded_functor {
-            [&os] (const add_op& op) { os << op; },
-            [&os] (const remove_op& op) { os << op; },
-            [&os] (const change_op& op) { os << op; },
+template <> struct fmt::formatter<service_level_op> : fmt::formatter<std::string_view> {
+    auto format(const service_level_op& op, fmt::format_context& ctx) const {
+        return std::visit(overloaded_functor {
+            [&ctx] (const auto& op) { return fmt::format_to(ctx.out(), "{}", op); }
      }, op);
-     return os;
-}
+    }
+};
 
 SEASTAR_THREAD_TEST_CASE(subscriber_simple) {
     sharded<service_level_controller> sl_controller;
