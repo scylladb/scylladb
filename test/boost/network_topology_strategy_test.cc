@@ -189,7 +189,6 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
 }
 
 void full_ring_check(const tablet_map& tmap,
-                     const std::map<sstring, sstring>& options,
                      replication_strategy_ptr rs_ptr,
                      locator::token_metadata_ptr tmptr) {
     auto& tm = *tmptr;
@@ -449,7 +448,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         .build();
 
     auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
-    full_ring_check(tmap, options323, ars_ptr, stm.get());
+    full_ring_check(tmap, ars_ptr, stm.get());
 
     ///////////////
     // Create the replication strategy
@@ -466,7 +465,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     BOOST_REQUIRE(tab_awr_ptr);
 
     tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
-    full_ring_check(tmap, options320, ars_ptr, stm.get());
+    full_ring_check(tmap, ars_ptr, stm.get());
 }
 
 /**
