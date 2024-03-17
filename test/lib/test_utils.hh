@@ -13,6 +13,7 @@
 #include <string>
 #include <boost/test/unit_test.hpp>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 using namespace seastar;
 
@@ -117,5 +118,15 @@ namespace std {
 std::ostream& boost_test_print_type(std::ostream& os, const std::strong_ordering& order);
 std::ostream& boost_test_print_type(std::ostream& os, const std::weak_ordering& order);
 std::ostream& boost_test_print_type(std::ostream& os, const std::partial_ordering& order);
+
+template<std::ranges::range T>
+requires (!std::same_as<T, std::string> &&
+          !std::same_as<T, std::string_view> &&
+          !std::same_as<T, std::basic_string_view<int8_t>> &&
+          !std::same_as<T, sstring>)
+std::ostream& boost_test_print_type(std::ostream& os, const T& v) {
+    fmt::print(os, "{}", v);
+    return os;
+}
 
 }
