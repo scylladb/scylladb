@@ -287,6 +287,7 @@ public:
     bool joined_group0() const;
 
     const raft_address_map& address_map() const;
+    raft_address_map& modifiable_address_map();
 private:
     static void init_rpc_verbs(raft_group0& shard0_this);
     static future<> uninit_rpc_verbs(netw::messaging_service& ms);
