@@ -36,6 +36,7 @@
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/container/static_vector.hpp>
+#include <fmt/ranges.h>
 #include "mutation/frozen_mutation.hh"
 #include <seastar/core/do_with.hh>
 #include "service/migration_listener.hh"

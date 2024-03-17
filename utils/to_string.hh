@@ -55,12 +55,6 @@ std::ostream& operator<<(std::ostream& os, const print_with_comma<NeedsComma, Pr
 
 namespace std {
 
-template <typename K, typename V>
-std::ostream& operator<<(std::ostream& os, const std::pair<K, V>& p) {
-    os << "{" << p.first << ", " << p.second << "}";
-    return os;
-}
-
 template<typename... T, size_t... I>
 std::ostream& print_tuple(std::ostream& os, const std::tuple<T...>& p, std::index_sequence<I...>) {
     return ((os << "{" ) << ... << utils::internal::print_with_comma<I < sizeof...(I) - 1, T>{std::get<I>(p)}) << "}";
@@ -90,11 +84,6 @@ std::ostream& operator<<(std::ostream& os, const std::set<T, Args...>& items) {
 
 template <typename T, typename... Args>
 std::ostream& operator<<(std::ostream& os, const std::unordered_set<T, Args...>& items) {
-    return utils::format_range(os, items);
-}
-
-template <typename K, typename V, typename... Args>
-std::ostream& operator<<(std::ostream& os, const std::map<K, V, Args...>& items) {
     return utils::format_range(os, items);
 }
 
