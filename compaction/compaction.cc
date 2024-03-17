@@ -145,12 +145,17 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
         if (compacting_set.contains(sst)) {
             continue;
         }
+        // There's no point in looking up the key in the sstable filter if
+        // it does not contain data older than the minimum timestamp.
+        if (sst->get_stats_metadata().min_timestamp >= timestamp) {
+            continue;
+        }
         if (!hk) {
             hk = sstables::sstable::make_hashed_key(*table_s.schema(), dk.key());
         }
         if (sst->filter_has_key(*hk)) {
             bloom_filter_checks++;
-            timestamp = std::min(timestamp, sst->get_stats_metadata().min_timestamp);
+            timestamp = sst->get_stats_metadata().min_timestamp;
         }
     }
     return timestamp;
