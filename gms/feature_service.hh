@@ -81,7 +81,6 @@ public:
 
 public:
     gms::feature user_defined_functions { *this, "UDF"sv };
-    gms::feature correct_idx_token_in_secondary_index { *this, "CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX"sv };
     gms::feature alternator_streams { *this, "ALTERNATOR_STREAMS"sv };
     gms::feature alternator_ttl { *this, "ALTERNATOR_TTL"sv };
     gms::feature range_scan_data_variant { *this, "RANGE_SCAN_DATA_VARIANT"sv };
