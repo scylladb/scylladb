@@ -380,8 +380,7 @@ future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_
         if (dc_rf > dc_node_count) {
             replicas = co_await add_tablets_in_dc(s, topo, load, tb, replicas_per_dc_rack[dc], replicas, dc, dc_node_count, dc_rf);
         } else {
-            // FIXME: add support for deallocating tablet replicas
-            on_internal_error(tablet_logger, format("Deallocating tablet replicas is not supported yet: dc={} allocated={} rf={}", dc, dc_node_count, dc_rf));
+            replicas = drop_tablets_in_dc(s, topo, load, tb, replicas, dc, dc_node_count, dc_rf);
         }
     }
 
@@ -515,6 +514,28 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
     }
 
     co_return replicas;
+}
+
+tablet_replica_set network_topology_strategy::drop_tablets_in_dc(schema_ptr s, const locator::topology& topo, load_sketch& load, tablet_id tb,
+        const tablet_replica_set& cur_replicas,
+        sstring dc, size_t dc_node_count, size_t dc_rf) const {
+    tablet_logger.debug("drop_tablets_in_dc {}.{} tablet_id={}: deallocating tablet replicas in dc={} allocated={} rf={}", s->ks_name(), s->cf_name(), tb.id, dc, dc_node_count, dc_rf);
+
+    // Leave dc_rf replicas in dc, effectively deallocating in reverse order,
+    // to maintain replica pairing between the base table and its materialized views.
+    // This may leave racks unbalanced, but that's ok since the tablet load balancer
+    // can fix this later.
+    tablet_replica_set filtered;
+    filtered.reserve(cur_replicas.size() - (dc_node_count - dc_rf));
+    size_t nodes_in_dc = 0;
+    for (const auto& tr : cur_replicas) {
+        if (topo.get_node(tr.host).dc_rack().dc != dc || ++nodes_in_dc <= dc_rf) {
+            filtered.emplace_back(tr);
+        } else {
+            load.unload(tr.host, tr.shard);
+        }
+    }
+    return filtered;
 }
 
 using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params>;

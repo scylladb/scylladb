@@ -115,6 +115,18 @@ public:
         return shard;
     }
 
+    void unload(host_id node, shard_id shard) {
+        auto& n = _nodes.at(node);
+        for (auto& shard_load : n._shards) {
+            if (shard_load.id == shard) {
+                assert(shard_load.load > 0);
+                --shard_load.load;
+                break;
+            }
+        }
+        std::make_heap(n._shards.begin(), n._shards.end(), shard_load_cmp());
+    }
+
     uint64_t get_load(host_id node) const {
         if (!_nodes.contains(node)) {
             return 0;

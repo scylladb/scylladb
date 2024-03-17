@@ -64,6 +64,9 @@ private:
             std::map<sstring, std::unordered_set<locator::host_id>>& replicas_per_rack,
             const tablet_replica_set& cur_replicas,
             sstring dc, size_t dc_node_count, size_t dc_rf) const;
+    tablet_replica_set drop_tablets_in_dc(schema_ptr, const locator::topology&, load_sketch&, tablet_id,
+            const tablet_replica_set& cur_replicas,
+            sstring dc, size_t dc_node_count, size_t dc_rf) const;
 
     // map: data centers -> replication factor
     std::unordered_map<sstring, size_t> _dc_rep_factor;
