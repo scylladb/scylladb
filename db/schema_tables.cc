@@ -749,7 +749,7 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
         auto s = proxy.local().get_db().local().find_schema(NAME, table);
         std::vector<mutation> mutations;
         for (auto&& p : rs->partitions()) {
-            auto mut = p.mut().unfreeze(s);
+            auto mut = co_await p.mut().unfreeze_gently(s);
             auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
             if (!accept_keyspace(partition_key)) {
                 continue;
@@ -794,7 +794,7 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
         auto s = proxy.local().get_db().local().find_schema(NAME, table);
         std::vector<canonical_mutation> results;
         for (auto&& p : rs->partitions()) {
-            auto mut = p.mut().unfreeze(s);
+            auto mut = co_await p.mut().unfreeze_gently(s);
             auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
             if (is_system_keyspace(partition_key)) {
                 continue;
@@ -853,7 +853,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
     if (partitions.size() == 0) {
         co_return mutation(s, std::move(dk));
     } else if (partitions.size() == 1) {
-        co_return partitions[0].mut().unfreeze(s);
+        co_return co_await partitions[0].mut().unfreeze_gently(s);
     } else {
         auto&& ex = std::make_exception_ptr(std::invalid_argument("Results must have at most one partition"));
         co_return coroutine::exception(std::move(ex));
@@ -949,9 +949,9 @@ future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service:
 {
     if (this_shard_id() != 0) {
         // mutations must be applied on the owning shard (0).
-        co_await smp::submit_to(0, [&, fmuts = freeze(mutations)] () mutable -> future<> {
-            return merge_schema(sys_ks, proxy, feat, unfreeze(fmuts), reload);
-        });
+        co_await smp::submit_to(0, coroutine::lambda([&, fmuts = freeze(mutations)] () mutable -> future<> {
+            co_await merge_schema(sys_ks, proxy, feat, co_await unfreeze_gently(fmuts), reload);
+        }));
         co_return;
     }
     co_await with_merge_lock([&] () mutable -> future<> {
