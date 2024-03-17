@@ -98,7 +98,8 @@ void endpoints_check(
     replication_strategy_ptr ars_ptr,
     const token_metadata_ptr& tm,
     const inet_address_vector_replica_set& endpoints,
-    const locator::topology& topo) {
+    const locator::topology& topo,
+    bool strict_dc_rf = false) {
 
     auto&& nodes_per_dc = tm->get_topology().get_datacenter_endpoints();
     const network_topology_strategy* nts_ptr =
@@ -132,7 +133,8 @@ void endpoints_check(
     }
 
     for (auto&& [dc, rf] : dc_rf) {
-        auto effective_rf = std::min<size_t>(nts_ptr->get_replication_factor(dc), nodes_per_dc.at(dc).size());
+        auto effective_rf = strict_dc_rf ? nts_ptr->get_replication_factor(dc) :
+                std::min<size_t>(nts_ptr->get_replication_factor(dc), nodes_per_dc.at(dc).size());
         BOOST_CHECK(rf == effective_rf);
     }
 }
@@ -204,7 +206,7 @@ void full_ring_check(const tablet_map& tmap,
     };
 
     for (tablet_id tb : tmap.tablet_ids()) {
-        endpoints_check(rs_ptr, tmptr, to_endpoint_set(tmap.get_tablet_info(tb).replicas), topo);
+        endpoints_check(rs_ptr, tmptr, to_endpoint_set(tmap.get_tablet_info(tb).replicas), topo, true);
     }
 }
 
