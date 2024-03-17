@@ -1,9 +1,17 @@
+add_library(test-raft-helper OBJECT)
+target_sources(test-raft-helper
+  PRIVATE
+    helpers.cc)
+target_link_libraries(test-raft-helper
+  test-lib
+  Seastar::seastar_testing)
+
 add_library(test-raft)
 target_sources(test-raft
   PRIVATE
-    helpers.cc
     replication.cc)
 target_link_libraries(test-raft
+  test-raft-helper
   test-lib
   Seastar::seastar_testing)
 
@@ -31,7 +39,7 @@ add_scylla_test(raft_sys_table_storage_test
   KIND SEASTAR)
 add_scylla_test(randomized_nemesis_test
   KIND SEASTAR
-  LIBRARIES test-raft)
+  LIBRARIES test-raft-helper)
 add_scylla_test(replication_test
   KIND SEASTAR
   LIBRARIES test-raft)
