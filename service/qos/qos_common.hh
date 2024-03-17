@@ -85,3 +85,9 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<qos::service_level_options::workload_type> : fmt::formatter<std::string_view> {
+    auto format(qos::service_level_options::workload_type wt, fmt::format_context& ctx) const {
+        return formatter<std::string_view>::format(qos::service_level_options::to_string(wt), ctx);
+    }
+};
