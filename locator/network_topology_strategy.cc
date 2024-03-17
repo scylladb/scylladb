@@ -8,7 +8,9 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <algorithm>
 #include <functional>
+#include <random>
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -16,6 +18,7 @@
 #include "locator/network_topology_strategy.hh"
 #include "locator/load_sketch.hh"
 #include <boost/algorithm/string.hpp>
+#include <boost/range/adaptors.hpp>
 #include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
 #include "utils/hash.hh"
@@ -324,8 +327,6 @@ static unsigned calculate_initial_tablets_from_topology(const schema& s, const t
 }
 
 future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, unsigned initial_scale) const {
-    natural_endpoints_tracker::check_enough_endpoints(*tm, _dc_rep_factor);
-
     auto tablet_count = get_initial_tablets();
     if (tablet_count == 0) {
         tablet_count = calculate_initial_tablets_from_topology(*s, tm->get_topology(), _dc_rep_factor) * initial_scale;
@@ -336,40 +337,184 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
         tablet_count = aligned_tablet_count;
     }
 
-    tablet_map tablets(tablet_count);
+    return reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count));
+}
+
+future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {
+    natural_endpoints_tracker::check_enough_endpoints(*tm, _dc_rep_factor);
     load_sketch load(tm);
     co_await load.populate();
 
-    // FIXME: Don't use tokens to distribute nodes.
-    // The following reuses the existing token-based algorithm used by NetworkTopologyStrategy.
-    assert(!tm->sorted_tokens().empty());
-    auto token_range = tm->ring_range(dht::token::get_random_token());
+    tablet_logger.debug("Allocating tablets for {}.{} ({}): dc_rep_factor={} tablet_count={}", s->ks_name(), s->cf_name(), s->id(), _dc_rep_factor, tablets.tablet_count());
 
+    const auto& topo = tm->get_topology();
+    const auto dc_rack_nodes = topo.get_datacenter_rack_nodes();
     for (tablet_id tb : tablets.tablet_ids()) {
-        natural_endpoints_tracker tracker(*tm, _dc_rep_factor);
-
-        while (true) {
-            co_await coroutine::maybe_yield();
-            if (token_range.begin() == token_range.end()) {
-                token_range = tm->ring_range(dht::minimum_token());
-            }
-            locator::host_id ep = *tm->get_endpoint(*token_range.begin());
-            token_range.drop_front();
-            if (tracker.add_endpoint_and_check_if_done(ep)) {
-                break;
-            }
-        }
-
-        tablet_replica_set replicas;
-        for (auto&& ep : tracker.replicas()) {
-            replicas.emplace_back(tablet_replica{ep, load.next_shard(ep)});
-        }
-
+        auto replicas = co_await reallocate_tablets(s, topo, load, tablets, tb);
         tablets.set_tablet(tb, tablet_info{std::move(replicas)});
     }
 
-    tablet_logger.debug("Allocated tablets for {}.{} ({}): {}", s->ks_name(), s->cf_name(), s->id(), tablets);
+    tablet_logger.debug("Allocated tablets for {}.{} ({}): dc_rep_factor={}: {}", s->ks_name(), s->cf_name(), s->id(), _dc_rep_factor, tablets);
     co_return tablets;
+}
+
+future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_ptr s, const locator::topology& topo, load_sketch& load, const tablet_map& cur_tablets, tablet_id tb) const {
+    tablet_replica_set replicas;
+    // Current number of replicas per dc
+    std::unordered_map<sstring, size_t> nodes_per_dc;
+    // Current replicas per dc/rack
+    std::unordered_map<sstring, std::map<sstring, std::unordered_set<locator::host_id>>> replicas_per_dc_rack;
+
+    replicas = cur_tablets.get_tablet_info(tb).replicas;
+    for (const auto& tr : replicas) {
+        const auto& node = topo.get_node(tr.host);
+        replicas_per_dc_rack[node.dc_rack().dc][node.dc_rack().rack].insert(tr.host);
+        ++nodes_per_dc[node.dc_rack().dc];
+    }
+
+    for (const auto& [dc, dc_rf] : _dc_rep_factor) {
+        auto dc_node_count = nodes_per_dc[dc];
+        if (dc_rf == dc_node_count) {
+            continue;
+        }
+        if (dc_rf > dc_node_count) {
+            replicas = co_await add_tablets_in_dc(s, topo, load, tb, replicas_per_dc_rack[dc], replicas, dc, dc_node_count, dc_rf);
+        } else {
+            // FIXME: add support for deallocating tablet replicas
+            on_internal_error(tablet_logger, format("Deallocating tablet replicas is not supported yet: dc={} allocated={} rf={}", dc, dc_node_count, dc_rf));
+        }
+    }
+
+    co_return replicas;
+}
+
+future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_ptr s, const locator::topology& topo, load_sketch& load, tablet_id tb,
+        std::map<sstring, std::unordered_set<locator::host_id>>& replicas_per_rack,
+        const tablet_replica_set& cur_replicas,
+        sstring dc, size_t dc_node_count, size_t dc_rf) const {
+    static thread_local std::default_random_engine rnd_engine{std::random_device{}()};
+
+    auto replicas = cur_replicas;
+    // all_dc_racks is ordered lexicographically on purpose
+    auto all_dc_racks = boost::copy_range<std::map<sstring, std::unordered_set<const node*>>>(topo.get_datacenter_rack_nodes().at(dc));
+
+    // Track all nodes with no replicas on them for this tablet, per rack.
+    struct node_load {
+        locator::host_id host;
+        uint64_t load;
+    };
+    // for sorting in descending load order
+    // (in terms of number of replicas)
+    auto node_load_cmp = [] (const node_load& a, const node_load& b) {
+        return a.load > b.load;
+    };
+
+    struct rack_candidates {
+        sstring rack;
+        utils::small_vector<node_load, 3> nodes;
+    };
+    using candidates_list = std::deque<rack_candidates>;
+    candidates_list candidate_racks;
+
+    // We use this vector to start allocating from an
+    // unpoplated rack.
+    std::vector<candidates_list::iterator> new_racks;
+
+    for (const auto& [rack, nodes] : all_dc_racks) {
+        co_await coroutine::maybe_yield();
+        if (nodes.empty()) {
+            continue;
+        }
+        auto& candidate = candidate_racks.emplace_back(rack);
+        const auto& existing = replicas_per_rack[rack];
+        if (existing.empty()) {
+            new_racks.emplace_back(candidate_racks.end() - 1);
+        }
+        for (const auto& node : nodes) {
+            const auto& host_id = node->host_id();
+            if (!existing.contains(host_id)) {
+                candidate.nodes.emplace_back(host_id, load.get_load(host_id));
+            }
+        }
+        if (candidate.nodes.empty()) {
+            candidate_racks.pop_back();
+            tablet_logger.trace("allocate_replica {}.{}: no candidate nodes left on rack={}", s->ks_name(), s->cf_name(), rack);
+            // Note that this rack can't be in new_racks since
+            // those had no existing replicas and if current rack has no nodes
+            // we skip it in the beginning of the loop body
+            continue;
+        }
+        // Sort candidate nodes in each rack in descending load order
+        // so we want to allocate first from the least loaded nodes.
+        // Do shuffle + stable_sort to shuffle nodes with equal load.
+        std::shuffle(candidate.nodes.begin(), candidate.nodes.end(), rnd_engine);
+        std::stable_sort(candidate.nodes.begin(), candidate.nodes.end(), node_load_cmp);
+    }
+
+    if (candidate_racks.empty()) {
+        on_internal_error(tablet_logger,
+                format("allocate_replica {}.{}: no candidate racks found for dc={} allocated={} rf={}: existing={}",
+                        s->ks_name(), s->cf_name(), dc, dc_node_count, dc_rf, replicas_per_rack));
+    }
+
+    // ensure fairness across racks (in particular if rf < number_of_racks)
+    candidates_list::iterator candidate_rack = new_racks.empty()
+            ? candidate_racks.begin() + (tb.id % candidate_racks.size())
+            : new_racks[tb.id % new_racks.size()];
+
+    auto allocate_replica = [&] (candidates_list::iterator& candidate) {
+        const auto& rack = candidate->rack;
+        auto& nodes = candidate->nodes;
+        if (nodes.empty()) {
+            on_internal_error(tablet_logger,
+                    format("allocate_replica {}.{} tablet_id={}: candidates vector for rack={} is empty for allocating tablet replicas in dc={} allocated={} rf={}",
+                            s->ks_name(), s->cf_name(), tb.id, rack, dc, dc_node_count, dc_rf));
+        }
+        auto host_id = nodes.back().host;
+        auto replica = tablet_replica{host_id, load.next_shard(host_id)};
+        const auto& node = topo.get_node(host_id);
+        auto inserted = replicas_per_rack[node.dc_rack().rack].insert(host_id).second;
+        // Sanity check that a node is not used more than once
+        if (!inserted) {
+            on_internal_error(tablet_logger,
+                    format("allocate_replica {}.{} tablet_id={}: allocated replica={} node already used when allocating tablet replicas in dc={} allocated={} rf={}: replicas={}",
+                            s->ks_name(), s->cf_name(), tb.id, replica, dc, dc_node_count, dc_rf, replicas));
+        }
+        nodes.pop_back();
+        tablet_logger.trace("allocate_replica {}.{} tablet_id={}: allocated tablet replica={} dc={} rack={}: nodes remaining in rack={}",
+                s->ks_name(), s->cf_name(), tb.id, replica, node.dc_rack().dc, node.dc_rack().rack, nodes.size());
+        if (nodes.empty()) {
+            candidate = candidate_racks.erase(candidate);
+        } else {
+            ++candidate;
+        }
+        if (candidate == candidate_racks.end()) {
+            candidate = candidate_racks.begin();
+        }
+        if (tablet_logger.is_enabled(log_level::trace)) {
+            if (candidate != candidate_racks.end()) {
+                tablet_logger.trace("allocate_replica {}.{} tablet_id={}: next rack={} nodes={}", s->ks_name(), s->cf_name(), tb.id, candidate->rack, candidate->nodes.size());
+            } else {
+                tablet_logger.trace("allocate_replica {}.{} tablet_id={}: no candidate racks left", s->ks_name(), s->cf_name(), tb.id);
+            }
+        }
+        return replica;
+    };
+
+    tablet_logger.debug("allocate_replica {}.{} tablet_id={}: allocating tablet replicas in dc={} allocated={} rf={}",
+            s->ks_name(), s->cf_name(), tb.id, dc, dc_node_count, dc_rf);
+
+    for (size_t remaining = dc_rf - dc_node_count; remaining; --remaining) {
+        co_await coroutine::maybe_yield();
+        if (candidate_rack == candidate_racks.end()) {
+            on_internal_error(tablet_logger,
+                    format("allocate_replica {}.{} tablet_id={}: ran out of candidates for allocating tablet replicas in dc={} allocated={} rf={}: remaining={}",
+                            s->ks_name(), s->cf_name(), tb.id, dc, dc_node_count, dc_rf, remaining));
+        }
+        replicas.emplace_back(allocate_replica(candidate_rack));
+    }
+
+    co_return replicas;
 }
 
 using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params>;
