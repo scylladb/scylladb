@@ -902,10 +902,10 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
 
         for (auto h : {host1, host2, host3}) {
             testlog.debug("Checking host {}", h);
-            BOOST_REQUIRE(load.get_load(h) <= 3);
-            BOOST_REQUIRE(load.get_load(h) > 1);
-            BOOST_REQUIRE(load.get_avg_shard_load(h) <= 2);
-            BOOST_REQUIRE(load.get_avg_shard_load(h) > 0);
+            BOOST_REQUIRE_LE(load.get_load(h), 3);
+            BOOST_REQUIRE_GT(load.get_load(h), 1);
+            BOOST_REQUIRE_LE(load.get_avg_shard_load(h), 2);
+            BOOST_REQUIRE_GT(load.get_avg_shard_load(h), 0);
         }
     }
   }).get();
@@ -1075,9 +1075,9 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
         {
             load_sketch load(stm.get());
             load.populate().get();
-            BOOST_REQUIRE(load.get_avg_shard_load(host1) == 2);
-            BOOST_REQUIRE(load.get_avg_shard_load(host2) == 2);
-            BOOST_REQUIRE(load.get_avg_shard_load(host3) == 0);
+            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host1), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host2), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
         }
 
         stm.mutate_token_metadata([&](token_metadata& tm) {
@@ -1090,9 +1090,9 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
         {
             load_sketch load(stm.get());
             load.populate().get();
-            BOOST_REQUIRE(load.get_avg_shard_load(host1) == 2);
-            BOOST_REQUIRE(load.get_avg_shard_load(host2) == 2);
-            BOOST_REQUIRE(load.get_avg_shard_load(host3) == 0);
+            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host1), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host2), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
         }
     }).get();
 }
@@ -1179,10 +1179,10 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
         {
             load_sketch load(stm.get());
             load.populate().get();
-            BOOST_REQUIRE(load.get_avg_shard_load(host1) >= 2);
-            BOOST_REQUIRE(load.get_avg_shard_load(host2) >= 2);
-            BOOST_REQUIRE(load.get_avg_shard_load(host3) >= 2);
-            BOOST_REQUIRE(load.get_avg_shard_load(host4) == 0);
+            BOOST_REQUIRE_GE(load.get_avg_shard_load(host1), 2);
+            BOOST_REQUIRE_GE(load.get_avg_shard_load(host2), 2);
+            BOOST_REQUIRE_GE(load.get_avg_shard_load(host3), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host4), 0);
         }
 
         // Verify replicas are not collocated on racks
@@ -1192,7 +1192,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
             tmap.for_each_tablet([&](auto tid, auto& tinfo) -> future<> {
                 auto rack1 = tm->get_topology().get_rack(tinfo.replicas[0].host);
                 auto rack2 = tm->get_topology().get_rack(tinfo.replicas[1].host);
-                BOOST_REQUIRE(rack1 != rack2);
+                BOOST_REQUIRE_NE(rack1, rack2);
                 return make_ready_future<>();
             }).get();
         }
@@ -1402,7 +1402,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
 
         for (auto h : {host1, host2, host3}) {
             testlog.debug("Checking host {}", h);
-            BOOST_REQUIRE(load.get_avg_shard_load(h) == 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(h), 2);
         }
     }
   }).get();
@@ -1525,7 +1525,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
 
         for (auto h : {host1, host2, host3, host4}) {
             testlog.debug("Checking host {}", h);
-            BOOST_REQUIRE(load.get_avg_shard_load(h) == 4);
+            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(h), 4);
         }
     }
   }).get();
@@ -1865,7 +1865,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
             };
 
             do_rebalance_tablets(std::move(load_stats));
-            BOOST_REQUIRE(tablet_count() == initial_tablets);
+            BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::merge>(resize_decision().way));
         }
 
@@ -1878,7 +1878,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
             };
 
             do_rebalance_tablets(std::move(load_stats));
-            BOOST_REQUIRE(tablet_count() == initial_tablets);
+            BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
         }
 
@@ -1891,9 +1891,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
             };
 
             do_rebalance_tablets(std::move(load_stats));
-            BOOST_REQUIRE(tablet_count() == initial_tablets);
+            BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::split>(resize_decision().way));
-            BOOST_REQUIRE(resize_decision().sequence_number > 0);
+            BOOST_REQUIRE_GT(resize_decision().sequence_number, 0);
         }
 
         // replicas set their split status as ready, and load balancer finalizes split generating a new
@@ -1907,7 +1907,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
 
             do_rebalance_tablets(std::move(load_stats));
 
-            BOOST_REQUIRE(tablet_count() == initial_tablets * 2);
+            BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets * 2);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
         }
     }).get();
