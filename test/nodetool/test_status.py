@@ -107,7 +107,10 @@ def validate_status_output(res, keyspace, nodes, ownership, resolve):
                 assert owns == "?"
             else:
                 assert owns == "{:.1f}%".format(float(ownership[ep]) * 100)
-            assert host_id == node.host_id
+            if node.host_id is not None:
+                assert host_id == node.host_id
+            else:
+                assert host_id == "?"
             assert rack == node.rack
 
         assert len(dc_eps) == 0
@@ -178,7 +181,7 @@ def _do_test_status(nodetool, keyspace, node_list, resolve=None):
 
     load_map = [{"key": ep, "value": node.load} for ep, node in nodes.items() if node.load is not None]
 
-    host_id_map = [{"key": ep, "value": node.host_id} for ep, node in nodes.items()]
+    host_id_map = [{"key": ep, "value": node.host_id} for ep, node in nodes.items() if node.host_id is not None]
 
     tokens_endpoint = []
     for ep, node in nodes.items():
@@ -402,7 +405,11 @@ def test_status_keyspace_multi_dc(nodetool):
     _do_test_status(nodetool, "ks", nodes)
 
 
-def test_status_keyspace_no_load(nodetool):
+def test_status_keyspace_joining_node(nodetool):
+    """ Joining nodes do not have some attributes available yet:
+    * load
+    * host_id
+    """
     nodes = [
         Node(
             endpoint="127.0.0.1",
@@ -411,18 +418,18 @@ def test_status_keyspace_no_load(nodetool):
             tokens=["-9175818098208185248", "-3983536194780899528"],
             datacenter="datacenter1",
             rack="rack1",
-            status=NodeStatus.Unknown,
-            state=NodeState.Joining,
+            status=NodeStatus.Up,
+            state=NodeState.Normal,
         ),
         Node(
             endpoint="127.0.0.2",
-            host_id="ed341f60-b12a-4fd4-9917-e80977ded0f9",
+            host_id=None,
             load=None,
             tokens=["-1810801828328238220", "2983536194780899528"],
             datacenter="datacenter1",
             rack="rack2",
-            status=NodeStatus.Down,
-            state=NodeState.Normal,
+            status=NodeStatus.Up,
+            state=NodeState.Joining,
         ),
     ]
 

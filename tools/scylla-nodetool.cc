@@ -1851,7 +1851,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
                     load,
                     endpoint_tokens.at(ep),
                     keyspace ? format("{:.1f}%", endpoint_ownership.at(ep) * 100) : "?",
-                    endpoint_host_id.at(ep),
+                    endpoint_host_id.contains(ep) ? endpoint_host_id.at(ep) : "?",
                     endpoint_rack.at(ep));
         }
         table.print();
