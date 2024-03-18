@@ -318,6 +318,8 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(
 
 bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views);
 
+size_t memory_usage_of(const frozen_mutation_and_schema& mut);
+
 /**
  * create_virtual_column() adds a "virtual column" to a schema builder.
  * The definition of a "virtual column" is based on the given definition
