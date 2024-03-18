@@ -16,7 +16,9 @@
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
 #include "auth/maintenance_socket_role_manager.hh"
+#include "seastar/core/future.hh"
 #include "seastar/core/timer.hh"
+#include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "tasks/task_manager.hh"
 #include "utils/build_id.hh"
 #include "supervisor.hh"
@@ -1790,9 +1792,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
              */
             db.local().enable_autocompaction_toggle();
 
-            sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
-                controller.set_distributed_data_accessor(::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
-                        ::make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks.local())));
+            sl_controller.invoke_on_all([&qp, &group0_client] (qos::service_level_controller& controller) -> future<> {
+                return qos::get_service_level_distributed_data_accessor_for_current_version(
+                    sys_ks.local(),
+                    sys_dist_ks.local(),
+                    qp.local(), group0_client
+                    ).then([&controller] (auto data_accessor) {
+                        controller.set_distributed_data_accessor(std::move(data_accessor));
+                    });
             }).get();
 
             group0_service.start().get();

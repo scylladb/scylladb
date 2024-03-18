@@ -257,4 +257,12 @@ public:
     virtual void on_up(const gms::inet_address& endpoint) override;
     virtual void on_down(const gms::inet_address& endpoint) override;
 };
+
+future<shared_ptr<service_level_controller::service_level_distributed_data_accessor>> 
+get_service_level_distributed_data_accessor_for_current_version(
+    db::system_keyspace& sys_ks,
+    db::system_distributed_keyspace& sys_dist_ks,
+    cql3::query_processor& qp, service::raft_group0_client& group0_client
+);
+
 }

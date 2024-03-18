@@ -17,6 +17,8 @@
 #include "db/system_keyspace.hh"
 #include "seastar/core/on_internal_error.hh"
 #include "seastar/core/timer.hh"
+#include "service/qos/raft_service_level_distributed_data_accessor.hh"
+#include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service_level_controller.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "cql3/query_processor.hh"
@@ -564,6 +566,23 @@ void service_level_controller::register_subscriber(qos_configuration_change_subs
 
 future<> service_level_controller::unregister_subscriber(qos_configuration_change_subscriber* subscriber) {
     return _subscribers.remove(subscriber);
+}
+
+future<shared_ptr<service_level_controller::service_level_distributed_data_accessor>> 
+get_service_level_distributed_data_accessor_for_current_version(
+    db::system_keyspace& sys_ks,
+    db::system_distributed_keyspace& sys_dist_ks,
+    cql3::query_processor& qp, service::raft_group0_client& group0_client
+) {
+    auto sl_version = co_await sys_ks.get_service_levels_version();
+
+    if (sl_version && *sl_version == 2) {
+        co_return static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
+            make_shared<qos::raft_service_level_distributed_data_accessor>(qp, group0_client));
+    } else {
+        co_return static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
+            make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks));
+    }
 }
 
 }
