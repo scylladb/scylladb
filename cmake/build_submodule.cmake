@@ -26,7 +26,7 @@ function(build_submodule name dir)
     COMMAND reloc/build_deb.sh --reloc-pkg ${reloc_pkg}
     DEPENDS ${reloc_pkg}
     WORKING_DIRECTORY "${working_dir}")
-  add_custom_target(dist-${name}
+  add_custom_target(dist-${name} ALL
     DEPENDS dist-${name}-tar dist-${name}-rpm dist-${name}-deb)
 endfunction()
 
