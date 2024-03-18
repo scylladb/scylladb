@@ -14,18 +14,22 @@ add_custom_command(
     ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-add_custom_target(dist-server-deb
+add_custom_target(dist-server-deb ALL
+  # the --builddir should match the paths specified by
+  # "packages" in dist/docker/debian/build_docker.sh
   COMMAND reloc/build_deb.sh
     --reloc-pkg ${unstripped_dist_pkg}
-    --builddir ${CMAKE_BINARY_DIR}/$<CONFIG>/debian
+    --builddir ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/debian
   DEPENDS ${unstripped_dist_pkg}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-add_custom_target(dist-server-rpm
+add_custom_target(dist-server-rpm ALL
   COMMAND reloc/build_rpm.sh
     --reloc-pkg ${unstripped_dist_pkg}
-    --builddir ${CMAKE_CURRENT_BINARY_DIR}
+    --builddir ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/redhat
   DEPENDS ${unstripped_dist_pkg}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+add_custom_target(dist-server
+  DEPENDS dist-server-deb dist-server-rpm)
 
 function(add_stripped name)
   # ${name} must be an absolute path
