@@ -13,6 +13,7 @@
 #include "test/lib/test_utils.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
+#include "db/system_keyspace_sstables_registry.hh"
 #include "dht/i_partitioner.hh"
 #include "gms/feature_service.hh"
 #include "repair/row_level.hh"
@@ -233,8 +234,8 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
         return do_with_cql_env_thread([wrap = std::move(wrap)] (auto& cql_env) mutable {
             test_env env(std::move(wrap->cfg), &cql_env.get_sstorage_manager().local());
             auto close_env = defer([&] { env.stop().get(); });
-            env.manager().plug_system_keyspace(cql_env.get_system_keyspace().local());
-            auto unplu = defer([&env] { env.manager().unplug_system_keyspace(); });
+            env.manager().plug_sstables_registry(std::make_unique<db::system_keyspace_sstables_registry>(cql_env.get_system_keyspace().local()));
+            auto unplu = defer([&env] { env.manager().unplug_sstables_registry(); });
             wrap->func(env);
         }, std::move(db_cfg));
     }

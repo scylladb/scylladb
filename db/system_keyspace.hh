@@ -19,6 +19,7 @@
 #include "db_clock.hh"
 #include "mutation_query.hh"
 #include "system_keyspace_view_types.hh"
+#include "sstables/sstables_registry.hh"
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
 #include "locator/host_id.hh"
@@ -571,7 +572,7 @@ public:
     future<> sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status);
     future<> sstables_registry_update_entry_state(sstring location, sstables::generation_type gen, sstables::sstable_state state);
     future<> sstables_registry_delete_entry(sstring location, sstables::generation_type gen);
-    using sstable_registry_entry_consumer = noncopyable_function<future<>(sstring status, sstables::sstable_state state, sstables::entry_descriptor desc)>;
+    using sstable_registry_entry_consumer = sstables::sstables_registry::entry_consumer;
     future<> sstables_registry_list(sstring location, sstable_registry_entry_consumer consumer);
 
     future<std::optional<sstring>> load_group0_upgrade_state();

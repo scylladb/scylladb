@@ -24,9 +24,9 @@
 #include "utils/phased_barrier.hh"
 #include "utils/disk-error-handler.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/sstables_registry.hh"
 
 class compaction_manager;
-namespace db { class system_keyspace; }
 
 namespace sstables {
 
@@ -113,14 +113,14 @@ public:
         virtual future<> prepare(sstable_directory&, process_flags, storage&) override;
     };
 
-    class system_keyspace_components_lister final : public components_lister {
-        db::system_keyspace& _sys_ks;
+    class sstables_registry_components_lister final : public components_lister {
+        sstables_registry& _sstables_registry;
         sstring _location;
 
         future<> garbage_collect(storage&);
 
     public:
-        system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location);
+        sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, sstring location);
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
