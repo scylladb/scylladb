@@ -344,6 +344,102 @@ SEASTAR_TEST_CASE(test_inject_message) {
     }
 }
 
+SEASTAR_TEST_CASE(test_inject_unshared_message) {
+    testing::scoped_no_abort_on_internal_error abort_guard;
+    utils::error_injection<true> errinj;
+
+    auto timeout = db::timeout_clock::now() + 5s;
+
+    errinj.enable("injection1");
+    {
+        // Test receiving enough unshared messages
+        auto f1 = errinj.inject("injection1", std::bind_front([] (auto timeout, auto& handler) -> future<> {
+            co_await handler.wait_for_message(timeout);
+            co_await handler.wait_for_message(timeout);
+        }, timeout), false);
+        auto f2 = errinj.inject("injection1", std::bind_front([] (auto timeout, auto& handler) -> future<> {
+            co_await handler.wait_for_message(timeout);
+            co_await handler.wait_for_message(timeout);
+        }, timeout), false);
+
+        for (size_t i = 0; i < 4; ++i) {
+            errinj.receive_message("injection1");
+        }
+
+        BOOST_REQUIRE_NO_THROW(co_await std::move(f1));
+        BOOST_REQUIRE_NO_THROW(co_await std::move(f2));
+    }
+    errinj.disable("injection1");
+
+    errinj.enable("injection2");
+    {
+        // Test receiving enough unshared messages before waiting for them
+        errinj.receive_message("injection2");
+        errinj.receive_message("injection2");
+
+        auto f1 = errinj.inject("injection2", [timeout] (auto& handler) {
+            return handler.wait_for_message(timeout);
+        }, false);
+        auto f2 = errinj.inject("injection2", [timeout] (auto& handler) {
+            return handler.wait_for_message(timeout);
+        }, false);
+
+        BOOST_REQUIRE_NO_THROW(co_await std::move(f1));
+        BOOST_REQUIRE_NO_THROW(co_await std::move(f2));
+    }
+    errinj.disable("injection2");
+
+    errinj.enable("injection3");
+    {
+        // Test receiving not enough unshared messages
+        auto timeout_1s = db::timeout_clock::now() + 1s;
+
+        auto f1 = errinj.inject("injection3", std::bind_front([] (auto timeout, auto& handler) -> future<> {
+            co_await handler.wait_for_message(timeout);
+            co_await handler.wait_for_message(timeout);
+        }, timeout_1s), false);
+        auto f2 = errinj.inject("injection3", std::bind_front([] (auto timeout, auto& handler) -> future<> {
+            co_await handler.wait_for_message(timeout);
+            co_await handler.wait_for_message(timeout);
+        }, timeout_1s), false);
+
+        for (size_t i = 0; i < 3; ++i) {
+            errinj.receive_message("injection3");
+        }
+
+        BOOST_REQUIRE_THROW(co_await when_all_succeed(std::move(f1), std::move(f2)).discard_result(), std::runtime_error);
+    }
+    errinj.disable("injection3");
+
+    errinj.enable("injection4");
+    {
+        // Test handlers sharing messages are independent of the not sharing ones
+        auto f1 = errinj.inject("injection4", std::bind_front([] (auto timeout, auto& handler) -> future<> {
+            co_await handler.wait_for_message(timeout);
+            co_await handler.wait_for_message(timeout);
+        }, timeout), true);
+        auto f2 = errinj.inject("injection4", std::bind_front([] (auto timeout, auto& handler) -> future<> {
+            co_await handler.wait_for_message(timeout);
+            co_await handler.wait_for_message(timeout);
+        }, timeout), true);
+        auto f3 = errinj.inject("injection4", [timeout] (auto& handler) {
+            return handler.wait_for_message(timeout);
+        }, false);
+        auto f4 = errinj.inject("injection4", [timeout] (auto& handler) {
+            return handler.wait_for_message(timeout);
+        }, false);
+
+        errinj.receive_message("injection4");
+        errinj.receive_message("injection4");
+
+        BOOST_REQUIRE_NO_THROW(co_await std::move(f1));
+        BOOST_REQUIRE_NO_THROW(co_await std::move(f2));
+        BOOST_REQUIRE_NO_THROW(co_await std::move(f3));
+        BOOST_REQUIRE_NO_THROW(co_await std::move(f4));
+    }
+    errinj.disable("injection4");
+}
+
 SEASTAR_TEST_CASE(test_inject_with_parameters) {
     utils::error_injection<true> errinj;
 
