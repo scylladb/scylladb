@@ -120,22 +120,20 @@ void endpoints_check(
     BOOST_CHECK(endpoints.size() == ep_set.size());
 
     // Check the per-DC RF
-    std::unordered_map<sstring, size_t> dc_rf;
+    std::unordered_map<sstring, std::unordered_set<locator::host_id>> replicas_per_dc;
     for (auto ep : endpoints) {
-        sstring dc = topo.get_location(ep).dc;
+        const auto* node = topo.find_node(ep);
+        auto dc = node->dc_rack().dc;
 
-        auto rf = dc_rf.find(dc);
-        if (rf == dc_rf.end()) {
-            dc_rf[dc] = 1;
-        } else {
-            rf->second++;
-        }
+        auto inserted = replicas_per_dc[dc].insert(node->host_id()).second;
+        // replicas might never be placed on the same node
+        BOOST_REQUIRE(inserted);
     }
 
-    for (auto&& [dc, rf] : dc_rf) {
+    for (auto&& [dc, nodes] : replicas_per_dc) {
         auto effective_rf = strict_dc_rf ? nts_ptr->get_replication_factor(dc) :
                 std::min<size_t>(nts_ptr->get_replication_factor(dc), nodes_per_dc.at(dc).size());
-        BOOST_CHECK(rf == effective_rf);
+        BOOST_CHECK_EQUAL(nodes.size(), effective_rf);
     }
 }
 
