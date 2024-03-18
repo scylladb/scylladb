@@ -26,7 +26,6 @@
 
 namespace db {
 
-class system_keyspace;
 class large_data_handler;
 class config;
 
@@ -103,7 +102,7 @@ private:
 
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
-    seastar::shared_ptr<db::system_keyspace> _sys_ks;
+    std::unique_ptr<sstables::sstables_registry> _sstables_registry;
     // This function is bound to token_metadata.get_my_id() in the database constructor,
     // it can return unset value (bool(host_id) == false) until host_id is loaded
     // after system_keyspace initialization.
@@ -156,13 +155,13 @@ public:
     future<> close();
     directory_semaphore& dir_semaphore() noexcept { return _dir_semaphore; }
 
-    void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
-    void unplug_system_keyspace() noexcept;
+    void plug_sstables_registry(std::unique_ptr<sstables_registry>) noexcept;
+    void unplug_sstables_registry() noexcept;
 
     // Only for sstable::storage usage
-    db::system_keyspace& system_keyspace() const noexcept {
-        assert(_sys_ks && "System keyspace is not plugged");
-        return *_sys_ks;
+    sstables::sstables_registry& sstables_registry() const noexcept {
+        assert(_sstables_registry && "sstables_registry is not plugged");
+        return *_sstables_registry;
     }
 
     future<> delete_atomically(std::vector<shared_sstable> ssts);

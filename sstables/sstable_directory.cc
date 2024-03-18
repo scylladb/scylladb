@@ -22,7 +22,6 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/directories.hh"
 #include "replica/database.hh"
-#include "db/system_keyspace.hh"
 #include "dht/auto_refreshing_sharder.hh"
 
 static logging::logger dirlog("sstable_directory");
@@ -44,8 +43,8 @@ sstable_directory::filesystem_components_lister::filesystem_components_lister(st
 {
 }
 
-sstable_directory::system_keyspace_components_lister::system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location)
-        : _sys_ks(sys_ks)
+sstable_directory::sstables_registry_components_lister::sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, sstring location)
+        : _sstables_registry(sstables_registry)
         , _location(std::move(location))
 {
 }
@@ -57,7 +56,7 @@ sstable_directory::make_components_lister() {
             return std::make_unique<sstable_directory::filesystem_components_lister>(_sstable_dir);
         },
         [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
-            return std::make_unique<sstable_directory::system_keyspace_components_lister>(_manager.system_keyspace(), _sstable_dir.native());
+            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), _sstable_dir.native());
         }
     }, _storage_opts->value);
 }
@@ -266,7 +265,7 @@ future<> sstable_directory::filesystem_components_lister::prepare(sstable_direct
     }
 }
 
-future<> sstable_directory::system_keyspace_components_lister::prepare(sstable_directory& dir, process_flags flags, storage& st) {
+future<> sstable_directory::sstables_registry_components_lister::prepare(sstable_directory& dir, process_flags flags, storage& st) {
     if (flags.garbage_collect) {
         co_await garbage_collect(st);
     }
@@ -372,8 +371,8 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     }
 }
 
-future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, process_flags flags) {
-    return _sys_ks.sstables_registry_list(_location, [this, flags, &directory] (sstring status, sstable_state state, entry_descriptor desc) {
+future<> sstable_directory::sstables_registry_components_lister::process(sstable_directory& directory, process_flags flags) {
+    return _sstables_registry.sstables_registry_list(_location, [this, flags, &directory] (sstring status, sstable_state state, entry_descriptor desc) {
         if (state != directory._state) {
             return make_ready_future<>();
         }
@@ -402,13 +401,13 @@ future<> sstable_directory::filesystem_components_lister::commit() {
     });
 }
 
-future<> sstable_directory::system_keyspace_components_lister::commit() {
+future<> sstable_directory::sstables_registry_components_lister::commit() {
     return make_ready_future<>();
 }
 
-future<> sstable_directory::system_keyspace_components_lister::garbage_collect(storage& st) {
+future<> sstable_directory::sstables_registry_components_lister::garbage_collect(storage& st) {
     return do_with(std::set<generation_type>(), [this, &st] (auto& gens_to_remove) {
-        return _sys_ks.sstables_registry_list(_location, [&st, &gens_to_remove] (sstring status, sstable_state state, entry_descriptor desc) {
+        return _sstables_registry.sstables_registry_list(_location, [&st, &gens_to_remove] (sstring status, sstable_state state, entry_descriptor desc) {
             if (status == "sealed") {
                 return make_ready_future<>();
             }
@@ -418,7 +417,7 @@ future<> sstable_directory::system_keyspace_components_lister::garbage_collect(s
             return st.remove_by_registry_entry(std::move(desc));
         }).then([this, &gens_to_remove] {
             return parallel_for_each(gens_to_remove, [this] (auto gen) {
-                return _sys_ks.sstables_registry_delete_entry(_location, gen);
+                return _sstables_registry.delete_entry(_location, gen);
             });
         });
     });

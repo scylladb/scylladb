@@ -9,12 +9,12 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "log.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
-#include "db/system_keyspace.hh"
 #include "utils/s3/client.hh"
 #include "exceptions/exceptions.hh"
 
@@ -201,12 +201,12 @@ future<> sstables_manager::close() {
     co_await _sstable_metadata_concurrency_sem.stop();
 }
 
-void sstables_manager::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
-    _sys_ks = sys_ks.shared_from_this();
+void sstables_manager::plug_sstables_registry(std::unique_ptr<sstables::sstables_registry> sr) noexcept {
+    _sstables_registry = std::move(sr);
 }
 
-void sstables_manager::unplug_system_keyspace() noexcept {
-    _sys_ks = nullptr;
+void sstables_manager::unplug_sstables_registry() noexcept {
+    _sstables_registry.reset();
 }
 
 future<> sstables_manager::init_table_storage(const data_dictionary::storage_options& so, sstring dir) {
@@ -236,5 +236,7 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
         }
     }, so.value);
 }
+
+sstables_registry::~sstables_registry() = default;
 
 }   // namespace sstables

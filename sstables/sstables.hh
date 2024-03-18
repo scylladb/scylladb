@@ -12,6 +12,7 @@
 #include "version.hh"
 #include "shared_sstable.hh"
 #include "open_info.hh"
+#include "sstables_registry.hh"
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
@@ -132,13 +133,6 @@ constexpr auto table_subdirectories = std::to_array({
     quarantine_dir,
     pending_delete_dir,
 });
-
-enum class sstable_state {
-    normal,
-    staging,
-    quarantine,
-    upload,
-};
 
 inline std::string_view state_to_dir(sstable_state state) {
     switch (state) {
