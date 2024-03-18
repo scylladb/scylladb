@@ -9,9 +9,7 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/thread.hh>
 #include <map>
-#include <iostream>
 #include <fmt/core.h>
-#include <fmt/ostream.h>
 
 constexpr int TEST_NODE_SIZE = 16;
 
@@ -35,10 +33,11 @@ public:
     bool match_key(const test_key& k) const { return _value == (int)k + 10; }
 };
 
-std::ostream& operator<<(std::ostream& os, test_data d) {
-    os << (unsigned long)d;
-    return os;
-}
+template <> struct fmt::formatter<test_data> : fmt::formatter<std::string_view> {
+    auto format(test_data d, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", static_cast<unsigned long>(d));
+    }
+};
 
 using test_tree = tree<test_key, test_data, test_key_compare, TEST_NODE_SIZE, key_search::both, with_debug::yes>;
 using test_node = typename test_tree::node;
