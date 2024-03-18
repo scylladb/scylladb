@@ -315,6 +315,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(
 
 bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views);
 
+<<<<<<< HEAD
 struct wait_for_all_updates_tag {};
 using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
 future<> mutate_MV(
@@ -326,6 +327,9 @@ future<> mutate_MV(
         db::timeout_semaphore_units pending_view_updates,
         service::allow_hints allow_hints,
         wait_for_all_updates wait_for_all);
+=======
+size_t memory_usage_of(const frozen_mutation_and_schema& mut);
+>>>>>>> d1e0d59432 (mv: adjust memory tracking of single view updates within a batch)
 
 /**
  * create_virtual_column() adds a "virtual column" to a schema builder.
