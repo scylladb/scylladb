@@ -138,14 +138,15 @@ cql3::statements::create_keyspace_statement::prepare(data_dictionary::database d
 }
 
 future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(const service::client_state& cs) const {
-    return do_with(auth::make_data_resource(keyspace()), [&cs](const auth::resource& r) {
-        return auth::grant_applicable_permissions(
+    auto resource = auth::make_data_resource(keyspace());
+    try {
+        co_await auth::grant_applicable_permissions(
                 *cs.get_auth_service(),
                 *cs.user(),
-                r).handle_exception_type([](const auth::unsupported_authorization_operation&) {
-            // Nothing.
-        });
-    });
+                resource);
+    } catch (const auth::unsupported_authorization_operation&) {
+        // Nothing.
+    }
 }
 
 // Check for replication strategy choices which are restricted by the

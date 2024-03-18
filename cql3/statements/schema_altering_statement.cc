@@ -70,18 +70,14 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
             throw std::logic_error(format("Attempted to modify {} via internal query: such schema changes are not propagated and thus illegal", info));
         }
     }
-
-    return qp.execute_schema_statement(*this, state, options, std::move(guard)).then([this, &state, internal](::shared_ptr<messages::result_message> result) {
-        // We don't want to grant the permissions to the supposed creator even if the statement succeeded if it's an internal query
-        // or if the query did not actually create the item, i.e. the query is bounced to another shard or it's a IF NOT EXISTS
-        // query where the item already exists.
-        auto permissions_granted_fut = internal || !result->is_schema_change()
-                ? make_ready_future<>()
-                : grant_permissions_to_creator(state.get_client_state());
-        return permissions_granted_fut.then([result = std::move(result)] {
-           return result;
-        });
-    });
+    auto result = co_await qp.execute_schema_statement(*this, state, options, std::move(guard));
+    // We don't want to grant the permissions to the supposed creator even if the statement succeeded if it's an internal query
+    // or if the query did not actually create the item, i.e. the query is bounced to another shard or it's a IF NOT EXISTS
+    // query where the item already exists.
+    if (!internal && result->is_schema_change()) {
+        co_await grant_permissions_to_creator(state.get_client_state());
+    }
+    co_return std::move(result);
 }
 
 }
