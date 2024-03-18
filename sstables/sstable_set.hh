@@ -40,6 +40,7 @@ private:
     bool will_introduce_overlapping(const shared_sstable& sst) const;
 public:
     sstable_run() = default;
+    sstable_run(const sstable_run&) = default;
     // Builds a sstable run with single fragment. It bypasses overlapping check done in insert().
     sstable_run(shared_sstable);
     // Returns false if sstable being inserted cannot satisfy the disjoint invariant. Then caller should pick another run for it.
