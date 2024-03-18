@@ -111,7 +111,8 @@ async def test_multiple_unpublished_cdc_generations(request, manager: ManagerCli
             return None
 
         # Check that all 4 CDC generations are eventually published in the correct order.
-        await handler.message()
+        for _ in range(4):
+            await handler.message()
         while len(gen_timestamps) < 4:
             # We prefer to detect CDC generation publications one-by-one, because it increases our chances of catching
             # potential bugs like incorrect order of publications. Therefore, we use very short period - 0.01 s.

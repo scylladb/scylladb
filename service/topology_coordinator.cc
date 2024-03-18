@@ -663,7 +663,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 rtlogger.info("CDC generation publisher fiber sleeps after injection");
                 co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
                 rtlogger.info("CDC generation publisher fiber finishes sleeping after injection");
-            });
+            }, false);
 
             bool sleep = false;
             try {
