@@ -65,10 +65,10 @@ void aio_writes_result_mixin::update(aio_writes_result_mixin& result, const exec
     result.aio_write_bytes = (engine().get_io_stats().aio_write_bytes - result.aio_write_bytes) / stats.invocations;
 }
 
-std::ostream& operator<<(std::ostream& os, const perf_result_with_aio_writes& result) {
-    fmt::print(os, "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:8} errors, {:7.2f} bytes/op, {:5.1f} writes/op)",
+auto fmt::formatter<perf_result_with_aio_writes>::format(const perf_result_with_aio_writes& result, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:8} errors, {:7.2f} bytes/op, {:5.1f} writes/op)",
             result.throughput, result.mallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.errors, result.aio_write_bytes, result.aio_writes);
-    return os;
 }
 
 namespace perf {

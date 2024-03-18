@@ -170,7 +170,9 @@ struct aio_writes_result_mixin {
 
 struct perf_result_with_aio_writes : public perf_result, public aio_writes_result_mixin {};
 
-std::ostream& operator<<(std::ostream& os, const perf_result_with_aio_writes& result);
+template <> struct fmt::formatter<perf_result_with_aio_writes> : fmt::formatter<std::string_view> {
+    auto format(const perf_result_with_aio_writes&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
 
 /**
  * Measures throughput of an asynchronous action. Executes the action on all cores
