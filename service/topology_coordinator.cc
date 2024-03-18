@@ -2396,8 +2396,11 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     co_await auth::migrate_to_auth_v2(_sys_ks.query_processor(), _group0.client(),
             [this] (abort_source*) { return start_operation();}, _as);
 
-    rtlogger.info("migrating service levels data");
-    co_await qos::service_level_controller::migrate_to_v2(_gossiper.num_endpoints(), _sys_ks.query_processor(), _group0.client(), _as);
+    auto sl_version = co_await _sys_ks.get_service_levels_version();
+    if (!sl_version || *sl_version < 2) {
+        rtlogger.info("migrating service levels data");
+        co_await qos::service_level_controller::migrate_to_v2(_gossiper.num_endpoints(), _sys_ks, _sys_ks.query_processor(), _group0.client(), _as);
+    }
 
     rtlogger.info("building initial raft topology state and CDC generation");
     guard = co_await start_operation();

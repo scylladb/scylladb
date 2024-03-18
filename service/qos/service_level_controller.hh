@@ -23,6 +23,7 @@
 #include "service/raft/raft_group_registry.hh"
 
 namespace db {
+    class system_keyspace;
     class system_distributed_keyspace;
 }
 namespace cql3 {
@@ -195,7 +196,7 @@ public:
     /**
      * Migrate data from `system_distributed.service_levels` to `system.service_levels_v2`
      */
-    static future<> migrate_to_v2(size_t nodes_count, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as);
+    static future<> migrate_to_v2(size_t nodes_count, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as);
 private:
     /**
      *  Adds a service level configuration if it doesn't exists, and updates
