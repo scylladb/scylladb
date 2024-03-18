@@ -13,7 +13,6 @@
 #include "test/lib/test_utils.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
-#include "db/system_keyspace_sstables_registry.hh"
 #include "dht/i_partitioner.hh"
 #include "gms/feature_service.hh"
 #include "repair/row_level.hh"
@@ -221,24 +220,67 @@ future<> test_env::stop() {
     co_await _impl->semaphore.stop();
 }
 
+class mock_sstables_registry : public sstables::sstables_registry {
+    struct entry {
+        sstring status;
+        sstables::sstable_state state;
+        sstables::entry_descriptor desc;
+    };
+    std::map<sstring, entry> _entries;
+public:
+    virtual future<> create_entry(sstring location, sstring status, sstable_state state, sstables::entry_descriptor desc) override {
+        _entries.emplace(location, entry { status, state, desc });
+        co_return;
+    };
+    virtual future<> update_entry_status(sstring location, sstables::generation_type gen, sstring status) override {
+        auto it = _entries.find(location);
+        if (it != _entries.end()) {
+            it->second.status = status;
+        } else {
+            throw std::runtime_error("update_entry_status: not found");
+        }
+        co_return;
+    }
+    virtual future<> update_entry_state(sstring location, sstables::generation_type gen, sstables::sstable_state state) override {
+        auto it = _entries.find(location);
+        if (it != _entries.end()) {
+            it->second.state = state;
+        } else {
+            throw std::runtime_error("update_entry_state: not found");
+        }
+        co_return;
+    }
+    virtual future<> delete_entry(sstring location, sstables::generation_type gen) override {
+        auto it = _entries.find(location);
+        if (it != _entries.end()) {
+            _entries.erase(it);
+        } else {
+            throw std::runtime_error("delete_entry: not found");
+        }
+        co_return;
+    }
+    virtual future<> sstables_registry_list(sstring location, entry_consumer consumer) override {
+        for (auto& [loc, e] : _entries) {
+            co_await consumer(loc, e.state, e.desc);
+        }
+    }
+};
+
 future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg) {
     if (!cfg.storage.is_local_type()) {
-        struct test_env_with_cql {
-            noncopyable_function<void(test_env&)> func;
-            test_env_config cfg;
-            test_env_with_cql(noncopyable_function<void(test_env&)> fn, test_env_config c) : func(std::move(fn)), cfg(std::move(c)) {}
-        };
-        auto wrap = std::make_shared<test_env_with_cql>(std::move(func), std::move(cfg));
         auto db_cfg = make_shared<db::config>();
         db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
-        db_cfg->object_storage_config.set(make_storage_options_config(wrap->cfg.storage));
-        return do_with_cql_env_thread([wrap = std::move(wrap)] (auto& cql_env) mutable {
-            test_env env(std::move(wrap->cfg), &cql_env.get_sstorage_manager().local());
+        db_cfg->object_storage_config.set(make_storage_options_config(cfg.storage));
+        return seastar::async([func = std::move(func), cfg = std::move(cfg), db_cfg = std::move(db_cfg)] () mutable {
+            sharded<sstables::storage_manager> sstm;
+            sstm.start(std::ref(*db_cfg), sstables::storage_manager::config{}).get();
+            auto stop_sstm = defer([&] { sstm.stop().get(); });
+            test_env env(std::move(cfg), &sstm.local());
             auto close_env = defer([&] { env.stop().get(); });
-            env.manager().plug_sstables_registry(std::make_unique<db::system_keyspace_sstables_registry>(cql_env.get_system_keyspace().local()));
+            env.manager().plug_sstables_registry(std::make_unique<mock_sstables_registry>());
             auto unplu = defer([&env] { env.manager().unplug_sstables_registry(); });
-            wrap->func(env);
-        }, std::move(db_cfg));
+            func(env);
+        });
     }
 
     return seastar::async([func = std::move(func), cfg = std::move(cfg)] () mutable {
