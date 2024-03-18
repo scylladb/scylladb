@@ -299,6 +299,12 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, bool use_lev
         , _use_level_metadata(use_level_metadata) {
 }
 
+static std::unordered_map<run_id, shared_sstable_run> clone_runs(const std::unordered_map<run_id, shared_sstable_run>& runs) {
+    return boost::copy_range<std::unordered_map<run_id, shared_sstable_run>>(runs | boost::adaptors::transformed([] (auto& p) {
+        return std::make_pair(p.first, make_lw_shared<sstable_run>(*p.second));
+    }));
+}
+
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
         const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, bool use_level_metadata, uint64_t bytes_on_disk)
         : sstable_set_impl(bytes_on_disk)
@@ -306,7 +312,7 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::v
         , _unleveled_sstables(unleveled_sstables)
         , _leveled_sstables(leveled_sstables)
         , _all(make_lw_shared<sstable_list>(*all))
-        , _all_runs(all_runs)
+        , _all_runs(clone_runs(all_runs))
         , _use_level_metadata(use_level_metadata) {
 }
 
