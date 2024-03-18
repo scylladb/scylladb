@@ -274,7 +274,7 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
 
     tasks = [asyncio.create_task(do_writes()) for _ in range(concurrency)]
 
-    async def verify():
+    async def verify(cql: Session):
         generations = await cql.run_async("SELECT * FROM system_distributed.cdc_streams_descriptions_v2")
 
         stream_to_timestamp = { stream: gen.time for gen in generations for stream in gen.streams}
@@ -285,11 +285,11 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
             timestamp = stream_to_timestamp[log_entry.cdc_stream_id]
             assert timestamp <= datetime_from_uuid1(log_entry.cdc_time)
 
-    async def finish_and_verify():
+    async def finish_and_verify(cql: Session):
         logger.info("Stopping write workers")
         stop_event.set()
         await asyncio.gather(*tasks)
-        await verify()
+        await verify(cql)
 
     return finish_and_verify
 

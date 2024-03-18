@@ -70,4 +70,4 @@ async def test_topology_upgrade_basic(request, manager: ManagerClient):
     await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
 
     logging.info("Checking correctness of data in system_distributed.cdc_streams_descriptions_v2")
-    await finish_writes_and_verify()
+    await finish_writes_and_verify(cql)
