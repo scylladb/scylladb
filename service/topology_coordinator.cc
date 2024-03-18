@@ -568,7 +568,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return std::tuple{gen_uuid, std::move(guard), std::move(updates.back())};
     }
 
-    // Deletes obsolete CDC generations. These are the generations that stopped operating more than 24 hours ago.
+    // Deletes obsolete CDC generations. These are the published generations that stopped operating
+    // more than 24 hours ago.
     //
     // Appends necessary mutations to `updates` and updates the `reason` string.
     future<> clean_obsolete_cdc_generations(
@@ -591,6 +592,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         utils::get_local_injector().inject("clean_obsolete_cdc_generations_change_ts_ub", [&] {
             ts_upper_bound = db_clock::now();
         });
+
+        // Theoretically, some generations might not be published within 24 hours after creation. If that happens,
+        // we reduce `ts_upper_bound` to ensure they aren't deleted.
+        if (!_topo_sm._topology.unpublished_cdc_generations.empty()) {
+            ts_upper_bound = std::min(ts_upper_bound, _topo_sm._topology.unpublished_cdc_generations.front().ts);
+        }
 
         std::optional<std::vector<cdc::generation_id_v2>::const_iterator> first_nonobsolete_gen_it;
         for (auto it = committed_gens.begin(); it != committed_gens.end() && it->ts <= ts_upper_bound; it++) {
