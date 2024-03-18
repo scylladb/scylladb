@@ -626,7 +626,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         builder.set_committed_cdc_generations(std::move(new_committed_gens));
         updates.push_back(builder.build());
 
-        reason += ::format("deleted data of CDC generations with time UUID not exceeding {}", id_upper_bound);
+        reason += ::format("deleted data of CDC generations with time UUID lower than {}", id_upper_bound);
     }
 
     // If there are some unpublished CDC generations, publishes the one with the oldest timestamp
