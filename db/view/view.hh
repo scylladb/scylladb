@@ -327,6 +327,8 @@ future<> mutate_MV(
         service::allow_hints allow_hints,
         wait_for_all_updates wait_for_all);
 
+size_t memory_usage_of(const frozen_mutation_and_schema& mut);
+
 /**
  * create_virtual_column() adds a "virtual column" to a schema builder.
  * The definition of a "virtual column" is based on the given definition
