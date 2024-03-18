@@ -1208,6 +1208,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // which happens outside the topology coordinator.
         bool has_updates = !updates.empty();
         if (has_updates) {
+            co_await utils::get_local_injector().inject("tablet_transition_updates", [] (auto& handler) {
+                rtlogger.info("tablet_transition_updates: start");
+                return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+            });
+
             updates.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
                     .set_version(_topo_sm._topology.version + 1)

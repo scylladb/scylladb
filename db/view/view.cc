@@ -1611,21 +1611,24 @@ get_view_natural_endpoint(
         const dht::token& view_token,
         bool use_legacy_self_pairing) {
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
-    auto my_address = topology.my_address();
+    auto me = topology.my_host_id();
     auto my_datacenter = topology.get_datacenter();
-    std::vector<gms::inet_address> base_endpoints, view_endpoints;
-    for (auto&& base_endpoint : base_erm->get_natural_endpoints(base_token)) {
+    std::vector<locator::host_id> base_endpoints, view_endpoints;
+
+    // We need to use get_replicas() for pairing to be stable in case base or view tablet
+    // is rebuilding a replica which has left the ring. get_natural_endpoints() filters such replicas.
+    for (auto&& base_endpoint : base_erm->get_replicas(base_token)) {
         if (!network_topology || topology.get_datacenter(base_endpoint) == my_datacenter) {
             base_endpoints.push_back(base_endpoint);
         }
     }
 
-    for (auto&& view_endpoint : view_erm->get_natural_endpoints(view_token)) {
+    for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
         if (use_legacy_self_pairing) {
             // If this base replica is also one of the view replicas, we use
             // ourselves as the view replica.
-            if (view_endpoint == my_address) {
-                return view_endpoint;
+            if (view_endpoint == me) {
+                return topology.my_address();
             }
             // We have to remove any endpoint which is shared between the base
             // and the view, as it will select itself and throw off the counts
@@ -1645,14 +1648,15 @@ get_view_natural_endpoint(
     }
 
     assert(base_endpoints.size() == view_endpoints.size());
-    auto base_it = std::find(base_endpoints.begin(), base_endpoints.end(), my_address);
+    auto base_it = std::find(base_endpoints.begin(), base_endpoints.end(), me);
     if (base_it == base_endpoints.end()) {
         // This node is not a base replica of this key, so we return empty
         // FIXME: This case shouldn't happen, and if it happens, a view update
         // would be lost. We should reported or count this case.
         return {};
     }
-    return view_endpoints[base_it - base_endpoints.begin()];
+    auto replica = view_endpoints[base_it - base_endpoints.begin()];
+    return topology.get_node(replica).endpoint();
 }
 
 static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator::effective_replication_map_ptr ermp,

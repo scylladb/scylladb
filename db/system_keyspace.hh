@@ -535,7 +535,9 @@ public:
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     future<bool> group0_history_contains(utils::UUID state_id);
 
-    future<service::topology> load_topology_state();
+    // force_load_hosts is a set of hosts which must be loaded even if they are in the left state.
+    future<service::topology> load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts);
+
     future<std::optional<service::topology_features>> load_topology_features_state();
 
     // Read CDC generation data with the given UUID as key.

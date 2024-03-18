@@ -38,6 +38,30 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/raft/leader_host",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns host ID of the current leader of the given Raft group",
+               "type":"string",
+               "nickname":"get_leader_host",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"group_id",
+                     "description":"The ID of the group. When absent, group0 is used.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
       }
    ]
 }

@@ -451,6 +451,7 @@ public:
     const table_to_tablet_map& all_tables() const { return _tablets; }
     table_to_tablet_map& all_tables() { return _tablets; }
     size_t external_memory_usage() const;
+    bool has_replica_on(host_id) const;
 public:
     void set_balancing_enabled(bool value) { _balancing_enabled = value; }
     void set_tablet_map(table_id, tablet_map);

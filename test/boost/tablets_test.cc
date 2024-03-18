@@ -263,6 +263,71 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
     }, tablet_cql_test_config());
 }
 
+SEASTAR_TEST_CASE(test_read_required_hosts) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+
+        auto ts = current_timestamp(e);
+        verify_tablet_metadata_persistence(e, tm, ts);
+        BOOST_REQUIRE_EQUAL(std::unordered_set<locator::host_id>({}),
+                            read_required_hosts(e.local_qp()).get());
+
+        // Add table1
+        auto table1 = add_table(e).get();
+        {
+            tablet_map tmap(1);
+            tmap.set_tablet(tmap.first_tablet(), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 3},
+                }
+            });
+            tm.set_tablet_map(table1, std::move(tmap));
+        }
+
+        ts = current_timestamp(e);
+        verify_tablet_metadata_persistence(e, tm, ts);
+        BOOST_REQUIRE_EQUAL(std::unordered_set<locator::host_id>({h1, h2}),
+                            read_required_hosts(e.local_qp()).get());
+
+        // Add table2
+        auto table2 = add_table(e).get();
+        {
+            tablet_map tmap(2);
+            auto tb = tmap.first_tablet();
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                }
+            });
+            tb = *tmap.next_tablet(tb);
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h2, 0},
+                }
+            });
+            tmap.set_tablet_transition_info(tb, tablet_transition_info{
+                tablet_transition_stage::allow_write_both_read_old,
+                tablet_transition_kind::migration,
+                tablet_replica_set {
+                    tablet_replica {h3, 0},
+                },
+                tablet_replica {h3, 0}
+            });
+            tm.set_tablet_map(table2, std::move(tmap));
+        }
+
+        ts = current_timestamp(e);
+        verify_tablet_metadata_persistence(e, tm, ts);
+        BOOST_REQUIRE_EQUAL(std::unordered_set<locator::host_id>({h1, h2, h3}),
+                            read_required_hosts(e.local_qp()).get());
+    }, tablet_cql_test_config());
+}
+
 SEASTAR_TEST_CASE(test_get_shard) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());

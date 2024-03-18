@@ -15,6 +15,10 @@ Node state can be one of those:
 
 Nodes in state left are never removed from the state.
 
+Nodes in state `left` may still appear as tablet replicas in host_id-based replica sets
+(`effective_replication_map::get_replicas()`), but they never appear in IP-based replica sets, e.g. those returned by
+`effective_replication_map::get_natural_endpoints()`.
+
 State transition diagram for nodes:
 ```mermaid
 stateDiagram-v2
@@ -114,10 +118,27 @@ that there are no tablet transitions in the system.
 Tablets are migrated in parallel and independently.
 
 There is a variant of tablet migration track called tablet draining track, which is invoked
-as a step of certain topology operations (e.g. decommission, removenode, replace). Its goal is to readjust tablet replicas
+as a step of certain topology operations (e.g. decommission, removenode). Its goal is to readjust tablet replicas
 so that a given topology change can proceed. For example, when decommissioning a node, we
 need to migrate tablet replicas away from the node being decommissioned.
 Tablet draining happens before making changes to vnode-based replication.
+
+## Node replace with tablets
+
+Tablet replicas on the replaced node are rebuilt after the replacing node is already in the normal state and
+the replaced node is in the left state.
+
+Until old replicas are rebuilt, the availability in the cluster is reduced. If another node becomes unavailable, we
+may have two unavailable replicas for some tablets. Admin needs to know that and not start rolling restart for example.
+To avoid surprises, the replaced node waits on boot for tablet replicas to finish rebuilding
+so that admin sees the replace as finished after availability was restored.
+
+### Impact on repair
+
+When tablet is rebuilt in the background after replace, its primary replica may be on the node which is no
+longer in topology. This means that running repair -pr on all nodes will not repair such a tablet, but it's fine because
+we decided that repair can be optimistic. It's safe with regards to tombstone gc because expiry is decided per table per token range
+based on actual repair time of that range. Unrepaired tablets will not have their token range marked as repaired.
 
 # Tablet transitions
 

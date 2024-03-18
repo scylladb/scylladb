@@ -839,6 +839,10 @@ public:
     topology::upgrade_state_type get_topology_upgrade_state() const;
 
     node_state get_node_state(locator::host_id id);
+
+    // Waits for topology state in which none of tablets has replaced_id as a replica.
+    // Must be called on shard 0.
+    future<> await_tablets_rebuilt(raft::server_id replaced_id);
 private:
     // Tracks progress of the upgrade to topology coordinator.
     future<> _upgrade_to_topology_coordinator_fiber = make_ready_future<>();

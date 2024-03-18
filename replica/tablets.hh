@@ -64,6 +64,9 @@ future<> save_tablet_metadata(replica::database&, const locator::tablet_metadata
 /// Reads tablet metadata from system.tablets.
 future<locator::tablet_metadata> read_tablet_metadata(cql3::query_processor&);
 
+/// Reads the set of hosts referenced by tablet replicas.
+future<std::unordered_set<locator::host_id>> read_required_hosts(cql3::query_processor&);
+
 /// Reads tablet metadata from system.tablets in the form of mutations.
 future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<database>&);
 

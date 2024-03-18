@@ -218,6 +218,7 @@ class load_balancer {
         host_id id;
         uint64_t shard_count = 0;
         uint64_t tablet_count = 0;
+        const locator::node* node; // never nullptr
 
         // The average shard load on this node.
         load_type avg_load = 0;
@@ -226,6 +227,18 @@ class load_balancer {
         std::vector<shard_load> shards; // Indexed by shard_id to which a given shard_load corresponds.
 
         std::optional<locator::load_sketch> target_load_sketch;
+
+        const sstring& dc() const {
+            return node->dc_rack().dc;
+        }
+
+        const sstring& rack() const {
+            return node->dc_rack().rack;
+        }
+
+        locator::node::state state() const {
+            return node->get_state();
+        }
 
         future<load_sketch&> get_load_sketch(const token_metadata_ptr& tm) {
             if (!target_load_sketch) {
@@ -599,37 +612,44 @@ public:
 
         std::unordered_map<host_id, node_load> nodes;
         std::unordered_set<host_id> nodes_to_drain;
+
+        auto ensure_node = [&] (host_id host) {
+            if (nodes.contains(host)) {
+                return;
+            }
+            auto* node = topo.find_node(host);
+            if (!node) {
+                on_internal_error(lblogger, format("Node {} not found in topology", host));
+            }
+            node_load& load = nodes[host];
+            load.id = host;
+            load.node = node;
+            load.shard_count = node->get_shard_count();
+            load.shards.resize(load.shard_count);
+            if (!load.shard_count) {
+                throw std::runtime_error(format("Shard count of {} not found in topology", host));
+            }
+        };
+
         topo.for_each_node([&] (const locator::node* node_ptr) {
             if (node_ptr->dc_rack().dc != dc) {
                 return;
             }
             bool is_drained = node_ptr->get_state() == locator::node::state::being_decommissioned
-                              || node_ptr->get_state() == locator::node::state::being_removed
-                              || node_ptr->get_state() == locator::node::state::being_replaced;
+                              || node_ptr->get_state() == locator::node::state::being_removed;
             if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
-                node_load& load = nodes[node_ptr->host_id()];
-                load.id = node_ptr->host_id();
-                load.shard_count = node_ptr->get_shard_count();
-                load.shards.resize(load.shard_count);
-                if (!load.shard_count) {
-                    throw std::runtime_error(format("Shard count of {} not found in topology", node_ptr->host_id()));
-                }
                 if (is_drained) {
+                    ensure_node(node_ptr->host_id());
                     lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc);
                     nodes_to_drain.emplace(node_ptr->host_id());
                 } else if (node_ptr->is_excluded() || _skiplist.contains(node_ptr->host_id())) {
                     // Excluded nodes should not be chosen as targets for migration.
                     lblogger.debug("Ignoring excluded or dead node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
-                    nodes.erase(node_ptr->host_id());
+                } else {
+                    ensure_node(node_ptr->host_id());
                 }
             }
         });
-
-        if (nodes.empty()) {
-            lblogger.debug("No nodes to balance.");
-            _stats.for_dc(dc).stop_balance++;
-            co_return plan;
-        }
 
         // Compute tablet load on nodes.
 
@@ -638,6 +658,20 @@ public:
 
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
+
+                // Check if any replica is on a node which has left.
+                // When node is replaced we don't rebuild as part of topology request.
+                for (auto&& r : ti.replicas) {
+                    auto* node = topo.find_node(r.host);
+                    if (!node) {
+                        on_internal_error(lblogger, format("Replica {} of tablet {} not found in topology",
+                                                           r, global_tablet_id{table, tid}));
+                    }
+                    if (node->left() && node->dc_rack().dc == dc) {
+                        ensure_node(r.host);
+                        nodes_to_drain.insert(r.host);
+                    }
+                }
 
                 // We reflect migrations in the load as if they already happened,
                 // optimistically assuming that they will succeed.
@@ -654,6 +688,12 @@ public:
 
                 return make_ready_future<>();
             });
+        }
+
+        if (nodes.empty()) {
+            lblogger.debug("No nodes to balance.");
+            _stats.for_dc(dc).stop_balance++;
+            co_return plan;
         }
 
         // Detect finished drain.
@@ -691,9 +731,8 @@ public:
         }
 
         for (auto&& [host, load] : nodes) {
-            auto& node = topo.get_node(host);
             lblogger.info("Node {}: rack={} avg_load={}, tablets={}, shards={}, state={}",
-                          host, node.dc_rack().rack, load.avg_load, load.tablet_count, load.shard_count, node.get_state());
+                          host, load.rack(), load.avg_load, load.tablet_count, load.shard_count, load.state());
         }
 
         if (!min_load_node) {
@@ -902,9 +941,9 @@ public:
                 for (auto&& r : tmap.get_tablet_info(source_tablet.tablet).replicas) {
                     replicas.insert(r.host);
                     if (nodes.contains(r.host)) {
-                        const locator::node& node = topo.get_node(r.host);
-                        rack_load[node.dc_rack().rack] += 1;
-                        max_rack_load = std::max(max_rack_load, rack_load[node.dc_rack().rack]);
+                        const node_load& node = nodes[r.host];
+                        rack_load[node.rack()] += 1;
+                        max_rack_load = std::max(max_rack_load, rack_load[node.rack()]);
                     }
                 }
 
@@ -925,14 +964,13 @@ public:
                         continue;
                     }
 
-                    const locator::node& target_node = topo.get_node(new_target);
-                    const locator::node& source_node = topo.get_node(src_host);
-                    if (target_node.dc_rack().rack != source_node.dc_rack().rack
-                            && (rack_load[target_node.dc_rack().rack] + 1 > max_rack_load)) {
+                    const node_load& target_node = nodes[new_target];
+                    const node_load& source_node = nodes[src_host];
+                    if (target_node.rack() != source_node.rack() && (rack_load[target_node.rack()] + 1 > max_rack_load)) {
                         lblogger.debug("next best target {} (avg_load={}) skipped because it would overload rack {} "
                                        "with {} replicas of {}, current max is {}",
-                                       new_target, nodes[new_target].avg_load, target_node.dc_rack().rack,
-                                       rack_load[target_node.dc_rack().rack] + 1, source_tablet, max_rack_load);
+                                       new_target, nodes[new_target].avg_load, target_node.rack(),
+                                       rack_load[target_node.rack()] + 1, source_tablet, max_rack_load);
                         continue;
                     }
 
@@ -948,7 +986,7 @@ public:
 
             target = nodes_by_load_dst.back();
             auto& target_info = nodes[target];
-            const locator::node& target_node = topo.get_node(target);
+            auto& src_info = nodes[src.host];
             auto push_back_target_node = seastar::defer([&] {
                 std::push_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
             });
@@ -1001,7 +1039,7 @@ public:
             std::unordered_map<sstring, int> rack_load; // Will be built if check_rack_load
 
             if (nodes_to_drain.empty()) {
-                check_rack_load = target_node.dc_rack().rack != topo.get_node(src.host).dc_rack().rack;
+                check_rack_load = target_info.rack() != src_info.rack();
                 for (auto&& r: tmap.get_tablet_info(source_tablet.tablet).replicas) {
                     if (r.host == target) {
                         has_replica_on_target = true;
@@ -1026,10 +1064,10 @@ public:
             if (check_rack_load) {
                 auto max_rack_load = std::max_element(rack_load.begin(), rack_load.end(),
                                                  [] (auto& a, auto& b) { return a.second < b.second; })->second;
-                auto new_rack_load = rack_load[target_node.dc_rack().rack] + 1;
+                auto new_rack_load = rack_load[target_info.rack()] + 1;
                 if (new_rack_load > max_rack_load) {
                     lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
-                                   source_tablet, target_node.dc_rack().rack, new_rack_load, max_rack_load);
+                                   source_tablet, target_info.rack(), new_rack_load, max_rack_load);
                     _stats.for_dc(dc).tablets_skipped_rack++;
                     continue;
                 }
@@ -1038,9 +1076,8 @@ public:
             auto& target_load_sketch = co_await target_info.get_load_sketch(_tm);
             auto dst = global_shard_id {target, target_load_sketch.next_shard(target)};
 
-            const locator::node& src_node = topo.get_node(src.host);
-            tablet_transition_kind kind = (src_node.get_state() == locator::node::state::being_removed
-                                           || src_node.get_state() == locator::node::state::being_replaced)
+            tablet_transition_kind kind = (src_info.state() == locator::node::state::being_removed
+                                           || src_info.state() == locator::node::state::left)
                        ? tablet_transition_kind::rebuild : tablet_transition_kind::migration;
             auto mig = tablet_migration_info {kind, source_tablet, src, dst};
             auto mig_streaming_info = get_migration_streaming_info(topo, tmap.get_tablet_info(source_tablet.tablet), mig);

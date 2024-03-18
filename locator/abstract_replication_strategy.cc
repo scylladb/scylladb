@@ -492,14 +492,24 @@ auto vnode_effective_replication_map::clone_data_gently() const -> future<std::u
     co_return std::move(result);
 }
 
-inet_address_vector_replica_set vnode_effective_replication_map::do_get_natural_endpoints(const token& tok,
+host_id_vector_replica_set vnode_effective_replication_map::do_get_replicas(const token& tok,
     bool is_vnode) const
 {
     const token& key_token = _rs->natural_endpoints_depend_on_token()
         ? (is_vnode ? tok : _tmptr->first_token(tok))
         : default_replication_map_key;
     const auto it = _replication_map.find(key_token);
-    return resolve_endpoints<inet_address_vector_replica_set>(it->second, *_tmptr);
+    return it->second;
+}
+
+inet_address_vector_replica_set vnode_effective_replication_map::do_get_natural_endpoints(const token& tok,
+    bool is_vnode) const
+{
+    return resolve_endpoints<inet_address_vector_replica_set>(do_get_replicas(tok, is_vnode), *_tmptr);
+}
+
+host_id_vector_replica_set vnode_effective_replication_map::get_replicas(const token& tok) const {
+    return do_get_replicas(tok, false);
 }
 
 inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints(const token& search_token) const {

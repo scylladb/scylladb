@@ -14,9 +14,9 @@ import pytest
 import time
 from cassandra.cluster import Session  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host        # type: ignore # pylint: disable=no-name-in-module
-from test.pylib.internal_types import ServerInfo
+from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier, get_available_host
 
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,13 @@ async def get_current_group0_config(manager: ManagerClient, srv: ServerInfo) -> 
     result = {(str(m.server_id), bool(m.can_vote)) for m in config}
     logger.info(f"Group 0 members by {srv}: {result}")
     return result
+
+
+async def get_topology_coordinator(manager: ManagerClient) -> HostID:
+    """Get the host ID of the topology coordinator."""
+    host = await get_available_host(manager.cql, time.time() + 60)
+    await read_barrier(manager.cql, host)
+    return await manager.api.get_raft_leader(host.address)
 
 
 async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> None:
