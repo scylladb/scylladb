@@ -5836,11 +5836,13 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         if (dst.shard >= node->get_shard_count()) {
             throw std::runtime_error(format("Host {} does not have shard {}", *node, dst.shard));
         }
-        if (src.host == dst.host) {
-            throw std::runtime_error("Migrating within the same node is not supported");
+
+        if (src == dst) {
+            sstring reason = format("No-op move of tablet {} to {}", gid, dst);
+            return std::make_tuple(std::move(updates), std::move(reason));
         }
 
-        if (locator::contains(tinfo.replicas, dst.host)) {
+        if (src.host != dst.host && locator::contains(tinfo.replicas, dst.host)) {
             throw std::runtime_error(fmt::format("Tablet {} has replica on {}", gid, dst.host));
         }
         auto src_dc_rack = get_token_metadata().get_topology().get_location(src.host);
@@ -5863,7 +5865,8 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-            .set_transition(last_token, locator::tablet_transition_kind::migration)
+            .set_transition(last_token, src.host == dst.host ? locator::tablet_transition_kind::intranode_migration
+                                                             : locator::tablet_transition_kind::migration)
             .build());
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
