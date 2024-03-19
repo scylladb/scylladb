@@ -11,6 +11,7 @@ from test.pylib.manager_client import ManagerClient
 import pytest
 from cassandra.auth import PlainTextAuthProvider
 from test.pylib.util import read_barrier, unique_name, wait_for_cql_and_get_hosts
+from test.topology.util import trigger_snapshot
 
 
 """
@@ -56,16 +57,6 @@ async def test_auth_no_quorum(manager: ManagerClient) -> None:
             auth_provider=PlainTextAuthProvider(username=role, password=role))
     names = [row.role for row in await manager.get_cql().run_async(f"LIST ROLES", execution_profile='whitelist')]
     assert set(names) == set(roles)
-
-
-async def trigger_snapshot(manager: ManagerClient, server: ServerInfo) -> None:
-    cql = manager.get_cql()
-    host = cql.cluster.metadata.get_host(server.ip_addr)
-    group0_id = (await cql.run_async(
-        "select value from system.scylla_local where key = 'raft_group0_id'",
-        host=host))[0].value
-    await manager.api.client.post(f"/raft/trigger_snapshot/{group0_id}", host=server.ip_addr)
-
 
 """
 Tests raft snapshot transfer of auth data.
