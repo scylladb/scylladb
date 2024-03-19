@@ -468,6 +468,68 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     full_ring_check(tmap, ars_ptr, stm.get());
 }
 
+SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_negative_test) {
+    auto my_address = gms::inet_address("localhost");
+
+    // Create the RackInferringSnitch
+    snitch_config cfg;
+    cfg.listen_address = my_address;
+    cfg.broadcast_address = my_address;
+    cfg.name = "RackInferringSnitch";
+    sharded<snitch_ptr> snitch;
+    snitch.start(cfg).get();
+    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+    snitch.invoke_on_all(&snitch_ptr::start).get();
+
+    locator::token_metadata::config tm_cfg;
+    tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
+
+    std::vector<ring_point> ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 2.0,  inet_address("192.100.20.1") },
+            { 3.0,  inet_address("192.100.30.1") },
+    };
+
+    // Initialize the token_metadata
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        auto& topo = tm.get_topology();
+        for (const auto& [ring_point, endpoint, id] : ring_points) {
+            std::unordered_set<token> tokens;
+            tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
+            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
+            tm.update_host_id(id, endpoint);
+            co_await tm.update_normal_tokens(std::move(tokens), id);
+        }
+    }).get();
+
+    auto s = schema_builder("ks", "tb")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("v", utf8_type)
+        .build();
+
+    std::map<sstring, sstring> options_inval_dc = {
+            {"42", "3"},
+    };
+    locator::replication_strategy_params params_inval_dc(options_inval_dc, 1);
+    auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
+            "NetworkTopologyStrategy", params_inval_dc);
+    auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
+    BOOST_REQUIRE(tab_awr_ptr);
+    BOOST_REQUIRE_THROW(tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get(), exceptions::configuration_exception);
+
+    std::map<sstring, sstring> options4 = {
+            {"100", "4"},
+    };
+    locator::replication_strategy_params params4(options4, 1);
+    ars_ptr = abstract_replication_strategy::create_replication_strategy(
+            "NetworkTopologyStrategy", params4);
+    tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
+    BOOST_REQUIRE(tab_awr_ptr);
+    BOOST_REQUIRE_THROW(tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get(), exceptions::configuration_exception);
+}
+
 /**
  * static impl of "old" network topology strategy endpoint calculation.
  */
