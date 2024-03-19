@@ -1675,10 +1675,25 @@ future<> mutate_MV(
     co_await max_concurrent_for_each(view_updates, max_concurrent_updates,
             [base_token, &stats, &cf_stats, tr_state, &pending_view_updates, allow_hints, wait_for_all] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
+<<<<<<< HEAD
         auto& keyspace_name = mut.s->ks_name();
         auto target_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto remote_endpoints = service::get_local_storage_proxy().get_token_metadata_ptr()->pending_endpoints_for(view_token, keyspace_name);
         auto sem_units = pending_view_updates.split(mut.fm.representation().size());
+=======
+        auto view_ermp = mut.s->table().get_effective_replication_map();
+        auto& ks = _proxy.local().local_db().find_keyspace(mut.s->ks_name());
+        bool network_topology = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
+        // We set legacy self-pairing for old vnode-based tables (for backward
+        // compatibility), and unset it for tablets - where range movements
+        // are more frequent and backward compatibility is less important.
+        // TODO: Maybe allow users to set use_legacy_self_pairing explicitly
+        // on a view, like we have the synchronous_updates_flag.
+        bool use_legacy_self_pairing = !ks.uses_tablets();
+        auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing);
+        auto remote_endpoints = view_ermp->get_pending_endpoints(view_token);
+        auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
+>>>>>>> 436dea3222 (mv: keep semaphore units alive until the end of a remote view update)
 
         const bool update_synchronously = should_update_synchronously(*mut.s);
         if (update_synchronously) {
@@ -1726,7 +1741,7 @@ future<> mutate_MV(
                     mut.s->ks_name(), mut.s->cf_name(), base_token, view_token);
             local_view_update = service::get_local_storage_proxy().mutate_mv_locally(mut.s, *mut_ptr, tr_state, db::commitlog::force_sync::no).then_wrapped(
                     [s = mut.s, &stats, &cf_stats, tr_state, base_token, view_token, my_address, mut_ptr = std::move(mut_ptr),
-                            units = sem_units.split(sem_units.count())] (future<>&& f) {
+                            sem_units] (future<>&& f) {
                 --stats.writes;
                 if (f.failed()) {
                     ++stats.view_updates_failed_local;
@@ -1761,9 +1776,15 @@ future<> mutate_MV(
             stats.view_updates_pushed_remote += updates_pushed_remote;
             cf_stats.total_view_updates_pushed_remote += updates_pushed_remote;
             schema_ptr s = mut.s;
+<<<<<<< HEAD
             future<> view_update = apply_to_remote_endpoints(*target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
                     [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
                             units = sem_units.split(sem_units.count()), apply_update_synchronously] (future<>&& f) mutable {
+=======
+            future<> remote_view_update = apply_to_remote_endpoints(_proxy.local(), std::move(view_ermp), *target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
+                [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
+                 sem_units, apply_update_synchronously] (future<>&& f) mutable {
+>>>>>>> 436dea3222 (mv: keep semaphore units alive until the end of a remote view update)
                 if (f.failed()) {
                     stats.view_updates_failed_remote += updates_pushed_remote;
                     cf_stats.total_view_updates_failed_remote += updates_pushed_remote;
