@@ -1727,7 +1727,7 @@ future<> view_update_generator::mutate_MV(
         bool use_legacy_self_pairing = !ks.uses_tablets();
         auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing);
         auto remote_endpoints = view_ermp->get_pending_endpoints(view_token);
-        auto sem_units = pending_view_updates.split(memory_usage_of(mut));
+        auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
 
         const bool update_synchronously = should_update_synchronously(*mut.s);
         if (update_synchronously) {
@@ -1775,7 +1775,7 @@ future<> view_update_generator::mutate_MV(
                     mut.s->ks_name(), mut.s->cf_name(), base_token, view_token);
             local_view_update = _proxy.local().mutate_mv_locally(mut.s, *mut_ptr, tr_state, db::commitlog::force_sync::no).then_wrapped(
                     [s = mut.s, &stats, &cf_stats, tr_state, base_token, view_token, my_address, mut_ptr = std::move(mut_ptr),
-                            units = sem_units.split(sem_units.count())] (future<>&& f) {
+                            sem_units] (future<>&& f) {
                 --stats.writes;
                 if (f.failed()) {
                     ++stats.view_updates_failed_local;
@@ -1811,7 +1811,7 @@ future<> view_update_generator::mutate_MV(
             schema_ptr s = mut.s;
             future<> remote_view_update = apply_to_remote_endpoints(_proxy.local(), std::move(view_ermp), *target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
                 [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
-                 units = sem_units.split(sem_units.count()), apply_update_synchronously] (future<>&& f) mutable {
+                 sem_units, apply_update_synchronously] (future<>&& f) mutable {
                 if (f.failed()) {
                     stats.view_updates_failed_remote += updates_pushed_remote;
                     cf_stats.total_view_updates_failed_remote += updates_pushed_remote;
