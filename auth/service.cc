@@ -474,6 +474,14 @@ future<> drop_role(const service& ser, std::string_view name) {
     co_await ser.underlying_role_manager().drop(name);
 }
 
+future<> grant_role(const service& ser, std::string_view grantee_name, std::string_view role_name) {
+    return ser.underlying_role_manager().grant(grantee_name, role_name);
+}
+
+future<> revoke_role(const service& ser, std::string_view revokee_name, std::string_view role_name) {
+    return ser.underlying_role_manager().revoke(revokee_name, role_name);
+}
+
 future<bool> has_role(const service& ser, std::string_view grantee, std::string_view name) {
     return when_all_succeed(
             validate_role_exists(ser, name),
@@ -487,6 +495,14 @@ future<bool> has_role(const service& ser, const authenticated_user& u, std::stri
     }
 
     return has_role(ser, *u.name, name);
+}
+
+future<> set_attribute(const service& ser, std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) {
+    return ser.underlying_role_manager().set_attribute(role_name, attribute_name, attribute_value);
+}
+
+future<> remove_attribute(const service& ser, std::string_view role_name, std::string_view attribute_name) {
+    return ser.underlying_role_manager().remove_attribute(role_name, attribute_name);
 }
 
 future<> grant_permissions(

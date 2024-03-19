@@ -51,8 +51,8 @@ attach_service_level_statement::execute(query_processor& qp,
         throw qos::nonexistant_service_level_exception(_service_level);
     }
 
-    co_await state.get_client_state().get_auth_service()->underlying_role_manager().
-            set_attribute(_role_name, "service_level", _service_level);
+    const auto& as = *state.get_client_state().get_auth_service();
+    co_await auth::set_attribute(as, _role_name, "service_level", _service_level);
 
     using void_result_msg = cql_transport::messages::result_message::void_message;
     using result_msg = cql_transport::messages::result_message;

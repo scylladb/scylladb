@@ -44,8 +44,8 @@ detach_service_level_statement::execute(query_processor& qp,
     if (guard) {
         release_guard(std::move(*guard));
     }
-    co_await state.get_client_state().get_auth_service()->underlying_role_manager().
-            remove_attribute(_role_name, "service_level");
+    const auto& as = *state.get_client_state().get_auth_service();
+    co_await auth::remove_attribute(as, _role_name, "service_level");
 
     using void_result_msg = cql_transport::messages::result_message::void_message;
     using result_msg = cql_transport::messages::result_message;

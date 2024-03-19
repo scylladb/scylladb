@@ -234,6 +234,25 @@ future<> alter_role(
 future<> drop_role(const service&, std::string_view name);
 
 ///
+/// Grant `role_name` to `grantee_name`.
+///
+/// \returns an exceptional future with \ref nonexistant_role if either the role or the grantee do not exist.
+///
+/// \returns an exceptional future with \ref role_already_included if granting the role would be redundant, or
+/// create a cycle.
+///
+future<> grant_role(const service&, std::string_view grantee_name, std::string_view role_name);
+
+///
+/// Revoke `role_name` from `revokee_name`.
+///
+/// \returns an exceptional future with \ref nonexistant_role if either the role or the revokee do not exist.
+///
+/// \returns an exceptional future with \ref revoke_ungranted_role if the role was not granted.
+///
+future<> revoke_role(const service&, std::string_view revokee_name, std::string_view role_name);
+
+///
 /// Check if `grantee` has been granted the named role.
 ///
 /// \returns an exceptional future with \ref nonexistent_role if `grantee` or `name` do not exist.
@@ -245,6 +264,18 @@ future<bool> has_role(const service&, std::string_view grantee, std::string_view
 /// \returns an exceptional future with \ref nonexistent_role if the user or `name` do not exist.
 ///
 future<bool> has_role(const service&, const authenticated_user&, std::string_view name);
+
+
+/// Sets `attribute_name` with `attribute_value` for `role_name`.
+/// \returns an exceptional future with nonexistant_role if the role does not exist.
+///
+future<> set_attribute(const service&, std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value);
+
+/// Removes `attribute_name` for `role_name`.
+/// \returns an exceptional future with nonexistant_role if the role does not exist.
+/// \note: This is a no-op if the role does not have the named attribute set.
+///
+future<> remove_attribute(const service&, std::string_view role_name, std::string_view attribute_name);
 
 ///
 /// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.

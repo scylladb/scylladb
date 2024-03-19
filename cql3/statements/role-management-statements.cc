@@ -401,9 +401,9 @@ grant_role_statement::execute(query_processor&, service::query_state& state, con
     if (guard) {
         release_guard(std::move(*guard));
     }
-    auto& as = *state.get_client_state().get_auth_service();
+    const auto& as = *state.get_client_state().get_auth_service();
     try {
-        co_await as.underlying_role_manager().grant(_grantee, _role);
+        co_await auth::grant_role(as, _grantee, _role);
     } catch (const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -436,9 +436,9 @@ future<result_message_ptr> revoke_role_statement::execute(
     if (guard) {
         release_guard(std::move(*guard));
     }
-    auto& rm = state.get_client_state().get_auth_service()->underlying_role_manager();
+    const auto& as = *state.get_client_state().get_auth_service();
     try {
-        co_await rm.revoke(_revokee, _role);
+        co_await auth::revoke_role(as, _revokee, _role);
     } catch (const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
