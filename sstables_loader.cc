@@ -239,8 +239,8 @@ future<> tablet_sstable_streamer::stream(bool primary_replica_only) {
             sstable_it++;
         }
 
-        for (; sstable_it != _sstables.rend(); sstable_it++) {
-            auto sst_token_range = sstable_token_range(*sstable_it);
+        for (auto sst_it = sstable_it; sst_it != _sstables.rend(); sst_it++) {
+            auto sst_token_range = sstable_token_range(*sst_it);
             // sstables are sorted by first key, so we're done with current tablet when
             // the next sstable doesn't overlap with its owned token range.
             if (!tablet_range.overlaps(sst_token_range, dht::token_comparator{})) {
@@ -248,9 +248,9 @@ future<> tablet_sstable_streamer::stream(bool primary_replica_only) {
             }
 
             if (tablet_range.contains(sst_token_range, dht::token_comparator{})) {
-                sstables_fully_contained.push_back(*sstable_it);
+                sstables_fully_contained.push_back(*sst_it);
             } else {
-                sstables_partially_contained.push_back(*sstable_it);
+                sstables_partially_contained.push_back(*sst_it);
             }
             co_await coroutine::maybe_yield();
         }
