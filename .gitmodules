@@ -6,12 +6,6 @@
 	path = swagger-ui
 	url = ../scylla-swagger-ui
 	ignore = dirty
-[submodule "scylla-jmx"]
-	path = tools/jmx
-	url = ../scylla-jmx
-[submodule "scylla-tools"]
-	path = tools/java
-	url = ../scylla-tools-java
 [submodule "scylla-python3"]
 	path = tools/python3
 	url = ../scylla-python3

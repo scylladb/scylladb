@@ -1,8 +1,6 @@
 FROM docker.io/fedora:38
 ADD ./install-dependencies.sh ./
 ADD ./seastar/install-dependencies.sh ./seastar/
-ADD ./tools/jmx/install-dependencies.sh ./tools/jmx/
-ADD ./tools/java/install-dependencies.sh ./tools/java/
 ADD ./tools/toolchain/system-auth ./
 RUN dnf -y update \
     && dnf -y install 'dnf-command(copr)' \
@@ -13,5 +11,4 @@ RUN dnf -y update \
     && cp system-auth /etc/pam.d \
     && echo 'Defaults !requiretty' >> /etc/sudoers
 RUN mkdir -p /root/.m2/repository
-ENV JAVA8_HOME=/usr/lib/jvm/java-1.8.0-openjdk
 CMD /bin/bash

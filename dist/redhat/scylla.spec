@@ -11,12 +11,9 @@ Requires:       %{product}-server = %{version}-%{release}
 Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
 Requires:       %{product}-kernel-conf = %{version}-%{release}
-Requires:       %{product}-jmx = %{version}-%{release}
-Requires:       %{product}-tools = %{version}-%{release}
-Requires:       %{product}-tools-core = %{version}-%{release}
 Requires:       %{product}-node-exporter = %{version}-%{release}
 Requires:       %{product}-cqlsh = %{version}-%{release}
-Obsoletes:      scylla-server < 1.1
+Obsoletes:      %{product}-jmx < 5.5
 
 %global _debugsource_template %{nil}
 %global _debuginfo_subpackages %{nil}
@@ -36,7 +33,7 @@ Obsoletes:      scylla-server < 1.1
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
 This package installs all required packages for ScyllaDB,  including
-%{product}-server, %{product}-jmx, %{product}-tools, %{product}-tools-core %{product}-node-exporter.
+%{product}-server, %{product}-node-exporter.
 
 # this is needed to prevent python compilation error on CentOS (#2235)
 %if 0%{?rhel}
@@ -74,6 +71,7 @@ Summary:        The Scylla database server
 Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
 AutoReqProv:    no
+Obsoletes:      %{product}-tools < 5.5
 
 %description server
 This package contains ScyllaDB server.
@@ -152,7 +150,6 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %package conf
 Group:          Applications/Databases
 Summary:        Scylla configuration package
-Obsoletes:      scylla-server < 1.1
 
 %description conf
 This package contains the main scylla configuration file.
