@@ -301,7 +301,6 @@ fi
 umask 0022
 
 ./seastar/install-dependencies.sh
-./tools/jmx/install-dependencies.sh
 ./tools/java/install-dependencies.sh
 
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then

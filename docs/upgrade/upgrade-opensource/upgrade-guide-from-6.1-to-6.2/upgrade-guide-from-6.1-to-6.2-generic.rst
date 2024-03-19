@@ -171,6 +171,15 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
                sudo apt-get update
                sudo apt-get dist-upgrade scylla
 
+        #. Remove old scylla-jmx package since the package is not used anymore:
+
+            .. code-block:: console
+
+               sudo apt-get purge scylla-jmx
+
+            scylla-jmx becomes optional package from ScyllaDB 6.2.
+            If you still need JMX server, see :doc:`Install scylla-jmx Package </getting-started/install-scylla/install-jmx>` and get new version.
+
 
         Answer ‘y’ to the first two questions.
 
@@ -183,6 +192,16 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
 
                sudo yum clean all
                sudo yum update scylla\* -y
+
+        #. Remove old scylla-jmx package since the package is not used anymore:
+
+            .. code:: sh
+
+               sudo yum remove scylla-jmx
+
+            scylla-jmx becomes optional package from ScyllaDB 6.2.
+            If you still need JMX server, see :doc:`Install scylla-jmx Package </getting-started/install-scylla/install-jmx>` and get new version.
+
 
    .. group-tab:: EC2/GCP/Azure Ubuntu Image
 
@@ -201,6 +220,16 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
                sudo apt-get update
                sudo apt-get dist-upgrade scylla
                sudo apt-get dist-upgrade scylla-machine-image
+
+      #. Remove old scylla-jmx package since the package is not used anymore:
+
+            .. code-block:: console
+
+               sudo apt-get purge scylla-jmx
+
+            scylla-jmx becomes optional package from ScyllaDB 6.2.
+            If you still need JMX server, see :doc:`Install scylla-jmx Package </getting-started/install-scylla/install-jmx>` and get new version.
+
 
       #. Run ``scylla_setup`` without ``running io_setup``.
       #. Run ``sudo /opt/scylladb/scylla-machine-image/scylla_cloud_io_setup``.
