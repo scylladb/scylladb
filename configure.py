@@ -701,7 +701,7 @@ arg_parser.add_argument('--with', dest='artifacts', action='append', default=[],
                         help="Specify the artifacts to build, invoke {} with --list-artifacts to list all available artifacts, if unspecified all artifacts are built".format(sys.argv[0]))
 arg_parser.add_argument('--with-seastar', action='store', dest='seastar_path', default='seastar', help='Path to Seastar sources')
 add_tristate(arg_parser, name='dist', dest='enable_dist',
-                        help='scylla-tools-java, scylla-jmx and packages')
+                        help='build dist targets')
 arg_parser.add_argument('--dist-only', dest='dist_only', action='store_true', default=False,
                         help='skip compiling code and run dist targets only')
 
@@ -2292,12 +2292,11 @@ def write_build_file(f,
         f.write(f'  mode = {mode}\n')
         f.write(f'build dist-server-{mode}: phony $builddir/dist/{mode}/redhat $builddir/dist/{mode}/debian\n')
         f.write(f'build dist-server-debuginfo-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-debuginfo-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
-        f.write(f'build dist-jmx-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz dist-jmx-rpm dist-jmx-deb\n')
         f.write(f'build dist-tools-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz dist-tools-rpm dist-tools-deb\n')
         f.write(f'build dist-cqlsh-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz dist-cqlsh-rpm dist-cqlsh-deb\n')
         f.write(f'build dist-python3-{mode}: phony dist-python3-tar dist-python3-rpm dist-python3-deb\n')
         f.write(f'build dist-unified-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
-        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz: unified $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz | always\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz: unified $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz | always\n')
         f.write(f'  mode = {mode}\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
@@ -2344,17 +2343,6 @@ def write_build_file(f,
         rule build-submodule-deb
           command = cd $dir && ./reloc/build_deb.sh --reloc-pkg $artifact
 
-        build tools/jmx/build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz: build-submodule-reloc | $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE
-          reloc_dir = tools/jmx
-        build dist-jmx-rpm: build-submodule-rpm tools/jmx/build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
-          dir = tools/jmx
-          artifact = build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
-        build dist-jmx-deb: build-submodule-deb tools/jmx/build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
-          dir = tools/jmx
-          artifact = build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
-        build dist-jmx-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz'.format(mode=mode, scylla_product=scylla_product, scylla_version=scylla_version, scylla_release=scylla_release) for mode in default_modes])}
-        build dist-jmx: phony dist-jmx-tar dist-jmx-rpm dist-jmx-deb
-
         build tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz: build-submodule-reloc | $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE
           reloc_dir = tools/java
         build dist-tools-rpm: build-submodule-rpm tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
@@ -2388,11 +2376,11 @@ def write_build_file(f,
           artifact = build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build dist-python3-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch, scylla_version=scylla_version, scylla_release=scylla_release) for mode in default_modes])}
         build dist-python3: phony dist-python3-tar dist-python3-rpm dist-python3-deb
-        build dist-deb: phony dist-server-deb dist-python3-deb dist-jmx-deb dist-tools-deb dist-cqlsh-deb
-        build dist-rpm: phony dist-server-rpm dist-python3-rpm dist-jmx-rpm dist-tools-rpm dist-cqlsh-rpm
-        build dist-tar: phony dist-unified-tar dist-server-tar dist-python3-tar dist-jmx-tar dist-tools-tar dist-cqlsh-tar
+        build dist-deb: phony dist-server-deb dist-python3-deb dist-tools-deb dist-cqlsh-deb
+        build dist-rpm: phony dist-server-rpm dist-python3-rpm dist-tools-rpm dist-cqlsh-rpm
+        build dist-tar: phony dist-unified-tar dist-server-tar dist-python3-tar dist-tools-tar dist-cqlsh-tar
 
-        build dist: phony dist-unified dist-server dist-python3 dist-jmx dist-tools dist-cqlsh
+        build dist: phony dist-unified dist-server dist-python3 dist-tools dist-cqlsh
         '''))
 
     f.write(textwrap.dedent(f'''\
@@ -2407,12 +2395,10 @@ def write_build_file(f,
         build $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz: copy tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz: copy tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz: copy tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
-        build $builddir/{mode}/dist/tar/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz: copy tools/jmx/build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
-        build $builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz: copy tools/jmx/build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz: copy tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-package.tar.gz: copy tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
 
-        build {mode}-dist: phony dist-server-{mode} dist-server-debuginfo-{mode} dist-python3-{mode} dist-tools-{mode} dist-jmx-{mode} dist-unified-{mode} dist-cqlsh-{mode}
+        build {mode}-dist: phony dist-server-{mode} dist-server-debuginfo-{mode} dist-python3-{mode} dist-tools-{mode} dist-unified-{mode} dist-cqlsh-{mode}
         build dist-{mode}: phony {mode}-dist
         build dist-check-{mode}: dist-check
           mode = {mode}
