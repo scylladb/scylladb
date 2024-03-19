@@ -7,7 +7,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptors.hpp>
 #include "gms/inet_address.hh"
 #include "locator/types.hh"
 #include "utils/UUID_gen.hh"
@@ -399,135 +399,75 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     locator::token_metadata::config tm_cfg;
     tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
 
-    std::vector<ring_point> ring_points = {
-            { 1.0,  inet_address("192.100.10.1") },
-            { 2.0,  inet_address("192.101.10.1") },
-            { 3.0,  inet_address("192.102.10.1") },
-            { 4.0,  inet_address("192.100.20.1") },
-            { 5.0,  inet_address("192.101.20.1") },
-            { 6.0,  inet_address("192.102.20.1") },
-            { 7.0,  inet_address("192.100.30.1") },
-            { 8.0,  inet_address("192.101.30.1") },
-            { 9.0,  inet_address("192.102.30.1") },
-            { 10.0, inet_address("192.102.40.1") },
-            { 11.0, inet_address("192.102.40.2") }
-    };
+    // Generate a random cluster
+    auto& random_engine = seastar::testing::local_random_engine;
+    for (unsigned shard_count = 1; shard_count <= 4; ++shard_count) {
+        std::map<sstring, size_t> node_count_per_dc;
+        std::map<sstring, std::map<sstring, size_t>> node_count_per_rack;
+        std::vector<ring_point> ring_points;
 
-    // Initialize the token_metadata
-    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
-        for (const auto& [ring_point, endpoint, id] : ring_points) {
-            std::unordered_set<token> tokens;
-            tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
-            tm.update_host_id(id, endpoint);
-            co_await tm.update_normal_tokens(std::move(tokens), id);
+        double point = 1;
+        size_t num_dcs = 1 + tests::random::get_int(5);
+        for (size_t dc = 0; dc < num_dcs; ++dc) {
+            sstring dc_name = fmt::format("{}", 100 + dc);
+            size_t num_racks = 1 + tests::random::get_int(5);
+            for (size_t rack = 0; rack < num_racks; ++rack) {
+                sstring rack_name = fmt::format("{}", 10 + rack);
+                size_t rack_nodes = 1 + tests::random::get_int(2);
+                for (size_t i = 1; i <= rack_nodes; ++i) {
+                    ring_points.emplace_back(point, inet_address(format("192.{}.{}.{}", dc_name, rack_name, i)));
+                    node_count_per_dc[dc_name]++;
+                    node_count_per_rack[dc_name][rack_name]++;
+                }
+            }
         }
-    }).get();
 
-    /////////////////////////////////////
-    // Create the replication strategy
-    std::map<sstring, sstring> options323 = {
-            {"100", "3"},
-            {"101", "2"},
-            {"102", "3"},
-    };
-    locator::replication_strategy_params params323(options323, 100);
+        testlog.debug("node_count_per_rack={}", node_count_per_rack);
 
-    auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params323);
+        // Initialize the token_metadata
+        locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            auto& topo = tm.get_topology();
+            for (const auto& [ring_point, endpoint, id] : ring_points) {
+                std::unordered_set<token> tokens;
+                tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
+                topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
+                tm.update_host_id(id, endpoint);
+                co_await tm.update_normal_tokens(std::move(tokens), id);
+            }
+        }).get();
 
-    auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
-    BOOST_REQUIRE(tab_awr_ptr);
+        auto s = schema_builder("ks", "tb")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("v", utf8_type)
+            .build();
 
-    auto s = schema_builder("ks", "tb")
-        .with_column("pk", utf8_type, column_kind::partition_key)
-        .with_column("v", utf8_type)
-        .build();
+        auto make_random_options = [&] () {
+            auto option_dcs = boost::copy_range<std::vector<sstring>>(node_count_per_dc | boost::adaptors::map_keys);
+            std::map<sstring, sstring> options;
+            std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
+            size_t num_option_dcs = 1 + tests::random::get_int(option_dcs.size() - 1);
+            for (size_t i = 0; i < num_option_dcs; ++i) {
+                const auto& dc = option_dcs[i];
+                size_t node_count = tests::random::get_int(node_count_per_dc[dc]);
+                options.emplace(dc, fmt::to_string(node_count));
+            }
+            return options;
+        };
 
-    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
-    full_ring_check(tmap, ars_ptr, stm.get());
-
-    ///////////////
-    // Create the replication strategy
-    std::map<sstring, sstring> options320 = {
-            {"100", "3"},
-            {"101", "2"},
-            {"102", "0"},
-    };
-    locator::replication_strategy_params params320(options320, 100);
-
-    ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params320);
-    tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
-    BOOST_REQUIRE(tab_awr_ptr);
-
-    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
-    full_ring_check(tmap, ars_ptr, stm.get());
-}
-
-SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_negative_test) {
-    auto my_address = gms::inet_address("localhost");
-
-    // Create the RackInferringSnitch
-    snitch_config cfg;
-    cfg.listen_address = my_address;
-    cfg.broadcast_address = my_address;
-    cfg.name = "RackInferringSnitch";
-    sharded<snitch_ptr> snitch;
-    snitch.start(cfg).get();
-    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
-    snitch.invoke_on_all(&snitch_ptr::start).get();
-
-    locator::token_metadata::config tm_cfg;
-    tm_cfg.topo_cfg.this_endpoint = my_address;
-    tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
-
-    std::vector<ring_point> ring_points = {
-            { 1.0,  inet_address("192.100.10.1") },
-            { 2.0,  inet_address("192.100.20.1") },
-            { 3.0,  inet_address("192.100.30.1") },
-    };
-
-    // Initialize the token_metadata
-    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
-        for (const auto& [ring_point, endpoint, id] : ring_points) {
-            std::unordered_set<token> tokens;
-            tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
-            tm.update_host_id(id, endpoint);
-            co_await tm.update_normal_tokens(std::move(tokens), id);
-        }
-    }).get();
-
-    auto s = schema_builder("ks", "tb")
-        .with_column("pk", utf8_type, column_kind::partition_key)
-        .with_column("v", utf8_type)
-        .build();
-
-    std::map<sstring, sstring> options_inval_dc = {
-            {"42", "3"},
-    };
-    locator::replication_strategy_params params_inval_dc(options_inval_dc, 1);
-    auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params_inval_dc);
-    auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
-    BOOST_REQUIRE(tab_awr_ptr);
-    BOOST_REQUIRE_THROW(tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get(), exceptions::configuration_exception);
-
-    std::map<sstring, sstring> options4 = {
-            {"100", "4"},
-    };
-    locator::replication_strategy_params params4(options4, 1);
-    ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params4);
-    tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
-    BOOST_REQUIRE(tab_awr_ptr);
-    BOOST_REQUIRE_THROW(tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get(), exceptions::configuration_exception);
+        // Create the replication strategy
+        auto options = make_random_options();
+        size_t tablet_count = 1 + tests::random::get_int(99);
+        testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
+        locator::replication_strategy_params params(options, tablet_count);
+        auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
+                "NetworkTopologyStrategy", params);
+        auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
+        BOOST_REQUIRE(tab_awr_ptr);
+        auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
+        full_ring_check(tmap, ars_ptr, stm.get());
+    }
 }
 
 /**
