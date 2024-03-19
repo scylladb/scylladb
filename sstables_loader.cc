@@ -255,9 +255,23 @@ future<> tablet_sstable_streamer::stream(bool primary_replica_only) {
             co_await coroutine::maybe_yield();
         }
 
+        llog.debug("Check with tablet_id={} tablet_range={} full_ssts={} part_ssts={}",
+                tablet_id, tablet_range, sstables_fully_contained.size(), sstables_partially_contained.size());
+
         auto tablet_pr = dht::to_partition_range(tablet_range);
-        co_await stream_sstables(tablet_pr, std::move(sstables_partially_contained), primary_replica_only);
-        co_await stream_fully_contained_sstables(tablet_pr, std::move(sstables_fully_contained), primary_replica_only);
+        if (!sstables_partially_contained.empty()) {
+            const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
+            co_await stream_sstables(full_partition_range, std::move(sstables_partially_contained), primary_replica_only);
+        }
+        if (!sstables_fully_contained.empty()) {
+            co_await stream_fully_contained_sstables(tablet_pr, std::move(sstables_fully_contained), primary_replica_only);
+        }
+
+        // If we have processed all the sstables, we are done. No need to walk
+        // through the remaining tablet ranges.
+        if (sstable_it == _sstables.rend()) {
+            break;
+        }
     }
 }
 
