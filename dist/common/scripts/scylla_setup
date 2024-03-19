@@ -103,7 +103,6 @@ def interactive_choose_swap_size():
             print(f'"{s}" is not valid number, input again')
 
 pkg_files = {
-        f'{PRODUCT}-jmx': scylladir_p() / 'jmx/scylla-jmx',
         f'{PRODUCT}-tools': scylladir_p() / 'share/cassandra/bin/cqlsh',
         f'{PRODUCT}-node-exporter': scylladir_p() / 'node_exporter/node_exporter'
         }

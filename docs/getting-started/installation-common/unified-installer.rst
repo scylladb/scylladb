@@ -50,6 +50,11 @@ Download and Install
 
     ./install.sh --nonroot --python3 ~/scylladb/python3/bin/python3
 
+#. (Optional) Install scylla-jmx
+
+    scylla-jmx becomes optional package from ScyllaDB 6.2, not installed by default.
+    If you need JMX server, see :doc:`Install scylla-jmx Package </getting-started/install-scylla/install-jmx>`
+
 Configure and Run ScyllaDB
 ----------------------------
 
