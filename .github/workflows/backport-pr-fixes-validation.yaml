@@ -1,0 +1,26 @@
+name: Fixes validation for backport PR
+
+on:
+  pull_request:
+    types: [opened, reopened, edited]
+    branches: [branch-*]
+
+jobs:
+  check-fixes-prefix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR body for "Fixes" prefix patterns
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body;
+            const repo = context.payload.repository.full_name;
+            
+            // Regular expression pattern to check for "Fixes" prefix
+            // Adjusted to dynamically insert the repository full name
+            const pattern = `Fixes:? (?:#|${repo.replace('/', '\\/')}#|https://github\\.com/${repo.replace('/', '\\/')}/issues/)(\\d+)`;
+            const regex = new RegExp(pattern);
+            
+            if (!regex.test(body)) {
+              core.setFailed("PR body does not contain a valid 'Fixes' reference.");
+            }
