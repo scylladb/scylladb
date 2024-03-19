@@ -14,6 +14,8 @@
 #include <boost/mp11/algorithm.hpp>
 #include <boost/implicit_cast.hpp>
 
+#include <fmt/std.h>
+
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/variant_utils.hh>
 #include "utils/chunked_vector.hh"
@@ -469,10 +471,6 @@ struct either_of {
     either_of(Op o) : op(std::move(o)) {
         static_assert(Executable<either_of<Ops...>>);
     }
-
-    friend std::ostream& operator<<(std::ostream& os, const either_of& e) {
-        return os << e.op;
-    }
 };
 
 } // namespace operation
@@ -827,20 +825,34 @@ stagger_gen<G> stagger(
 
 } // namespace generator
 
-namespace operation {
+template <operation::Executable... Ops>
+struct fmt::formatter<operation::either_of<Ops...>> : fmt::formatter<std::string_view> {
+    auto format(operation::either_of<Ops...>& e, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", e.op);
+    }
+};
 
 template <typename Op>
-std::ostream& operator<<(std::ostream& os, const exceptional_result<Op>& r) {
-    try {
-        std::rethrow_exception(r.eptr);
-    } catch (const std::exception& e) {
-        return os << format("exceptional{{i:{}, ex:{}}}", r.op, e);
+struct fmt::formatter<operation::exceptional_result<Op>> : fmt::formatter<std::string_view> {
+    auto format(const operation::exceptional_result<Op>& r, fmt::format_context& ctx) const {
+        try {
+            std::rethrow_exception(r.eptr);
+        } catch (const std::exception& e) {
+            return fmt::format_to(ctx.out(), "exceptional{{i:{}, ex:{}}}", r.op, e);
+        }
     }
-}
+};
 
 template <operation::Executable Op>
-std::ostream& operator<<(std::ostream& os, const completion<Op>& c) {
-    return os << format("c{{r:{}, t:{}, tid:{}}}", c.result, c.time, c.thread);
-}
+struct fmt::formatter<operation::completion<Op>> : fmt::formatter<std::string_view> {
+    auto format(const operation::completion<Op>& c, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "c{{r:{}, t:{}, tid:{}}}", c.result, c.time, c.thread);
+    }
+};
 
-} // namespace operation
+template <operation::Executable Op>
+struct fmt::formatter<operation::invocable<Op>> : fmt::formatter<std::string_view> {
+    auto format(const operation::invocable<Op>& op, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", static_cast<Op>(op));
+    }
+};
