@@ -72,7 +72,7 @@ Install ScyllaDB
 
             .. code-block:: console
     
-               apt-get install scylla{,-server,-jmx,-tools,-tools-core,-kernel-conf,-node-exporter,-conf,-python3}=<your patch version>
+               apt-get install scylla{,-server,-tools,-tools-core,-kernel-conf,-node-exporter,-conf,-python3}=<your patch version>
           
             The following example shows installing ScyllaDB 5.2.3.
 
@@ -88,7 +88,7 @@ Install ScyllaDB
             .. code-block:: console
                :class: hide-copy-button
     
-               apt-get install scylla{,-server,-jmx,-tools,-tools-core,-kernel-conf,-node-exporter,-conf,-python3}=5.2.3-0.20230608.ea08d409f155-1
+               apt-get install scylla{,-server,-tools,-tools-core,-kernel-conf,-node-exporter,-conf,-python3}=5.2.3-0.20230608.ea08d409f155-1
 
 
         #. (Ubuntu only) Set Java 11.
@@ -152,6 +152,13 @@ Install ScyllaDB
                :class: hide-copy-button
     
                sudo yum install scylla-5.2.3
+
+(Optional) Install scylla-jmx
+-------------------------------
+
+    scylla-jmx becomes optional package from ScyllaDB 6.2, not installed by default.
+    If you need JMX server, see :doc:`Install scylla-jmx Package </getting-started/install-scylla/install-jmx>`
+
 
 
 .. include:: /getting-started/_common/setup-after-install.rst

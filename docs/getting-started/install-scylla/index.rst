@@ -10,6 +10,7 @@ Install ScyllaDB
    /getting-started/install-scylla/launch-on-azure
    /getting-started/installation-common/scylla-web-installer
    /getting-started/install-scylla/install-on-linux
+   /getting-started/install-scylla/install-jmx
    /getting-started/install-scylla/run-in-docker
    /getting-started/installation-common/unified-installer
    /getting-started/installation-common/air-gapped-install
@@ -35,6 +36,7 @@ Keep your versions up-to-date. The two latest versions are supported. Also, alwa
 
   * :doc:`Install ScyllaDB with Web Installer (recommended) </getting-started/installation-common/scylla-web-installer>`
   * :doc:`Install ScyllaDB Linux Packages </getting-started/install-scylla/install-on-linux>`
+  * :doc:`Install scylla-jmx Package </getting-started/install-scylla/install-jmx>`
   * :doc:`Install ScyllaDB Without root Privileges </getting-started/installation-common/unified-installer>`
   * :doc:`Air-gapped Server Installation </getting-started/installation-common/air-gapped-install>`
   * :doc:`ScyllaDB Developer Mode </getting-started/installation-common/dev-mod>`
