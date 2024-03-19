@@ -395,15 +395,6 @@ future<permission_set> get_permissions(const service& ser, const authenticated_u
     });
 }
 
-bool is_enforcing(const service& ser)  {
-    const bool enforcing_authorizer = ser.underlying_authorizer().qualified_java_name() != allow_all_authorizer_name;
-
-    const bool enforcing_authenticator = ser.underlying_authenticator().qualified_java_name()
-            != allow_all_authenticator_name;
-
-    return enforcing_authorizer || enforcing_authenticator;
-}
-
 bool is_protected(const service& ser, command_desc cmd) noexcept {
     if (cmd.type_ == command_desc::type::ALTER_WITH_OPTS) {
         return false; // Table attributes are OK to modify; see #7057.
