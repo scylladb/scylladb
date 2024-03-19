@@ -107,11 +107,6 @@ if ! $skip_systemd_check && [ ! -d /run/systemd/system/ ]; then
     exit 1
 fi
 
-if ! scylla-jmx/select-java -version > /dev/null; then
-    echo "Please install openjdk-8 or openjdk-11 before running install.sh."
-    exit 1
-fi
-
 if [ -z "$prefix" ]; then
     if $nonroot; then
         prefix=~/scylladb
@@ -139,7 +134,6 @@ if [ -z "$python3" ]; then
 fi
 
 scylla_args=()
-jmx_args=()
 args=()
 
 if $housekeeping; then
@@ -147,19 +141,16 @@ if $housekeeping; then
 fi
 if $nonroot; then
     scylla_args+=(--nonroot)
-    jmx_args+=(--nonroot)
     args+=(--nonroot)
 fi
 if $supervisor; then
     scylla_args+=(--supervisor)
-    jmx_args+=(--packaging)
 fi
 if $supervisor_log_to_stdout; then
     scylla_args+=(--supervisor-log-to-stdout)
 fi
 if $without_systemd; then
     scylla_args+=(--without-systemd)
-    jmx_args+=(--without-systemd)
 fi
 if $debuginfo; then
     scylla_args+=(--debuginfo)
@@ -168,8 +159,6 @@ fi
 (cd $(readlink -f scylla); ./install.sh --root "$root" --prefix "$prefix" --python3 "$python3" --sysconfdir "$sysconfdir" ${scylla_args[@]})
 
 (cd $(readlink -f scylla-python3); ./install.sh --root "$root" --prefix "$prefix" ${args[@]})
-
-(cd $(readlink -f scylla-jmx); ./install.sh --root "$root" --prefix "$prefix"  --sysconfdir "$sysconfdir" ${jmx_args[@]})
 
 (cd $(readlink -f scylla-tools); ./install.sh --root "$root" --prefix "$prefix" ${args[@]})
 
