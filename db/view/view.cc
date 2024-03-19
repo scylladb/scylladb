@@ -1685,7 +1685,7 @@ future<> mutate_MV(
         auto& keyspace_name = mut.s->ks_name();
         auto target_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto remote_endpoints = service::get_local_storage_proxy().get_token_metadata_ptr()->pending_endpoints_for(view_token, keyspace_name);
-        auto sem_units = pending_view_updates.split(memory_usage_of(mut));
+        auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
 
         const bool update_synchronously = should_update_synchronously(*mut.s);
         if (update_synchronously) {
@@ -1733,7 +1733,7 @@ future<> mutate_MV(
                     mut.s->ks_name(), mut.s->cf_name(), base_token, view_token);
             local_view_update = service::get_local_storage_proxy().mutate_mv_locally(mut.s, *mut_ptr, tr_state, db::commitlog::force_sync::no).then_wrapped(
                     [s = mut.s, &stats, &cf_stats, tr_state, base_token, view_token, my_address, mut_ptr = std::move(mut_ptr),
-                            units = sem_units.split(sem_units.count())] (future<>&& f) {
+                            sem_units] (future<>&& f) {
                 --stats.writes;
                 if (f.failed()) {
                     ++stats.view_updates_failed_local;
@@ -1770,7 +1770,7 @@ future<> mutate_MV(
             schema_ptr s = mut.s;
             future<> view_update = apply_to_remote_endpoints(*target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
                     [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
-                            units = sem_units.split(sem_units.count()), apply_update_synchronously] (future<>&& f) mutable {
+                            sem_units, apply_update_synchronously] (future<>&& f) mutable {
                 if (f.failed()) {
                     stats.view_updates_failed_remote += updates_pushed_remote;
                     cf_stats.total_view_updates_failed_remote += updates_pushed_remote;
