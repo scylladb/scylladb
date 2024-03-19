@@ -20,12 +20,11 @@ logger = logging.getLogger(__name__)
 CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch"}
 
 
-# Checks a cluster boot/operations in multi-dc environment with 30 nodes each in a separate DC
+# Checks a cluster boot/operations in multi-dc environment with 5 nodes each in a separate DC
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Too heavy for CI, but OK for local run")
 async def test_multidc(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     logger.info("Creating a new cluster")
-    for i in range(30):
+    for i in range(5):
         s_info = await manager.server_add(
             config=CONFIG,
             property_file={'dc': f'dc{i}', 'rack': 'myrack1'}
