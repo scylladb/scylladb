@@ -133,6 +133,7 @@ public:
         auto id = generate_legacy_id(system_keyspace::NAME, "token_ring");
         return schema_builder(system_keyspace::NAME, "token_ring", std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+            .with_column("table_name", utf8_type, column_kind::clustering_key)
             .with_column("start_token", utf8_type, column_kind::clustering_key)
             .with_column("endpoint", inet_addr_type, column_kind::clustering_key)
             .with_column("end_token", utf8_type)
@@ -146,11 +147,34 @@ public:
         return dht::decorate_key(*_s, partition_key::from_single_value(*_s, data_value(name).serialize_nonnull()));
     }
 
-    clustering_key make_clustering_key(sstring start_token, gms::inet_address host) {
+    clustering_key make_clustering_key(const sstring& table_name, sstring start_token, gms::inet_address host) {
         return clustering_key::from_exploded(*_s, {
+            data_value(table_name).serialize_nonnull(),
             data_value(start_token).serialize_nonnull(),
             data_value(host).serialize_nonnull()
         });
+    }
+
+    future<> emit_ring(result_collector& result, const dht::decorated_key& dk, const sstring& table_name, std::vector<dht::token_range_endpoints> ranges) {
+
+        co_await result.emit_partition_start(dk);
+        boost::sort(ranges, [] (const dht::token_range_endpoints& l, const dht::token_range_endpoints& r) {
+            return l._start_token < r._start_token;
+        });
+
+        for (dht::token_range_endpoints& range : ranges) {
+            boost::sort(range._endpoint_details, endpoint_details_cmp());
+
+            for (const dht::endpoint_details& detail : range._endpoint_details) {
+                clustering_row cr(make_clustering_key(table_name, range._start_token, detail._host));
+                set_cell(cr.cells(), "end_token", sstring(range._end_token));
+                set_cell(cr.cells(), "dc", sstring(detail._datacenter));
+                set_cell(cr.cells(), "rack", sstring(detail._rack));
+                co_await result.emit_row(std::move(cr));
+            }
+        }
+
+        co_await result.emit_partition_end();
     }
 
     struct endpoint_details_cmp {
@@ -168,13 +192,9 @@ public:
         };
 
         auto keyspace_names = boost::copy_range<std::vector<decorated_keyspace_name>>(
-            _db.get_keyspaces()
-                | boost::adaptors::filtered([] (auto&& e) {
-                      auto&& rs = e.second.get_replication_strategy();
-                      return rs.is_vnode_based();
-                  })
-                | boost::adaptors::transformed([this] (auto&& e) {
-                    return decorated_keyspace_name{e.first, make_partition_key(e.first)};
+            _db.get_non_local_strategy_keyspaces()
+                | boost::adaptors::transformed([this] (auto&& ks) {
+                    return decorated_keyspace_name{ks, make_partition_key(ks)};
         }));
 
         boost::sort(keyspace_names, [less = dht::ring_position_less_comparator(*_s)]
@@ -188,26 +208,19 @@ public:
                 continue;
             }
 
-            std::vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring(e.name);
-
-            co_await result.emit_partition_start(dk);
-            boost::sort(ranges, [] (const dht::token_range_endpoints& l, const dht::token_range_endpoints& r) {
-                return l._start_token < r._start_token;
-            });
-
-            for (dht::token_range_endpoints& range : ranges) {
-                boost::sort(range._endpoint_details, endpoint_details_cmp());
-
-                for (const dht::endpoint_details& detail : range._endpoint_details) {
-                    clustering_row cr(make_clustering_key(range._start_token, detail._host));
-                    set_cell(cr.cells(), "end_token", sstring(range._end_token));
-                    set_cell(cr.cells(), "dc", sstring(detail._datacenter));
-                    set_cell(cr.cells(), "rack", sstring(detail._rack));
-                    co_await result.emit_row(std::move(cr));
-                }
+            if (_db.find_keyspace(e.name).get_replication_strategy().uses_tablets()) {
+                co_await _db.get_tables_metadata().for_each_table_gently([&, this] (table_id, lw_shared_ptr<replica::table> table) -> future<> {
+                    if (table->schema()->ks_name() != e.name) {
+                        co_return;
+                    }
+                    const auto& table_name = table->schema()->cf_name();
+                    std::vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring_for_table(e.name, table_name);
+                    co_await emit_ring(result, e.key, table_name, std::move(ranges));
+                });
+            } else {
+                std::vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring(e.name);
+                co_await emit_ring(result, e.key, "<ALL>", std::move(ranges));
             }
-
-            co_await result.emit_partition_end();
         }
     }
 };

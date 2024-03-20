@@ -4837,12 +4837,11 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
         }
         for (auto& r : replicas) {
             dht::endpoint_details details;
-            auto& hostid = r.host;
-            auto endpoint = host2ip(hostid);
-            details._datacenter = topology.get_datacenter(hostid);
-            details._rack = topology.get_rack(hostid);
-            details._host = endpoint;
-            tr._rpc_endpoints.push_back(_gossiper.get_rpc_address(endpoint));
+            const auto& node = topology.get_node(r.host);
+            details._datacenter = node.dc_rack().dc;
+            details._rack = node.dc_rack().rack;
+            details._host = node.endpoint();
+            tr._rpc_endpoints.push_back(_gossiper.get_rpc_address(node.endpoint()));
             tr._endpoints.push_back(fmt::to_string(details._host));
             tr._endpoint_details.push_back(std::move(details));
         }
