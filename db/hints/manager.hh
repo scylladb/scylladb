@@ -124,6 +124,9 @@ private:
     std::unordered_set<endpoint_id> _eps_with_pending_hints;
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
+    // For now, this never changes.
+    const bool _uses_host_id = true;
+
 public:
     manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter,
             int64_t max_hint_window_ms, resource_manager& res_manager, sharded<replica::database>& db);
@@ -268,7 +271,7 @@ private:
         return _local_db;
     }
 
-    hint_endpoint_manager& get_ep_manager(endpoint_id ep);
+    hint_endpoint_manager& get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip);
 
 public:
     bool have_ep_manager(endpoint_id ep) const noexcept;
@@ -317,6 +320,10 @@ private:
     bool draining_all() noexcept {
         return _state.contains(state::draining_all);
     }
+
+    /// Iterates over existing hint directories and for each, if the corresponding endpoint is present
+    /// in locator::topology, creates an endpoint manager.
+    future<> initialize_endpoint_managers();
 };
 
 } // namespace db::hints

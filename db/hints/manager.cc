@@ -29,6 +29,7 @@
 // Scylla includes.
 #include "db/hints/internal/hint_logger.hh"
 #include "gms/gossiper.hh"
+#include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
 #include "service/storage_proxy.hh"
@@ -184,17 +185,7 @@ void manager::register_metrics(const sstring& group_name) {
 future<> manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
     _gossiper_anchor = std::move(gossiper_ptr);
 
-
-    co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
-            [this] (fs::path datadir, directory_entry de) {
-        endpoint_id ep = endpoint_id{utils::UUID{de.name}};
-
-        if (!check_dc_for(ep)) {
-            return make_ready_future<>();
-        }
-
-        return get_ep_manager(ep).populate_segments_to_replay();
-    });
+    co_await initialize_endpoint_managers();
 
     co_await compute_hints_dir_device_id();
     set_started();
@@ -331,12 +322,21 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     }
 }
 
-hint_endpoint_manager& manager::get_ep_manager(endpoint_id ep) {
-    auto [it, emplaced] = _ep_managers.try_emplace(ep, ep, *this);
+// For now, because `_uses_host_id` is always set to true, we don't use the second argument.
+hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip = {}) {
+    const auto hint_directory = std::invoke([&] () -> std::filesystem::path {
+        if (_uses_host_id) {
+            return hints_dir() / host_id.to_sstring();
+        } else {
+            return hints_dir() / ip.to_sstring();
+        }
+    });
+
+    auto [it, emplaced] = _ep_managers.try_emplace(host_id, host_id, std::move(hint_directory), *this);
     hint_endpoint_manager& ep_man = it->second;
 
     if (emplaced) {
-        manager_logger.trace("Created an endpoint manager for {}", ep);
+        manager_logger.trace("Created an endpoint manager for {}", host_id);
         ep_man.start();
     }
 
@@ -569,6 +569,50 @@ void manager::update_backlog(size_t backlog, size_t max_backlog) {
 
 future<> manager::with_file_update_mutex_for(endpoint_id ep, noncopyable_function<future<> ()> func) {
     return _ep_managers.at(ep).with_file_update_mutex(std::move(func));
+}
+
+// The function assumes that if `_uses_host_id == true`, then there are no directories that represent IP addresses,
+// i.e. every directory is either valid and represents a host ID, or is invalid (so it should be ignored anyway).
+future<> manager::initialize_endpoint_managers() {
+    auto maybe_create_ep_mgr = [this] (const locator::host_id& host_id, const gms::inet_address& ip) -> future<> {
+        if (!check_dc_for(host_id)) {
+            co_return;
+        }
+
+        co_await get_ep_manager(host_id, ip).populate_segments_to_replay();
+    };
+
+    // We dispatch here to not hold on to the token metadata if hinted handoff is host-ID-based.
+    // In that case, there are no directories that represent IP addresses, so we won't need to use it.
+    // We want to avoid a situation when topology changes are prevented while we hold on to this pointer.
+    const auto tmptr = _uses_host_id ? nullptr : _proxy.get_token_metadata_ptr();
+
+    co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
+            [&] (fs::path directory, directory_entry de) -> future<> {
+        auto maybe_host_id_or_ep = std::invoke([&] () -> std::optional<locator::host_id_or_endpoint> {
+            try {
+                return locator::host_id_or_endpoint{de.name};
+            } catch (...) {
+                // The name represents neither an IP address, nor a host ID.
+                return std::nullopt;
+            }
+        });
+
+        // The directory is invalid, so there's nothing more to do.
+        if (!maybe_host_id_or_ep) {
+            co_return;
+        }
+
+        if (_uses_host_id) {
+            // If hinted handoff is host-ID-based, `get_ep_manager` will NOT use the passed IP address,
+            // so we simply pass the default value there.
+            co_return co_await maybe_create_ep_mgr(maybe_host_id_or_ep->id(), gms::inet_address{});
+        }
+
+        // If we have got to this line, hinted handoff is still IP-based.
+        const locator::host_id host_id = maybe_host_id_or_ep->resolve_id(*tmptr);
+        co_await maybe_create_ep_mgr(host_id, maybe_host_id_or_ep->endpoint());
+    });
 }
 
 } // namespace db::hints
