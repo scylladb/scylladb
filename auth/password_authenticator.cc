@@ -144,36 +144,36 @@ future<> password_authenticator::create_default_if_missing() {
 }
 
 future<> password_authenticator::start() {
-     return once_among_shards([this] {
-         auto f = create_metadata_table_if_missing(
-                 meta::roles_table::name,
-                 _qp,
-                 meta::roles_table::creation_query(),
-                 _migration_manager);
+    return once_among_shards([this] {
+        auto f = create_metadata_table_if_missing(
+                meta::roles_table::name,
+                _qp,
+                meta::roles_table::creation_query(),
+                _migration_manager);
 
-         _stopped = do_after_system_ready(_as, [this] {
-             return async([this] {
-                 _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
+        _stopped = do_after_system_ready(_as, [this] {
+            return async([this] {
+                _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
-                 if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get()) {
-                     if (legacy_metadata_exists()) {
-                         plogger.warn("Ignoring legacy authentication metadata since nondefault data already exist.");
-                     }
+                if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get()) {
+                    if (legacy_metadata_exists()) {
+                        plogger.warn("Ignoring legacy authentication metadata since nondefault data already exist.");
+                    }
 
-                     return;
-                 }
+                    return;
+                }
 
-                 if (legacy_metadata_exists()) {
-                     migrate_legacy_metadata().get();
-                     return;
-                 }
+                if (legacy_metadata_exists()) {
+                    migrate_legacy_metadata().get();
+                    return;
+                }
 
-                 create_default_if_missing().get();
-             });
-         });
+                create_default_if_missing().get();
+            });
+        });
 
-         return f;
-     });
+        return f;
+    });
  }
 
 future<> password_authenticator::stop() {
