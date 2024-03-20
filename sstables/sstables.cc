@@ -1397,7 +1397,7 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
     _stats.on_open_for_reading();
 
     _total_reclaimable_memory.reset();
-    _manager.increment_total_reclaimable_memory(this);
+    _manager.increment_total_reclaimable_memory_and_maybe_reclaim(this);
 }
 
 future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
@@ -1558,7 +1558,7 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
         validate_partitioner();
         return update_info_for_opened_data().then([this]() {
             _total_reclaimable_memory.reset();
-            _manager.increment_total_reclaimable_memory(this);
+            _manager.increment_total_reclaimable_memory_and_maybe_reclaim(this);
         });
     });
 }
