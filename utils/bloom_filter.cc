@@ -72,15 +72,18 @@ bool bloom_filter::is_present(const bytes_view& key) {
     return is_present(make_hashed_key(key));
 }
 
+size_t get_bitset_size(int64_t num_elements, int buckets_per) {
+    int64_t num_bits = (num_elements * buckets_per) + bloom_calculations::EXCESS;
+    num_bits = align_up<int64_t>(num_bits, 64);  // Seems to be implied in origin
+    return num_bits;
+}
+
 filter_ptr create_filter(int hash, large_bitset&& bitset, filter_format format) {
     return std::make_unique<murmur3_bloom_filter>(hash, std::move(bitset), format);
 }
 
 filter_ptr create_filter(int hash, int64_t num_elements, int buckets_per, filter_format format) {
-    int64_t num_bits = (num_elements * buckets_per) + bloom_calculations::EXCESS;
-    num_bits = align_up<int64_t>(num_bits, 64);  // Seems to be implied in origin
-    large_bitset bitset(num_bits);
-    return std::make_unique<murmur3_bloom_filter>(hash, std::move(bitset), format);
+    return std::make_unique<murmur3_bloom_filter>(hash, large_bitset(get_bitset_size(num_elements, buckets_per)), format);
 }
 }
 }
