@@ -100,6 +100,7 @@ std::string_view to_string(compaction_type type) {
     case compaction_type::Upgrade: return "Upgrade";
     case compaction_type::Reshape: return "Reshape";
     case compaction_type::Split: return "Split";
+    case compaction_type::BloomFilterRegeneration: return "BloomFilterRegeneration";
     }
     on_internal_error_noexcept(clogger, format("Invalid compaction type {}", int(type)));
     return "(invalid)";
@@ -1780,6 +1781,7 @@ compaction_type compaction_type_options::type() const {
         compaction_type::Reshard,
         compaction_type::Reshape,
         compaction_type::Split,
+        compaction_type::BloomFilterRegeneration,
     };
     static_assert(std::variant_size_v<compaction_type_options::options_variant> == std::size(index_to_type));
     return index_to_type[_options.index()];
@@ -1812,6 +1814,9 @@ static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstable
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::split split_options) {
             return std::make_unique<split_compaction>(table_s, std::move(descriptor), cdata, std::move(split_options), progress_monitor);
+        }
+        std::unique_ptr<compaction> operator()(compaction_type_options::bloom_filter_regeneration) {
+            return nullptr; // bypasses the normal compaction code-path
         }
     } visitor_factory{table_s, std::move(descriptor), cdata, progress_monitor};
 

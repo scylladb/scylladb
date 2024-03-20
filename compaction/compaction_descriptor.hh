@@ -31,6 +31,7 @@ enum class compaction_type {
     Upgrade = 6,
     Reshape = 7,
     Split = 8,
+    BloomFilterRegeneration = 9,
 };
 
 struct compaction_completion_desc {
@@ -84,8 +85,10 @@ public:
     struct split {
         mutation_writer::classify_by_token_group classifier;
     };
+    struct bloom_filter_regeneration {
+    };
 private:
-    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split>;
+    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split, bloom_filter_regeneration>;
 
 private:
     options_variant _options;
@@ -121,6 +124,10 @@ public:
 
     static compaction_type_options make_split(mutation_writer::classify_by_token_group classifier) {
         return compaction_type_options(split{std::move(classifier)});
+    }
+
+    static compaction_type_options make_bloom_filter_regeneration() {
+        return compaction_type_options(bloom_filter_regeneration{});
     }
 
     template <typename... Visitor>
