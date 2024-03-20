@@ -29,13 +29,13 @@ jobs:
         run: python .github/scripts/sync_labels.py --repo ${{ github.repository }} --number ${{ github.event.number }} --action ${{ github.event.action }}
 
       - name: Pull request labeled or unlabeled event
-        if: github.event_name == 'pull_request' && startsWith(github.event.label.name, 'backport')
+        if: github.event_name == 'pull_request' && startsWith(github.event.label.name, 'backport/')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python .github/scripts/sync_labels.py --repo ${{ github.repository }} --number ${{ github.event.number }} --action ${{ github.event.action }} --label ${{ github.event.label.name }}
 
       - name: Issue labeled or unlabeled event
-        if: github.event_name == 'issues' && startsWith(github.event.label.name, 'backport')
+        if: github.event_name == 'issues' && startsWith(github.event.label.name, 'backport/')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python .github/scripts/sync_labels.py --repo ${{ github.repository }} --number ${{ github.event.issue.number }} --action ${{ github.event.action }} --is_issue --label ${{ github.event.label.name }}
