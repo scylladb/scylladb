@@ -1075,7 +1075,7 @@ public:
         auto m = _mutations[ep];
         if (m) {
             const auto hid = ermptr->get_token_metadata().get_host_id(ep);
-            return hm.store_hint(hid, _schema, std::move(m), tr_state);
+            return hm.store_hint(hid, ep, _schema, std::move(m), tr_state);
         } else {
             return false;
         }
@@ -1134,7 +1134,7 @@ public:
     virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, locator::effective_replication_map_ptr ermptr,
             tracing::trace_state_ptr tr_state) override {
         const auto hid = ermptr->get_token_metadata().get_host_id(ep);
-        return hm.store_hint(hid, _schema, _mutation, tr_state);
+        return hm.store_hint(hid, ep, _schema, _mutation, tr_state);
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
@@ -2512,7 +2512,7 @@ storage_proxy_stats::split_stats::split_stats(const sstring& category, const sst
         , _long_description_prefix(long_description_prefix)
         , _category(category)
         , _op_type(op_type)
-        , _auto_register_metrics(auto_register_metrics) 
+        , _auto_register_metrics(auto_register_metrics)
         , _sg(current_scheduling_group()) { }
 
 storage_proxy_stats::write_stats::write_stats()
@@ -3020,7 +3020,7 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_st
     });
 }
 
-future<> 
+future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
         return mutate_locally(std::move(mutation), tr_state, timeout, _write_smp_service_group, rate_limit_info);
 }
