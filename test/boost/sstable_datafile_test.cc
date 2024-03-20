@@ -3483,3 +3483,23 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components) {
+    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+        return async([&env, tmpdir_path] {
+            simple_schema ss;
+            auto schema_ptr = ss.schema();
+            auto sst = env.make_sstable(schema_ptr, tmpdir_path, 0);
+
+            // create a bloom filter
+            auto sst_test = sstables::test(sst);
+            sst_test.create_bloom_filter(100);
+            auto total_reclaimable_memory = sst_test.total_reclaimable_memory_size();
+
+            // Test sstable::reclaim_memory_from_components() :
+            BOOST_REQUIRE_EQUAL(sst_test.reclaim_memory_from_components(), total_reclaimable_memory);
+            BOOST_REQUIRE_EQUAL(sst_test.total_reclaimable_memory_size(), 0);
+            BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), 0);
+        });
+    });
+}

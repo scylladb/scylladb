@@ -224,6 +224,19 @@ public:
     static fs::path filename(const sstable& sst, component_type c) {
         return fs::path(sst.filename(c));
     }
+
+    void create_bloom_filter(uint64_t estimated_partitions, double max_false_pos_prob = 0.1) {
+        _sst->_components->filter = utils::i_filter::get_filter(estimated_partitions, max_false_pos_prob, utils::filter_format::m_format);
+        _sst->_total_reclaimable_memory.reset();
+    }
+
+    size_t total_reclaimable_memory_size() const {
+        return _sst->total_reclaimable_memory_size();
+    }
+
+    size_t reclaim_memory_from_components() {
+        return _sst->reclaim_memory_from_components();
+    }
 };
 
 inline auto replacer_fn_no_op() {
