@@ -48,14 +48,14 @@ def get_linked_pr_from_issue_number(repo, number):
 
 def get_linked_issues_based_on_pr_body(repo, number):
     pr = repo.get_pull(number)
-    pattern = fr'Fixes:? (?:#|{repo}#|https://github.com/{repo}/issues/)(\d+)'
-    matches = re.findall(pattern, pr.body)
-    if not matches:
-        raise RuntimeError("No regex matches found in the body!")
+    repo_name = repo.full_name
+    pattern = rf"(?:fix(?:|es|ed)|resolve(?:|d|s))\s*:?\s*(?:(?:(?:{repo_name})?#)|https://github\.com/{repo_name}/issues/)(\d+)"
+    matches = re.findall(pattern, pr.body, re.IGNORECASE)
     issue_number_from_pr_body = []
-    for match in matches:
-        issue_number_from_pr_body.append(match)
-        print(f"Found issue number: {match}")
+    if matches:
+        for match in matches:
+            issue_number_from_pr_body.append(match)
+            print(f"Found issue number: {match}")
     return issue_number_from_pr_body
 
 
@@ -69,7 +69,6 @@ def sync_labels(repo, number, label, action, is_issue=False):
             target = repo.get_issue(pr_or_issue_number)
         else:
             target = repo.get_issue(int(pr_or_issue_number))
-        print(pr_or_issue_number)
         if action == 'labeled':
             target.add_to_labels(label)
             print(f"Label '{label}' successfully added.")
