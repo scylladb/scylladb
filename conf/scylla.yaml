@@ -585,7 +585,7 @@ strict_is_not_null_in_views: true
 # * workdir: the node will open the maintenance socket on the path <scylla's workdir>/cql.m,
 #            where <scylla's workdir> is a path defined by the workdir configuration option,
 # * <socket path>: the node will open the maintenance socket on the path <socket path>.
-maintenance_socket: ignore
+maintenance_socket: workdir
 
 # If set to true, configuration parameters defined with LiveUpdate option can be updated in runtime with CQL
 # by updating system.config virtual table. If we don't want any configuration parameter to be changed in runtime
