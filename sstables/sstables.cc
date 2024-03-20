@@ -2467,6 +2467,30 @@ future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
     co_return valid;
 }
 
+future<utils::filter_ptr> generate_bloom_filter(schema_ptr schema, reader_permit permit, shared_sstable sst) {
+    // Need a thread, because utils::i_filter::get_filter() requires a thread.
+    return async([schema = std::move(schema), permit = std::move(permit), sst = std::move(sst)] () mutable {
+        sstables::index_reader idx_reader(sst, permit);
+        auto close_idx_reader = deferred_close(idx_reader);
+
+        utils::filter_format format = (sst->get_version() >= sstable_version_types::mc)
+                ? utils::filter_format::m_format : utils::filter_format::k_l_format;
+        auto filter = utils::i_filter::get_filter(sst->get_estimated_key_count(), schema->bloom_filter_fp_chance(), format);
+
+        while (!idx_reader.eof()) {
+            idx_reader.read_partition_data().get();
+
+            auto pkey = idx_reader.get_partition_key();
+            auto sstables_pkey = sstables::key::from_partition_key(*schema, pkey);
+            filter->add(bytes_view(sstables_pkey));
+
+            idx_reader.advance_to_next_partition().get();
+        }
+
+        return filter;
+    });
+}
+
 void sstable::set_first_and_last_keys() {
     if (_first && _last) {
         return;
