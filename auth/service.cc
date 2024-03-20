@@ -172,7 +172,7 @@ service::service(
                       used_by_maintenance_socket) {
 }
 
-future<> service::create_keyspace_if_missing(::service::migration_manager& mm) const {
+future<> service::create_legacy_keyspace_if_missing(::service::migration_manager& mm) const {
     assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
     auto db = _qp.db();
 
@@ -200,12 +200,12 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
 }
 
 future<> service::start(::service::migration_manager& mm) {
-    auto create_keyspace_if_missing_or_noop = _used_by_maintenance_socket
-        ? make_ready_future<>()
-        : once_among_shards([this, &mm] {
-            return create_keyspace_if_missing(mm);
+    auto create_keyspace_if_missing_or_noop = make_ready_future<>();
+    if (legacy_mode(_qp) && !_used_by_maintenance_socket) {
+        create_keyspace_if_missing_or_noop = once_among_shards([this, &mm] {
+            return create_legacy_keyspace_if_missing(mm);
         });
-
+    }
     return create_keyspace_if_missing_or_noop.then([this] {
         return _role_manager->start().then([this] {
             return when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();

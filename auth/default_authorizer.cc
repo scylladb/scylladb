@@ -103,7 +103,7 @@ future<> default_authorizer::migrate_legacy_metadata() {
     });
 }
 
-future<> default_authorizer::start() {
+future<> default_authorizer::start_legacy() {
     static const sstring create_table = fmt::format(
             "CREATE TABLE {}.{} ("
             "{} text,"
@@ -121,7 +121,7 @@ future<> default_authorizer::start() {
             90 * 24 * 60 * 60); // 3 months.
 
     return once_among_shards([this] {
-        return create_metadata_table_if_missing(
+        return create_legacy_metadata_table_if_missing(
                 PERMISSIONS_CF,
                 _qp,
                 create_table,
@@ -142,6 +142,13 @@ future<> default_authorizer::start() {
             });
         });
     });
+}
+
+future<> default_authorizer::start() {
+    if (legacy_mode(_qp)) {
+        return start_legacy();
+    }
+    return make_ready_future<>();
 }
 
 future<> default_authorizer::stop() {

@@ -79,7 +79,7 @@ public:
 private:
     enum class membership_change { add, remove };
 
-    future<> create_metadata_tables_if_missing() const;
+    future<> create_legacy_metadata_tables_if_missing() const;
 
     bool legacy_metadata_exists();
 
