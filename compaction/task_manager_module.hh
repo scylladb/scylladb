@@ -556,6 +556,88 @@ struct bloom_filter_regeneration_conditions {
     float filter_size_mismatch_tolerance = 1.5;
 };
 
+class regenerate_bloom_filters_compaction_task_impl : public sstables_compaction_task_impl {
+private:
+    sharded<replica::database>& _db;
+    std::vector<sstring> _column_families;
+    std::optional<bloom_filter_regeneration_conditions> _conditions;
+    sstables::compaction_stats* _stats;
+public:
+    regenerate_bloom_filters_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            sharded<replica::database>& db,
+            std::vector<sstring> column_families,
+            std::optional<bloom_filter_regeneration_conditions> conditions,
+            sstables::compaction_stats* stats) noexcept
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
+        , _db(db)
+        , _column_families(std::move(column_families))
+        , _conditions(std::move(conditions))
+        , _stats(stats)
+    {}
+
+    virtual std::string type() const override {
+        return "regenerate bloom filters " + sstables_compaction_task_impl::type();
+    }
+protected:
+    virtual future<> run() override;
+};
+
+class shard_regenerate_bloom_filters_compaction_task_impl : public sstables_compaction_task_impl {
+private:
+    replica::database& _db;
+    std::vector<sstring> _column_families;
+    std::optional<bloom_filter_regeneration_conditions> _conditions;
+    sstables::compaction_stats& _stats;
+public:
+    shard_regenerate_bloom_filters_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            tasks::task_id parent_id,
+            replica::database& db,
+            std::vector<sstring> column_families,
+            std::optional<bloom_filter_regeneration_conditions> conditions,
+            sstables::compaction_stats& stats) noexcept
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
+        , _db(db)
+        , _column_families(std::move(column_families))
+        , _conditions(std::move(conditions))
+        , _stats(stats)
+    {}
+
+    virtual std::string type() const override {
+        return "regenerate bloom filters " + sstables_compaction_task_impl::type();
+    }
+protected:
+    virtual future<> run() override;
+};
+
+class table_regenerate_bloom_filters_compaction_task_impl : public sstables_compaction_task_impl {
+private:
+    replica::database& _db;
+    std::optional<bloom_filter_regeneration_conditions> _conditions;
+    sstables::compaction_stats& _stats;
+public:
+    table_regenerate_bloom_filters_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            std::string table,
+            tasks::task_id parent_id,
+            replica::database& db,
+            std::optional<bloom_filter_regeneration_conditions> conditions,
+            sstables::compaction_stats& stats) noexcept
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
+        , _db(db)
+        , _conditions(std::move(conditions))
+        , _stats(stats)
+    {}
+
+    virtual std::string type() const override {
+        return "regenerate bloom filters " + sstables_compaction_task_impl::type();
+    }
+protected:
+    virtual future<> run() override;
+};
+
+
 class reshaping_compaction_task_impl : public compaction_task_impl {
 public:
     reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
