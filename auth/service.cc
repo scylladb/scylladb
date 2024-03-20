@@ -248,51 +248,6 @@ void service::reset_authorization_cache() {
     _qp.reset_cache();
 }
 
-future<bool> service::has_existing_legacy_users() const {
-    if (!_qp.db().has_schema(meta::legacy::AUTH_KS, meta::legacy::USERS_CF)) {
-        return make_ready_future<bool>(false);
-    }
-
-    static const sstring default_user_query = format("SELECT * FROM {}.{} WHERE {} = ?",
-            meta::legacy::AUTH_KS,
-            meta::legacy::USERS_CF,
-            meta::user_name_col_name);
-
-    static const sstring all_users_query = format("SELECT * FROM {}.{} LIMIT 1",
-            meta::legacy::AUTH_KS,
-            meta::legacy::USERS_CF);
-
-    // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default user, we
-    // can potentially avoid doing a range query with a high consistency level.
-
-    return _qp.execute_internal(
-            default_user_query,
-            db::consistency_level::ONE,
-            {meta::DEFAULT_SUPERUSER_NAME},
-            cql3::query_processor::cache_internal::yes).then([this](auto results) {
-        if (!results->empty()) {
-            return make_ready_future<bool>(true);
-        }
-
-        return _qp.execute_internal(
-                default_user_query,
-                db::consistency_level::QUORUM,
-                {meta::DEFAULT_SUPERUSER_NAME},
-                cql3::query_processor::cache_internal::yes).then([this](auto results) {
-            if (!results->empty()) {
-                return make_ready_future<bool>(true);
-            }
-
-            return _qp.execute_internal(
-                    all_users_query,
-                    db::consistency_level::QUORUM,
-                    cql3::query_processor::cache_internal::no).then([](auto results) {
-                return make_ready_future<bool>(!results->empty());
-            });
-        });
-    });
-}
-
 future<permission_set>
 service::get_uncached_permissions(const role_or_anonymous& maybe_role, const resource& r) const {
     if (is_anonymous(maybe_role)) {
