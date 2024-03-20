@@ -1060,7 +1060,7 @@ public:
         auto m = _mutations[ep];
         if (m) {
             const auto hid = ermptr->get_token_metadata().get_host_id(ep);
-            return hm.store_hint(hid, _schema, std::move(m), tr_state);
+            return hm.store_hint(hid, ep, _schema, std::move(m), tr_state);
         } else {
             return false;
         }
@@ -1119,7 +1119,7 @@ public:
     virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, locator::effective_replication_map_ptr ermptr,
             tracing::trace_state_ptr tr_state) override {
         const auto hid = ermptr->get_token_metadata().get_host_id(ep);
-        return hm.store_hint(hid, _schema, _mutation, tr_state);
+        return hm.store_hint(hid, ep, _schema, _mutation, tr_state);
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,

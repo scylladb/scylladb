@@ -347,23 +347,23 @@ bool manager::have_ep_manager(endpoint_id ep) const noexcept {
     return _ep_managers.contains(ep);
 }
 
-bool manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
+bool manager::store_hint(endpoint_id host_id, gms::inet_address ip, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
         tracing::trace_state_ptr tr_state) noexcept
 {
-    if (stopping() || draining_all() || !started() || !can_hint_for(ep)) {
-        manager_logger.trace("Can't store a hint to {}", ep);
+    if (stopping() || draining_all() || !started() || !can_hint_for(host_id)) {
+        manager_logger.trace("Can't store a hint to {}", host_id);
         ++_stats.dropped;
         return false;
     }
 
     try {
-        manager_logger.trace("Going to store a hint to {}", ep);
-        tracing::trace(tr_state, "Going to store a hint to {}", ep);
+        manager_logger.trace("Going to store a hint to {}", host_id);
+        tracing::trace(tr_state, "Going to store a hint to {}", host_id);
 
-        return get_ep_manager(ep).store_hint(std::move(s), std::move(fm), tr_state);
+        return get_ep_manager(host_id, ip).store_hint(std::move(s), std::move(fm), tr_state);
     } catch (...) {
-        manager_logger.trace("Failed to store a hint to {}: {}", ep, std::current_exception());
-        tracing::trace(tr_state, "Failed to store a hint to {}: {}", ep, std::current_exception());
+        manager_logger.trace("Failed to store a hint to {}: {}", host_id, std::current_exception());
+        tracing::trace(tr_state, "Failed to store a hint to {}: {}", host_id, std::current_exception());
 
         ++_stats.errors;
         return false;
