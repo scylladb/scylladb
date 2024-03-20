@@ -38,11 +38,12 @@ def copy_labels_from_linked_issues(repo, pr_number):
 
 def get_linked_pr_from_issue_number(repo, number):
     linked_prs = []
-    for pr in repo.get_pulls(state='all'):
-        if f'{number}' in pr.body:
+    for pr in repo.get_pulls(state='all', base='master'):
+        if pr.body and f'{number}' in pr.body:
             linked_prs.append(pr.number)
-        else:
             break
+        else:
+            continue
     return linked_prs
 
 
