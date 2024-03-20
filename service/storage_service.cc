@@ -1798,7 +1798,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 
         if (!is_replacing()
                 && (!_sys_ks.local().bootstrap_complete()
-                    || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
+                    || cdc::should_propose_first_generation(my_host_id(), _gossiper))) {
             try {
                 cdc_gen_id = co_await _cdc_gens.local().legacy_make_new_generation(bootstrap_tokens, !is_first_node());
             } catch (...) {
