@@ -963,13 +963,25 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(std::move(schema), schema_features);
 
-    auto group0_cmd = _group0_client.prepare_command(
-        schema_change{
-            .mutations{adjusted_schema.begin(), adjusted_schema.end()},
-        },
-        guard, std::move(description));
+    if (description.starts_with("tablets")) {
+        auto group0_cmd = _group0_client.prepare_command(
+                topology_change{
+                        .mutations{adjusted_schema.begin(), adjusted_schema.end()},
+                },
+                guard, std::move(description));
 
-    co_return co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as, raft_timeout{});
+        // TODO: no retry if group0_concurrent_modification, add it?
+        co_return co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as, raft_timeout{});
+    } else {
+        auto group0_cmd = _group0_client.prepare_command(
+            schema_change{
+                .mutations{adjusted_schema.begin(), adjusted_schema.end()},
+            },
+            guard, std::move(description));
+
+        // TODO: no retry if group0_concurrent_modification, add it?
+        co_return co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as, raft_timeout{});
+    }
 }
 
 future<> migration_manager::announce_without_raft(std::vector<mutation> schema, group0_guard guard) {

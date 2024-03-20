@@ -90,13 +90,16 @@ static logging::logger mylogger("alter_keyspace");
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+    // TODO: for tablets-enabled keyspace, check if migrating away from networktopologystrategy
+    //       we shouldn't allow switching strategies for tablets-enabled keyspaces
     try {
         auto old_ksm = qp.db().find_keyspace(_name).metadata();
 
         const auto& tm = *qp.proxy().get_token_metadata_ptr();
         const auto& feat = qp.proxy().features();
-        auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(),
-                                                               _attrs->as_ks_metadata_update(old_ksm, tm, feat), ts);
+        auto ks_md_update = _attrs->as_ks_metadata_update(old_ksm, tm, feat);
+        mylogger.warn("smaron ks_md_update {}", ks_md_update);
+        std::vector<mutation> m;
         std::vector<sstring> warnings;
 
         auto&& replication_strategy = qp.db().find_keyspace(_name).get_replication_strategy();
@@ -109,10 +112,6 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                     builder.set_new_keyspace_rf_change_data(_name, _attrs->get_replication_map());
                     service::topology_change change{{builder.build()}};
                     mylogger.warn("smaron prepare after change");
-//                    boost::transform(change.mutations, std::back_inserter(m), [cf_schema](const canonical_mutation &cm) {
-//                        mylogger.warn("smaron prepare transform {}", cm);
-//                        return cm.to_mutation(cf_schema);
-//                    });
                     auto s = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
                     boost::transform(change.mutations, std::back_inserter(m), [s] (const canonical_mutation& cm) {
                         return cm.to_mutation(s);
@@ -124,6 +123,10 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 throw make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
                         exceptions::invalid_request_exception("alter_keyspace_statement::prepare_schema_mutations(): topology mutation cannot be performed while other request is ongoing"));
             }
+        }
+        else {
+            auto schema_mutations = service::prepare_keyspace_update_announcement(qp.db().real_database(), ks_md_update, ts);
+            m.insert(m.begin(), schema_mutations.begin(), schema_mutations.end());
         }
 
         using namespace cql_transport;

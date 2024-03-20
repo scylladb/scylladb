@@ -29,6 +29,7 @@
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
 #include "service/qos/service_level_controller.hh"
+#include "service/migration_manager.hh"
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group0.hh"
@@ -755,22 +756,40 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_await start_cleanup_on_dirty_nodes(std::move(guard), true);
             break;
         case global_topology_request::keyspace_rf_change: {
+            rtlogger.info("smaron global_topology_request::keyspace_rf_change");
+
             while (true) {
+                rtlogger.info("smaron global_topology_request::keyspace_rf_change while");
                 auto tmptr = get_token_metadata_ptr();
                 sstring ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
                 std::unordered_map<sstring, sstring> new_rf_per_dc = *_topo_sm._topology.new_keyspace_rf_change_rf_per_dc;
                 std::vector<canonical_mutation> updates;
                 for (const auto& table : _db.find_keyspace(ks_name).metadata()->tables()) {
+                    rtlogger.info("smaron global_topology_request::keyspace_rf_change table:{}", table);
                     std::unordered_map<sstring, size_t> new_rf_per_int_dc;
                     for (const auto& pair : new_rf_per_dc) {
                         new_rf_per_int_dc.insert(std::pair{pair.first, std::stoi(pair.second)});
                     }
+                    rtlogger.info("smaron new_rf_per_int_dc:{}", new_rf_per_int_dc);
 
                     // == START mocking new tablets map ==
                     // currently just drops the last tablets replica, i.e. works only for lowering the RF
-//                    auto new_tablet_map = co_await reallocate_tablets_for_new_rf(table, tmptr, new_rf_per_int_dc);
+                    auto new_tablet_map = co_await reallocate_tablets_for_new_rf(table, tmptr, new_rf_per_int_dc);
 
                     locator::tablet_map old_tablet_map = tmptr->tablets().get_tablet_map(table->id());
+                    for (auto tb : old_tablet_map.tablet_ids()) {
+                        const locator::tablet_info &ti = old_tablet_map.get_tablet_info(tb);
+                        locator::tablet_replica_set replicas = ti.replicas;
+                        rtlogger.info("smaron old tablet {} map for {}", tb, replicas);
+                    }
+
+                    for (auto tb : new_tablet_map.tablet_ids()) {
+                        const locator::tablet_info &ti = new_tablet_map.get_tablet_info(tb);
+                        locator::tablet_replica_set replicas = ti.replicas;
+                        rtlogger.info("smaron new tablet {} map for {}", tb, replicas);
+                    }
+
+                    /*                    locator::tablet_map old_tablet_map = tmptr->tablets().get_tablet_map(table->id());
                     auto new_tablet_map = old_tablet_map;
 
                     for (auto tb : old_tablet_map.tablet_ids()) {
@@ -789,7 +808,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         rtlogger.info("smaron new tablet {} map for {}", tb, replicas);
 
                     }
-                    // == END mocking new tablets map ==
+*/                    // == END mocking new tablets map ==
 
                     auto tablet_id = new_tablet_map.first_tablet();
                     while (true) {
@@ -808,14 +827,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     }
                 }
+                // TODO: move alter schema mutations here, not in the cql
+                // include mm here, first do schema mutation, then tablets mutation, then topo mutations?
+                // do schema mut under one raft guard, tablet mut under another one?
                 updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
                                                              .set_transition_state(topology::transition_state::tablet_migration)
                                                              .set_version(_topo_sm._topology.version + 1)
                                                              .del_global_topology_request()
                                                              .build()));
+
+                std::map<sstring, sstring> opts (new_rf_per_dc.begin(), new_rf_per_dc.end());
+                auto ks_md = keyspace_metadata::new_keyspace(ks_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", opts, 2);
+                auto m = service::prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                updates.emplace_back(*m.begin());
+
                 sstring reason = format("ALTER tablets KEYSPACE called with new RF-per-DC settings: {}", new_rf_per_dc);
                 rtlogger.info("do update {} reason {}", updates, reason);
-                topology_change change{std::move(updates)};
+                schema_change change{std::move(updates)};
                 group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
                 try {
                     co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), &_as);
@@ -1023,7 +1051,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
 
         for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
-            auto s = _db.find_schema(table_id);
             auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
             // Sequence number is monotonically increasing, globally. Therefore, it can be used to identify a decision.
             resize_decision.sequence_number = tmap.resize_decision().next_sequence_number();
