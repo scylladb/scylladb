@@ -53,7 +53,8 @@ class ReplaceConfig(NamedTuple):
     wait_replaced_dead: bool = True
 
 
-def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str) -> dict[str, object]:
+def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str,
+                     socket_path: str) -> dict[str, object]:
     # We significantly increase default timeouts to allow running tests on a very slow
     # setup (but without network losses). These timeouts can impact the running time of
     # topology tests. For example, the barrier_and_drain topology command waits until
@@ -113,7 +114,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         'reader_concurrency_semaphore_serialize_limit_multiplier': 0,
         'reader_concurrency_semaphore_kill_limit_multiplier': 0,
 
-        'maintenance_socket': 'workdir',
+        'maintenance_socket': socket_path,
 
         'service_levels_interval_ms': 500,
     }
@@ -221,6 +222,9 @@ class ScyllaServer:
                  append_env: Dict[str,Any]) -> None:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
+        # this variable needed to make a cleanup after server is not needed anymore
+        self.maintenance_socket_dir = tempfile.TemporaryDirectory(prefix=f"scylladb-{self.server_id}-test.py-")
+        self.maintenance_socket_path = f"{self.maintenance_socket_dir.name}/cql.m"
         self.exe = pathlib.Path(exe).resolve()
         self.vardir = pathlib.Path(vardir)
         self.logger = logger
@@ -243,7 +247,8 @@ class ScyllaServer:
                 workdir = self.workdir,
                 host_addr = self.ip_addr,
                 seed_addrs = self.seeds,
-                cluster_name = self.cluster_name) \
+                cluster_name = self.cluster_name,
+                socket_path=self.maintenance_socket_path) \
             | config_options
         self.property_file = property_file
         self.append_env = append_env
@@ -1191,6 +1196,7 @@ class ScyllaClusterManager:
         add_put('/cluster/server/{server_id}/change_rpc_address', self._server_change_rpc_address)
         add_get('/cluster/server/{server_id}/get_log_filename', self._server_get_log_filename)
         add_get('/cluster/server/{server_id}/workdir', self._server_get_workdir)
+        add_get('/cluster/server/{server_id}/maintenance_socket_path', self._server_get_maintenance_socket_path)
         add_get('/cluster/server/{server_id}/exe', self._server_get_exe)
         add_put('/cluster/server/{server_id}/wipe_sstables', self._cluster_server_wipe_sstables)
 
@@ -1474,6 +1480,9 @@ class ScyllaClusterManager:
 
     async def _server_get_workdir(self, request: aiohttp.web.Request) -> str:
         return str(await self._server_get_attribute(request, "workdir"))
+
+    async def _server_get_maintenance_socket_path(self, request: aiohttp.web.Request) -> str:
+        return str(await self._server_get_attribute(request, "maintenance_socket_path"))
 
     async def _server_get_exe(self, request: aiohttp.web.Request) -> str:
         return str(await self._server_get_attribute(request, "exe"))
