@@ -6,10 +6,10 @@ extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
 run_first:
-  - test_raft_recovery_majority_loss
   - test_raft_recovery_stuck
-  - test_read_repair
-  - test_replace
+  - test_raft_recovery_basic
+  - test_group0_schema_versioning
+  - test_tablets_migration
 skip_in_release:
   - test_raft_recovery_stuck
   - test_shutdown_hang
