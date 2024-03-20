@@ -51,7 +51,7 @@ def get_linked_issues_based_on_pr_body(repo, number):
     pattern = fr'Fixes:? (?:#|{repo}#|https://github.com/{repo}/issues/)(\d+)'
     matches = re.findall(pattern, pr.body)
     if not matches:
-        raise RuntimeError("No regex matches found in the body!")
+        return []
     issue_number_from_pr_body = []
     for match in matches:
         issue_number_from_pr_body.append(match)
