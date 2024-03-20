@@ -2,7 +2,7 @@ name: Sync labels
 
 on:
   pull_request:
-    types: [opened, labeled, unlabeled]
+    types: [opened, edited, labeled, unlabeled]
     branches: [master, next]
   issues:
     types: [labeled, unlabeled]
