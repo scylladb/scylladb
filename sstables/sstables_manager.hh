@@ -100,6 +100,8 @@ private:
 
     // Total reclaimable memory used by components of sstables in _active list
     size_t _total_reclaimable_memory{0};
+    // Total memory reclaimed so far across all sstables
+    size_t _total_memory_reclaimed{0};
 
     bool _closing = false;
     promise<> _done;
@@ -179,7 +181,10 @@ private:
     // Allow at most 10% of memory to be filled with such reads.
     size_t max_memory_sstable_metadata_concurrent_reads(size_t available_memory) { return available_memory * 0.1; }
 
-    void increment_total_reclaimable_memory(sstable* sst);
+    // Increment the _total_reclaimable_memory with the new SSTable's reclaimable
+    // memory and if the total memory usage exceeds the pre-defined threshold,
+    // reclaim it from the SSTable that has the most reclaimable memory.
+    void increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst);
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;
