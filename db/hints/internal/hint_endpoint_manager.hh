@@ -68,7 +68,7 @@ private:
     hint_sender _sender;
 
 public:
-    hint_endpoint_manager(const endpoint_id& key, manager& shard_manager);
+    hint_endpoint_manager(const endpoint_id& key, std::filesystem::path hint_directory, manager& shard_manager);
     hint_endpoint_manager(hint_endpoint_manager&&);
     ~hint_endpoint_manager();
 
