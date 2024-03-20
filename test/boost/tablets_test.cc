@@ -341,13 +341,33 @@ SEASTAR_TEST_CASE(test_get_shard) {
         auto h2 = host_id(utils::UUID_gen::get_time_UUID());
         auto h3 = host_id(utils::UUID_gen::get_time_UUID());
 
-        auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+        inet_address ip3("192.168.0.3");
 
-        tablet_metadata tm;
+        auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+        const auto shard_count = 2;
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+                locator::topology::config{
+                        .this_endpoint = ip1,
+                        .local_dc_rack = locator::endpoint_dc_rack::default_location
+                }
+        });
+
         tablet_id tid(0);
         tablet_id tid1(0);
 
-        {
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            tm.update_host_id(h1, ip1);
+            tm.update_host_id(h2, ip2);
+            tm.update_host_id(h3, ip3);
+            tm.update_topology(h1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(h2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(h3, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+
+            tablet_metadata tmeta;
             tablet_map tmap(2);
             tid = tmap.first_tablet();
             tmap.set_tablet(tid, tablet_info {
@@ -372,19 +392,25 @@ SEASTAR_TEST_CASE(test_get_shard) {
                 },
                 tablet_replica {h2, 3}
             });
-            tm.set_tablet_map(table1, std::move(tmap));
-        }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            return make_ready_future<>();
+        }).get();
 
-        auto&& tmap = tm.get_tablet_map(table1);
+        auto&& tmap = stm.get()->tablets().get_tablet_map(table1);
 
-        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid1, h1), std::make_optional(shard_id(2)));
-        BOOST_REQUIRE(!tmap.get_shard(tid1, h2));
-        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid1, h3), std::make_optional(shard_id(1)));
+        auto get_shard = [&] (tablet_id tid, host_id host) {
+            tablet_sharder sharder(*stm.get(), table1, host);
+            return sharder.shard_of(tmap.get_last_token(tid));
+        };
 
-        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h1), std::make_optional(shard_id(0)));
-        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h2), std::make_optional(shard_id(3)));
-        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h3), std::make_optional(shard_id(5)));
+        BOOST_REQUIRE_EQUAL(get_shard(tid1, h1), std::make_optional(shard_id(2)));
+        BOOST_REQUIRE(!get_shard(tid1, h2));
+        BOOST_REQUIRE_EQUAL(get_shard(tid1, h3), std::make_optional(shard_id(1)));
 
+        BOOST_REQUIRE_EQUAL(get_shard(tid, h1), std::make_optional(shard_id(0)));
+        BOOST_REQUIRE_EQUAL(get_shard(tid, h2), std::make_optional(shard_id(3)));
+        BOOST_REQUIRE_EQUAL(get_shard(tid, h3), std::make_optional(shard_id(5)));
     }, tablet_cql_test_config());
 }
 
