@@ -770,17 +770,34 @@ void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
 }
 
 static
+size_t get_tablet_count(const tablet_metadata& tm) {
+    size_t count = 0;
+    for (auto& [table, tmap] : tm.all_tables()) {
+        count += std::accumulate(tmap.tablets().begin(), tmap.tablets().end(), size_t(0),
+             [] (size_t accumulator, const locator::tablet_info& info) {
+                 return accumulator + info.replicas.size();
+             });
+    }
+    return count;
+}
+
+static
 void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm, locator::load_stats_ptr load_stats = {}, std::unordered_set<host_id> skiplist = {}) {
-    while (true) {
+    // Sanity limit to avoid infinite loops.
+    // The x10 factor is arbitrary, it's there to account for more complex schedules than direct migration.
+    auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
+
+    for (size_t i = 0; i < max_iterations; ++i) {
         auto plan = talloc.balance_tablets(stm.get(), load_stats, std::move(skiplist)).get();
         if (plan.empty()) {
-            break;
+            return;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
             apply_plan(tm, plan);
             return make_ready_future<>();
         }).get();
     }
+    throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");
 }
 
 static
