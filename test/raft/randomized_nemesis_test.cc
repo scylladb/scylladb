@@ -36,17 +36,26 @@
 
 namespace std {
 
-std::ostream& operator<<(std::ostream& os, const std::monostate&) {
-    return os << "";
-}
-
+// fmt::formatter<std::variant<Ts...> requires that the none of Ts... has
+// fallback formatter, so we cannot use it before ditching operator<< of
+// all element types.
 template <typename T, typename... Ts>
 std::ostream& operator<<(std::ostream& os, const std::variant<T, Ts...>& v) {
-    std::visit([&os] (auto& arg) { os << arg; }, v);
+    std::visit([&os] (auto& arg) { fmt::print(os, "{}", arg); }, v);
     return os;
 }
 
 } // namespace std
+
+#if FMT_VERSION < 100000
+// fmt v10 introduced formatter for std::exception
+template <>
+struct fmt::formatter<seastar::timed_out_error> : fmt::formatter<std::string_view> {
+    auto format(const seastar::timed_out_error& e, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", e.what());
+    }
+};
+#endif
 
 using namespace seastar;
 using namespace std::chrono_literals;
@@ -2589,9 +2598,12 @@ struct raft_call {
 
         co_return res;
     }
+};
 
-    friend std::ostream& operator<<(std::ostream& os, const raft_call& c) {
-        return os << format("raft_call{{input:{},timeout:{}}}", c.input, c.timeout);
+template <PureStateMachine M>
+struct fmt::formatter<raft_call<M>> : fmt::formatter<std::string_view> {
+    auto format(const raft_call<M>& r, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "raft_call{{input:{}, timeout:{}}}", r.input, r.timeout);
     }
 };
 
@@ -2624,9 +2636,12 @@ struct raft_read {
 
         co_return result_type{read_id, std::move(res)};
     }
+};
 
-    friend std::ostream& operator<<(std::ostream& os, const raft_read& r) {
-        return os << format("raft_read{{id:{}, timeout:{}}}", r.read_id, r.timeout);
+template <PureStateMachine M>
+struct fmt::formatter<raft_read<M>> : fmt::formatter<std::string_view> {
+    auto format(const raft_read<M>& r, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "raft_read{{id:{}, timeout:{}}}", r.read_id, r.timeout);
     }
 };
 
@@ -2696,8 +2711,13 @@ public:
         co_return std::monostate{};
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const network_majority_grudge& p) {
-        return os << format("network_majority_grudge{{duration:{}}}", p._duration);
+    friend fmt::formatter<network_majority_grudge>;
+};
+
+template <PureStateMachine M>
+struct fmt::formatter<network_majority_grudge<M>> : fmt::formatter<std::string_view> {
+    auto format(const network_majority_grudge<M>& p, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "network_majority_grudge{{duration:{}}}", p._duration);
     }
 };
 
@@ -2822,9 +2842,12 @@ struct reconfiguration {
             return execute_reconfigure(s, ctx, std::move(nodes), members_end, voters_end);
         }
     }
+};
 
-    friend std::ostream& operator<<(std::ostream& os, const reconfiguration& r) {
-        return os << format("reconfiguration{{timeout:{}}}", r.timeout);
+template <PureStateMachine M>
+struct fmt::formatter<reconfiguration<M>>: fmt::formatter<std::string_view> {
+    auto format(const reconfiguration<M>& r, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "reconfiguration{{timeout:{}}}", r.timeout);
     }
 };
 
@@ -2863,22 +2886,23 @@ struct stop_crash {
         co_return result_type{};
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const stop_crash& c) {
-        return os << format("stop_crash{{delay:{}}}", c.restart_delay);
-    }
-
     friend std::ostream& operator<<(std::ostream& os, const result_type&) {
         return os << "";
     }
 };
 
-namespace operation {
+template <PureStateMachine M>
+struct fmt::formatter<stop_crash<M>>: fmt::formatter<std::string_view> {
+    auto format(const stop_crash<M>& c, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "stop_crash{{delay:{}}}", c.restart_delay);
+    }
+};
 
-std::ostream& operator<<(std::ostream& os, const thread_id& tid) {
-    return os << format("thread_id{{{}}}", tid.id);
-}
-
-} // namespace operation
+template <> struct fmt::formatter<operation::thread_id>: fmt::formatter<std::string_view> {
+    auto format(const operation::thread_id& tid, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "thread_id{{{}}}", tid.id);
+    }
+};
 
 // An immutable sequence of integers.
 class append_seq {
@@ -2961,11 +2985,7 @@ public:
         return {{_seq, _end - 1, digest_remove(_digest, (*_seq)[_end - 1])}, (*_seq)[_end - 1]};
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const append_seq& s) {
-        // TODO: don't copy the elements
-        std::vector<elem_t> v{s._seq->begin(), s._seq->begin() + s._end};
-        return os << format("seq({} _end {})", v, s._end);
-    }
+    friend fmt::formatter<append_seq>;
 
 private:
     append_seq(lw_shared_ptr<std::vector<elem_t>> seq, size_t end, elem_t d)
@@ -2986,6 +3006,15 @@ struct AppendReg {
 
     static thread_local const state_t init;
 };
+
+template <> struct fmt::formatter<append_seq> : fmt::formatter<std::string_view> {
+    auto format(const append_seq& s, fmt::format_context& ctx) const {
+        // TODO: don't copy the elements
+        std::vector<append_seq::elem_t> v{s._seq->begin(), s._seq->begin() + s._end};
+        return fmt::format_to(ctx.out(), "seq({} _end {})", v, s._end);
+    }
+};
+
 
 thread_local const AppendReg::state_t AppendReg::init{{0}};
 
@@ -3177,13 +3206,17 @@ private:
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const AppendReg::append& a) {
-    return os << format("append{{{}}}", a.x);
-}
+template <> struct fmt::formatter<AppendReg::append> : fmt::formatter<std::string_view> {
+    auto format(const AppendReg::append& a, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "append{{{}}}", a.x);
+    }
+};
 
-std::ostream& operator<<(std::ostream& os, const AppendReg::ret& r) {
-    return os << format("ret{{{}, {}}}", r.x, r.prev);
-}
+template <> struct fmt::formatter<AppendReg::ret> : fmt::formatter<std::string_view> {
+    auto format(const AppendReg::ret& r, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "ret{{{}, {}}}", r.x, r.prev);
+    }
+};
 
 SEASTAR_TEST_CASE(basic_generator_test) {
     using op_type = operation::invocable<operation::either_of<
