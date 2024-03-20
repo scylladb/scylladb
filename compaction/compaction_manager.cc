@@ -2044,6 +2044,36 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
     }, info, can_purge_tombstones::no, std::move(option_desc));
 }
 
+future<compaction_manager::compaction_stats_opt>
+compaction_manager::perform_bloom_filter_regeneration(table_state& t, std::optional<bloom_filter_regeneration_conditions> conditions,
+        std::optional<tasks::task_info> info) {
+    auto needs_bf_regen = [&t, &conditions] (const sstables::shared_sstable& sst) -> bool {
+        if (!conditions) {
+            return true;
+        }
+        const auto calculated_filter_size = utils::i_filter::get_filter_size(sst->get_estimated_key_count(), t.schema()->bloom_filter_fp_chance());
+        const auto actual_filter_size = sst->filter_memory_size();
+        const auto min_acceptable_filter_size = calculated_filter_size / conditions->filter_size_mismatch_tolerance;
+        const auto max_acceptable_filter_size = calculated_filter_size * conditions->filter_size_mismatch_tolerance;
+        cmlog.debug("perform_bloom_filter_regeneration(): checking {}: actual={}, calculated={}, tolerance={}", sst, actual_filter_size, calculated_filter_size, conditions->filter_size_mismatch_tolerance);
+        if (actual_filter_size < min_acceptable_filter_size || actual_filter_size > max_acceptable_filter_size) {
+            return true;
+        }
+        return false;
+    };
+    auto get_sstables = [this, &t, &needs_bf_regen] {
+        std::vector<sstables::shared_sstable> tables;
+        for (auto& sst : get_candidates(t)) {
+            if (needs_bf_regen(sst)) {
+                tables.emplace_back(sst);
+            }
+        }
+        return make_ready_future<std::vector<sstables::shared_sstable>>(tables);
+    };
+
+    return rewrite_sstables(t, sstables::compaction_type_options::make_bloom_filter_regeneration(), {}, std::move(get_sstables), info);
+}
+
 compaction::compaction_state::compaction_state(table_state& t)
     : backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
 {

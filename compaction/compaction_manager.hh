@@ -350,6 +350,14 @@ public:
     // or user aborted splitting using stop API.
     future<compaction_stats_opt> perform_split_compaction(compaction::table_state& t, sstables::compaction_type_options::split opt, std::optional<tasks::task_info> info = std::nullopt);
 
+    // Submit a table for bloom-filter compaction and wait for its termination.
+    // Regenerate the filter of sstable, for which the conditions below do not hold.
+    // If no conditions are specified, all filters are generated unconditionally.
+    // Can be used to force a changed schema bloom_filter_fp_chance to take effect.
+    // Sstables are not compacted in fact, the only component which is re-written is the filter.
+    future<compaction_stats_opt> perform_bloom_filter_regeneration(compaction::table_state& t, std::optional<bloom_filter_regeneration_conditions> conditions,
+            std::optional<tasks::task_info> info = std::nullopt);
+
     // Run a custom job for a given table, defined by a function
     // it completes when future returned by job is ready or returns immediately
     // if manager was asked to stop.

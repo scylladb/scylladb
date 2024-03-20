@@ -548,6 +548,14 @@ protected:
     virtual future<> run() override;
 };
 
+struct bloom_filter_regeneration_conditions {
+    // Defines a range of acceptable filter sizes, compared to the ideal filter
+    // size, calculated based on actual number of partitions and current fp
+    // chance:
+    //      [calculated / tolerance, calculated * tolerance]
+    float filter_size_mismatch_tolerance = 1.5;
+};
+
 class reshaping_compaction_task_impl : public compaction_task_impl {
 public:
     reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
