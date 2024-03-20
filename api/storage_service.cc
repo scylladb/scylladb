@@ -1797,6 +1797,39 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 
         co_return json::json_return_type(static_cast<int>(scrub_status::successful));
     });
+
+    ss::regenerate_sstable_bloom_filters.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
+        auto rp = req_params({
+            {"keyspace", {mandatory::yes}},
+            {"cf", {""}},
+            {"force", {"false"}},
+            {"filter_size_mismatch_tolerance", {"1.5"}},
+        });
+        rp.process(*req);
+        const auto keyspace = validate_keyspace(ctx, *rp.get("keyspace"));
+        const auto column_families = parse_tables(keyspace, ctx, *rp.get("cf"));
+        const bool force = validate_bool(*rp.get("force"));
+        const double filter_size_mismatch_tolerance = std::stod(rp.get("filter_size_mismatch_tolerance")->c_str());
+
+        std::optional<bloom_filter_regeneration_conditions> conditions;
+        if (!force) {
+            conditions.emplace();
+            conditions->filter_size_mismatch_tolerance = filter_size_mismatch_tolerance;
+        }
+
+        sstables::compaction_stats stats;
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<regenerate_bloom_filters_compaction_task_impl>({}, keyspace, db, column_families, conditions, &stats);
+        try {
+            co_await task->done();
+        } catch (...) {
+            apilog.error("regenerate bloom filters keyspace={} tables={} failed: {}", keyspace, column_families, std::current_exception());
+            throw;
+        }
+
+        co_return json::json_return_type(static_cast<int>(stats.compacted_sstables));
+    });
 }
 
 void unset_snapshot(http_context& ctx, routes& r) {
