@@ -411,6 +411,7 @@ class PythonTestSuite(TestSuite):
             """
             for srv in cluster.running.values():
                 srv.log_file.close()
+                srv.maintenance_socket_dir.cleanup()
             await cluster.stop()
             await cluster.release_ips()
 

@@ -27,8 +27,7 @@ async def test_maintenance_mode(manager: ManagerClient):
     """
 
     server_a, server_b = await manager.server_add(), await manager.server_add()
-    workdir = await manager.server_get_workdir(server_a.server_id)
-    socket_endpoint = UnixSocketEndPoint(workdir + "/cql.m")
+    socket_endpoint = UnixSocketEndPoint(await manager.server_get_maintenance_socket_path(server_a.server_id))
 
     cluster = cluster_con([server_b.ip_addr], 9042, False)
     cql = cluster.connect()
