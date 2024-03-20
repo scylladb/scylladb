@@ -103,13 +103,6 @@ class ManagerClient():
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
         return cql, hosts
 
-    @staticmethod
-    def connect_to_node(server: ServerInfo) -> CassandraSession:
-        """Connect cql to the specific node in the cluster"""
-        logger.info(f"Establishing connection to {server.ip_addr}")
-        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([server.ip_addr]))
-        return CassandraCluster([server.ip_addr], execution_profiles={EXEC_PROFILE_DEFAULT: profile}).connect()
-
     # Make driver update endpoints from remote connection
     def _driver_update(self) -> None:
         if self.ccluster is not None:
