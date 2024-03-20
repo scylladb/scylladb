@@ -6701,7 +6701,7 @@ future<> storage_service::start_maintenance_mode() {
     set_mode(mode::MAINTENANCE);
 
     return mutate_token_metadata([this] (mutable_token_metadata_ptr token_metadata) -> future<> {
-        return token_metadata->update_normal_tokens({ dht::token{} }, get_token_metadata_ptr()->get_topology().my_host_id());
+        return token_metadata->update_normal_tokens({ dht::token{} }, my_host_id());
     }, acquire_merge_lock::yes);
 }
 
