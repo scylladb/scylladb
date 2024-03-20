@@ -87,6 +87,9 @@ struct always_present_filter: public i_filter {
     }
 };
 
+// Get the size of the bitset (in bits, not bytes) for the specific parameters.
+size_t get_bitset_size(int64_t num_elements, int buckets_per);
+
 filter_ptr create_filter(int hash, large_bitset&& bitset, filter_format format);
 filter_ptr create_filter(int hash, int64_t num_elements, int buckets_per, filter_format format);
 }
