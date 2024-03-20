@@ -1887,6 +1887,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 } else {
                     auto validation_result = validate_joining_node(node);
 
+                    if (utils::get_local_injector().enter("handle_node_transition_drop_expiring")) {
+                        _group0.modifiable_address_map().force_drop_expiring_entries();
+                    }
+
                     // When the validation succeeded, it's important that all nodes in the
                     // cluster are aware of the IP address of the new node before we proceed to
                     // the topology::transition_state::join_group0 state, since in this state
@@ -2653,7 +2657,7 @@ future<> topology_coordinator::run() {
         bool sleep = false;
         try {
             co_await utils::get_local_injector().inject("topology_coordinator_pause_before_processing_backlog",
-                [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(1)); });
+                [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
             auto guard = co_await cleanup_group0_config_if_needed(co_await start_operation());
 
             if (_rollback) {

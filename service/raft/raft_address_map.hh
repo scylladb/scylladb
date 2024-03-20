@@ -162,9 +162,9 @@ class raft_address_map_t : public peering_sharded_service<raft_address_map_t<Clo
 
     std::optional<future<>> _replication_fiber{make_ready_future<>()};
 
-    void drop_expired_entries() {
+    void drop_expired_entries(bool force = false) {
         auto list_it = _expiring_list.rbegin();
-        while (list_it != _expiring_list.rend() && list_it->expired(_expiry_period)) {
+        while (list_it != _expiring_list.rend() && (list_it->expired(_expiry_period) || force)) {
             // Remove from both LRU list and base storage
             auto map_it = _map.find(list_it->entry_id());
             if (map_it == _map.end()) {
@@ -374,6 +374,12 @@ public:
         }
         handle_add_or_update_entry(id, generation_number, addr, true);
         replicate_add_or_update_entry(id, generation_number, addr, true);
+    }
+
+    // Drop all expiring entries immediately, without waiting for expiry.
+    // Used for testing
+    void force_drop_expiring_entries() {
+        drop_expired_entries(true);
     }
 };
 
