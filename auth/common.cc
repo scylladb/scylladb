@@ -65,7 +65,7 @@ future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_f
     }).discard_result();
 }
 
-static future<> create_metadata_table_if_missing_impl(
+static future<> create_legacy_metadata_table_if_missing_impl(
         std::string_view table_name,
         cql3::query_processor& qp,
         std::string_view cql,
@@ -98,12 +98,12 @@ static future<> create_metadata_table_if_missing_impl(
     }
 }
 
-future<> create_metadata_table_if_missing(
+future<> create_legacy_metadata_table_if_missing(
         std::string_view table_name,
         cql3::query_processor& qp,
         std::string_view cql,
         ::service::migration_manager& mm) noexcept {
-    return futurize_invoke(create_metadata_table_if_missing_impl, table_name, qp, cql, mm);
+    return futurize_invoke(create_legacy_metadata_table_if_missing_impl, table_name, qp, cql, mm);
 }
 
 ::service::query_state& internal_distributed_query_state() noexcept {

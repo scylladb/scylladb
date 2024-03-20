@@ -172,7 +172,7 @@ service::service(
                       used_by_maintenance_socket) {
 }
 
-future<> service::create_keyspace_if_missing(::service::migration_manager& mm) const {
+future<> service::create_legacy_keyspace_if_missing(::service::migration_manager& mm) const {
     assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
     auto db = _qp.db();
 
@@ -204,8 +204,12 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
     // version is set in query processor to be easily available in various places we call auth::legacy_mode check.
     _qp.auth_version = auth_version;
     if (!_used_by_maintenance_socket) {
+        // this legacy keyspace is only used by cqlsh
+        // it's needed when executing `list roles` or `list users`
+        // it doesn't affect anything except that cqlsh fails if keyspace
+        // is not found
         co_await once_among_shards([this, &mm] {
-            return create_keyspace_if_missing(mm);
+            return create_legacy_keyspace_if_missing(mm);
         });
     }
     co_await _role_manager->start();

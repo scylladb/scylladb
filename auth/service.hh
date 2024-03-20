@@ -175,7 +175,7 @@ public:
     }
 
 private:
-    future<> create_keyspace_if_missing(::service::migration_manager& mm) const;
+    future<> create_legacy_keyspace_if_missing(::service::migration_manager& mm) const;
 };
 
 future<bool> has_superuser(const service&, const authenticated_user&);

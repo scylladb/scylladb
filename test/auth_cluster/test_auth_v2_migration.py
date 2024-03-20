@@ -187,6 +187,7 @@ async def test_auth_v2_during_recovery(manager: ManagerClient):
     logging.info("Poison with auth_v1 look a like data")
     # this will verify that old roles are not brought back during recovery
     # as it runs very similar code path as during v1->v2 migration
+    await cql.run_async(f"CREATE TABLE system_auth.roles (role text PRIMARY KEY, can_login boolean, is_superuser boolean, member_of set<text>, salted_hash text)")
     v1_ro_name = "v1_ro" + unique_name()
     await cql.run_async(f"INSERT INTO system_auth.roles (role) VALUES ('{v1_ro_name}')")
 
