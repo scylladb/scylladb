@@ -735,27 +735,55 @@ future<> storage_service::topology_transition() {
 }
 
 future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
-   std::vector<mutation> muts;
-   muts.reserve(snp.topology_mutations.size() + snp.cdc_generation_mutations.size() + snp.topology_requests_mutations.size());
-   {
-       auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
-       boost::transform(snp.topology_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
-           return m.to_mutation(s);
-       });
-   }
-   if (snp.cdc_generation_mutations.size() > 0) {
-       auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
-       boost::transform(snp.cdc_generation_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
-           return m.to_mutation(s);
-       });
-   }
-   if (snp.topology_requests_mutations.size()) {
-       auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
-       boost::transform(snp.topology_requests_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
-           return m.to_mutation(s);
-       });
-   }
-   co_await _db.local().apply(freeze(muts), db::no_timeout);
+    if (!snp.cdc_generation_mutations.empty()) {
+        auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+
+        // Split big mutations into smaller ones, prepare frozen_muts_to_apply
+        std::vector<frozen_mutation> frozen_muts_to_apply;
+        {
+            std::vector<mutation> muts_to_apply;
+            muts_to_apply.reserve(snp.cdc_generation_mutations.size());
+            const auto max_size = _db.local().commitlog()->max_record_size() / 2;
+            for (const auto& m: snp.cdc_generation_mutations) {
+                auto mut = m.to_mutation(s);
+                if (m.representation().size() <= max_size) {
+                    muts_to_apply.push_back(std::move(mut));
+                } else {
+                    co_await split_mutation(std::move(mut), muts_to_apply, max_size);
+                }
+            }
+            frozen_muts_to_apply = freeze(muts_to_apply);
+        }
+
+        // Apply non-atomically so as not to hit the commitlog size limit.
+        // The cdc_generations_v3 data is not used in any way until
+        // it's referenced from the topology table.
+        // By applying the cdc_generations_v3 mutations before topology mutations
+        // we ensure that the lack of atomicity isn't a problem here.
+        co_await max_concurrent_for_each(frozen_muts_to_apply, 128, [&] (const frozen_mutation& m) -> future<> {
+            return _db.local().apply(s, m, {}, db::commitlog::force_sync::yes, db::no_timeout);
+        });
+    }
+
+    // Apply system.topology and system.topology_requests mutations atomically
+    // to have a consistent state after restart
+    {
+        std::vector<mutation> muts;
+        muts.reserve(snp.topology_mutations.size());
+        {
+            auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+            boost::transform(snp.topology_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
+                return m.to_mutation(s);
+            });
+        }
+        if (snp.topology_requests_mutations.size()) {
+            auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
+            boost::transform(snp.topology_requests_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
+                return m.to_mutation(s);
+            });
+        }
+        co_await _db.local().apply(freeze(muts), db::no_timeout);
+    }
 }
 
 // Moves the coroutine lambda onto the heap and extends its
@@ -6238,6 +6266,25 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
                     // Alternatively, a node would wait for some time before switching to normal state.
                     auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
                     cdc_generation_mutations = co_await ss.get_system_mutations(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+
+                    utils::get_local_injector().inject("cdc_generation_mutations_topology_snapshot_replication",
+                        [target_size=ss._db.local().commitlog()->max_record_size() * 2, &muts = cdc_generation_mutations] {
+                            // Copy mutations n times, where n is picked so that the memory size of all mutations
+                            // together exceeds `commitlog()->max_record_size()`.
+                            // We multiply by two to account for all possible deltas (like segment::entry_overhead_size).
+
+                            size_t current_size = 0;
+                            for (const auto& m: muts) {
+                                current_size += m.representation().size();
+                            }
+                            const auto number_of_copies = (target_size / current_size + 1) * 2;
+                            muts.reserve(muts.size() * number_of_copies);
+                            const auto it_begin = muts.begin();
+                            const auto it_end = muts.end();
+                            for (unsigned i = 0; i < number_of_copies; ++i) {
+                                std::copy(it_begin, it_end, std::back_inserter(muts));
+                            }
+                        });
                 }
 
                 std::vector<canonical_mutation> topology_requests_mutations;

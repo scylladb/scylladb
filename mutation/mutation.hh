@@ -461,3 +461,15 @@ template <> struct fmt::formatter<mutation> : fmt::formatter<std::string_view> {
 };
 
 std::ostream& operator<<(std::ostream& os, const mutation& m);
+
+// Splits the source mutation into multiple mutations so that their size
+// does not exceed the max_size limit.
+// The size of a mutation is calculated as the sum of the memory_usage()
+// of its constituent mutation_fragments.
+// The function doesn't split rows into cells, one big row can
+// lead to the creation of a mutation larger than max_size.
+// Due to the difference in calculating sizes for mutations and their fragments,
+// the actual size of the output mutation may be larger than max_size. It is recommended
+// to pass half of the required value as max_size; such a margin should ensure
+// that the condition is met.
+future<> split_mutation(mutation source, std::vector<mutation>& target, size_t max_size);

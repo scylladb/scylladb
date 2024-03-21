@@ -17,7 +17,9 @@ async def test_send_data_in_parts(manager: ManagerClient):
     first_server = await manager.server_add(config=config)
 
     async with inject_error(manager.api, first_server.ip_addr, 'cdc_generation_mutations_replication'):
-        await manager.server_add(config=config)
+        async with inject_error(manager.api, first_server.ip_addr,
+                                'cdc_generation_mutations_topology_snapshot_replication'):
+            await manager.server_add(config=config)
 
     await check_token_ring_and_group0_consistency(manager)
 

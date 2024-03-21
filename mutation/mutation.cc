@@ -13,6 +13,10 @@
 #include "types/collection.hh"
 #include "types/tuple.hh"
 #include "dht/i_partitioner.hh"
+#include "reader_concurrency_semaphore.hh"
+#include "readers/from_mutations_v2.hh"
+
+logging::logger mlog("mutation");
 
 mutation::data::data(dht::decorated_key&& key, schema_ptr&& schema)
     : _schema(std::move(schema))
@@ -192,6 +196,91 @@ mutation reverse(mutation mut) {
     auto reverse_schema = mut.schema()->make_reversed();
     mutation_rebuilder_v2 reverse_rebuilder(reverse_schema);
     return *std::move(mut).consume(reverse_rebuilder, consume_in_reverse::yes).result;
+}
+
+namespace {
+class mutation_by_size_splitter {
+    struct partition_state {
+        mutation_rebuilder_v2 builder;
+        size_t empty_partition_size;
+        size_t size = 0;
+        explicit partition_state(schema_ptr schema)
+            : builder(std::move(schema))
+        {
+        }
+    };
+    const schema_ptr _schema;
+    std::vector<mutation>& _target;
+    const size_t _max_size;
+    std::optional<partition_state> _state;
+    template <typename T>
+    stop_iteration consume_fragment(T&& fragment) {
+        const auto fragment_size = fragment.memory_usage(*_schema);
+        if (_state->size && _state->size + _state->empty_partition_size + fragment_size > _max_size) {
+            _target.emplace_back(_state->builder.flush());
+            // We could end up with an empty mutation if we consumed a range_tombstone_change
+            // and the next fragment exceeds the limit. The tombstone range may not have been
+            // closed yet and range_tombstone will not be created.
+            // This should be a rare case though, so just pop such mutation.
+            if (_target.back().partition().empty()) {
+                _target.pop_back();
+            }
+            _state->size = 0;
+        }
+        _state->size += fragment_size;
+        _state->builder.consume(std::move(fragment));
+        return stop_iteration::no;
+    }
+public:
+    mutation_by_size_splitter(schema_ptr schema, std::vector<mutation>& target, size_t max_size)
+        : _schema(std::move(schema))
+        , _target(target)
+        , _max_size(max_size)
+    {
+    }
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _state.emplace(_schema);
+        _state->empty_partition_size = _state->builder.consume_new_partition(dk).memory_usage(*_schema);
+    }
+    void consume(tombstone t) {
+        _state->builder.consume(t);
+    }
+    stop_iteration consume(static_row&& sr) {
+        return consume_fragment(std::move(sr));
+    }
+    stop_iteration consume(clustering_row&& cr) {
+        return consume_fragment(std::move(cr));
+    }
+    stop_iteration consume(range_tombstone_change&& rtc) {
+        return consume_fragment(std::move(rtc));
+    }
+    stop_iteration consume_end_of_partition() {
+        _state->builder.consume_end_of_partition();
+        if (auto mut_opt = _state->builder.consume_end_of_stream(); mut_opt) {
+            _target.emplace_back(std::move(*mut_opt));
+        } else {
+            on_internal_error(mlog, "consume_end_of_stream didn't return a mutation");
+        }
+        _state.reset();
+        return stop_iteration::no;
+    }
+    stop_iteration consume_end_of_stream() {
+        return stop_iteration::no;
+    }
+};
+}
+
+future<> split_mutation(mutation source, std::vector<mutation>& target, size_t max_size) {
+    reader_concurrency_semaphore sem(reader_concurrency_semaphore::no_limits{}, "split_mutation",
+        reader_concurrency_semaphore::register_metrics::no);
+    {
+        auto s = source.schema();
+        auto reader = make_flat_mutation_reader_from_mutations_v2(s,
+            sem.make_tracking_only_permit(s, "split_mutation", db::no_timeout, {}),
+            std::move(source));
+        co_await reader.consume(mutation_by_size_splitter(s, target, max_size));
+    }
+    co_await sem.stop();
 }
 
 auto fmt::formatter<mutation>::format(const mutation& m, fmt::format_context& ctx) const
