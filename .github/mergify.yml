@@ -7,6 +7,14 @@ pull_request_rules:
     actions:
       edit:
          draft: true
+  - name: Delete mergify backport branch
+    conditions:
+      - base~=branch-
+      - or:
+        - merged
+        - closed
+    actions:
+      delete_head_branch:
   - name: Automate backport pull request 5.2
     conditions:
       - or:
