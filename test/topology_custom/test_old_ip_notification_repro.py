@@ -11,12 +11,14 @@ import pytest
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
 from test.pylib.util import read_barrier, wait_for_cql_and_get_hosts
+from test.topology.conftest import skip_mode
 
 
 logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_old_ip_notification_repro(manager: ManagerClient) -> None:
     """
     Regression test for #14257.

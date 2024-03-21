@@ -9,12 +9,14 @@ from cassandra.query import SimpleStatement # type: ignore
 from cassandra.cluster import ConsistencyLevel # type: ignore
 from cassandra.protocol import ReadTimeout # type: ignore
 from test.pylib.util import wait_for_cql_and_get_hosts
+from test.topology.conftest import skip_mode
 
 
 logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_node_shutdown_waits_for_pending_requests(manager: ManagerClient) -> None:
     """Reproducer for #16382"""
 

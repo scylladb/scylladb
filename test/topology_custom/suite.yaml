@@ -11,14 +11,9 @@ run_first:
   - test_group0_schema_versioning
   - test_tablets_migration
 skip_in_release:
-  - test_raft_recovery_stuck
-  - test_shutdown_hang
   - test_replace_ignore_nodes
-  - test_old_ip_notification_repro
   - test_different_group0_ids
   - test_group0_schema_versioning
-  - test_topology_failure_recovery
-  - test_node_shutdown_waits_for_pending_requests
 skip_in_debug:
   - test_shutdown_hang
   - test_replace

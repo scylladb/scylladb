@@ -8,6 +8,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.topology.util import wait_for_cdc_generations_publishing, \
         check_system_topology_and_cdc_generations_v3_consistency
+from test.topology.conftest import skip_mode
 
 from cassandra.cluster import ConsistencyLevel # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_cdc_generation_clearing(manager: ManagerClient):
     """Test that obsolete CDC generations are removed from CDC_GENERATIONS_V3 and TOPOLOGY.committed_cdc_generations
        if their timestamp is old enough according to the topology coordinator's clock."""

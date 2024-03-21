@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 from test.pylib.manager_client import ManagerClient
+from test.topology.conftest import skip_mode
 import pytest
 import logging
 import asyncio
@@ -11,6 +12,7 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_coordinator_queue_management(manager: ManagerClient):
     """This test creates a 5 node cluster with 2 down nodes (A and B). After that it
        creates a queue of 3 topology operation: bootstrap, removenode A and removenode B
