@@ -79,6 +79,7 @@ class sstables_manager {
             boost::intrusive::constant_time_size<false>>;
 private:
     storage_manager* _storage;
+    size_t _available_memory;
     db::large_data_handler& _large_data_handler;
     const db::config& _db_config;
     gms::feature_service& _features;
