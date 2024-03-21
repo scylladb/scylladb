@@ -299,6 +299,20 @@ data_dictionary::storage_options make_test_object_storage_options() {
     return ret;
 }
 
+static sstring toc_filename(const sstring& dir, schema_ptr schema, sstables::generation_type generation, sstable_version_types v) {
+    return sstable::filename(dir, schema->ks_name(), schema->cf_name(), v, generation,
+                             sstable_format_types::big, component_type::TOC);
+}
+
+future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation) {
+    for (auto v : boost::adaptors::reverse(all_sstable_versions)) {
+        if (co_await file_exists(toc_filename(dir, schema, generation, v))) {
+            co_return co_await reusable_sst(schema, dir, generation, v);
+        }
+    }
+    throw sst_not_found(dir, generation);
+}
+
 void test_env_compaction_manager::propagate_replacement(compaction::table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
     _cm.propagate_replacement(table_s, removed, added);
 }
