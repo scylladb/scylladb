@@ -48,6 +48,11 @@ class sstables_manager {
             boost::intrusive::member_hook<sstable, sstable::manager_link_type, &sstable::_manager_link>,
             boost::intrusive::constant_time_size<false>>;
 private:
+<<<<<<< HEAD
+=======
+    storage_manager* _storage;
+    size_t _available_memory;
+>>>>>>> 2ca4b0a7a2 (sstables_manager: store available memory size)
     db::large_data_handler& _large_data_handler;
     const db::config& _db_config;
     gms::feature_service& _features;

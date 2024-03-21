@@ -19,8 +19,15 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
+<<<<<<< HEAD
     db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem)
     : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
+=======
+    sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, noncopyable_function<locator::host_id()>&& resolve_host_id, storage_manager* shared)
+    : _storage(shared)
+    , _available_memory(available_memory)
+    , _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
+>>>>>>> 2ca4b0a7a2 (sstables_manager: store available memory size)
     , _sstable_metadata_concurrency_sem(
         max_count_sstable_metadata_concurrent_reads,
         max_memory_sstable_metadata_concurrent_reads(available_memory),
