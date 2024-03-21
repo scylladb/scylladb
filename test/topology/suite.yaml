@@ -11,8 +11,7 @@ run_first:
     - test_mutation_schema_change
 skip_in_release:
     - test_cluster_features
-    - test_replace_alive_node
-skip_in_debug:
-    - test_replace_alive_node
 run_in_release:
     - test_gossiper
+run_in_dev:
+    - test_replace_alive_node

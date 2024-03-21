@@ -10,15 +10,12 @@ run_first:
   - test_raft_recovery_basic
   - test_group0_schema_versioning
   - test_tablets_migration
-skip_in_release:
-  - test_replace_ignore_nodes
-  - test_different_group0_ids
-  - test_group0_schema_versioning
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
-  - test_replace_ignore_nodes
   - test_old_ip_notification_repro
-  - test_different_group0_ids
-  - test_group0_schema_versioning
   - test_node_shutdown_waits_for_pending_requests
+run_in_dev:
+  - test_group0_schema_versioning
+  - test_different_group0_ids
+  - test_replace_ignore_nodes

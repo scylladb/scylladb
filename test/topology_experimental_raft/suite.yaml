@@ -13,8 +13,8 @@ run_first:
   - test_tablets
 skip_in_release:
   - test_raft_cluster_features
-  - test_raft_ignore_nodes
 skip_in_debug:
   - test_cdc_generation_clearing
   - test_cdc_generation_publishing
+run_in_dev:
   - test_raft_ignore_nodes
