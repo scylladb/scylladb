@@ -2677,6 +2677,23 @@ static std::set<sstring> decode_features(const set_type_impl::native_type& featu
     return fset;
 }
 
+static bool must_have_tokens(service::node_state nst) {
+    switch (nst) {
+    case service::node_state::none: return false;
+    // Bootstrapping and replacing nodes don't have tokens at first,
+    // they are inserted only at some point during bootstrap/replace
+    case service::node_state::bootstrapping: return false;
+    case service::node_state::replacing: return false;
+    // A decommissioning node doesn't have tokens at the end, they are
+    // removed during transition to the left_token_ring state.
+    case service::node_state::decommissioning: return false;
+    case service::node_state::removing: return true;
+    case service::node_state::rebuilding: return true;
+    case service::node_state::normal: return true;
+    case service::node_state::left: return false;
+    }
+}
+
 future<service::topology> system_keyspace::load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts) {
     auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
@@ -2720,6 +2737,9 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ring_slice = service::ring_slice {
                 .tokens = std::move(tokens),
             };
+        } else if (must_have_tokens(nstate)) {
+            on_fatal_internal_error(slogger, format(
+                        "load_topology_state: node {} in {} state but missing ring slice", host_id, nstate));
         }
 
         std::optional<raft::server_id> replaced_id;
@@ -2787,10 +2807,6 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         std::unordered_map<raft::server_id, service::replica_state>* map = nullptr;
         if (nstate == service::node_state::normal) {
             map = &ret.normal_nodes;
-            if (!ring_slice) {
-                on_fatal_internal_error(slogger, format(
-                    "load_topology_state: node {} in normal state but missing ring slice", host_id));
-            }
         } else if (nstate == service::node_state::left) {
             ret.left_nodes.emplace(host_id);
             if (force_load_hosts.contains(locator::host_id(host_id.uuid()))) {
@@ -2806,17 +2822,6 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
                 on_fatal_internal_error(slogger, format(
                     "load_topology_state: found two nodes in transitioning state: {} in {} state and {} in {} state",
                     other_id, other_rs.state, host_id, nstate));
-            }
-            // A decommissioning node doesn't have tokens at the end, they are
-            // removed during transition to the left_token_ring state.
-            // Bootstrapping and replacing nodes don't have tokens at first,
-            // they are inserted only at some point during bootstrap/replace
-            if (!ring_slice
-                    && nstate != service::node_state::decommissioning
-                    && nstate != service::node_state::bootstrapping
-                    && nstate != service::node_state::replacing) {
-                on_fatal_internal_error(slogger, format(
-                    "load_topology_state: node {} in transitioning state but missing ring slice", host_id));
             }
         }
         if (map) {
