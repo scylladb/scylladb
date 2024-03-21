@@ -143,8 +143,9 @@ public:
     virtual ~sstable_streamer() {}
 
     virtual future<> stream(bool primary_replica_only);
-    virtual inet_address_vector_replica_set get_endpoints(const dht::token& token, bool primary_replica_only) const;
+    inet_address_vector_replica_set get_endpoints(const dht::token& token, bool primary_replica_only) const;
 protected:
+    virtual inet_address_vector_replica_set get_primary_endpoints(const dht::token& token) const;
     future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, bool primary_replica_only);
     future<> stream_sstable_mutations(const dht::partition_range&, std::vector<sstables::shared_sstable>, bool primary_replica_only);
 };
@@ -157,8 +158,18 @@ public:
         , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table_id)) {
     }
 
+    inet_address_vector_replica_set to_replica_set(const locator::tablet_replica_set& replicas) const {
+        auto& tm = _erm->get_token_metadata();
+        inet_address_vector_replica_set result;
+        result.reserve(replicas.size());
+        for (auto&& replica : replicas) {
+            result.push_back(tm.get_endpoint_for_host_id(replica.host));
+        }
+        return result;
+    }
+
     virtual future<> stream(bool primary_replica_only) override;
-    virtual inet_address_vector_replica_set get_endpoints(const dht::token& token, bool primary_replica_only) const override;
+    virtual inet_address_vector_replica_set get_primary_endpoints(const dht::token& token) const override;
 private:
     future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables,
                                              bool primary_replica_only) {
@@ -168,46 +179,25 @@ private:
 };
 
 inet_address_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token, bool primary_replica_only) const {
-    auto current_targets = _erm->get_natural_endpoints(token);
-    if (primary_replica_only && current_targets.size() > 1) {
-        current_targets.resize(1);
+    if (primary_replica_only) {
+        return get_primary_endpoints(token);
     }
+    auto current_targets = _erm->get_natural_endpoints_without_node_being_replaced(token);
+    auto pending = _erm->get_pending_endpoints(token);
+    std::move(pending.begin(), pending.end(), std::back_inserter(current_targets));
     return current_targets;
 }
 
-inet_address_vector_replica_set tablet_sstable_streamer::get_endpoints(const dht::token& token, bool primary_replica_only) const {
-    auto current_targets = sstable_streamer::get_endpoints(token, primary_replica_only);
-
-    auto pending_replica_endpoint = std::invoke([&] () -> std::optional<gms::inet_address> {
-        auto tid = _tablet_map.get_tablet_id(token);
-        auto* tinfo = _tablet_map.get_tablet_transition_info(tid);
-        // No tablet in transit.
-        if (!tinfo) {
-            return std::nullopt;
-        }
-
-        auto leaving_replica = locator::get_leaving_replica(_tablet_map.get_tablet_info(tid), *tinfo);
-        auto& tm = _erm->get_token_metadata();
-        auto is_leaving = [&] (gms::inet_address target) {
-            return tm.get_host_id(target) == leaving_replica.host;
-        };
-        // If primary_replica_only is set, then it might happen the primary replica is not
-        // the one leaving through migration. Or migration is at such an advanced stage,
-        // that the next replica set is picked and none are leaving.
-        if (std::ranges::none_of(current_targets, is_leaving)) {
-            return std::nullopt;
-        }
-        // If intra-node migration is happening, we don't want to stream to same node twice.
-        if (leaving_replica.host == tinfo->pending_replica.host) {
-            return std::nullopt;
-        }
-        return tm.get_endpoint_for_host_id(tinfo->pending_replica.host);
-    });
-    if (pending_replica_endpoint) {
-        current_targets.push_back(*pending_replica_endpoint);
-    }
-
+inet_address_vector_replica_set sstable_streamer::get_primary_endpoints(const dht::token& token) const {
+    auto current_targets = _erm->get_natural_endpoints(token);
+    current_targets.resize(1);
     return current_targets;
+}
+
+inet_address_vector_replica_set tablet_sstable_streamer::get_primary_endpoints(const dht::token& token) const {
+    auto tid = _tablet_map.get_tablet_id(token);
+    auto replicas = locator::get_primary_replicas(_tablet_map.get_tablet_info(tid), _tablet_map.get_tablet_transition_info(tid));
+    return to_replica_set(replicas);
 }
 
 future<> sstable_streamer::stream(bool primary_replica_only) {

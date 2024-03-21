@@ -140,6 +140,28 @@ tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migra
     return replace_replica(tinfo.replicas, mig.src, mig.dst);
 }
 
+tablet_replica_set get_primary_replicas(const tablet_info& info, const tablet_transition_info* transition) {
+    auto write_selector = [&] {
+        if (!transition) {
+            return write_replica_set_selector::previous;
+        }
+        return transition->writes;
+    };
+    auto primary = [] (tablet_replica_set set) -> tablet_replica {
+        return set.front();
+    };
+    auto add = [] (tablet_replica r1, tablet_replica r2) -> tablet_replica_set {
+        // if primary replica is not the one leaving, then only primary will be streamed to.
+        return (r1 == r2) ? tablet_replica_set{r1} : tablet_replica_set{r1, r2};
+    };
+
+    switch (write_selector()) {
+        case write_replica_set_selector::previous: return {primary(info.replicas)};
+        case write_replica_set_selector::both: return add(primary(info.replicas), primary(transition->next));
+        case write_replica_set_selector::next: return {primary(transition->next)};
+    }
+}
+
 tablet_transition_info migration_to_transition_info(const tablet_info& ti, const tablet_migration_info& mig) {
     return tablet_transition_info {
             tablet_transition_stage::allow_write_both_read_old,
