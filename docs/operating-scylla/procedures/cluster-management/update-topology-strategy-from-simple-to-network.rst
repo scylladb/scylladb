@@ -21,7 +21,7 @@ Alter each Keyspace replication to use ``class : NetworkTopologyStrategy``.
 Alter the following:
 
 * Keyspace created by the user.
-* System: ``system_auth``, ``system_distributed``, ``system_traces``.
+* System: ``system_distributed``, ``system_traces``.
 
 For example:
 

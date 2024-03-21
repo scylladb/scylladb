@@ -160,7 +160,7 @@ Add New DC
 #. When all nodes are up and running ``ALTER`` the following Keyspaces in the new nodes:
 
    * Keyspace created by the user (which needed to replicate to the new DC).
-   * System: ``system_auth``, ``system_distributed``, ``system_traces`` For example, replicate the data to three nodes in the new DC.
+   * System: ``system_distributed``, ``system_traces`` For example, replicate the data to three nodes in the new DC.
 
    For example:
 
@@ -177,7 +177,6 @@ Add New DC
    .. code-block:: cql
 
       ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
-      ALTER KEYSPACE system_auth WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
       ALTER KEYSPACE system_distributed WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
       ALTER KEYSPACE system_traces WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
 
@@ -187,7 +186,6 @@ Add New DC
 
       DESCRIBE KEYSPACE mykeyspace;
       CREATE KEYSPACE mykeyspace WITH REPLICATION = {'class’: 'NetworkTopologyStrategy', <exiting_dc>:3, <new_dc>: 3};
-      CREATE KEYSPACE system_auth WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
       CREATE KEYSPACE system_distributed WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
       CREATE KEYSPACE system_traces WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
 
