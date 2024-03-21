@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <fmt/ranges.h>
 #include <seastar/core/reactor.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/timed_out_error.hh>
@@ -2851,6 +2852,17 @@ struct fmt::formatter<reconfiguration<M>>: fmt::formatter<std::string_view> {
     }
 };
 
+// TODO: make stop_crash_result a nested class of stop_crash,
+//   and print it using format_as(), once {fmt} v10 can be used
+struct stop_crash_result {};
+
+template <>
+struct fmt::formatter<stop_crash_result>: fmt::formatter<std::string_view> {
+    auto format(stop_crash_result, fmt::format_context& ctx) const {
+        return ctx.out();
+    }
+};
+
 template <PureStateMachine M>
 struct stop_crash {
     raft::logical_clock::duration restart_delay;
@@ -2862,7 +2874,7 @@ struct stop_crash {
         std::mt19937 rnd;
     };
 
-    struct result_type {};
+    using result_type = stop_crash_result;
 
     future<result_type> execute(state_type& s, const operation::context& ctx) {
         assert(s.known.size() > 0);
@@ -2884,10 +2896,6 @@ struct stop_crash {
         co_await s.env.start_server(srv);
 
         co_return result_type{};
-    }
-
-    friend std::ostream& operator<<(std::ostream& os, const result_type&) {
-        return os << "";
     }
 };
 
