@@ -546,7 +546,7 @@ shared_ptr<service::group0_handshaker> raft_group0::make_legacy_handshaker(bool 
                 co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, g0_info.group0_id, {{my_addr, _can_vote}}, {});
                 co_return true;
             } catch (std::runtime_error& e) {
-                group0_log.warn("failed to modify config at peer {}: {}. Retrying.", g0_info.id, e);
+                group0_log.warn("failed to modify config at peer {}: {}. Retrying.", g0_info.id, e.what());
                 co_return false;
             }
         };
