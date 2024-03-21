@@ -152,6 +152,16 @@ concept ExceptionContainer = is_exception_container<T>::value;
 
 }
 
+#if FMT_VERSION < 100000
+// fmt v10 introduced formatter for std::exception
+template <>
+struct fmt::formatter<utils::bad_exception_container_access> : fmt::formatter<std::string_view> {
+    auto format(const utils::bad_exception_container_access& e, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", e.what());
+    }
+};
+#endif
+
 template <typename... Exs> struct fmt::formatter<utils::exception_container<Exs...>> : fmt::formatter<std::string_view> {
     auto format(const auto& ec, fmt::format_context& ctx) const {
         auto out = ctx.out();
