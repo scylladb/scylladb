@@ -71,4 +71,5 @@ public:
     void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
 };
 
+std::map<sstring, sstring> get_default_tombstonesonte_gc_mode(data_dictionary::database db, sstring ks_name);
 void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name);

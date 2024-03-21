@@ -1158,7 +1158,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)
     , log_to_syslog(this, "log_to_syslog", value_status::Used)
     , _extensions(std::move(exts))
-{}
+{
+    add_tombstone_gc_extension();
+}
 
 db::config::config()
     : config(std::make_shared<db::extensions>())
@@ -1177,6 +1179,10 @@ void db::config::add_per_partition_rate_limit_extension() {
 
 void db::config::add_tags_extension() {
     _extensions->add_schema_extension<db::tags_extension>(db::tags_extension::NAME);
+}
+
+void db::config::add_tombstone_gc_extension() {
+    _extensions->add_schema_extension<tombstone_gc_extension>(tombstone_gc_extension::NAME);
 }
 
 void db::config::setup_directories() {

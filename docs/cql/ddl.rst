@@ -862,7 +862,8 @@ time may result in the resurrection of deleted data.
 
 The ``tombstone_gc`` option allows you to prevent data resurrection. With the ``repair`` mode configured, :term:`tombstone` 
 are only removed after :term:`repair` is performed. Unlike  ``gc_grace_seconds``, ``tombstone_gc`` has no time constraints - when 
-the ``repair`` mode is on, tombstones garbage collection will wait until repair is run. 
+the ``repair`` mode is on, tombstones garbage collection will wait until repair is run. For tables which use tablets ``repair``
+mode is set by default.
 
 You can enable the after-repair tombstone GC by setting the ``repair`` mode using 
 ``ALTER TABLE`` or ``CREATE TABLE``. For example:
