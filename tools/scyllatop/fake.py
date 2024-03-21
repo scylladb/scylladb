@@ -1,11 +1,11 @@
 import metric
 import os
 import random
-import collectd
 import logging
+import prometheus
 
 
-class FakeCollectd(object):
+class FakePrometheus(object):
     def __init__(self, socketName):
         pass
 
@@ -47,4 +47,4 @@ class FakeMetric(Metric):
 
 def fake():
     metric.Metric = FakeMetric
-    collectd.Collectd = FakeCollectd
+    prometheus.Prometheus = FakePrometheus

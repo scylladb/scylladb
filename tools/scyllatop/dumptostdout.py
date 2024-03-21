@@ -1,7 +1,7 @@
 import livedata
 import views.stdout
 import logging
-
+import prometheus
 
 class _FakeLoop:
     def __init__(self, liveData, iterations):
@@ -18,9 +18,9 @@ class _FakeLoop:
             self._liveData.stop()
 
 
-def dumpToStdout(metricPatterns, interval, collectd, iterations, ttl=None):
+def dumpToStdout(metricPatterns, interval, prometheus, iterations, ttl=None):
     stdout = views.stdout.Stdout()
-    liveData = livedata.LiveData(metricPatterns, interval, collectd, ttl)
+    liveData = livedata.LiveData(metricPatterns, interval, prometheus, ttl)
     liveData.addView(stdout)
 
     loop = _FakeLoop(liveData, iterations)

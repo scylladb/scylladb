@@ -2,7 +2,6 @@
 set(swagger_files
   api-doc/authorization_cache.json
   api-doc/cache_service.json
-  api-doc/collectd.json
   api-doc/column_family.json
   api-doc/commitlog.json
   api-doc/compaction_manager.json
@@ -41,7 +40,6 @@ target_sources(api
   PRIVATE
     api.cc
     cache_service.cc
-    collectd.cc
     column_family.cc
     commitlog.cc
     compaction_manager.cc
