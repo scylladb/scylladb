@@ -141,6 +141,9 @@ struct db_config_and_extensions {
 
 class tool_app_template {
 public:
+    static const std::vector<std::pair<const char*, const char*>> help_arguments;
+
+public:
     struct config {
         sstring name;
         sstring description;
