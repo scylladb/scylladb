@@ -595,6 +595,9 @@ public:
     virtual replica::database& real_database(data_dictionary::database db) const override {
         throw std::bad_function_call();
     }
+    virtual replica::database* real_database_ptr(data_dictionary::database db) const override {
+        return nullptr;
+    }
 
     virtual ~mock_database_impl() = default;
 };

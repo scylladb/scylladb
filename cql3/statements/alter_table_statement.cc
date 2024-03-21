@@ -340,7 +340,7 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
                 throw exceptions::invalid_request_exception(format("The synchronous_updates option is only applicable to materialized views, not to base tables"));
             }
 
-            _properties->apply_to_builder(cfm, std::move(schema_extensions));
+            _properties->apply_to_builder(cfm, std::move(schema_extensions), db, keyspace());
         }
         break;
 
