@@ -57,6 +57,9 @@ In particular, you must abstain from:
 * :doc:`Cluster management procedures </operating-scylla/procedures/cluster-management/index>` (adding, replacing, removing, decommissioning nodes etc.).
 * Running :doc:`nodetool repair </operating-scylla/nodetool-commands/repair>`.
 * Running :doc:`nodetool checkAndRepairCdcStreams </operating-scylla/nodetool-commands/checkandrepaircdcstreams>`.
+* Any modifications of :doc:`authentication </operating-scylla/security/authentication>` and :doc:`authorization </operating-scylla/security/enable-authorization>` settings.
+* Any change of authorization via :doc:`CQL API </operating-scylla/security/authorization>`.
+* Doing schema changes.
 
 Running the procedure
 =====================
