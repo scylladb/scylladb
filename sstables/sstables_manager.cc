@@ -146,11 +146,18 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     return cfg;
 }
 
+void sstables_manager::increment_total_reclaimable_memory(sstable* sst) {
+    _total_reclaimable_memory += sst->total_reclaimable_memory_size();
+}
+
 void sstables_manager::add(sstable* sst) {
     _active.push_back(*sst);
 }
 
 void sstables_manager::deactivate(sstable* sst) {
+    // Remove SSTable from the reclaimable memory tracking
+    _total_reclaimable_memory -= sst->total_reclaimable_memory_size();
+
     // At this point, sst has a reference count of zero, since we got here from
     // lw_shared_ptr_deleter<sstables::sstable>::dispose().
     _active.erase(_active.iterator_to(*sst));

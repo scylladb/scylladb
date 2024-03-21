@@ -96,6 +96,9 @@ private:
     list_type _active;
     list_type _undergoing_close;
 
+    // Total reclaimable memory used by components of sstables in _active list
+    size_t _total_reclaimable_memory{0};
+
     bool _closing = false;
     promise<> _done;
     cache_tracker& _cache_tracker;
@@ -183,6 +186,8 @@ private:
     static constexpr size_t max_count_sstable_metadata_concurrent_reads{10};
     // Allow at most 10% of memory to be filled with such reads.
     size_t max_memory_sstable_metadata_concurrent_reads(size_t available_memory) { return available_memory * 0.1; }
+
+    void increment_total_reclaimable_memory(sstable* sst);
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;
