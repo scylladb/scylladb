@@ -269,6 +269,9 @@ class load_balancer {
         }
     };
 
+    // Data structure used for making load-balancing decisions over a set of nodes.
+    using node_load_map = std::unordered_map<host_id, node_load>;
+
     // We have split and merge thresholds, which work respectively as (target) upper and lower
     // bound for average size of tablets.
     //
@@ -594,6 +597,43 @@ public:
         co_return std::move(resize_plan);
     }
 
+    void apply_load(node_load_map& nodes, const tablet_migration_streaming_info& info) {
+        for (auto&& replica : info.read_from) {
+            if (nodes.contains(replica.host)) {
+                nodes[replica.host].shards[replica.shard].streaming_read_load += 1;
+            }
+        }
+        for (auto&& replica : info.written_to) {
+            if (nodes.contains(replica.host)) {
+                nodes[replica.host].shards[replica.shard].streaming_write_load += 1;
+            }
+        }
+    }
+
+    bool can_accept_load(node_load_map& nodes, const tablet_migration_streaming_info& info) {
+        for (auto r : info.read_from) {
+            if (!nodes.contains(r.host)) {
+                continue;
+            }
+            auto load = nodes[r.host].shards[r.shard].streaming_read_load;
+            if (load >= max_read_streaming_load) {
+                lblogger.debug("Migration skipped because of read load limit on {} ({})", r, load);
+                return false;
+            }
+        }
+        for (auto r : info.written_to) {
+            if (!nodes.contains(r.host)) {
+                continue;
+            }
+            auto load = nodes[r.host].shards[r.shard].streaming_write_load;
+            if (load >= max_write_streaming_load) {
+                lblogger.debug("Migration skipped because of write load limit on {} ({})", r, load);
+                return false;
+            }
+        }
+        return true;
+    }
+
     future<migration_plan> make_plan(dc_name dc) {
         migration_plan plan;
 
@@ -610,7 +650,7 @@ public:
 
         // Select subset of nodes to balance.
 
-        std::unordered_map<host_id, node_load> nodes;
+        node_load_map nodes;
         std::unordered_set<host_id> nodes_to_drain;
 
         auto ensure_node = [&] (host_id host) {
@@ -766,50 +806,13 @@ public:
 
         // Compute per-shard load and candidate tablets.
 
-        auto apply_load = [&] (const tablet_migration_streaming_info& info) {
-            for (auto&& replica : info.read_from) {
-                if (nodes.contains(replica.host)) {
-                    nodes[replica.host].shards[replica.shard].streaming_read_load += 1;
-                }
-            }
-            for (auto&& replica : info.written_to) {
-                if (nodes.contains(replica.host)) {
-                    nodes[replica.host].shards[replica.shard].streaming_write_load += 1;
-                }
-            }
-        };
-
-        auto can_accept_load = [&] (const tablet_migration_streaming_info& info) {
-            for (auto r : info.read_from) {
-                if (!nodes.contains(r.host)) {
-                    continue;
-                }
-                auto load = nodes[r.host].shards[r.shard].streaming_read_load;
-                if (load >= max_read_streaming_load) {
-                    lblogger.debug("Migration skipped because of read load limit on {} ({})", r, load);
-                    return false;
-                }
-            }
-            for (auto r : info.written_to) {
-                if (!nodes.contains(r.host)) {
-                    continue;
-                }
-                auto load = nodes[r.host].shards[r.shard].streaming_write_load;
-                if (load >= max_write_streaming_load) {
-                    lblogger.debug("Migration skipped because of write load limit on {} ({})", r, load);
-                    return false;
-                }
-            }
-            return true;
-        };
-
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = tmap_;
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
                 if (is_streaming(trinfo)) {
-                    apply_load(get_migration_streaming_info(topo, ti, *trinfo));
+                    apply_load(nodes, get_migration_streaming_info(topo, ti, *trinfo));
                 }
 
                 for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
@@ -1082,8 +1085,8 @@ public:
             auto mig = tablet_migration_info {kind, source_tablet, src, dst};
             auto mig_streaming_info = get_migration_streaming_info(topo, tmap.get_tablet_info(source_tablet.tablet), mig);
 
-            if (can_accept_load(mig_streaming_info)) {
-                apply_load(mig_streaming_info);
+            if (can_accept_load(nodes, mig_streaming_info)) {
+                apply_load(nodes, mig_streaming_info);
                 lblogger.debug("Adding migration: {}", mig);
                 _stats.for_dc(dc).migrations_produced++;
                 plan.add(std::move(mig));
