@@ -75,3 +75,13 @@ future<> run_topology_coordinator(
         endpoint_lifecycle_notifier& lifecycle_notifier);
 
 }
+
+#if FMT_VERSION < 100000
+// fmt v10 introduced formatter for std::exception
+template <>
+struct fmt::formatter<service::wait_for_ip_timeout> : fmt::formatter<std::string_view> {
+    auto format(const service::wait_for_ip_timeout& e, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", e.what());
+    }
+};
+#endif
