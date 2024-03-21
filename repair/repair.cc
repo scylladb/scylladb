@@ -2093,6 +2093,12 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             throw std::runtime_error(format("repair[{}] Table {}.{} is not a tablet table", rid.uuid(), keyspace_name, table_name));
         }
         table_id tid = t->schema()->id();
+        // Invoke group0 read barrier before obtaining erm pointer so that it sees all prior metadata changes
+        auto dropped = co_await repair::table_sync_and_check(_db.local(), _mm, tid);
+        if (dropped) {
+            rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
+            continue;
+        }
         // FIXME: we need to wait for current tablet movement and disable future tablet movement
         auto erm = t->get_effective_replication_map();
         auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
