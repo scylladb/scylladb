@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 docker.io/scylladb/scylla-toolchain:fedora-37-branch-5.2-20240219
+=======
+docker.io/scylladb/scylla-toolchain:fedora-38-20240321
+>>>>>>> b39f9cc5d1 (tools/toolchain/image: update python driver (implicit))
