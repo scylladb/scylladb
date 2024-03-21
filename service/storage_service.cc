@@ -1688,7 +1688,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         }
     } ();
 
-    co_await _gossiper.wait_for_gossip_to_settle();
+    if (!raft_topology_change_enabled()) {
+        co_await _gossiper.wait_for_gossip_to_settle();
+    }
 
     // This is the moment when the locator::topology has gathered information about other nodes
     // in the cluster -- either through gossiper, or by loading it from disk -- so it's safe
