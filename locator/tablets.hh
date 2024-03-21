@@ -218,6 +218,7 @@ struct tablet_migration_info {
 
 /// Returns the replica set which will become the replica set of the tablet after executing a given tablet transition.
 tablet_replica_set get_new_replicas(const tablet_info&, const tablet_migration_info&);
+tablet_replica_set get_primary_replicas(const tablet_info&, const tablet_transition_info*);
 tablet_transition_info migration_to_transition_info(const tablet_info&, const tablet_migration_info&);
 
 /// Describes streaming required for a given tablet transition.

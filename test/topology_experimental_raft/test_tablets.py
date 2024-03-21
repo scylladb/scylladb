@@ -800,7 +800,8 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
     dest_expected_count_per_shard[3] += count_of_tokens_on_src_shard_to_move
     await assert_tablet_count_metric_value_for_shards(manager, dest_server, dest_expected_count_per_shard)
 
-async def test_tablet_load_and_stream(manager: ManagerClient):
+@pytest.mark.parametrize("primary_replica_only", [False, True])
+async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_only):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -875,7 +876,7 @@ async def test_tablet_load_and_stream(manager: ManagerClient):
 
     await manager.api.enable_tablet_balancing(servers[0].ip_addr)
 
-    await manager.api.load_new_sstables(servers[0].ip_addr, "test2", "test")
+    await manager.api.load_new_sstables(servers[0].ip_addr, "test2", "test", primary_replica_only)
 
     time.sleep(1)
 
