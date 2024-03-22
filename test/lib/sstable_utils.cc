@@ -120,20 +120,6 @@ future<compaction_result> compact_sstables(test_env& env, sstables::compaction_d
     co_return ret;
 }
 
-static sstring toc_filename(const sstring& dir, schema_ptr schema, sstables::generation_type generation, sstable_version_types v) {
-    return sstable::filename(dir, schema->ks_name(), schema->cf_name(), v, generation,
-                             sstable_format_types::big, component_type::TOC);
-}
-
-future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation) {
-    for (auto v : boost::adaptors::reverse(all_sstable_versions)) {
-        if (co_await file_exists(toc_filename(dir, schema, generation, v))) {
-            co_return co_await reusable_sst(schema, dir, generation, v);
-        }
-    }
-    throw sst_not_found(dir, generation);
-}
-
 class compaction_manager_test_task : public compaction::compaction_task_executor {
     sstables::run_id _run_id;
     noncopyable_function<future<> (sstables::compaction_data&)> _job;

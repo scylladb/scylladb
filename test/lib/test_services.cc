@@ -182,6 +182,29 @@ std::unique_ptr<db::config> make_db_config(sstring temp_dir, const data_dictiona
     return cfg;
 }
 
+struct test_env::impl {
+    tmpdir dir;
+    std::unique_ptr<db::config> db_config;
+    directory_semaphore dir_sem;
+    ::cache_tracker cache_tracker;
+    gms::feature_service feature_service;
+    db::nop_large_data_handler nop_ld_handler;
+    test_env_sstables_manager mgr;
+    std::unique_ptr<test_env_compaction_manager> cmgr;
+    reader_concurrency_semaphore semaphore;
+    sstables::sstable_generation_generator gen{0};
+    sstables::uuid_identifiers use_uuid;
+    data_dictionary::storage_options storage;
+
+    impl(test_env_config cfg, sstables::storage_manager* sstm);
+    impl(impl&&) = delete;
+    impl(const impl&) = delete;
+
+    sstables::generation_type new_generation() noexcept {
+        return gen(use_uuid);
+    }
+};
+
 test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     : dir()
     , db_config(make_db_config(dir.path().native(), cfg.storage))
@@ -202,6 +225,14 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
         assert(use_uuid == uuid_identifiers::yes);
     }
 }
+
+test_env::test_env(test_env_config cfg, sstables::storage_manager* sstm)
+        : _impl(std::make_unique<impl>(std::move(cfg), sstm)) {
+}
+
+test_env::test_env(test_env&&) noexcept = default;
+
+test_env::~test_env() = default;
 
 void test_env::maybe_start_compaction_manager(bool enable) {
     if (!_impl->cmgr) {
@@ -290,6 +321,159 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
     });
 }
 
+sstables::generation_type
+test_env::new_generation() noexcept {
+    return _impl->new_generation();
+}
+
+shared_sstable
+test_env::make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
+        sstable::version_types v, sstable::format_types f,
+        size_t buffer_size, gc_clock::time_point now) {
+    return _impl->mgr.make_sstable(std::move(schema), dir, _impl->storage, generation, sstables::sstable_state::normal, v, f, now, default_io_error_handler_gen(), buffer_size);
+}
+
+shared_sstable
+test_env::make_sstable(schema_ptr schema, sstring dir, sstable::version_types v) {
+    return make_sstable(std::move(schema), std::move(dir), new_generation(), std::move(v));
+}
+
+shared_sstable
+test_env::make_sstable(schema_ptr schema, sstables::generation_type generation,
+        sstable::version_types v, sstable::format_types f,
+        size_t buffer_size, gc_clock::time_point now) {
+    return make_sstable(std::move(schema), _impl->dir.path().native(), generation, std::move(v), std::move(f), buffer_size, now);
+}
+
+shared_sstable
+test_env::make_sstable(schema_ptr schema, sstable::version_types v) {
+    return make_sstable(std::move(schema), _impl->dir.path().native(), std::move(v));
+}
+
+std::function<shared_sstable()>
+test_env::make_sst_factory(schema_ptr s) {
+    return [this, s = std::move(s)] {
+        return make_sstable(s, new_generation());
+    };
+}
+
+std::function<shared_sstable()>
+test_env::make_sst_factory(schema_ptr s, sstable::version_types version) {
+    return [this, s = std::move(s), version] {
+        return make_sstable(s, new_generation(), version);
+    };
+}
+
+future<shared_sstable>
+test_env::reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation,
+        sstable::version_types version, sstable::format_types f) {
+    auto sst = make_sstable(std::move(schema), dir, generation, version, f);
+    sstable_open_config cfg { .load_first_and_last_position_metadata = true };
+    return sst->load(sst->get_schema()->get_sharder(), cfg).then([sst = std::move(sst)] {
+        return make_ready_future<shared_sstable>(std::move(sst));
+    });
+}
+
+future<shared_sstable>
+test_env::reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type::int_t gen_value,
+        sstable::version_types version, sstable::format_types f) {
+    return reusable_sst(std::move(schema), std::move(dir), sstables::generation_type(gen_value), version, f);
+}
+
+future<shared_sstable>
+test_env::reusable_sst(schema_ptr schema, sstables::generation_type generation,
+        sstable::version_types version, sstable::format_types f) {
+    return reusable_sst(std::move(schema), _impl->dir.path().native(), std::move(generation), std::move(version), std::move(f));
+}
+
+future<shared_sstable>
+test_env::reusable_sst(schema_ptr schema, shared_sstable sst) {
+    return reusable_sst(std::move(schema), sst->get_storage().prefix(), sst->generation(), sst->get_version());
+}
+
+future<shared_sstable>
+test_env::reusable_sst(shared_sstable sst) {
+    return reusable_sst(sst->get_schema(), std::move(sst));
+}
+
+future<shared_sstable>
+test_env::reusable_sst(schema_ptr schema, sstables::generation_type generation) {
+    return reusable_sst(std::move(schema), _impl->dir.path().native(), generation);
+}
+
+test_env_sstables_manager&
+test_env::manager() {
+    return _impl->mgr;
+}
+
+test_env_compaction_manager&
+test_env::test_compaction_manager() {
+    return *_impl->cmgr;
+}
+
+reader_concurrency_semaphore&
+test_env::semaphore() {
+    return _impl->semaphore;
+}
+
+db::config&
+test_env::db_config() {
+    return *_impl->db_config;
+}
+
+tmpdir&
+test_env::tempdir() noexcept {
+    return _impl->dir;
+}
+
+data_dictionary::storage_options
+test_env::get_storage_options() const noexcept {
+    return _impl->storage;
+}
+
+reader_permit
+test_env::make_reader_permit(const schema_ptr &s, const char* n, db::timeout_clock::time_point timeout) {
+    return _impl->semaphore.make_tracking_only_permit(s, n, timeout, {});
+}
+
+reader_permit
+test_env::make_reader_permit(db::timeout_clock::time_point timeout) {
+    return _impl->semaphore.make_tracking_only_permit(nullptr, "test", timeout, {});
+}
+
+replica::table::config
+test_env::make_table_config() {
+    return replica::table::config{.compaction_concurrency_semaphore = &_impl->semaphore};
+}
+
+future<>
+test_env::do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> func) {
+    return seastar::async([func = std::move(func)] {
+        sharded<test_env> env;
+        env.start().get();
+        auto stop = defer([&] { env.stop().get(); });
+        func(env);
+    });
+}
+
+table_for_tests
+test_env::make_table_for_tests(schema_ptr s, sstring dir) {
+    maybe_start_compaction_manager();
+    auto cfg = make_table_config();
+    cfg.datadir = dir;
+    cfg.enable_commitlog = false;
+    return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
+}
+
+table_for_tests
+test_env::make_table_for_tests(schema_ptr s) {
+    maybe_start_compaction_manager();
+    auto cfg = make_table_config();
+    cfg.datadir = _impl->dir.path().native();
+    cfg.enable_commitlog = false;
+    return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
+}
+
 data_dictionary::storage_options make_test_object_storage_options() {
     data_dictionary::storage_options ret;
     ret.value = data_dictionary::storage_options::s3 {
@@ -297,6 +481,20 @@ data_dictionary::storage_options make_test_object_storage_options() {
         .endpoint = tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"),
     };
     return ret;
+}
+
+static sstring toc_filename(const sstring& dir, schema_ptr schema, sstables::generation_type generation, sstable_version_types v) {
+    return sstable::filename(dir, schema->ks_name(), schema->cf_name(), v, generation,
+                             sstable_format_types::big, component_type::TOC);
+}
+
+future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation) {
+    for (auto v : boost::adaptors::reverse(all_sstable_versions)) {
+        if (co_await file_exists(toc_filename(dir, schema, generation, v))) {
+            co_return co_await reusable_sst(schema, dir, generation, v);
+        }
+    }
+    throw sst_not_found(dir, generation);
 }
 
 void test_env_compaction_manager::propagate_replacement(compaction::table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
