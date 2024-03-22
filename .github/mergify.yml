@@ -26,6 +26,8 @@ pull_request_rules:
           {% for c in commits %}
           (cherry picked from commit {{ c.sha }})
           {% endfor %}
+
+           Refs #{{number}}
         branches:
           - branch-5.2
         assignees:
@@ -49,6 +51,8 @@ pull_request_rules:
           {% for c in commits %}
           (cherry picked from commit {{ c.sha }})
           {% endfor %}
+
+          Refs #{{number}}
         branches:
           - branch-5.4
         assignees:
