@@ -262,13 +262,26 @@ class TestSuite(ABC):
 
         pending = set()
         for shortname in lst:
+            t = os.path.join(self.name, shortname)
+            casename = None
+
+            # Check opt-out lists
             if shortname in self.disabled_tests:
                 continue
-
-            t = os.path.join(self.name, shortname)
-            patterns = options.name if options.name else [t]
             if options.skip_patterns:
                 if any(skip_pattern in t for skip_pattern in options.skip_patterns):
+                    continue
+
+            # Check opt-in list
+            if options.name:
+                for p in options.name:
+                    pn = p.split('::', 2)
+                    if len(pn) == 1 and p in t:
+                        break
+                    if len(pn) == 2 and pn[0] == t:
+                        casename = pn[1]
+                        break
+                else:
                     continue
 
             async def add_test(shortname, casename) -> None:
@@ -278,14 +291,8 @@ class TestSuite(ABC):
                     await self.add_test(shortname, casename)
                     self.pending_test_count += 1
 
-            for p in patterns:
-                pn = p.split('::', 2)
-                if len(pn) == 1:
-                    if p in t:
-                        pending.add(asyncio.create_task(add_test(shortname, None)))
-                else:
-                    if pn[0] == t:
-                        pending.add(asyncio.create_task(add_test(shortname, pn[1])))
+            pending.add(asyncio.create_task(add_test(shortname, casename)))
+
         if len(pending) == 0:
             return
         try:
