@@ -79,6 +79,8 @@ private:
     using hint_endpoint_manager = internal::hint_endpoint_manager;
     using node_to_hint_store_factory_type = internal::node_to_hint_store_factory_type;
 
+    using hint_directory_manager = internal::hint_directory_manager;
+
     enum class state {
         started,        // Hinting is currently allowed (start() has completed).
         replay_allowed, // Replaying (sending) hints is allowed.
@@ -119,6 +121,16 @@ private:
     resource_manager& _resource_manager;
 
     std::unordered_map<endpoint_id, hint_endpoint_manager> _ep_managers;
+
+    // This is ONLY used when `_uses_host_id` is false. Otherwise, this map should stay EMPTY.
+    //
+    // Invariants:
+    //   (1) there is an endpoint manager in `_ep_managers` identified by host ID `H` if an only if
+    //       there is a mapping corresponding to `H` in `_hint_directory_manager`,
+    //   (2) a hint directory representing an IP address `I` is managed by an endpoint manager
+    //       if and only if there is a mapping corresponding to `I` in `_hint_directory_manager`.
+    hint_directory_manager _hint_directory_manager;
+
     hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<endpoint_id> _eps_with_pending_hints;
@@ -190,7 +202,8 @@ public:
     ///
     /// \param ep endpoint whose file update mutex should be locked
     /// \param func functor to be executed
-    future<> with_file_update_mutex_for(endpoint_id ep, noncopyable_function<future<> ()> func);
+    future<> with_file_update_mutex_for(const std::variant<locator::host_id, gms::inet_address>& ep,
+            noncopyable_function<future<> ()> func);
 
     /// \brief Checks if hints are disabled for all endpoints
     /// \return TRUE if hints are disabled.
@@ -275,7 +288,7 @@ private:
     hint_endpoint_manager& get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip);
 
 public:
-    bool have_ep_manager(endpoint_id ep) const noexcept;
+    bool have_ep_manager(const std::variant<locator::host_id, gms::inet_address>& ep) const noexcept;
 
 public:
     /// \brief Initiate the draining when we detect that the node has left the cluster.
