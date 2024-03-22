@@ -43,6 +43,7 @@ public:
 
 struct test_env_config {
     db::large_data_handler* large_data_handler = nullptr;
+    size_t available_memory = memory::stats().total_memory();
 };
 
 class test_env {
