@@ -31,6 +31,7 @@
 
 // Scylla includes.
 #include "db/hints/internal/hint_logger.hh"
+#include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -47,6 +48,7 @@
 // STD.
 #include <algorithm>
 #include <exception>
+#include <shared_mutex>
 #include <variant>
 
 namespace db::hints {
@@ -192,10 +194,21 @@ void manager::register_metrics(const sstring& group_name) {
 future<> manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
     _gossiper_anchor = std::move(gossiper_ptr);
 
+    if (_proxy.features().host_id_based_hinted_handoff) {
+        _uses_host_id = true;
+        co_await migrate_ip_directories();
+    }
+
     co_await initialize_endpoint_managers();
 
     co_await compute_hints_dir_device_id();
     set_started();
+
+    if (!_uses_host_id) {
+        _migration_callback = _proxy.features().host_id_based_hinted_handoff.when_enabled([this] {
+            _migrating_done = perform_migration();
+        });
+    }
 }
 
 future<> manager::stop() {
@@ -203,7 +216,9 @@ future<> manager::stop() {
 
     set_stopping();
 
-    return _draining_eps_gate.close().finally([this] {
+    return _migrating_done.finally([this] {
+        return _draining_eps_gate.close();
+    }).finally([this] {
         return parallel_for_each(_ep_managers | boost::adaptors::map_values, [] (hint_endpoint_manager& ep_man) {
             return ep_man.stop();
         }).finally([this] {
@@ -269,6 +284,19 @@ sync_point::shard_rps manager::calculate_current_sync_point(std::span<const gms:
 }
 
 future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps) {
+    using lock_type = std::shared_lock<seastar::shared_mutex>;
+    // Prevent the migration to host-ID-based hinted handoff until this function finishes its execution.
+    const auto shared_lock = co_await std::invoke(coroutine::lambda([&] () -> future<lock_type> {
+        co_await _migration_mutex.lock_shared();
+
+        try {
+            co_return lock_type{_migration_mutex, std::adopt_lock_t{}};
+        } catch (...) {
+            _migration_mutex.unlock_shared();
+            throw;
+        }
+   }));
+
     abort_source local_as;
 
     auto sub = as.subscribe([&local_as] () noexcept {
@@ -414,6 +442,10 @@ bool manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
 }
 
 bool manager::can_hint_for(endpoint_id ep) const noexcept {
+    if (_state.contains(state::migrating)) {
+        return false;
+    }
+
     if (_proxy.local_db().get_token_metadata().get_topology().is_me(ep)) {
         return false;
     }
@@ -560,6 +592,9 @@ future<> manager::drain_for(endpoint_id endpoint) noexcept {
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
     const auto holder = seastar::gate::holder{_draining_eps_gate};
+    // As long as we hold on to this lock, no migration of hinted handoff to host IDs
+    // can be being performed because `manager::perform_migration()` takes it
+    // at the beginning of its execution too.
     const auto sem_unit = co_await seastar::get_units(_drain_lock, 1);
 
     // After an endpoint has been drained, we remove its directory with all of its contents.
@@ -759,6 +794,85 @@ future<> manager::migrate_ip_directories() {
     });
 
     co_await io_check(sync_directory, _hints_dir.native());
+}
+
+future<> manager::perform_migration() {
+    // This function isn't marked as noexcept, but the only parts of the code that
+    // can throw an exception are:
+    //   1. the call to `migrate_ip_directories()`: if we fail there, the failure is critical.
+    //      It doesn't lead to any data corruption, but the node must be stopped;
+    //   2. the re-initialization of the endpoint managers: a failure there is the same failure
+    //      that can happen when starting a node. It may be seen as critical, but it should only
+    //      boil down to not initializing some of the endpoint managers. No data corruption
+    //      is possible.
+    if (_state.contains(state::stopping) || _state.contains(state::draining_all)) {
+        // It's possible the cluster feature is enabled right after the local node decides
+        // to leave the cluster. In that case, the migration callback might still potentially
+        // be called, but we don't want to perform it. We need to stop the node as soon as possible.
+        //
+        // The `state::draining_all` case is more tricky. The semantics of self-draining is not
+        // specified, but based on the description of the state in the header file, it means
+        // the node is leaving the cluster and it works like that indeed, so we apply the same reasoning.
+        co_return;
+    }
+
+    manager_logger.info("Migration of hinted handoff to host ID is starting");
+    // Step 1. Prevent acceping incoming hints.
+    _state.set(state::migrating);
+
+    // Step 2. Make sure during the migration there is no draining process and we don't await any sync points.
+
+    // We're taking this lock for two reasons:
+    //   1. we're waiting for the ongoing drains to finish so that there's no data race,
+    //   2. we suspend new drain requests -- to prevent data races.
+    const auto lock = co_await seastar::get_units(_drain_lock, 1);
+
+    using lock_type = std::unique_lock<seastar::shared_mutex>;
+    // We're taking this lock because we're about to stop endpoint managers here, wheras
+    // `manager::wait_for_sync_point` browses them and awaits their corresponding sync points.
+    // If we stop them during that process, that function will get exceptions.
+    //
+    // Although in the current implemenation there is no danger of race conditions
+    // (or at least race conditions that could be harmful in any way), it's better
+    // to avoid them anyway. Hence this lock.
+    const auto unique_lock = co_await std::invoke(coroutine::lambda([&] () -> future<lock_type> {
+        co_await _migration_mutex.lock();
+
+        try {
+            co_return lock_type{_migration_mutex, std::adopt_lock_t{}};
+        } catch (...) {
+            _migration_mutex.unlock();
+            throw;
+        }
+    }));
+
+    // Step 3. Stop endpoint managers. We will modify the hint directory contents, so this is necessary.
+    co_await coroutine::parallel_for_each(_ep_managers | std::views::values, [] (auto& ep_manager) -> future<> {
+        return ep_manager.stop(drain::no);
+    });
+
+    // Step 4. Prevent resource manager from scanning the hint directory. Race conditions are unacceptable.
+    auto resource_manager_lock = co_await seastar::get_units(_resource_manager.update_lock(), 1);
+
+    // Once the resource manager cannot scan anything anymore, we can safely get rid of these.
+    _ep_managers.clear();
+    _eps_with_pending_hints.clear();
+
+    // We won't need this anymore.
+    _hint_directory_manager.clear();
+
+    // Step 5. Rename the hint directories so that those that remain all represent valid host IDs.
+    co_await migrate_ip_directories();
+    _uses_host_id = true;
+
+    // Step 6. Make resource manager scan the hint directory again.
+    resource_manager_lock.return_all();
+    // Step 7. Once resource manager is working again, endpoint managers can be safely recreated.
+    //         We won't modify the contents of the hint directory anymore.
+    co_await initialize_endpoint_managers();
+    // Step 8. Start accepting incoming hints again.
+    _state.remove(state::migrating);
+    manager_logger.info("Migration of hinted handoff to host ID has finished successfully");
 }
 
 } // namespace db::hints
