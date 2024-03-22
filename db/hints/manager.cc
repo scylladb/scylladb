@@ -327,8 +327,7 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     }
 }
 
-// For now, because `_uses_host_id` is always set to true, we don't use the second argument.
-hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip = {}) {
+hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip) {
     const auto hint_directory = std::invoke([&] () -> std::filesystem::path {
         if (_uses_host_id) {
             return hints_dir() / host_id.to_sstring();
@@ -453,18 +452,39 @@ future<> manager::change_host_filter(host_filter filter) {
     std::exception_ptr eptr = nullptr;
 
     try {
+        const auto tmptr = _proxy.get_token_metadata_ptr();
+
         // Iterate over existing hint directories and see if we can enable an endpoint manager
         // for some of them
         co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
-                [this] (fs::path datadir, directory_entry de) {
-            const endpoint_id ep = endpoint_id{utils::UUID{de.name}};
+                [&] (fs::path datadir, directory_entry de) -> future<> {
+            using pair_type = std::pair<locator::host_id, gms::inet_address>;
 
-            const auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
-            if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(topology, ep)) {
-                return make_ready_future();
+            const auto maybe_host_id_and_ip = std::invoke([&] () -> std::optional<pair_type> {
+                try {
+                    locator::host_id_or_endpoint hid_or_ep{de.name};
+                    if (hid_or_ep.has_host_id()) {
+                        return std::make_optional(pair_type{hid_or_ep.id(), hid_or_ep.resolve_endpoint(*tmptr)});
+                    } else {
+                        return std::make_optional(pair_type{hid_or_ep.resolve_id(*tmptr), hid_or_ep.endpoint()});
+                    }
+                } catch (...) {
+                    return std::nullopt;
+                }
+            });
+
+            if (!maybe_host_id_and_ip) {
+                co_return;
             }
 
-            return get_ep_manager(ep).populate_segments_to_replay();
+            const auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
+            const auto& [host_id, ip] = *maybe_host_id_and_ip;
+
+            if (_ep_managers.contains(host_id) || !_host_filter.can_hint_for(topology, host_id)) {
+                co_return;
+            }
+
+            co_await get_ep_manager(host_id, ip).populate_segments_to_replay();
         });
     } catch (...) {
         // Revert the changes in the filter. The code below will stop the additional managers
