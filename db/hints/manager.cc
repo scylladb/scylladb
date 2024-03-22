@@ -32,6 +32,7 @@
 #include "gms/gossiper.hh"
 #include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/host_id.hh"
 #include "locator/token_metadata.hh"
 #include "replica/database.hh"
 #include "service/storage_proxy.hh"
@@ -44,6 +45,7 @@
 // STD.
 #include <algorithm>
 #include <exception>
+#include <variant>
 
 namespace db::hints {
 
@@ -204,6 +206,7 @@ future<> manager::stop() {
             return ep_man.stop();
         }).finally([this] {
             _ep_managers.clear();
+            _hint_directory_manager.clear();
             manager_logger.info("Shard hint manager has stopped");
         });
     });
@@ -326,23 +329,39 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
 }
 
 hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip) {
+    // If this is enabled, we can't rely on the information obtained from `_hint_directory_manager`.
+    if (_uses_host_id) {
+        if (auto it = _ep_managers.find(host_id); it != _ep_managers.end()) {
+            return it->second;
+        }
+    } else {
+        if (const auto maybe_mapping = _hint_directory_manager.get_mapping(host_id, ip)) {
+            return _ep_managers.at(maybe_mapping->first);
+        }
+
+        // If there is no mapping in `_hint_directory_manager` corresponding to either `host_id`, or `ip`,
+        // we need to create a new endpoint manager.
+        _hint_directory_manager.insert_mapping(host_id, ip);
+    }
+
     const std::filesystem::path hint_directory = _uses_host_id
             ? hints_dir() / host_id.to_sstring()
             : hints_dir() / ip.to_sstring();
 
-    auto [it, emplaced] = _ep_managers.try_emplace(host_id, host_id, std::move(hint_directory), *this);
+    auto [it, _] = _ep_managers.emplace(host_id, hint_endpoint_manager{host_id, std::move(hint_directory), *this});
     hint_endpoint_manager& ep_man = it->second;
 
-    if (emplaced) {
-        manager_logger.trace("Created an endpoint manager for {}", host_id);
-        ep_man.start();
-    }
+    manager_logger.trace("Created an endpoint manager for {}", host_id);
+    ep_man.start();
 
     return ep_man;
 }
 
-bool manager::have_ep_manager(endpoint_id ep) const noexcept {
-    return _ep_managers.contains(ep);
+bool manager::have_ep_manager(const std::variant<locator::host_id, gms::inet_address>& ep) const noexcept {
+    if (std::holds_alternative<locator::host_id>(ep)) {
+        return _ep_managers.contains(std::get<locator::host_id>(ep));
+    }
+    return _hint_directory_manager.has_mapping(std::get<gms::inet_address>(ep));
 }
 
 bool manager::store_hint(endpoint_id host_id, gms::inet_address ip, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
@@ -500,6 +519,7 @@ future<> manager::change_host_filter(host_filter filter) {
 
             return ep_man.stop(drain::no).finally([this, ep] {
                 _ep_managers.erase(ep);
+                _hint_directory_manager.remove_mapping(ep);
             });
         });
     } catch (...) {
@@ -556,6 +576,7 @@ future<> manager::drain_for(endpoint_id endpoint) noexcept {
         }
 
         _ep_managers.clear();
+        _hint_directory_manager.clear();
     } else {
         auto it = _ep_managers.find(endpoint);
 
@@ -570,6 +591,7 @@ future<> manager::drain_for(endpoint_id endpoint) noexcept {
             // so iterators could have been invalidated.
             // This never throws.
             _ep_managers.erase(endpoint);
+            _hint_directory_manager.remove_mapping(endpoint);
         }
     }
 
@@ -588,8 +610,15 @@ void manager::update_backlog(size_t backlog, size_t max_backlog) {
     }
 }
 
-future<> manager::with_file_update_mutex_for(endpoint_id ep, noncopyable_function<future<> ()> func) {
-    return _ep_managers.at(ep).with_file_update_mutex(std::move(func));
+future<> manager::with_file_update_mutex_for(const std::variant<locator::host_id, gms::inet_address>& ep,
+        noncopyable_function<future<> ()> func) {
+    const locator::host_id host_id = std::invoke([&] {
+        if (std::holds_alternative<locator::host_id>(ep)) {
+            return std::get<locator::host_id>(ep);
+        }
+        return *_hint_directory_manager.get_mapping(std::get<gms::inet_address>(ep));
+    });
+    return _ep_managers.at(host_id).with_file_update_mutex(std::move(func));
 }
 
 // The function assumes that if `_uses_host_id == true`, then there are no directories that represent IP addresses,
