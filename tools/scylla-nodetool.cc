@@ -823,6 +823,33 @@ void getlogginglevels_operation(scylla_rest_client& client, const bpo::variables
     }
 }
 
+void getsstables_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("keyspace") || !vm.count("table") || !vm.count("key")) {
+        throw std::invalid_argument("getsstables requires keyspace, table and partition key arguments");
+    }
+
+    const auto keyspace = vm["keyspace"].as<sstring>();
+    const auto table = vm["table"].as<sstring>();
+    const auto ks_to_cfs = get_ks_to_cfs(client);
+    if (!ks_to_cfs.contains(keyspace)) {
+        throw std::invalid_argument(format("unknown keyspace: {}", keyspace));
+    }
+    const auto tables = ks_to_cfs.at(keyspace);
+    if (auto it = std::find(tables.begin(), tables.end(), table); it == tables.end()) {
+        throw std::invalid_argument(format("unknown table: {}", table));
+    }
+
+    auto params = std::unordered_map<sstring, sstring>{{"key", vm["key"].as<sstring>()}};
+    if (vm.count("hex-format")) {
+        params["format"] = "hex";
+    }
+
+    auto res = client.get(seastar::format("/column_family/sstables/by_key/{}:{}", keyspace, table), std::move(params));
+    for (auto& sst : res.GetArray()) {
+        fmt::print("{}\n", rjson::to_string_view(sst));
+    }
+}
+
 void gettraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto res = client.get("/storage_service/trace_probability");
     fmt::print(std::cout, "Current trace probability: {}\n", res.GetDouble());
@@ -2710,6 +2737,7 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"-pl", "--pull"},
     {"-pr", "--partitioner-range"},
     {"-hosts", "--in-hosts"},
+    {"-hf", "--hex-format"},
 };
 
 std::map<operation, operation_func> get_operations_with_func() {
@@ -3005,6 +3033,23 @@ Prints a table with the name and current logging level for each logger in Scylla
 )",
             },
             getlogginglevels_operation
+        },
+        {
+            {
+                "getsstables",
+                "Get the sstables that contain the given key",
+R"(
+)",
+                {
+                    typed_option<>("hex-format", "The key is given in hex dump format"),
+                },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to query", 1),
+                    typed_option<sstring>("table", "The table to query", 1),
+                    typed_option<sstring>("key", "The partition key for which we need to find the sstables", 1),
+                },
+            },
+            getsstables_operation
         },
         {
             {
