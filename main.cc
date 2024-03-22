@@ -258,7 +258,7 @@ enable_initial_error_injections(const db::config& cfg) {
     return smp::invoke_on_all([&cfg] {
         auto& injector = utils::get_local_injector();
         for (const auto& inj : cfg.error_injections_at_startup()) {
-            injector.enable(inj.name, inj.one_shot);
+            injector.enable(inj.name, inj.one_shot, inj.parameters);
         }
     });
 }

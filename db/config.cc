@@ -284,6 +284,8 @@ struct convert<db::config::error_injection_at_startup> {
                     rhs.name = n.second.as<sstring>();
                 } else if (key == "one_shot") {
                     rhs.one_shot = n.second.as<bool>();
+                } else {
+                    rhs.parameters.insert({key, n.second.as<sstring>()});
                 }
             }
             return !rhs.name.empty();
@@ -1239,8 +1241,8 @@ std::istream& operator>>(std::istream& is, error_injection_at_startup& eias) {
 
 auto fmt::formatter<db::error_injection_at_startup>::format(const db::error_injection_at_startup& eias, fmt::format_context& ctx) const
     -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "error_injection_at_startup{{name={}, one_short={}}}",
-                          eias.name, eias.one_shot);
+    return fmt::format_to(ctx.out(), "error_injection_at_startup{{name={}, one_short={}, parameters={}}}",
+                          eias.name, eias.one_shot, eias.parameters);
 }
 
 namespace utils {

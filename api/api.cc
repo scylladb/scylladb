@@ -68,6 +68,9 @@ future<> set_server_init(http_context& ctx) {
                 "The system related API");
         rb02->add_definitions_file(r, "metrics");
         set_system(ctx, r);
+        rb->register_function(r, "error_injection",
+            "The error injection API");
+        set_error_injection(ctx, r);
     });
 }
 
@@ -275,9 +278,6 @@ future<> set_server_done(http_context& ctx) {
         rb->register_function(r, "collectd",
                 "The collectd API");
         set_collectd(ctx, r);
-        rb->register_function(r, "error_injection",
-                "The error injection API");
-        set_error_injection(ctx, r);
     });
 }
 

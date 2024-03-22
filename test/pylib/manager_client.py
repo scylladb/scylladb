@@ -176,13 +176,17 @@ class ManagerClient():
         await self.client.put_json(f"/cluster/server/{server_id}/stop_gracefully", timeout=timeout)
 
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
-                           wait_others: int = 0, wait_interval: float = 45) -> None:
+                           wait_others: int = 0, wait_interval: float = 45,
+                           timeout: Optional[float] = None) -> None:
         """Start specified server and optionally wait for it to learn of other servers"""
         logger.debug("ManagerClient starting %s", server_id)
         data = {"expected_error": expected_error}
-        await self.client.put_json(f"/cluster/server/{server_id}/start", data)
+        await self.client.put_json(f"/cluster/server/{server_id}/start", data, timeout=timeout)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
-        self._driver_update()
+        if self.cql:
+            self._driver_update()
+        else:
+            await self.driver_connect()
 
     async def server_restart(self, server_id: ServerNum, wait_others: int = 0,
                              wait_interval: float = 45) -> None:
@@ -236,12 +240,13 @@ class ManagerClient():
         logger.debug("ManagerClient wiping sstables on %s, keyspace=%s, table=%s", server_id, keyspace, table)
         await self.client.put_json(f"/cluster/server/{server_id}/wipe_sstables", {"keyspace": keyspace, "table": table})
 
-    def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig] = None,
-                                cmdline: Optional[List[str]] = None,
-                                config: Optional[dict[str, Any]] = None,
-                                property_file: Optional[dict[str, Any]] = None,
-                                start: bool = True,
-                                expected_error: Optional[str] = None) -> dict[str, Any]:
+    def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig],
+                                cmdline: Optional[List[str]],
+                                config: Optional[dict[str, Any]],
+                                property_file: Optional[dict[str, Any]],
+                                start: bool,
+                                seeds: Optional[List[IPAddress]],
+                                expected_error: Optional[str]) -> dict[str, Any]:
         data: dict[str, Any] = {'start': start}
         if replace_cfg:
             data['replace_cfg'] = replace_cfg._asdict()
@@ -251,6 +256,8 @@ class ManagerClient():
             data['config'] = config
         if property_file:
             data['property_file'] = property_file
+        if seeds:
+            data['seeds'] = seeds
         if expected_error:
             data['expected_error'] = expected_error
         return data
@@ -260,10 +267,12 @@ class ManagerClient():
                          config: Optional[dict[str, Any]] = None,
                          property_file: Optional[dict[str, Any]] = None,
                          start: bool = True,
-                         expected_error: Optional[str] = None) -> ServerInfo:
+                         expected_error: Optional[str] = None,
+                         seeds: Optional[List[IPAddress]] = None,
+                         timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> ServerInfo:
         """Add a new server"""
         try:
-            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, expected_error)
+            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, seeds, expected_error)
 
             # If we replace, we should wait until other nodes see the node being
             # replaced as dead because the replace operation can be rejected if
@@ -275,7 +284,7 @@ class ManagerClient():
                 await self.others_not_see_server(replaced_ip)
 
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
-                                                     timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+                                                     timeout=timeout)
         except Exception as exc:
             raise Exception("Failed to add server") from exc
         try:
@@ -287,7 +296,7 @@ class ManagerClient():
         logger.debug("ManagerClient added %s", s_info)
         if self.cql:
             self._driver_update()
-        else:
+        elif start:
             await self.driver_connect()
         return s_info
 
@@ -296,6 +305,7 @@ class ManagerClient():
                           config: Optional[dict[str, Any]] = None,
                           property_file: Optional[dict[str, Any]] = None,
                           start: bool = True,
+                          seeds: Optional[List[IPAddress]] = None,
                           expected_error: Optional[str] = None) -> [ServerInfo]:
         """Add new servers concurrently.
         This function can be called only if the cluster uses consistent topology changes, which support
@@ -304,7 +314,7 @@ class ManagerClient():
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
 
         try:
-            data = self._create_server_add_data(None, cmdline, config, property_file, start, expected_error)
+            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error)
             data['servers_num'] = servers_num
             server_infos = await self.client.put_json("/cluster/addservers", data, response_type="json",
                                                       timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)
@@ -326,14 +336,15 @@ class ManagerClient():
         logger.debug("ManagerClient added %s", s_infos)
         if self.cql:
             self._driver_update()
-        else:
+        elif start:
             await self.driver_connect()
         return s_infos
 
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
                           ignore_dead: List[IPAddress] | List[HostID] = list[IPAddress](),
                           expected_error: str | None = None,
-                          wait_removed_dead: bool = True) -> None:
+                          wait_removed_dead: bool = True,
+                          timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Invoke remove node Scylla REST API for a specified server"""
         logger.debug("ManagerClient remove node %s on initiator %s", server_id, initiator_id)
 
@@ -348,25 +359,27 @@ class ManagerClient():
 
         data = {"server_id": server_id, "ignore_dead": ignore_dead, "expected_error": expected_error}
         await self.client.put_json(f"/cluster/remove-node/{initiator_id}", data,
-                                   timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+                                   timeout=timeout)
         self._driver_update()
 
     async def decommission_node(self, server_id: ServerNum,
-                                expected_error: str | None = None) -> None:
+                                expected_error: str | None = None,
+                                timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Tell a node to decommission with Scylla REST API"""
         logger.debug("ManagerClient decommission %s", server_id)
         data = {"expected_error": expected_error}
         await self.client.put_json(f"/cluster/decommission-node/{server_id}", data,
-                                   timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+                                   timeout=timeout)
         self._driver_update()
 
     async def rebuild_node(self, server_id: ServerNum,
-                           expected_error: str | None = None) -> None:
+                           expected_error: str | None = None,
+                           timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Tell a node to rebuild with Scylla REST API"""
         logger.debug("ManagerClient rebuild %s", server_id)
         data = {"expected_error": expected_error}
         await self.client.put_json(f"/cluster/rebuild-node/{server_id}", data,
-                                   timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+                                   timeout=timeout)
         self._driver_update()
 
     async def server_get_config(self, server_id: ServerNum) -> dict[str, object]:

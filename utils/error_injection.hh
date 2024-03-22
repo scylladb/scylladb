@@ -14,6 +14,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/util/defer.hh>
 #include "seastarx.hh"
 
 #include "log.hh"
@@ -26,6 +27,7 @@
 
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include <boost/lexical_cast.hpp>
 
 
 namespace utils {
@@ -103,6 +105,14 @@ using error_injection_parameters = std::unordered_map<sstring, sstring>;
  *    Requires func to be a function taking an injection_handler reference and
  *    returning a future<>.
  *    Expected use case: wait for an event from tests.
+ * 5. inject_parameter(name)
+ *    Enables tests to inject parameters into the system, like lowering timeouts or limits, to
+ *    make the tests run faster.
+ *    Logically it is the same as
+ *      T value{}
+ *      co_await inject(name, [&value](auto& handler) { value = handler.get("value"); }
+ *    The function simply returns the 'value' parameter.
+ *    Expected use case: adjusting system parameters for tests.
  */
 
 template <bool injection_enabled>
@@ -118,9 +128,28 @@ class error_injection {
         size_t received_message_count{0};
         condition_variable received_message_cv;
         error_injection_parameters parameters;
+        sstring injection_name;
 
-        explicit injection_shared_data(error_injection_parameters parameters)
-            : parameters(std::move(parameters)) {}
+        explicit injection_shared_data(error_injection_parameters parameters, std::string_view injection_name)
+            : parameters(std::move(parameters))
+            , injection_name(injection_name)
+            {}
+
+        template <typename T>
+        std::optional<T> get(sstring name) const {
+            const auto it = parameters.find(name);
+            if (it == parameters.end()) {
+                return std::nullopt;
+            }
+            const auto& s = it->second;
+            errinj_logger.debug("Injected value [{}] for parameter [{}], injection [{}]",
+                s, name, injection_name);
+            if constexpr (std::is_same_v<T, std::string_view>) {
+                return s;
+            } else {
+                return boost::lexical_cast<T>(s.data(), s.size());
+            }
+        }
     };
 
     class injection_data;
@@ -169,16 +198,12 @@ public:
             return false;
         }
 
-        std::optional<std::string_view> get(std::string_view key) {
+        template <typename T = std::string_view>
+        std::optional<T> get(std::string_view key) {
             if (!_shared_data) {
                 on_internal_error(errinj_logger, "injection_shared_data is not initialized");
             }
-
-            auto it = _shared_data->parameters.find(std::string(key));
-            if (it == _shared_data->parameters.end()) {
-                return std::nullopt;
-            }
-            return it->second;
+            return _shared_data->template get<T>(std::string(key));
         }
 
         friend class error_injection;
@@ -201,9 +226,9 @@ private:
         lw_shared_ptr<injection_shared_data> shared_data;
         bi::list<injection_handler, bi::constant_time_size<false>> handlers;
 
-        explicit injection_data(bool one_shot, error_injection_parameters parameters)
+        explicit injection_data(bool one_shot, error_injection_parameters parameters, std::string_view injection_name)
             : one_shot(one_shot)
-            , shared_data(make_lw_shared<injection_shared_data>(std::move(parameters))) {}
+            , shared_data(make_lw_shared<injection_shared_data>(std::move(parameters), injection_name)) {}
 
         void receive_message() {
             assert(shared_data);
@@ -221,21 +246,8 @@ private:
         }
     };
 
-    // String cross-type comparator
-    class str_less
-    {
-    public:
-        using is_transparent = std::true_type;
-
-        template<typename TypeLeft, typename TypeRight>
-        bool operator()(const TypeLeft& left, const TypeRight& right) const
-        {
-            return left < right;
-        }
-    };
     // Map enabled-injection-name -> is-one-shot
-    // TODO: change to unordered_set once we have heterogeneous lookups
-    std::map<sstring, injection_data, str_less> _enabled;
+    std::unordered_map<std::string_view, injection_data> _enabled;
 
     bool is_one_shot(const std::string_view& injection_name) const {
         const auto it = _enabled.find(injection_name);
@@ -282,18 +294,15 @@ public:
     }
 
     void enable(const std::string_view& injection_name, bool one_shot = false, error_injection_parameters parameters = {}) {
-        _enabled.emplace(injection_name, injection_data{one_shot, std::move(parameters)});
+        auto data = injection_data{one_shot, std::move(parameters), injection_name};
+        std::string_view name = data.shared_data->injection_name;
+        _enabled.emplace(name, std::move(data));
         errinj_logger.debug("Enabling injection {} \"{}\"",
                 one_shot? "one-shot ": "", injection_name);
     }
 
     void disable(const std::string_view& injection_name) {
-        // TODO: plain erase once _enabled has heterogeneous lookups
-        auto it = _enabled.find(injection_name);
-        if (it == _enabled.end()) {
-            return;
-        }
-        _enabled.erase(it);
+        _enabled.erase(injection_name);
     }
 
     void disable_all() {
@@ -419,6 +428,15 @@ public:
         co_await func(handler);
     }
 
+    template <typename T = std::string_view>
+    std::optional<T> inject_parameter(const std::string_view& name) {
+        auto* data = get_data(name);
+        if (!data) {
+            return std::nullopt;
+        }
+        return data->shared_data->template get<T>("value");
+    }
+
     future<> enable_on_all(const std::string_view& injection_name, bool one_shot = false, error_injection_parameters parameters = {}) {
         return smp::invoke_on_all([injection_name = sstring(injection_name), one_shot, parameters = std::move(parameters)] {
             auto& errinj = _local;
@@ -537,6 +555,12 @@ public:
     [[gnu::always_inline]]
     future<> inject(const std::string_view& name, waiting_handler_fun func) {
         return make_ready_future<>();
+    }
+
+    template <typename T>
+    [[gnu::always_inline]]
+    std::optional<T> inject_parameter(const std::string_view& name) {
+        return std::nullopt;
     }
 
     [[gnu::always_inline]]

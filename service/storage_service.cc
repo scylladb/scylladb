@@ -1173,9 +1173,18 @@ public:
     }
 };
 
-future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_server, const join_node_request_params& params) {
+future<> storage_service::raft_initialize_discovery_leader(const join_node_request_params& params) {
+    // No other server can become a member of the cluster until
+    // we finish adding ourselves. This is ensured by
+    // waiting in join_node_request_handler for
+    // _topology_state_machine._topology.normal_nodes to be not empty.
+    // We cannot mark ourselves as dead during this process.
+    // This means there is no valid way we can lose quorum here,
+    // but some subsystems may just become unreasonably slow for various reasons,
+    // so we nonetheless use raft_timeout{} here.
+
     if (_topology_state_machine._topology.is_empty()) {
-        co_await raft_server.read_barrier(&_group0_as);
+        co_await _group0->group0_server_with_timeouts().read_barrier(&_group0_as, raft_timeout{});
     }
 
     while (_topology_state_machine._topology.is_empty()) {
@@ -1184,7 +1193,7 @@ future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_se
         }
 
         rtlogger.info("adding myself as the first node to the topology");
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         auto insert_join_request_mutations = build_mutation_from_join_params(params, guard);
 
@@ -1200,7 +1209,7 @@ future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_se
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 "bootstrap: adding myself as the first node to the topology");
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("bootstrap: concurrent operation is detected, retrying.");
         }
@@ -1247,7 +1256,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     while (true) {
         rtlogger.info("refreshing topology to check if it's synchronized with local metadata");
 
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         if (synchronized()) {
             break;
@@ -1282,7 +1291,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
                 std::move(change), guard, ::format("{}: update topology with local metadata", raft_server.id()));
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("update topology with local metadata:"
                          " concurrent operation is detected, retrying.");
@@ -1319,7 +1328,7 @@ future<> storage_service::start_upgrade_to_raft_topology() {
     }
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::not_upgraded) {
             co_return;
@@ -1332,7 +1341,7 @@ future<> storage_service::start_upgrade_to_raft_topology() {
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, "upgrade: start");
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
             break;
         } catch (group0_concurrent_modification&) {
             rtlogger.info("upgrade: concurrent operation is detected, retrying.");
@@ -1653,7 +1662,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // on their behalf by an existing node in the cluster during the handshake.
         // Discovery leaders on the other need to insert the join request themselves,
         // we do that here.
-        co_await raft_initialize_discovery_leader(*raft_server, join_params);
+        co_await raft_initialize_discovery_leader(join_params);
 
         // start topology coordinator fiber
         _raft_state_monitor = raft_state_monitor_fiber(*raft_server, sys_dist_ks);
@@ -3366,7 +3375,7 @@ future<> storage_service::raft_decommission() {
     utils::UUID request_id;
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         auto it = _topology_state_machine._topology.find(raft_server.id());
         if (!it) {
@@ -3396,7 +3405,7 @@ future<> storage_service::raft_decommission() {
 
         request_id = guard.new_group0_state_id();
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("decommission: concurrent operation is detected, retrying.");
             continue;
@@ -3495,7 +3504,7 @@ future<> storage_service::decommission() {
                     // group 0's availability won't be reduced.
                     if (raft_available) {
                         slogger.info("decommission[{}]: becoming a group 0 non-voter", uuid);
-                        ss._group0->become_nonvoter().get();
+                        ss._group0->become_nonvoter(ss._group0_as).get();
                         slogger.info("decommission[{}]: became a group 0 non-voter", uuid);
                     }
 
@@ -3698,7 +3707,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
     utils::UUID request_id;
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         auto it = _topology_state_machine._topology.find(id);
 
@@ -3754,8 +3763,8 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         request_id = guard.new_group0_state_id();
         try {
             // Make non voter during request submission for better HA
-            co_await _group0->make_nonvoters(ignored_ids);
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->make_nonvoters(ignored_ids, _group0_as, raft_timeout{});
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("removenode: concurrent operation is detected, retrying.");
             continue;
@@ -3836,7 +3845,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                 // but before removing it group 0, group 0's availability won't be reduced.
                 if (is_group0_member && ss._group0->is_member(raft_id, true)) {
                     slogger.info("removenode[{}]: making node {} a non-voter in group 0", uuid, raft_id);
-                    ss._group0->make_nonvoter(raft_id).get();
+                    ss._group0->make_nonvoter(raft_id, ss._group0_as).get();
                     slogger.info("removenode[{}]: made node {} a non-voter in group 0", uuid, raft_id);
                 }
 
@@ -4328,7 +4337,7 @@ future<> storage_service::do_cluster_cleanup() {
     auto& raft_server = _group0->group0_server();
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         auto curr_req = _topology_state_machine._topology.global_request;
         if (curr_req && *curr_req != global_topology_request::cleanup) {
@@ -4356,7 +4365,7 @@ future<> storage_service::do_cluster_cleanup() {
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("cleanup: cluster cleanup requested"));
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("cleanup: concurrent operation is detected, retrying.");
             continue;
@@ -4390,7 +4399,7 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
     utils::UUID request_id;
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         auto it = _topology_state_machine._topology.find(raft_server.id());
         if (!it) {
@@ -4423,7 +4432,7 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
         request_id = guard.new_group0_state_id();
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("rebuild: concurrent operation is detected, retrying.");
             continue;
@@ -4443,7 +4452,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
 
     while (true) {
         rtlogger.info("request check_and_repair_cdc_streams, refreshing topology");
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
         auto curr_req = _topology_state_machine._topology.global_request;
         if (curr_req && *curr_req != global_topology_request::new_cdc_generation) {
             // FIXME: replace this with a queue
@@ -4469,7 +4478,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 ::format("request check+repair CDC generation from {}", _group0->group0_server().id()));
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("request check+repair CDC: concurrent operation is detected, retrying.");
             continue;
@@ -5677,7 +5686,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
     }
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         while (_topology_state_machine._topology.is_busy()) {
             const auto tstate = *_topology_state_machine._topology.tstate;
@@ -5688,7 +5697,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             rtlogger.debug("move_tablet(): topology state machine is busy: {}", tstate);
             release_guard(std::move(guard));
             co_await _topology_state_machine.event.wait();
-            guard = co_await _group0->client().start_operation(&_abort_source);
+            guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
         }
 
         std::vector<canonical_mutation> updates;
@@ -5755,7 +5764,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         topology_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
             break;
         } catch (group0_concurrent_modification&) {
             rtlogger.debug("move_tablet(): concurrent modification, retrying");
@@ -5853,13 +5862,13 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     }
 
     while (true) {
-        group0_guard guard = co_await _group0->client().start_operation(&_abort_source);
+        group0_guard guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         while (_topology_state_machine._topology.is_busy()) {
             rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
             release_guard(std::move(guard));
             co_await _topology_state_machine.event.wait();
-            guard = co_await _group0->client().start_operation(&_abort_source);
+            guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
         }
 
         std::vector<canonical_mutation> updates;
@@ -5872,7 +5881,7 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
         topology_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
             break;
         } catch (group0_concurrent_modification&) {
             rtlogger.debug("set_tablet_balancing_enabled(): concurrent modification");
@@ -5993,7 +6002,7 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
     }
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as);
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
         if (const auto *p = _topology_state_machine._topology.find(params.host_id)) {
             const auto& rs = p->second;
@@ -6037,10 +6046,17 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
         topology_change change{{std::move(mutation)}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 format("raft topology: placing join request for {}", params.host_id));
+
+        co_await utils::get_local_injector().inject("join-node-before-add-entry", [] (auto& handler) -> future<> {
+            rtlogger.info("join-node-before-add-entry injection hit");
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+            rtlogger.info("join-node-before-add-entry injection done");
+        });
+
         try {
             // Make replaced node and ignored nodes non voters earlier for better HA
-            co_await _group0->make_nonvoters(ignored_nodes_from_join_params(params));
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+            co_await _group0->make_nonvoters(ignored_nodes_from_join_params(params), _group0_as, raft_timeout{});
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
             break;
         } catch (group0_concurrent_modification&) {
             rtlogger.info("join_node_request: concurrent operation is detected, retrying.");
@@ -6095,9 +6111,14 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
                 // the replacing node that is alive.
                 co_await _gossiper.advertise_to_nodes({});
 
+                co_await utils::get_local_injector().inject("join-node-response_handler-before-read-barrier", [] (auto& handler) -> future<> {
+                    rtlogger.info("join-node-response_handler-before-read-barrier injection hit");
+                    co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                    rtlogger.info("join-node-response_handler-before-read-barrier injection done");
+                });
+
                 // Do a read barrier to read/initialize the topology state
-                auto& raft_server = _group0->group0_server();
-                co_await raft_server.read_barrier(&_group0_as);
+                co_await _group0->group0_server_with_timeouts().read_barrier(&_group0_as, raft_timeout{});
 
                 // Calculate nodes to ignore
                 // TODO: ignore_dead_nodes setting for bootstrap

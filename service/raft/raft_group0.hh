@@ -215,19 +215,20 @@ public:
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
     // `wait_for_raft` must've also been called earlier and returned `true`.
-    future<> become_nonvoter();
+    future<> become_nonvoter(abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
 
     // Make the given server, other than us, a non-voter in group 0.
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
     // `wait_for_raft` must've also been called earlier and returned `true`.
-    future<> make_nonvoter(raft::server_id);
+    future<> make_nonvoter(raft::server_id, abort_source&, std::optional<raft_timeout> timeout = std::nullopt);
 
     // Make the given servers, other than us, a non-voter in group 0.
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
     // `wait_for_raft` must've also been called earlier and returned `true`.
-    future<> make_nonvoters(const std::unordered_set<raft::server_id>&);
+    future<> make_nonvoters(const std::unordered_set<raft::server_id>&, abort_source&,
+            std::optional<raft_timeout> timeout = std::nullopt);
 
     // Remove ourselves from group 0.
     //
@@ -281,6 +282,11 @@ public:
     // after boot/upgrade is complete
     raft::server& group0_server() {
         return _raft_gr.group0();
+    }
+
+    // Returns a wrapper for the group0_server() with timeouts support.
+    raft_server_with_timeouts group0_server_with_timeouts() {
+        return _raft_gr.group0_with_timeouts();
     }
 
     // Returns true after the group 0 server has been started.
@@ -360,7 +366,7 @@ private:
 
     // Make the given server a non-voter in Raft group 0 configuration.
     // Retries on raft::commit_status_unknown.
-    future<> make_raft_config_nonvoter(const std::unordered_set<raft::server_id>&);
+    future<> make_raft_config_nonvoter(const std::unordered_set<raft::server_id>&, abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
 
     // Returns true if raft is enabled
     future<bool> use_raft();

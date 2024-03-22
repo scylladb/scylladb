@@ -7,7 +7,8 @@
 # defines common test fixtures for all of them to use
 
 import ssl
-from typing import List
+import platform
+from typing import List, Optional
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient, IPAddress
@@ -210,14 +211,18 @@ def mode(request):
     return request.config.getoption('mode')
 
 skipped_funcs = {}
-def skip_mode(mode: str, reason: str):
+# Can be used to mark a test to be skipped for a specific mode=[release, dev, debug]
+# The reason to skip a test should be specified, used as a comment only.
+# Additionally, platform_key can be specified to limit the scope of the attribute
+# to the specified platform. Example platform_key-s: [aarch64, x86_64]
+def skip_mode(mode: str, reason: str, platform_key: Optional[str]=None):
     def wrap(func):
-        skipped_funcs[(func, mode)] = reason
+        skipped_funcs.setdefault((func, mode), []).append((reason, platform_key))
         return func
     return wrap
 
 @pytest.fixture(scope="function", autouse=True)
 def skip_mode_fixture(request, mode):
-    skip_reason = skipped_funcs.get((request.function, mode))
-    if skip_reason is not None:
-        pytest.skip(f'{request.node.name} skipped, reason: {skip_reason}')
+    for reason, platform_key in skipped_funcs.get((request.function, mode), []):
+        if platform_key is None or platform_key in platform.platform():
+            pytest.skip(f'{request.node.name} skipped, reason: {reason}')

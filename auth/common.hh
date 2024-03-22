@@ -93,7 +93,8 @@ future<> announce_mutations_with_batching(
         // function here
         start_operation_func_t start_operation_func,
         std::function<mutations_generator(api::timestamp_type& t)> gen,
-        seastar::abort_source* as);
+        seastar::abort_source* as,
+        std::optional<::service::raft_timeout> timeout);
 
 // Execute update query via group0 mechanism, mutations will be applied on all nodes.
 future<> announce_mutations(
@@ -101,6 +102,7 @@ future<> announce_mutations(
         ::service::raft_group0_client& group0_client,
         const sstring query_string,
         std::vector<data_value_or_unset> values,
-        seastar::abort_source* as);
+        seastar::abort_source* as,
+        std::optional<::service::raft_timeout> timeout);
 
 }
