@@ -1219,6 +1219,9 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
         auto sl_status_mutation = co_await _sys_ks.local().make_service_levels_version_mutation(2, guard);
         insert_join_request_mutations.emplace_back(std::move(sl_status_mutation));
         
+        insert_join_request_mutations.emplace_back(
+                co_await _sys_ks.local().make_auth_version_mutation(guard.write_timestamp(), db::system_auth_keyspace::version_t::v2));
+
         topology_change change{std::move(insert_join_request_mutations)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 "bootstrap: adding myself as the first node to the topology");
@@ -6358,6 +6361,11 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
                 auto sl_version_mut = co_await ss._sys_ks.local().get_service_levels_version_mutation();
                 if (sl_version_mut) {
                     mutations.push_back(canonical_mutation(*sl_version_mut));
+                }
+
+                auto auth_version_mut = co_await ss._sys_ks.local().get_auth_version_mutation();
+                if (auth_version_mut) {
+                    mutations.emplace_back(*auth_version_mut);
                 }
 
                 co_return raft_snapshot{

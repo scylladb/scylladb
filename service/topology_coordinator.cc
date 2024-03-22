@@ -16,6 +16,7 @@
 
 #include "auth/service.hh"
 #include "cdc/generation.hh"
+#include "db/system_auth_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
 #include "dht/boot_strapper.hh"
@@ -2399,9 +2400,12 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     release_guard(std::move(guard));
     co_await _group0.wait_for_all_nodes_to_finish_upgrade(_as);
 
-    rtlogger.info("migrating system_auth keyspace data");
-    co_await auth::migrate_to_auth_v2(_sys_ks.query_processor(), _group0.client(),
-            [this] (abort_source*) { return start_operation();}, _as);
+    auto auth_version = co_await _sys_ks.get_auth_version();
+    if (auth_version < db::system_auth_keyspace::version_t::v2) {
+        rtlogger.info("migrating system_auth keyspace data");
+        co_await auth::migrate_to_auth_v2(_sys_ks, _group0.client(),
+                [this] (abort_source*) { return start_operation();}, _as);
+    }
 
     auto sl_version = co_await _sys_ks.get_service_levels_version();
     if (!sl_version || *sl_version < 2) {

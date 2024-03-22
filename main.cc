@@ -1693,7 +1693,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             auto start_auth_service = [&mm] (sharded<auth::service>& auth_service, std::any& stop_auth_service, const char* what) {
                 supervisor::notify(fmt::format("starting {}", what));
-                auth_service.invoke_on_all(&auth::service::start, std::ref(mm)).get();
+                auth_service.invoke_on_all(&auth::service::start, std::ref(mm), std::ref(sys_ks)).get();
 
                 stop_auth_service = defer_verbose_shutdown(what, [&auth_service] {
                     auth_service.stop().get();
@@ -1860,6 +1860,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(group0_client), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no).get();
 
             std::any stop_auth_service;
+            // Has to be called after node joined the cluster (join_cluster())
+            // with raft leader elected as only then auth version mutation is put
+            // in scylla_local table. This allows to know the version at auth service
+            // startup also when creating a new cluster.
             start_auth_service(auth_service, stop_auth_service, "auth service");
 
             api::set_server_authorization_cache(ctx, auth_service).get();

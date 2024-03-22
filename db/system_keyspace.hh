@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include "db/system_auth_keyspace.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
 #include "query-result-set.hh"
@@ -574,6 +575,12 @@ public:
     // If the `group0_schema_version` key in `system.scylla_local` is present (either live or tombstone),
     // returns the corresponding mutation. Otherwise returns nullopt.
     future<std::optional<mutation>> get_group0_schema_version();
+
+    // If the `auth_version` key in `system.scylla_local` is present (either live or tombstone),
+    // returns the corresponding mutation. Otherwise returns nullopt.
+    future<std::optional<mutation>> get_auth_version_mutation();
+    future<mutation> make_auth_version_mutation(api::timestamp_type ts, db::system_auth_keyspace::version_t version);
+    future<system_auth_keyspace::version_t> get_auth_version();
 
     future<> sstables_registry_create_entry(sstring location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc);
     future<> sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status);
