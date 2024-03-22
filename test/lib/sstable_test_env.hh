@@ -42,6 +42,14 @@ public:
     void set_promoted_index_block_size(size_t promoted_index_block_size) {
         _promoted_index_block_size = promoted_index_block_size;
     }
+
+    void increment_total_reclaimable_memory_and_maybe_reclaim(sstable *sst) {
+        sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(sst);
+    }
+
+    size_t get_total_memory_reclaimed() {
+        return _total_memory_reclaimed;
+    }
 };
 
 struct test_env_config {
