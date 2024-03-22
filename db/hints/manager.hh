@@ -133,7 +133,16 @@ private:
 
     hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
-    std::unordered_set<endpoint_id> _eps_with_pending_hints;
+
+    // We need to keep a variant here. Before migrating hinted handoff to using host ID, hint directories will
+    // still represent IP addresses. But after the migration, they will start representing host IDs.
+    // We need to handle either case.
+    //
+    // It's especially important when dealing with the scenario when there is an IP directory, but there is
+    // no mapping for in locator::token_metadata. Since we sometimes have to save a directory like that
+    // in this set as well, this variant is necessary.
+    std::unordered_set<std::variant<locator::host_id, gms::inet_address>> _eps_with_pending_hints;
+
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
     // For now, this never changes.
@@ -227,7 +236,7 @@ public:
         return it->second.hints_in_progress();
     }
 
-    void add_ep_with_pending_hints(endpoint_id key) {
+    void add_ep_with_pending_hints(const std::variant<locator::host_id, gms::inet_address>& key) {
         _eps_with_pending_hints.insert(key);
     }
 
@@ -236,7 +245,7 @@ public:
         _eps_with_pending_hints.reserve(_ep_managers.size());
     }
 
-    bool has_ep_with_pending_hints(endpoint_id key) const {
+    bool has_ep_with_pending_hints(const std::variant<locator::host_id, gms::inet_address>& key) const {
         return _eps_with_pending_hints.contains(key);
     }
 
