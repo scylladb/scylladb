@@ -2362,7 +2362,7 @@ def write_build_file(f,
           command = {python} configure.py --out=build.ninja.new $configure_args && mv build.ninja.new build.ninja
           generator = 1
           description = CONFIGURE $configure_args
-        build build.ninja {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN {args.seastar_path}/CMakeLists.txt
+        build build.ninja {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {args.seastar_path}/CMakeLists.txt
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
@@ -2388,7 +2388,8 @@ def write_build_file(f,
         build always: phony
         rule scylla_version_gen
             command = ./SCYLLA-VERSION-GEN
-        build $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE: scylla_version_gen
+            restat = 1
+        build $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE: scylla_version_gen | always
         rule debian_files_gen
             command = ./dist/debian/debian_files_gen.py
         build $builddir/debian/debian: debian_files_gen | always
