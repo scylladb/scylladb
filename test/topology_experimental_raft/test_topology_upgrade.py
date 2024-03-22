@@ -13,7 +13,7 @@ from test.pylib.rest_client import HTTPError
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.conftest import skip_mode
-from test.topology.util import log_run_time, wait_until_topology_upgrade_finishes, \
+from test.topology.util import log_run_time, wait_until_last_generation_is_in_use, wait_until_topology_upgrade_finishes, \
         wait_for_cdc_generations_publishing, check_system_topology_and_cdc_generations_v3_consistency, \
         start_writes_to_cdc_table
 
@@ -21,9 +21,12 @@ from test.topology.util import log_run_time, wait_until_topology_upgrade_finishe
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 @log_run_time
-async def test_topology_upgrade_basic(request, manager: ManagerClient):
+async def test_topology_upgrade_basic(request, mode: str, manager: ManagerClient):
     # First, force the first node to start in legacy mode due to the error injection
-    cfg = {'error_injections_at_startup': ['force_gossip_based_join']}
+    cfg = {
+        'error_injections_at_startup': ['force_gossip_based_join'],
+        'ring_delay_ms': 15000 if mode == 'debug' else 5000,
+    }
 
     servers = [await manager.server_add(config=cfg)]
     # Disable injections for the subsequent nodes - they should fall back to
@@ -70,6 +73,11 @@ async def test_topology_upgrade_basic(request, manager: ManagerClient):
 
     logging.info("Checking consistency of data in system.topology and system.cdc_generations_v3")
     await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
+
+    await wait_until_last_generation_is_in_use(cql)
+
+    logging.debug("Sleeping for 1 second to make sure there are writes to the CDC table in the last generation")
+    await asyncio.sleep(1)
 
     logging.info("Checking correctness of data in system_distributed.cdc_streams_descriptions_v2")
     await finish_writes_and_verify()

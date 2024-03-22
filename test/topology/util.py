@@ -7,6 +7,7 @@
 Test consistency of schema changes with topology changes.
 """
 import asyncio
+import datetime
 import logging
 import functools
 import operator
@@ -191,6 +192,22 @@ async def wait_for_cdc_generations_publishing(cql: Session, hosts: list[Host], d
 
         await wait_for(all_generations_published, deadline=deadline, period=1.0)
 
+async def wait_until_last_generation_is_in_use(cql: Session):
+    topo_res = await cql.run_async("SELECT committed_cdc_generations FROM system.topology")
+    assert len(topo_res) != 0
+    generations = topo_res[0].committed_cdc_generations
+    last_generation_ts = max(gen[0] for gen in generations)
+
+    # datetime objects returned by the driver are timezone-naive and we assume they are in UTC.
+    # To subtract timestamp, we need to make sure they are both timezone-aware (or both are timezone-naive).
+    last_generation_ts = last_generation_ts.replace(tzinfo=datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    seconds = (last_generation_ts - now).total_seconds()
+    if seconds > 0:
+        logger.info(f"Waiting {seconds} seconds for the last generation to be in use.")
+        await asyncio.sleep(seconds)
+    else:
+        logger.info(f"The last generation is already in use.")
 
 async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host]):
     assert len(hosts) != 0
