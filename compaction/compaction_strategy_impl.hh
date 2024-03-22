@@ -16,7 +16,6 @@
 namespace sstables {
 
 class sstable_set_impl;
-class resharding_descriptor;
 
 class compaction_strategy_impl {
 public:
