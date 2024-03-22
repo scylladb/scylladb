@@ -86,7 +86,7 @@ public:
     void start();
     future<> stop() noexcept;
 
-    seastar::named_semaphore& update_lock() {
+    seastar::named_semaphore& update_lock() noexcept {
         return _update_lock;
     }
 
@@ -194,6 +194,10 @@ public:
     /// The hints::managers can be added either before or after resource_manager starts.
     /// If resource_manager is already started, the hints manager will also be started.
     future<> register_manager(manager& m);
+
+    seastar::named_semaphore& update_lock() noexcept {
+        return _space_watchdog.update_lock();
+    }
 };
 
 }
