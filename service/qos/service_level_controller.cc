@@ -6,9 +6,19 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <boost/algorithm/string/join.hpp>
+#include <chrono>
+
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
+#include "cql3/untyped_result_set.hh"
+#include "db/consistency_level_type.hh"
+#include "db/system_keyspace.hh"
+#include "seastar/core/on_internal_error.hh"
 #include "seastar/core/timer.hh"
+#include "service/qos/raft_service_level_distributed_data_accessor.hh"
+#include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service_level_controller.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "cql3/query_processor.hh"
@@ -80,26 +90,35 @@ void service_level_controller::set_distributed_data_accessor(service_level_distr
 
 future<> service_level_controller::drain() {
     if (this_shard_id() != global_controller) {
-        return make_ready_future();
+        co_return;
     }
+
     // abort the loop of the distributed data checking if it is running
     if (!_global_controller_db->dist_data_update_aborter.abort_requested()) {
         _global_controller_db->dist_data_update_aborter.request_abort();
     }
+
+    abort_group0_operations();
+    
     _global_controller_db->notifications_serializer.broken();
-    return std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>()).then_wrapped([] (future<> f) {
-        try {
-            f.get();
-        } catch (const broken_semaphore& ignored) {
-        } catch (const sleep_aborted& ignored) {
-        } catch (const exceptions::unavailable_exception& ignored) {
-        } catch (const exceptions::read_timeout_exception& ignored) {
-        }
-    });
+    try {
+        co_await std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>());
+    } catch (const broken_semaphore& ignored) {
+    } catch (const sleep_aborted& ignored) {
+    } catch (const exceptions::unavailable_exception& ignored) {
+    } catch (const exceptions::read_timeout_exception& ignored) {
+    }
 }
 
 future<> service_level_controller::stop() {
     return drain();
+}
+
+void service_level_controller::abort_group0_operations() {
+    // abort group0 operations
+    if (!_global_controller_db->group0_aborter.abort_requested()) {
+        _global_controller_db->group0_aborter.request_abort();
+    }
 }
 
 future<> service_level_controller::update_service_levels_from_distributed_data() {
@@ -317,39 +336,45 @@ void service_level_controller::update_from_distributed_data(std::function<steady
     }
 }
 
-future<> service_level_controller::add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exists) {
+future<> service_level_controller::add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exists, std::optional<service::group0_guard> guard) {
     set_service_level_op_type add_type = if_not_exists ? set_service_level_op_type::add_if_not_exists : set_service_level_op_type::add;
-    return set_distributed_service_level(name, slo, add_type);
+    return set_distributed_service_level(name, slo, add_type, std::move(guard));
 }
 
-future<> service_level_controller::alter_distributed_service_level(sstring name, service_level_options slo) {
-    return set_distributed_service_level(name, slo, set_service_level_op_type::alter);
+future<> service_level_controller::alter_distributed_service_level(sstring name, service_level_options slo, std::optional<service::group0_guard> guard) {
+    return set_distributed_service_level(name, slo, set_service_level_op_type::alter, std::move(guard));
 }
 
-future<> service_level_controller::drop_distributed_service_level(sstring name, bool if_exists) {
-    return _sl_data_accessor->get_service_levels().then([this, name, if_exists] (qos::service_levels_info sl_info) {
-        auto it = sl_info.find(name);
-        if (it == sl_info.end()) {
-            if (if_exists) {
-                return make_ready_future();
-            } else {
-                return make_exception_future(nonexistant_service_level_exception(name));
-            }
+future<> service_level_controller::drop_distributed_service_level(sstring name, bool if_exists, std::optional<service::group0_guard> guard) {
+    auto sl_info = co_await _sl_data_accessor->get_service_levels();
+    auto it = sl_info.find(name);
+    if (it == sl_info.end()) {
+        if (if_exists) {
+            co_return;
         } else {
-            auto& role_manager = _auth_service.local().underlying_role_manager();
-            return role_manager.query_attribute_for_all("service_level").then( [&role_manager, name] (auth::role_manager::attribute_vals attributes) {
-                return parallel_for_each(attributes.begin(), attributes.end(), [&role_manager, name] (auto&& attr) {
-                    if (attr.second == name) {
-                        return do_with(attr.first, [&role_manager] (const sstring& role_name) {return role_manager.remove_attribute(role_name, "service_level");});
-                    } else {
-                        return make_ready_future();
-                    }
-                });
-            }).then([this, name] {
-                return _sl_data_accessor->drop_service_level(name);
+            throw nonexistant_service_level_exception(name);
+        }
+    }
+    
+    auto& role_manager = _auth_service.local().underlying_role_manager();
+    auto attributes = co_await role_manager.query_attribute_for_all("service_level");
+    //FIXME: use the same group0 operation to remove attribute
+    if (guard) {
+        service::release_guard(std::move(*guard));
+        guard = std::nullopt;
+    }
+        
+    co_await coroutine::parallel_for_each(attributes.begin(), attributes.end(), [&role_manager, name] (auto&& attr) {
+        if (attr.second == name) {
+            return do_with(attr.first, [&role_manager] (const sstring& role_name) {
+                return role_manager.remove_attribute(role_name, "service_level");
             });
+        } else {
+            return make_ready_future();
         }
     });
+
+    co_return co_await _sl_data_accessor->drop_service_level(name, std::move(guard), _global_controller_db->group0_aborter);
 }
 
 future<service_levels_info> service_level_controller::get_distributed_service_levels() {
@@ -360,23 +385,22 @@ future<service_levels_info> service_level_controller::get_distributed_service_le
     return _sl_data_accessor ? _sl_data_accessor->get_service_level(service_level_name) : make_ready_future<service_levels_info>();
 }
 
-future<> service_level_controller::set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type) {
-    return _sl_data_accessor->get_service_levels().then([this, name, slo, op_type] (qos::service_levels_info sl_info) {
-        auto it = sl_info.find(name);
-        // test for illegal requests or requests that should terminate without any action
-        if (it == sl_info.end()) {
-            if (op_type == set_service_level_op_type::alter) {
-                return make_exception_future(exceptions::invalid_request_exception(format("The service level '{}' doesn't exist.", name)));
-            }
-        } else {
-            if (op_type == set_service_level_op_type::add) {
-                return make_exception_future(exceptions::invalid_request_exception(format("The service level '{}' already exists.", name)));
-            } else if (op_type == set_service_level_op_type::add_if_not_exists) {
-                return make_ready_future();
-            }
+future<> service_level_controller::set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, std::optional<service::group0_guard> guard) {
+    auto sl_info = co_await _sl_data_accessor->get_service_levels();
+    auto it = sl_info.find(name);
+    // test for illegal requests or requests that should terminate without any action
+    if (it == sl_info.end()) {
+        if (op_type == set_service_level_op_type::alter) {
+            throw exceptions::invalid_request_exception(format("The service level '{}' doesn't exist.", name));
         }
-        return _sl_data_accessor->set_service_level(name, slo);
-    });
+    } else {
+        if (op_type == set_service_level_op_type::add) {
+            throw exceptions::invalid_request_exception(format("The service level '{}' already exists.", name));
+        } else if (op_type == set_service_level_op_type::add_if_not_exists) {
+            co_return;
+        }
+    }
+    co_return co_await _sl_data_accessor->set_service_level(name, slo, std::move(guard), _global_controller_db->group0_aborter);
 }
 
 future<> service_level_controller::do_add_service_level(sstring name, service_level_options slo, bool is_static) {
@@ -402,6 +426,99 @@ future<> service_level_controller::do_add_service_level(sstring name, service_le
         });
     }
     return make_ready_future();
+}
+
+bool service_level_controller::is_v2() const {
+    return _sl_data_accessor && _sl_data_accessor->is_v2();
+}
+
+void service_level_controller::upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) {
+    if (!_sl_data_accessor) {
+        return;
+    }
+
+    auto v2_data_accessor = _sl_data_accessor->upgrade_to_v2(qp, group0_client);
+    if (v2_data_accessor) {
+        _sl_data_accessor = v2_data_accessor;
+    }
+}
+
+future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as) {
+    //TODO:
+    //Now we trust the administrator to not make changes to service levels during the migration.
+    //Ideally, during the migration we should set migration data accessor(on all nodes, on all shards) that allows to read but forbids writes
+    using namespace std::chrono_literals;
+
+    auto schema = qp.db().find_schema(db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::SERVICE_LEVELS);
+
+    const auto t = 5min;
+    const timeout_config tc{t, t, t, t, t, t, t};
+    service::client_state cs(::service::client_state::internal_tag{}, tc);
+    service::query_state qs(cs, empty_service_permit());
+    
+    // `system_distributed` keyspace has RF=3 and we need to scan it with CL=ALL
+    // To support migration on cluster with 1 or 2 nodes, set appropriate CL
+    auto cl = db::consistency_level::ALL;
+    if (nodes_count == 1) {
+        cl = db::consistency_level::ONE;
+    } else if (nodes_count == 2) {
+        cl = db::consistency_level::TWO;
+    }
+    
+    auto rows = co_await qp.execute_internal(
+        format("SELECT * FROM {}.{}", db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::SERVICE_LEVELS),
+        cl,
+        qs,
+        {},
+        cql3::query_processor::cache_internal::no);
+    if (rows->empty()) {
+        co_return;
+    }
+    
+
+    auto col_names = boost::copy_range<std::vector<sstring>>(schema->all_columns() | boost::adaptors::transformed([] (const auto& col) {return col.name_as_cql_string(); }));
+    auto col_names_str = boost::algorithm::join(col_names, ", ");
+    sstring val_binders_str = "?";
+    for (size_t i = 1; i < col_names.size(); ++i) {
+        val_binders_str += ", ?";
+    }
+    
+    auto guard = co_await group0_client.start_operation(&as);
+
+    std::vector<mutation> migration_muts;
+    for (const auto& row: *rows) {
+        std::vector<data_value_or_unset> values;
+        for (const auto& col: schema->all_columns()) {
+            if (row.has(col.name_as_text())) {
+                values.push_back(col.type->deserialize(row.get_blob(col.name_as_text())));
+            } else {
+                values.push_back(unset_value{});
+            }
+        }
+
+        auto muts = co_await qp.get_mutations_internal(
+            format("INSERT INTO {}.{} ({}) VALUES ({})",
+                db::system_keyspace::NAME,
+                db::system_keyspace::SERVICE_LEVELS_V2,
+                col_names_str,
+                val_binders_str), 
+            qos_query_state(),
+            guard.write_timestamp(),
+            std::move(values));
+        if (muts.size() != 1) {
+            on_internal_error(sl_logger, format("expecting single insert mutation, got {}", muts.size()));
+        }
+        migration_muts.push_back(std::move(muts[0]));
+    }
+
+    auto status_mut = co_await sys_ks.make_service_levels_version_mutation(2, guard);
+    migration_muts.push_back(std::move(status_mut));
+
+    service::write_mutations change {
+        .mutations{migration_muts.begin(), migration_muts.end()},
+    };
+    auto group0_cmd = group0_client.prepare_command(change, guard, "migrate service levels to v2");
+    co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), &as);
 }
 
 future<> service_level_controller::do_remove_service_level(sstring name, bool remove_static) {
@@ -435,6 +552,7 @@ void service_level_controller::on_leave_cluster(const gms::inet_address& endpoin
     auto my_address = _auth_service.local().query_processor().proxy().local_db().get_token_metadata().get_topology().my_address();
     if (this_shard_id() == global_controller && endpoint == my_address) {
         _global_controller_db->dist_data_update_aborter.request_abort();
+        _global_controller_db->group0_aborter.request_abort();
     }
 }
 
@@ -448,6 +566,23 @@ void service_level_controller::register_subscriber(qos_configuration_change_subs
 
 future<> service_level_controller::unregister_subscriber(qos_configuration_change_subscriber* subscriber) {
     return _subscribers.remove(subscriber);
+}
+
+future<shared_ptr<service_level_controller::service_level_distributed_data_accessor>> 
+get_service_level_distributed_data_accessor_for_current_version(
+    db::system_keyspace& sys_ks,
+    db::system_distributed_keyspace& sys_dist_ks,
+    cql3::query_processor& qp, service::raft_group0_client& group0_client
+) {
+    auto sl_version = co_await sys_ks.get_service_levels_version();
+
+    if (sl_version && *sl_version == 2) {
+        co_return static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
+            make_shared<qos::raft_service_level_distributed_data_accessor>(qp, group0_client));
+    } else {
+        co_return static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
+            make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks));
+    }
 }
 
 }

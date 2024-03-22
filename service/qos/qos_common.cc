@@ -8,8 +8,13 @@
 
 #include "qos_common.hh"
 #include "utils/overloaded_functor.hh"
+#include "cql3/query_processor.hh"
+#include "cql3/result_set.hh"
+#include "cql3/untyped_result_set.hh"
 
 namespace qos {
+
+static logging::logger logger("qos");
 
 service_level_options service_level_options::replace_defaults(const service_level_options& default_values) const {
     service_level_options ret = *this;
@@ -118,6 +123,67 @@ void service_level_options::init_effective_names(sstring& service_level_name) {
         .timeout = service_level_name,
         .workload = service_level_name
     };
+}
+
+service::query_state& qos_query_state() {
+    using namespace std::chrono_literals;
+    const auto t = 10s;
+    static timeout_config tc{ t, t, t, t, t, t, t };
+    static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
+    static thread_local service::query_state qs(cs, empty_service_permit());
+    return qs;
+};
+
+static service_level_options::timeout_type get_duration(const cql3::untyped_result_set_row&row, std::string_view col_name) {
+    auto dur_opt = row.get_opt<cql_duration>(col_name);
+    if (!dur_opt) {
+        return qos::service_level_options::unset_marker{};
+    }
+    return std::chrono::duration_cast<lowres_clock::duration>(std::chrono::nanoseconds(dur_opt->nanoseconds));
+};
+
+future<qos::service_levels_info> get_service_levels(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, db::consistency_level cl) {
+    sstring prepared_query = format("SELECT * FROM {}.{};", ks_name, cf_name);
+    auto result_set = co_await qp.execute_internal(prepared_query, cl, qos_query_state(), cql3::query_processor::cache_internal::yes);
+ 
+    qos::service_levels_info service_levels;
+    for (auto &&row : *result_set) {
+        try {
+            auto service_level_name = row.get_as<sstring>("service_level");
+            auto workload = qos::service_level_options::parse_workload_type(row.get_opt<sstring>("workload_type").value_or(""));
+            qos::service_level_options slo{
+                .timeout = get_duration(row, "timeout"),
+                .workload = workload.value_or(qos::service_level_options::workload_type::unspecified),
+            };
+            service_levels.emplace(service_level_name, slo);
+        } catch (...) {
+            logger.warn("Failed to fetch data for service levels: {}", std::current_exception());
+        }
+    }
+
+    co_return service_levels;
+}
+
+future<service_levels_info> get_service_level(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, sstring service_level_name, db::consistency_level cl) {
+    sstring prepared_query = format("SELECT * FROM {}.{} WHERE service_level = ?;", ks_name, cf_name);
+    auto result_set = co_await  qp.execute_internal(prepared_query, cl, qos_query_state(), {service_level_name}, cql3::query_processor::cache_internal::yes);
+
+    qos::service_levels_info service_levels;
+    if (!result_set->empty()) {
+        try {
+            auto &&row = result_set->one();
+            auto workload = qos::service_level_options::parse_workload_type(row.get_opt<sstring>("workload_type").value_or(""));
+            qos::service_level_options slo{
+                .timeout = get_duration(row, "timeout"),
+                .workload = workload.value_or(qos::service_level_options::workload_type::unspecified),
+            };
+            service_levels.emplace(service_level_name, slo);
+        } catch (...) {
+            logger.warn("Failed to fetch data for service level {}: {}", service_level_name, std::current_exception());
+        }
+    }
+    
+    co_return service_levels;
 }
 
 }

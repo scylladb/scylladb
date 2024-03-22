@@ -14,6 +14,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include "seastar/core/on_internal_error.hh"
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/system_auth_keyspace.hh"
@@ -45,6 +46,7 @@
 #include "replica/tablets.hh"
 #include "replica/query.hh"
 #include "types/types.hh"
+#include "service/raft/raft_group0_client.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -84,6 +86,7 @@ namespace {
             system_keyspace::PEERS,
             system_keyspace::SCYLLA_LOCAL,
             system_keyspace::COMMITLOG_CLEANUPS,
+            system_keyspace::SERVICE_LEVELS_V2,
             system_keyspace::v3::CDC_LOCAL
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
@@ -1119,6 +1122,19 @@ schema_ptr system_keyspace::tablets() {
     return schema;
 }
 
+schema_ptr system_keyspace::service_levels_v2() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, SERVICE_LEVELS_V2);
+        return schema_builder(NAME, SERVICE_LEVELS_V2, id)
+                .with_column("service_level", utf8_type, column_kind::partition_key)
+                .with_column("timeout", duration_type)
+                .with_column("workload_type", utf8_type)
+                .with_version(db::system_keyspace::generate_schema_version(id))
+                .build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::legacy::hints() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, HINTS), NAME, HINTS,
@@ -2107,7 +2123,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
 
     if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
-        r.insert(r.end(), {topology(), cdc_generations_v3(), topology_requests()});
+        r.insert(r.end(), {topology(), cdc_generations_v3(), topology_requests(), service_levels_v2()});
     }
 
     if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
@@ -2631,13 +2647,13 @@ future<mutation> system_keyspace::get_group0_history(distributed<replica::databa
     co_return mutation(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
 }
 
-future<std::optional<mutation>> system_keyspace::get_group0_schema_version() {
-    auto s = _db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+static future<std::optional<mutation>> get_scylla_local_mutation(replica::database& db, std::string_view key) {
+    auto s = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
 
-    partition_key pk = partition_key::from_singular(*s, "group0_schema_version");
+    partition_key pk = partition_key::from_singular(*s, key);
     dht::partition_range pr = dht::partition_range::make_singular(dht::decorate_key(*s, pk));
 
-    auto rs = co_await replica::query_mutations(_db.container(), s, pr, s->full_slice(), db::no_timeout);
+    auto rs = co_await replica::query_mutations(db.container(), s, pr, s->full_slice(), db::no_timeout);
     assert(rs);
     auto& ps = rs->partitions();
     for (auto& p: ps) {
@@ -2646,6 +2662,40 @@ future<std::optional<mutation>> system_keyspace::get_group0_schema_version() {
     }
 
     co_return std::nullopt;
+}
+
+future<std::optional<mutation>> system_keyspace::get_group0_schema_version() {
+    return get_scylla_local_mutation(_db, "group0_schema_version");
+}
+
+static constexpr auto SERVICE_LEVELS_VERSION_KEY = "service_level_version";
+
+future<std::optional<mutation>> system_keyspace::get_service_levels_version_mutation() {
+    return get_scylla_local_mutation(_db, SERVICE_LEVELS_VERSION_KEY);
+}
+
+static service::query_state& internal_system_query_state() {
+    using namespace std::chrono_literals;
+    const auto t = 10s;
+    static timeout_config tc{ t, t, t, t, t, t, t };
+    static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
+    static thread_local service::query_state qs(cs, empty_service_permit());
+    return qs;
+};
+
+future<mutation> system_keyspace::make_service_levels_version_mutation(int8_t version, const service::group0_guard& guard) {
+    static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+    auto timestamp = guard.write_timestamp();
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), timestamp, {SERVICE_LEVELS_VERSION_KEY, format("{}", version)});
+
+    if (muts.size() != 1) {
+        on_internal_error(slogger, format("expecting single insert mutation, got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<std::optional<int8_t>> system_keyspace::get_service_levels_version() {
+    return get_scylla_local_param_as<int8_t>(SERVICE_LEVELS_VERSION_KEY);
 }
 
 static constexpr auto GROUP0_UPGRADE_STATE_KEY = "group0_upgrade_state";

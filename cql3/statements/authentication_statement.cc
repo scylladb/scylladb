@@ -25,6 +25,6 @@ future<> cql3::statements::authentication_statement::check_access(query_processo
     return make_ready_future<>();
 }
 
-bool cql3::statements::authentication_altering_statement::needs_guard(query_processor& qp) const {
+bool cql3::statements::authentication_altering_statement::needs_guard(query_processor& qp, service::query_state&) const {
     return !auth::legacy_mode(qp);
 }

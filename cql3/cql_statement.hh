@@ -50,7 +50,7 @@ public:
     seastar::sstring raw_cql_statement;
 
     // Returns true for statements that needs guard to be taken before the execution
-    virtual bool needs_guard(query_processor& qp) const {
+    virtual bool needs_guard(query_processor& qp, service::query_state& state) const {
         return false;
     }
 

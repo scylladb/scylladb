@@ -19,10 +19,17 @@
 #include "qos_common.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "qos_configuration_change_subscriber.hh"
+#include "service/raft/raft_group0_client.hh"
+#include "service/raft/raft_group_registry.hh"
 
 namespace db {
+    class system_keyspace;
     class system_distributed_keyspace;
 }
+namespace cql3 {
+    class query_processor;
+}
+
 namespace qos {
 /**
  *  a structure to hold a service level
@@ -49,8 +56,12 @@ public:
     public:
         virtual future<qos::service_levels_info> get_service_levels() const = 0;
         virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const = 0;
-        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const = 0;
-        virtual future<> drop_service_level(sstring service_level_name) const = 0;
+        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const = 0;
+        virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard, abort_source& as) const = 0;
+
+        virtual bool is_v2() const = 0;
+        // Returns v2(raft) data accessor. If data accessor is already a raft one, returns nullptr.
+        virtual ::shared_ptr<service_level_distributed_data_accessor> upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const = 0;
     };
     using service_level_distributed_data_accessor_ptr = ::shared_ptr<service_level_distributed_data_accessor>;
 
@@ -67,6 +78,7 @@ private:
         semaphore notifications_serializer = semaphore(1);
         future<> distributed_data_update = make_ready_future();
         abort_source dist_data_update_aborter;
+        abort_source group0_aborter;
     };
 
     std::unique_ptr<global_controller_data> _global_controller_db;
@@ -124,6 +136,8 @@ public:
      */
     future<> stop();
 
+    void abort_group0_operations();
+
     /**
      * Check the distributed data for changes in a constant interval and updates
      * the service_levels configuration in accordance (adds, removes, or updates
@@ -141,9 +155,9 @@ public:
     future<> update_service_levels_from_distributed_data();
 
 
-    future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists);
-    future<> alter_distributed_service_level(sstring name, service_level_options slo);
-    future<> drop_distributed_service_level(sstring name, bool if_exists);
+    future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists, std::optional<service::group0_guard> guard);
+    future<> alter_distributed_service_level(sstring name, service_level_options slo, std::optional<service::group0_guard> guard);
+    future<> drop_distributed_service_level(sstring name, bool if_exists, std::optional<service::group0_guard> guard);
     future<service_levels_info> get_distributed_service_levels();
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
 
@@ -170,6 +184,19 @@ public:
         return sl_it->second;
     }
 
+public:
+
+    /**
+     * Returns true if service levels module is running under raft
+     */
+    bool is_v2() const;
+
+    void upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client);
+
+    /**
+     * Migrate data from `system_distributed.service_levels` to `system.service_levels_v2`
+     */
+    static future<> migrate_to_v2(size_t nodes_count, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as);
 private:
     /**
      *  Adds a service level configuration if it doesn't exists, and updates
@@ -207,7 +234,7 @@ private:
         alter
     };
 
-    future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type);
+    future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, std::optional<service::group0_guard> guard);
 public:
 
     /**
@@ -230,4 +257,12 @@ public:
     virtual void on_up(const gms::inet_address& endpoint) override;
     virtual void on_down(const gms::inet_address& endpoint) override;
 };
+
+future<shared_ptr<service_level_controller::service_level_distributed_data_accessor>> 
+get_service_level_distributed_data_accessor_for_current_version(
+    db::system_keyspace& sys_ks,
+    db::system_distributed_keyspace& sys_dist_ks,
+    cql3::query_processor& qp, service::raft_group0_client& group0_client
+);
+
 }

@@ -27,6 +27,7 @@
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
+#include "service/qos/service_level_controller.hh"
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group0.hh"
@@ -2401,6 +2402,12 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     rtlogger.info("migrating system_auth keyspace data");
     co_await auth::migrate_to_auth_v2(_sys_ks.query_processor(), _group0.client(),
             [this] (abort_source*) { return start_operation();}, _as);
+
+    auto sl_version = co_await _sys_ks.get_service_levels_version();
+    if (!sl_version || *sl_version < 2) {
+        rtlogger.info("migrating service levels data");
+        co_await qos::service_level_controller::migrate_to_v2(_gossiper.num_endpoints(), _sys_ks, _sys_ks.query_processor(), _group0.client(), _as);
+    }
 
     rtlogger.info("building initial raft topology state and CDC generation");
     guard = co_await start_operation();

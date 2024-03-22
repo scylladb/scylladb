@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -45,6 +46,8 @@ namespace paxos {
 } // namespace service::paxos
 
 struct topology_request_state;
+
+class group0_guard;
 }
 
 namespace netw {
@@ -173,6 +176,7 @@ public:
     static constexpr auto SSTABLES_REGISTRY = "sstables";
     static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
     static constexpr auto TABLETS = "tablets";
+    static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -259,6 +263,7 @@ public:
     static schema_ptr sstables_registry();
     static schema_ptr cdc_generations_v3();
     static schema_ptr tablets();
+    static schema_ptr service_levels_v2();
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
@@ -584,6 +589,13 @@ public:
     future<> set_must_synchronize_topology(bool);
 
     future<service::topology_request_state> get_topology_request_state(utils::UUID id);
+
+public:
+    future<std::optional<int8_t>> get_service_levels_version();
+    
+    future<mutation> make_service_levels_version_mutation(int8_t version, const service::group0_guard& guard);
+    future<std::optional<mutation>> get_service_levels_version_mutation();
+
 private:
     static std::optional<service::topology_features> decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs);
 

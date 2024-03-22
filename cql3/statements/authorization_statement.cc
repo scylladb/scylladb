@@ -77,6 +77,6 @@ void cql3::statements::authorization_statement::maybe_correct_resource(auth::res
 }
 
 bool cql3::statements::authorization_altering_statement::needs_guard(
-                query_processor& qp) const {
+                query_processor& qp, service::query_state&) const {
     return !auth::legacy_mode(qp);
 };

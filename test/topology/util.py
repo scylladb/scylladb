@@ -301,3 +301,12 @@ def log_run_time(f):
         logging.info(f"{f.__name__} took {int(time.time() - start)} seconds.")
         return res
     return wrapped
+
+async def trigger_snapshot(manager, server: ServerInfo) -> None:
+    cql = manager.get_cql()
+    group0_id = (await cql.run_async(
+        "select value from system.scylla_local where key = 'raft_group0_id'"))[0].value
+
+    host = cql.cluster.metadata.get_host(server.ip_addr)
+    await manager.api.client.post(f"/raft/trigger_snapshot/{group0_id}", host=server.ip_addr)
+

@@ -30,7 +30,7 @@ schema_altering_statement::schema_altering_statement(cf_name name, timeout_confi
     , _is_column_family_level{true} {
 }
 
-bool schema_altering_statement::needs_guard(query_processor& qp) const {
+bool schema_altering_statement::needs_guard(query_processor&, service::query_state&) const {
     return true;
 }
 
