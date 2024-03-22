@@ -16,6 +16,8 @@
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <utility>
+#include <fmt/ranges.h>
+#include <fmt/std.h>
 
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/result_set_assertions.hh"

@@ -11,6 +11,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/functional/hash.hpp>
 #include <boost/icl/interval_map.hpp>
+#include <fmt/ranges.h>
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>

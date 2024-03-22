@@ -7,6 +7,7 @@
  */
 
 #include <exception>
+#include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
 #include "gms/endpoint_state.hh"
 #include "repair/repair.hh"

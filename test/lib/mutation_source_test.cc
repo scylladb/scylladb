@@ -9,6 +9,7 @@
 #include <set>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/test/unit_test.hpp>
+#include <fmt/ranges.h>
 #include "partition_slice_builder.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"

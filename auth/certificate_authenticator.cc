@@ -10,6 +10,7 @@
 #include "auth/certificate_authenticator.hh"
 
 #include <regex>
+#include <fmt/ranges.h>
 
 #include "utils/class_registrator.hh"
 #include "data_dictionary/data_dictionary.hh"

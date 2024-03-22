@@ -23,6 +23,7 @@
 #include "dht/boot_strapper.hh"
 #include <exception>
 #include <optional>
+#include <fmt/ranges.h>
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/coroutine/as_future.hh>

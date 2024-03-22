@@ -31,6 +31,8 @@
 #include <boost/range/algorithm_ext.hpp>
 #include <boost/range/adaptor/map.hpp>
 
+#include <fmt/ranges.h>
+
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>

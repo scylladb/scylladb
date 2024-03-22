@@ -12,6 +12,7 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include <boost/range/adaptors.hpp>
+#include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 
 using namespace std::chrono_literals;

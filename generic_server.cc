@@ -10,6 +10,7 @@
 
 #include "utils/to_string.hh"
 
+#include <fmt/ranges.h>
 #include <seastar/core/when_all.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/reactor.hh>

@@ -12,6 +12,7 @@
 #include "node_ops/node_ops_ctl.hh"
 #include "service/storage_service.hh"
 
+#include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 

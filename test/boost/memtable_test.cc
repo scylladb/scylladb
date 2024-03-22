@@ -16,6 +16,7 @@
 #include <seastar/util/closeable.hh>
 #include "service/migration_manager.hh"
 
+#include <fmt/ranges.h>
 #include <seastar/core/thread.hh>
 #include "replica/memtable.hh"
 #include "test/lib/cql_test_env.hh"

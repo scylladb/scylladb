@@ -8,6 +8,7 @@
 
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/combine.hpp>
+#include <fmt/ranges.h>
 #include "test/lib/scylla_test_case.hh"
 
 #include "dht/i_partitioner.hh"

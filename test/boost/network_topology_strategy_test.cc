@@ -8,6 +8,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptors.hpp>
+#include <fmt/ranges.h>
 #include "gms/inet_address.hh"
 #include "locator/types.hh"
 #include "utils/UUID_gen.hh"

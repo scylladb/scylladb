@@ -11,6 +11,7 @@
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm/remove_if.hpp>
+#include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>

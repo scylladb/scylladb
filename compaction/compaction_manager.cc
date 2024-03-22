@@ -14,6 +14,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include <memory>
+#include <fmt/ranges.h>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/switch_to.hh>

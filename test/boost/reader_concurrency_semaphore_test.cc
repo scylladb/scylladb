@@ -20,6 +20,7 @@
 #include "test/lib/random_schema.hh"
 #include "test/lib/tmpdir.hh"
 
+#include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "test/lib/scylla_test_case.hh"

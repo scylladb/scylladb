@@ -10,6 +10,7 @@
 #include "test/lib/scylla_test_case.hh"
 #include <string>
 #include <boost/range/adaptor/map.hpp>
+#include <fmt/ranges.h>
 
 #include "cdc/log.hh"
 #include "cdc/cdc_options.hh"

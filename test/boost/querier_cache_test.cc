@@ -15,6 +15,7 @@
 #include "test/lib/exception_utils.hh"
 #include "db/config.hh"
 
+#include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include "test/lib/scylla_test_case.hh"

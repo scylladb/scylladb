@@ -22,6 +22,7 @@
 #include "message/messaging_service.hh"
 #include "log.hh"
 #include "db/system_keyspace.hh"
+#include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>

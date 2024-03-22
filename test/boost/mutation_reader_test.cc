@@ -11,6 +11,8 @@
 #include <random>
 #include <source_location>
 
+#include <fmt/ranges.h>
+
 #include <seastar/core/sleep.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
