@@ -10,10 +10,10 @@ import pytest
 import time
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import read_barrier, wait_for_cql_and_get_hosts
-from test.topology.util import wait_until_topology_upgrade_finishes
+from test.pylib.util import read_barrier, wait_for_cql_and_get_hosts, unique_name
 from cassandra.cluster import ConsistencyLevel
-
+from test.topology.util import wait_until_topology_upgrade_finishes, restart, enter_recovery_state, reconnect_driver, \
+        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes
 
 def auth_data():
     return [
@@ -163,3 +163,71 @@ async def test_auth_v2_migration(request, manager: ManagerClient):
 
     logging.info("Checking auth statements after migration")
     await check_auth_v2_works(manager, hosts)
+
+
+@pytest.mark.asyncio
+async def test_auth_v2_during_recovery(manager: ManagerClient):
+    servers = await manager.servers_add(3)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    logging.info("Checking auth version before recovery")
+    auth_version = await cql.run_async(f"SELECT value FROM system.scylla_local WHERE key = 'auth_version'")
+    assert auth_version[0].value == "2"
+
+    logging.info("Creating role before recovery")
+    role_name = "ro" + unique_name()
+    await cql.run_async(f"CREATE ROLE {role_name}")
+    # auth reads are eventually consistent so we need to sync all nodes
+    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+
+    logging.info("Read roles before recovery")
+    roles = [row.role for row in await cql.run_async(f"LIST ROLES")]
+    assert set(roles) == set([role_name, "cassandra"])
+
+    logging.info("Poison with auth_v1 look a like data")
+    # this will verify that old roles are not brought back during recovery
+    # as it runs very similar code path as during v1->v2 migration
+    v1_ro_name = "v1_ro" + unique_name()
+    await cql.run_async(f"INSERT INTO system_auth.roles (role) VALUES ('{v1_ro_name}')")
+
+    logging.info(f"Restarting hosts {hosts} in recovery mode")
+    await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
+    for srv in servers:
+        await restart(manager, srv)
+
+    logging.info("Cluster restarted, waiting until driver reconnects to every server")
+    await reconnect_driver(manager)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    logging.info("Checking auth version during recovery")
+    auth_version = await cql.run_async(f"SELECT value FROM system.scylla_local WHERE key = 'auth_version'")
+    assert auth_version[0].value == "2"
+
+    logging.info("Reading roles during recovery")
+    roles = [row.role for row in await cql.run_async(f"LIST ROLES")]
+    assert set(roles) == set([role_name, "cassandra"])
+
+    logging.info("Restoring cluster to normal status")
+    await asyncio.gather(*(delete_raft_topology_state(cql, h) for h in hosts))
+    await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
+    for srv in servers:
+        await restart(manager, srv)
+
+    await reconnect_driver(manager)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    await asyncio.gather(*(wait_until_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
+    for host in hosts:
+        status = await manager.api.raft_topology_upgrade_status(host.address)
+        assert status == "not_upgraded"
+
+    await manager.api.upgrade_to_raft_topology(hosts[0].address)
+    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+
+    logging.info("Checking auth version after recovery")
+    auth_version = await cql.run_async(f"SELECT value FROM system.scylla_local WHERE key = 'auth_version'")
+    assert auth_version[0].value == "2"
+
+    logging.info("Reading roles after recovery")
+    roles = [row.role for row in await manager.get_cql().run_async(f"LIST ROLES")]
+    assert set(roles) == set([role_name, "cassandra"])
