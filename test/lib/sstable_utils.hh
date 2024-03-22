@@ -310,11 +310,11 @@ public:
         });
     }
 
-    static future<> do_with_tmp_directory(std::function<future<> (test_env&, sstring tmpdir_path)>&& fut) {
+    static future<> do_with_tmp_directory(std::function<future<> (test_env&, sstring tmpdir_path)>&& fut, test_env_config cfg = {}) {
         return test_env::do_with_async([fut = std::move(fut)] (test_env& env) {
             auto tmp = tmpdir();
             fut(env, tmp.path().string()).get();
-        });
+        }, cfg);
     }
 
     static future<> do_with_cloned_tmp_directory(sstring src, std::function<future<> (test_env&, sstring srcdir_path, sstring destdir_path)>&& fut) {
