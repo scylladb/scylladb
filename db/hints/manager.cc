@@ -325,8 +325,7 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     }
 }
 
-// For now, because `_uses_host_id` is always set to true, we don't use the second argument.
-hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip = {}) {
+hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip) {
     const std::filesystem::path hint_directory = _uses_host_id
             ? hints_dir() / host_id.to_sstring()
             : hints_dir() / ip.to_sstring();
@@ -446,25 +445,48 @@ future<> manager::change_host_filter(host_filter filter) {
     std::swap(_host_filter, filter);
     std::exception_ptr eptr = nullptr;
 
-    try {
-        // Iterate over existing hint directories and see if we can enable an endpoint manager
-        // for some of them
-        co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
-                [this] (fs::path datadir, directory_entry de) {
-            const endpoint_id ep = endpoint_id{utils::UUID{de.name}};
+    /* RAII lock for token metadata */ {
+        try {
+            const auto tmptr = _proxy.get_token_metadata_ptr();
 
-            const auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
-            if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(topology, ep)) {
-                return make_ready_future();
-            }
+            // Iterate over existing hint directories and see if we can enable an endpoint manager
+            // for some of them
+            co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
+                    [&] (fs::path datadir, directory_entry de) -> future<> {
+                auto maybe_hid_or_ep = std::invoke([&] () -> std::optional<locator::host_id_or_endpoint> {
+                    try {
+                        return locator::host_id_or_endpoint{de.name};
+                    } catch (...) {
+                        return std::nullopt;
+                    }
+                });
 
-            return get_ep_manager(ep).populate_segments_to_replay();
-        });
-    } catch (...) {
-        // Revert the changes in the filter. The code below will stop the additional managers
-        // that were started so far.
-        _host_filter = std::move(filter);
-        eptr = std::current_exception();
+                if (!maybe_hid_or_ep) {
+                    co_return;
+                }
+
+                try {
+                    maybe_hid_or_ep->resolve(*tmptr);
+                } catch (...) {
+                    co_return;
+                }
+
+                const auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
+                const auto& host_id = maybe_hid_or_ep->id;
+                const auto& ip = maybe_hid_or_ep->endpoint;
+
+                if (_ep_managers.contains(host_id) || !_host_filter.can_hint_for(topology, host_id)) {
+                    co_return;
+                }
+
+                co_await get_ep_manager(host_id, ip).populate_segments_to_replay();
+            });
+        } catch (...) {
+            // Revert the changes in the filter. The code below will stop the additional managers
+            // that were started so far.
+            _host_filter = std::move(filter);
+            eptr = std::current_exception();
+        }
     }
 
     try {
