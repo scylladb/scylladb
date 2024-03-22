@@ -20,6 +20,7 @@ from cassandra.util import datetime_from_uuid1           # type: ignore # pylint
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier, get_available_host, unique_name
+from contextlib import asynccontextmanager
 
 
 logger = logging.getLogger(__name__)
@@ -388,3 +389,55 @@ async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_e
         logger.warning("New coordinator was not elected %s", coordinators_ids)
 
     await wait_for(new_coordinator_elected, deadline=deadline)
+
+@asynccontextmanager
+async def new_test_keyspace(cql, opts):
+    """
+    A utility function for creating a new temporary keyspace with given
+    options. It can be used in a "async with", as:
+        async with new_test_keyspace(cql, '...') as keyspace:
+    """
+    keyspace = unique_name()
+    await cql.run_async("CREATE KEYSPACE " + keyspace + " " + opts)
+    try:
+        yield keyspace
+    finally:
+        await cql.run_async("DROP KEYSPACE " + keyspace)
+
+previously_used_table_names = []
+@asynccontextmanager
+async def new_test_table(cql, keyspace, schema, extra=""):
+    """
+    A utility function for creating a new temporary table with a given schema.
+    Because Scylla becomes slower when a huge number of uniquely-named tables
+    are created and deleted (see https://github.com/scylladb/scylla/issues/7620)
+    we keep here a list of previously used but now deleted table names, and
+    reuse one of these names when possible.
+    This function can be used in a "async with", as:
+       async with create_table(cql, test_keyspace, '...') as table:
+    """
+    global previously_used_table_names
+    if not previously_used_table_names:
+        previously_used_table_names.append(unique_name())
+    table_name = previously_used_table_names.pop()
+    table = keyspace + "." + table_name
+    await cql.run_async("CREATE TABLE " + table + "(" + schema + ")" + extra)
+    try:
+        yield table
+    finally:
+        await cql.run_async("DROP TABLE " + table)
+        previously_used_table_names.append(table_name)
+
+@asynccontextmanager
+async def new_materialized_view(cql, table, select, pk, where, extra=""):
+    """
+    A utility function for creating a new temporary materialized view in
+    an existing table.
+    """
+    keyspace = table.split('.')[0]
+    mv = keyspace + "." + unique_name()
+    await cql.run_async(f"CREATE MATERIALIZED VIEW {mv} AS SELECT {select} FROM {table} WHERE {where} PRIMARY KEY ({pk}) {extra}")
+    try:
+        yield mv
+    finally:
+        await cql.run_async(f"DROP MATERIALIZED VIEW {mv}")
