@@ -14,8 +14,11 @@
 // Seastar features.
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/file-types.hh>
+#include <seastar/core/file.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
@@ -31,9 +34,11 @@
 #include "gms/gossiper.hh"
 #include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/token_metadata.hh"
 #include "replica/database.hh"
 #include "service/storage_proxy.hh"
 #include "utils/directories.hh"
+#include "utils/disk-error-handler.hh"
 #include "utils/error_injection.hh"
 #include "utils/lister.hh"
 #include "seastarx.hh"
@@ -613,6 +618,92 @@ future<> manager::initialize_endpoint_managers() {
         const locator::host_id host_id = maybe_host_id_or_ep->resolve_id(*tmptr);
         co_await maybe_create_ep_mgr(host_id, maybe_host_id_or_ep->endpoint());
     });
+}
+
+// This function assumes that the hint directory is NOT modified as long as this function is being executed.
+future<> manager::migrate_ip_directories() {
+    std::vector<sstring> hint_directories{};
+
+    // Step 1. Gather the names of the hint directories.
+    co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
+            [&] (std::filesystem::path, directory_entry de) -> future<> {
+        hint_directories.push_back(std::move(de.name));
+        co_return;
+    });
+
+    struct hint_dir_mapping {
+        sstring current_name;
+        sstring new_name;
+    };
+
+    std::vector<hint_dir_mapping> dirs_to_rename{};
+    std::vector<std::filesystem::path> dirs_to_remove{};
+
+    /* RAII lock for token metadata */ {
+        // We need to keep the topology consistent throughout the loop below to
+        // ensure that, for example, two different IPs won't be mapped to
+        // the same host ID.
+        //
+        // We don't want to hold on to this pointer for longer than necessary.
+        // Topology changes might be postponed otherwise.
+        auto tmptr = _proxy.get_token_metadata_ptr();
+
+        // Step 2. Obtain mappings IP -> host ID for the directories.
+        for (auto& directory : hint_directories) {
+            try {
+                locator::host_id_or_endpoint hid_or_ep{directory};
+
+                // If the directory's name already represents a host ID, there is nothing to do.
+                if (hid_or_ep.has_host_id()) {
+                    continue;
+                }
+
+                const locator::host_id host_id = hid_or_ep.resolve_id(*tmptr);
+                dirs_to_rename.push_back({.current_name = std::move(directory), .new_name = host_id.to_sstring()});
+            } catch (...) {
+                // We cannot map the IP to the corresponding host ID either because
+                // the relevant mapping doesn't exist anymore or an error occurred. Drop it.
+                //
+                // We only care about directories named after IPs during an upgrade,
+                // so we don't want to make this more complex than necessary.
+                manager_logger.warn("No mapping IP-host ID for hint directory {}. It is going to be removed", directory);
+                dirs_to_remove.push_back(_hints_dir / std::move(directory));
+            }
+        }
+    }
+
+    // We don't need this memory anymore. The only remaining elements are the names of the directories
+    // that already represent valid host IDs. We won't do anything with them. The rest have been moved
+    // to either `dirs_to_rename` or `dirs_to_remove`.
+    hint_directories.clear();
+
+    // Step 3. Try to rename the directories.
+    co_await coroutine::parallel_for_each(dirs_to_rename, [&] (auto& mapping) -> future<> {
+        std::filesystem::path old_name = _hints_dir / std::move(mapping.current_name);
+        std::filesystem::path new_name = _hints_dir / std::move(mapping.new_name);
+
+        try {
+            manager_logger.info("Renaming hint directory {} to {}", old_name.native(), new_name.native());
+            co_await rename_file(old_name.native(), new_name.native());
+        } catch (...) {
+            manager_logger.warn("Renaming directory {} to {} has failed: {}",
+                    old_name.native(), new_name.native(), std::current_exception());
+            dirs_to_remove.push_back(std::move(old_name));
+        }
+    });
+
+    // Step 4. Remove directories that don't represent host IDs.
+    co_await coroutine::parallel_for_each(dirs_to_remove, [] (auto& directory) -> future<> {
+        try {
+            manager_logger.warn("Removing hint directory {}", directory.native());
+            co_await lister::rmdir(directory);
+        } catch (...) {
+            on_internal_error(manager_logger,
+                    seastar::format("Removing a hint directory has failed. Reason: {}", std::current_exception()));
+        }
+    });
+
+    co_await io_check(sync_directory, _hints_dir.native());
 }
 
 } // namespace db::hints
