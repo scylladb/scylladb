@@ -715,6 +715,7 @@ future<> storage_service::topology_state_load() {
     for (const auto& gen_id : _topology_state_machine._topology.committed_cdc_generations) {
         co_await _cdc_gens.local().handle_cdc_generation(gen_id);
         if (gen_id == _topology_state_machine._topology.committed_cdc_generations.back()) {
+            co_await _sys_ks.local().update_cdc_generation_id(gen_id);
             rtlogger.debug("topology_state_load: the last committed CDC generation ID: {}", gen_id);
         }
     }
