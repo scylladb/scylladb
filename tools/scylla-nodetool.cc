@@ -255,6 +255,18 @@ std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sst
     return keyspaces;
 }
 
+std::map<sstring, std::vector<sstring>> get_ks_to_cfs(scylla_rest_client& client) {
+    auto res = client.get("/column_family/");
+    std::map<sstring, std::vector<sstring>> keyspaces;
+    for (auto& element : res.GetArray()) {
+        const auto& cf_info = element.GetObject();
+        auto ks = rjson::to_string_view(cf_info["ks"]);
+        auto cf = rjson::to_string_view(cf_info["cf"]);
+        keyspaces[sstring(ks)].push_back(sstring(cf));
+    }
+    return keyspaces;
+}
+
 struct keyspace_and_tables {
     sstring keyspace;
     std::vector<sstring> tables;
@@ -837,18 +849,6 @@ void gossipinfo_operation(scylla_rest_client& client, const bpo::variables_map&)
             fmt::print("  {}:{}\n", state, rjson::to_string_view(obj["value"]));
         }
     }
-}
-
-std::map<sstring, std::vector<sstring>> get_ks_to_cfs(scylla_rest_client& client) {
-    auto res = client.get("/column_family/");
-    std::map<sstring, std::vector<sstring>> keyspaces;
-    for (auto& element : res.GetArray()) {
-        const auto& cf_info = element.GetObject();
-        auto ks = rjson::to_string_view(cf_info["ks"]);
-        auto cf = rjson::to_string_view(cf_info["cf"]);
-        keyspaces[sstring(ks)].push_back(sstring(cf));
-    }
-    return keyspaces;
 }
 
 static uint64_t get_off_heap_memory_used(scylla_rest_client& client) {
