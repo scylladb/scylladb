@@ -43,6 +43,12 @@ public:
 
 struct test_env_config {
     db::large_data_handler* large_data_handler = nullptr;
+<<<<<<< HEAD
+=======
+    data_dictionary::storage_options storage; // will be local by default
+    bool use_uuid = true;
+    size_t available_memory = memory::stats().total_memory();
+>>>>>>> 169629dd40 (test/lib: allow overriding available memory via test_env_config)
 };
 
 class test_env {
