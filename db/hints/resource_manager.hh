@@ -111,7 +111,8 @@ private:
     /// value.
     ///
     /// \param path directory to scan
-    /// \param ep_name end point ID (as a string)
+    /// \param shard_manager the hint manager managing the directory specified by `path`
+    /// \param ep_key endpoint ID corresponding to the scanned directory
     /// \return future that resolves when scanning is complete
     future<> scan_one_ep_dir(fs::path path, manager& shard_manager, endpoint_id ep_key);
 };
