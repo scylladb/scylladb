@@ -134,6 +134,7 @@ static future<> validate_role_exists(const service& ser, std::string_view role_n
 service::service(
         utils::loading_cache_config c,
         cql3::query_processor& qp,
+        ::service::raft_group0_client& g0,
         ::service::migration_notifier& mn,
         std::unique_ptr<authorizer> z,
         std::unique_ptr<authenticator> a,
@@ -142,6 +143,7 @@ service::service(
             : _loading_cache_config(std::move(c))
             , _permissions_cache(nullptr)
             , _qp(qp)
+            , _group0_client(g0)
             , _mnotifier(mn)
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
@@ -165,6 +167,7 @@ service::service(
             : service(
                       std::move(c),
                       qp,
+                      g0,
                       mn,
                       create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
                       create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm),
@@ -439,15 +442,6 @@ future<permission_set> get_permissions(const service& ser, const authenticated_u
     });
 }
 
-bool is_enforcing(const service& ser)  {
-    const bool enforcing_authorizer = ser.underlying_authorizer().qualified_java_name() != allow_all_authorizer_name;
-
-    const bool enforcing_authenticator = ser.underlying_authenticator().qualified_java_name()
-            != allow_all_authenticator_name;
-
-    return enforcing_authorizer || enforcing_authenticator;
-}
-
 bool is_protected(const service& ser, command_desc cmd) noexcept {
     if (cmd.type_ == command_desc::type::ALTER_WITH_OPTS) {
         return false; // Table attributes are OK to modify; see #7057.
@@ -480,8 +474,9 @@ future<> create_role(
         const service& ser,
         std::string_view name,
         const role_config& config,
-        const authentication_options& options) {
-    return ser.underlying_role_manager().create(name, config).then([&ser, name, &options] {
+        const authentication_options& options,
+        mutations_collector& mc) {
+    return ser.underlying_role_manager().create(name, config, mc).then([&ser, name, &options, &mc] {
         if (!auth::any_authentication_options(options)) {
             return make_ready_future<>();
         }
@@ -489,8 +484,8 @@ future<> create_role(
         return futurize_invoke(
                 &validate_authentication_options_are_supported,
                 options,
-                ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
-            return ser.underlying_authenticator().create(name, options);
+                ser.underlying_authenticator().supported_options()).then([&ser, name, &options, &mc] {
+            return ser.underlying_authenticator().create(name, options, mc);
         }).handle_exception([&ser, name](std::exception_ptr ep) {
             // Roll-back.
             return ser.underlying_role_manager().drop(name).then([ep = std::move(ep)] {
@@ -537,6 +532,14 @@ future<> drop_role(const service& ser, std::string_view name) {
     });
 }
 
+future<> grant_role(const service& ser, std::string_view grantee_name, std::string_view role_name) {
+    return ser.underlying_role_manager().grant(grantee_name, role_name);
+}
+
+future<> revoke_role(const service& ser, std::string_view revokee_name, std::string_view role_name) {
+    return ser.underlying_role_manager().revoke(revokee_name, role_name);
+}
+
 future<bool> has_role(const service& ser, std::string_view grantee, std::string_view name) {
     return when_all_succeed(
             validate_role_exists(ser, name),
@@ -550,6 +553,14 @@ future<bool> has_role(const service& ser, const authenticated_user& u, std::stri
     }
 
     return has_role(ser, *u.name, name);
+}
+
+future<> set_attribute(const service& ser, std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) {
+    return ser.underlying_role_manager().set_attribute(role_name, attribute_name, attribute_value);
+}
+
+future<> remove_attribute(const service& ser, std::string_view role_name, std::string_view attribute_name) {
+    return ser.underlying_role_manager().remove_attribute(role_name, attribute_name);
 }
 
 future<> grant_permissions(
@@ -635,6 +646,10 @@ future<std::vector<permission_details>> list_filtered_permissions(
             });
         });
     });
+}
+
+future<> announce_mutations(service& ser, mutations_collector& mc) {
+    return ser.announce_mutations(mc);
 }
 
 future<> migrate_to_auth_v2(cql3::query_processor& qp, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {

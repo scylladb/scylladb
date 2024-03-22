@@ -155,7 +155,7 @@ future<auth::authenticated_user> auth::certificate_authenticator::authenticate(c
     throw exceptions::authentication_exception("Cannot authenticate using attribute map");
 }
 
-future<> auth::certificate_authenticator::create(std::string_view role_name, const authentication_options& options) {
+future<> auth::certificate_authenticator::create(std::string_view role_name, const authentication_options& options, mutations_collector& mc) {
     // TODO: should we keep track of roles/enforce existence? Role manager should deal with this...
     co_return;
 }

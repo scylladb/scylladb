@@ -59,7 +59,7 @@ public:
         return make_ready_future<authenticated_user>(anonymous_user());
     }
 
-    virtual future<> create(std::string_view, const authentication_options& options) override {
+    virtual future<> create(std::string_view, const authentication_options& options, mutations_collector&) override {
         return make_ready_future();
     }
 

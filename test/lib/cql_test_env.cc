@@ -955,11 +955,14 @@ private:
                 config.is_superuser = true;
                 config.can_login = true;
 
+                //FIXME(mmal): fix mc handling in tests
+                auth::mutations_collector mc{std::nullopt};
                 auth::create_role(
                         _auth_service.local(),
                         testing_superuser,
                         config,
-                        auth::authentication_options()).get();
+                        auth::authentication_options(),
+                        mc).get();
             } catch (const auth::role_already_exists&) {
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }

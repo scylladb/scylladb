@@ -222,7 +222,7 @@ public:
     ///
     /// `nullptr` for internal instances.
     ///
-    const auth::service* get_auth_service() const {
+    auth::service* get_auth_service() const {
         return _auth_service;
     }
 

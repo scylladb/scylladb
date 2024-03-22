@@ -15,6 +15,7 @@
 
 #include "mutation/canonical_mutation.hh"
 #include "schema/schema_fwd.hh"
+#include "seastar/core/abort_source.hh"
 #include "timestamp.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "cql3/query_processor.hh"
@@ -200,6 +201,87 @@ future<> announce_mutations(
             std::move(values));
     std::vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
     co_await announce_mutations_with_guard(group0_client, std::move(cmuts), std::move(group0_guard), as);
+}
+
+mutations_collector::~mutations_collector() {
+    if (_muts.size() > 0 || _generators.size() > 0) {
+        on_internal_error_noexcept(auth_log, format("mutations_collector: contains {} mutations and {} generators when destructed, they will be lost", _muts.size(), _generators.size()));
+    }
+}
+
+api::timestamp_type mutations_collector::write_timestamp() const {
+    return _guard->write_timestamp();
+}
+
+void mutations_collector::add_mutation(mutation m) {
+    _muts.push_back(std::move(m));
+}
+
+void mutations_collector::add_mutations(std::vector<mutation> ms) {
+    _muts.insert(_muts.end(),
+            std::make_move_iterator(ms.begin()),
+            std::make_move_iterator(ms.end()));
+}
+
+void mutations_collector::add_generator(generator_func f) {
+    _generators.push_back(std::move(f));
+}
+
+future<> mutations_collector::announce(::service::raft_group0_client& group0_client, seastar::abort_source& as) {
+    if (_muts.size() == 0 && _generators.size() == 0) {
+        co_return;
+    }
+    if (!_guard) {
+        on_internal_error(auth_log, "mutations_collector: trying to announce without guard");
+    }
+    // common case, don't bother with potential batching as typically we
+    // would have only 1-2 mutations, when producer expects higher number of
+    // mutations it should use generator
+    if (_generators.size() == 0) {
+        std::vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
+        _muts.clear();
+        co_return co_await announce_mutations_with_guard(group0_client, std::move(cmuts), std::move(*_guard), &as);
+    }
+
+    if (_muts.size() > 0) {
+        _generators.emplace_back([this] (api::timestamp_type&) -> mutations_generator {
+            for (auto& mut: _muts) {
+                co_yield std::move(mut);
+            }
+            _muts.clear();
+        });
+    }
+
+    auto chained_generator = [this] (api::timestamp_type& t) -> mutations_generator {
+        for (auto& generator: _generators) {
+            auto g = generator(t);
+            while (auto mut = co_await g()) {
+                co_yield std::move(*mut);
+            }
+        }
+        _generators.clear();
+    };
+
+    co_return co_await announce_mutations_with_batching(
+            group0_client,
+            std::bind_front(&::service::raft_group0_client::start_operation, &group0_client),
+            std::move(chained_generator),
+            &as);
+}
+
+//FIXME(mmal): add unittest for mutations_collector if possible.
+
+future<> collect_mutations(
+        cql3::query_processor& qp,
+        const sstring query_string,
+        std::vector<data_value_or_unset> values,
+        mutations_collector& collector) {
+    auto muts = co_await qp.get_mutations_internal(
+            query_string,
+            internal_distributed_query_state(),
+            collector.write_timestamp(),
+            std::move(values));
+    collector.add_mutations(std::move(muts));
 }
 
 }
