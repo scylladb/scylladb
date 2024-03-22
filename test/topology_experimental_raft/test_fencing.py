@@ -68,6 +68,12 @@ async def test_fence_writes(request, manager: ManagerClient):
     logger.info("Bootstrapping the last node")
     servers += [await manager.server_add()]
 
+    # Disable load balancer as it might bump topology version, undoing the decrement below.
+    # This should be done before adding the last two servers,
+    # otherwise it can break the version == fence_version condition
+    # which the test relies on.
+    await manager.api.disable_tablet_balancing(servers[2].ip_addr)
+
     logger.info(f'Creating new tables')
     random_tables = RandomTables(request.node.name, manager, unique_name(), 3)
     table1 = await random_tables.add_table(name='t1', pks=1, columns=[
@@ -83,9 +89,6 @@ async def test_fence_writes(request, manager: ManagerClient):
 
     logger.info(f'Waiting for cql and hosts')
     host2 = (await wait_for_cql_and_get_hosts(cql, [servers[2]], time.time() + 60))[0]
-
-    # Disable load balancer as it might bump topology version, undoing the decrement below.
-    await manager.api.disable_tablet_balancing(servers[2].ip_addr)
 
     version = await get_version(manager, host2)
     logger.info(f"version on host2 {version}")
@@ -118,6 +121,14 @@ async def test_fence_hints(request, manager: ManagerClient):
     s0 = await manager.server_add(config={
         'error_injections_at_startup': ['decrease_hints_flush_period']
     }, cmdline=['--logger-log-level', 'hints_manager=trace'])
+
+    # Disable load balancer as it might bump topology version, potentially creating a race condition
+    # with read modify write below.
+    # This should be done before adding the last two servers,
+    # otherwise it can break the version == fence_version condition
+    # which the test relies on.
+    await manager.api.disable_tablet_balancing(s0.ip_addr)
+
     [s1, s2] = await manager.servers_add(2)
 
     logger.info(f'Creating test table')
@@ -131,10 +142,6 @@ async def test_fence_hints(request, manager: ManagerClient):
 
     logger.info(f'Waiting for cql and hosts')
     hosts = await wait_for_cql_and_get_hosts(cql, [s0, s2], time.time() + 60)
-
-    # Disable load balancer as it might bump topology version, potentially creating a race condition
-    # with read modify write below
-    await manager.api.disable_tablet_balancing(s2.ip_addr)
 
     host2 = host_by_server(hosts, s2)
     new_version = (await get_version(manager, host2)) + 1
