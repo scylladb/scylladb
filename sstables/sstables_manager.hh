@@ -199,6 +199,9 @@ private:
         return _large_data_handler;
     }
     friend class sstable;
+
+    // Allow testing private methods/variables via test_env_sstables_manager
+    friend class test_env_sstables_manager;
 };
 
 }   // namespace sstables
