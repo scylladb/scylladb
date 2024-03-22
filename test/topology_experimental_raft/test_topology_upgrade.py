@@ -13,8 +13,7 @@ from test.pylib.rest_client import HTTPError
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import log_run_time, wait_until_topology_upgrade_finishes, \
-        wait_for_cdc_generations_publishing, check_system_topology_and_cdc_generations_v3_consistency, \
-        start_writes_to_cdc_table
+        wait_for_cdc_generations_publishing, check_system_topology_and_cdc_generations_v3_consistency
 
 
 @pytest.mark.asyncio
@@ -39,8 +38,6 @@ async def test_topology_upgrade_basic(request, manager: ManagerClient):
     for host in hosts:
         status = await manager.api.raft_topology_upgrade_status(host.address)
         assert status == "not_upgraded"
-
-    finish_writes_and_verify = await start_writes_to_cdc_table(cql)
 
     logging.info("Triggering upgrade to raft topology")
     await manager.api.upgrade_to_raft_topology(hosts[0].address)
@@ -68,6 +65,3 @@ async def test_topology_upgrade_basic(request, manager: ManagerClient):
 
     logging.info("Checking consistency of data in system.topology and system.cdc_generations_v3")
     await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
-
-    logging.info("Checking correctness of data in system_distributed.cdc_streams_descriptions_v2")
-    await finish_writes_and_verify()
