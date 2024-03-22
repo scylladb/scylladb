@@ -237,10 +237,9 @@ void manager::forbid_hints() {
 }
 
 void manager::forbid_hints_for_eps_with_pending_hints() {
-    manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
-
-    for (auto& [_, ep_man] : _ep_managers) {
-        if (has_ep_with_pending_hints(ep_man.end_point_key())) {
+    for (auto& [host_id, ep_man] : _ep_managers) {
+        const auto ip = *_hint_directory_manager.get_mapping(host_id);
+        if (has_ep_with_pending_hints(host_id) || has_ep_with_pending_hints(ip)) {
             ep_man.forbid_hints();
         } else {
             ep_man.allow_hints();

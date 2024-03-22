@@ -7,6 +7,8 @@
  */
 
 #include "resource_manager.hh"
+#include "gms/inet_address.hh"
+#include "locator/token_metadata.hh"
 #include "manager.hh"
 #include "log.hh"
 #include <boost/range/algorithm/for_each.hpp>
@@ -91,7 +93,8 @@ future<> space_watchdog::stop() noexcept {
 }
 
 // Called under the end_point_hints_manager::file_update_mutex() of the corresponding end_point_hints_manager instance.
-future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, endpoint_id ep_key) {
+future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager,
+        std::optional<std::variant<locator::host_id, gms::inet_address>> maybe_ep_key) {
     // It may happen that we get here and the directory has already been deleted in the context of manager::drain_for().
     // In this case simply bail out.
     if (!co_await file_exists(path.native())) {
@@ -99,10 +102,10 @@ future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, 
     }
 
     co_await lister::scan_dir(path, lister::dir_entry_types::of<directory_entry_type::regular>(),
-            coroutine::lambda([this, ep_key, &shard_manager] (fs::path dir, directory_entry de) -> future<> {
+            coroutine::lambda([this, maybe_ep_key, &shard_manager] (fs::path dir, directory_entry de) -> future<> {
         // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
-        if (_files_count == 1) {
-            shard_manager.add_ep_with_pending_hints(ep_key);
+        if (maybe_ep_key && _files_count == 1) {
+            shard_manager.add_ep_with_pending_hints(*maybe_ep_key);
         }
         ++_files_count;
 
@@ -142,14 +145,35 @@ void space_watchdog::on_timer() {
                 // not hintable).
                 // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
                 // continue to enumeration - there is no one to change them.
-                const internal::endpoint_id ep{utils::UUID{de.name}};
+                auto maybe_variant = std::invoke([&] () -> std::optional<std::variant<locator::host_id, gms::inet_address>> {
+                    try {
+                        const auto hid_or_ep = locator::host_id_or_endpoint{de.name};
+                        if (hid_or_ep.has_host_id()) {
+                            return std::variant<locator::host_id, gms::inet_address>(hid_or_ep.id());
+                        } else {
+                            return std::variant<locator::host_id, gms::inet_address>(hid_or_ep.endpoint());
+                        }
+                    } catch (...) {
+                        return std::nullopt;
+                    }
+                });
 
-                if (shard_manager.have_ep_manager(ep)) {
-                    return shard_manager.with_file_update_mutex_for(ep, [this, ep, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)] () mutable {
-                        return scan_one_ep_dir(dir / ep_name, shard_manager, ep);
+                // Case 1: The directory is managed by an endpoint manager.
+                if (maybe_variant && shard_manager.have_ep_manager(*maybe_variant)) {
+                    const auto variant = *maybe_variant;
+                    return shard_manager.with_file_update_mutex_for(variant, [this, variant, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)] () mutable {
+                        return scan_one_ep_dir(dir / ep_name, shard_manager, variant);
                     });
-                } else {
-                    return scan_one_ep_dir(dir / de.name, shard_manager, ep);
+                }
+                // Case 2: The directory isn't managed by an endpoint manager, but it represents either an IP address,
+                //         or a host ID.
+                else if (maybe_variant) {
+                    return scan_one_ep_dir(dir / de.name, shard_manager, *maybe_variant);
+                }
+                // Case 3: The directory isn't managed by an endpoint manager, and it represents neither an IP address,
+                //         nor a host ID.
+                else {
+                    return scan_one_ep_dir(dir / de.name, shard_manager, {});
                 }
             }).get();
         }
