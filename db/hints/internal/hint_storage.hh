@@ -46,5 +46,41 @@ using hint_entry_reader = commitlog_entry_reader;
 /// \return A future that resolves when the operation is complete.
 future<> rebalance_hints(std::filesystem::path hint_directory);
 
+class hint_directory_manager {
+private:
+    std::map<locator::host_id, gms::inet_address> _mappings;
+
+public:
+    // Inserts a new mapping and returns it.
+    // If either the host ID or the IP is already in the map, the function inserts nothings
+    // and returns the existing mapping instead.
+    std::pair<locator::host_id, gms::inet_address> insert_mapping(const locator::host_id& host_id,
+            const gms::inet_address& ip);
+
+    // Returns the corresponding IP for a given host ID if a mapping is present in the directory manager.
+    // Otherwise, an empty optional is returned.
+    [[nodiscard]] std::optional<gms::inet_address> get_mapping(const locator::host_id& host_id) const noexcept;
+
+    // Returns the corresponding host ID for a given IP if a mapping is present in the directory manager.
+    // Otherwise, an empty optional is returned.
+    [[nodiscard]] std::optional<locator::host_id> get_mapping(const gms::inet_address& ip) const noexcept;
+
+    // Returns a mapping corresponding to either the passed host ID, or the passed IP if the mapping exists.
+    // Otherwise, an empty optional is returned.
+    [[nodiscard]] std::optional<std::pair<locator::host_id, gms::inet_address>> get_mapping(
+            const locator::host_id& host_id, const gms::inet_address& ip) const noexcept;
+
+    // Removes a mapping corresponding to the passed host ID if the mapping exists.
+    void remove_mapping(const locator::host_id& host_id) noexcept;
+    // Removes a mapping corresponding to the passed IP if the mapping exists.
+    void remove_mapping(const gms::inet_address& ip) noexcept;
+
+    bool has_mapping(const locator::host_id& host_id) const noexcept;
+    bool has_mapping(const gms::inet_address& ip) const noexcept;
+
+    // Removes all of the mappings.
+    void clear() noexcept;
+};
+
 } // namespace internal
 } // namespace db::hints
