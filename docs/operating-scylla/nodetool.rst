@@ -29,6 +29,7 @@ Nodetool
    nodetool-commands/enablegossip
    nodetool-commands/flush
    nodetool-commands/getendpoints
+   nodetool-commands/getsstables
    nodetool-commands/gettraceprobability
    nodetool-commands/gossipinfo
    nodetool-commands/help
@@ -105,6 +106,7 @@ Operations that are not listed below are currently not available.
 * :doc:`flush </operating-scylla/nodetool-commands/flush/>` - Flush one or more column families.
 * :doc:`getendpoints <nodetool-commands/getendpoints/>` :code:`<keyspace>` :code:`<table>` :code:`<key>`- Print the end points that owns the key.
 * **getlogginglevels** - Get the runtime logging levels.
+* :doc:`getsstables </operating-scylla/nodetool-commands/getsstables>` - Print the sstable filenames that own the key.
 * :doc:`gettraceprobability </operating-scylla/nodetool-commands/gettraceprobability>` - Displays the current trace probability value. 0 is disabled 1 is enabled.
 * :doc:`gossipinfo </operating-scylla/nodetool-commands/gossipinfo/>` - Shows the gossip information for the cluster.
 * :doc:`help </operating-scylla/nodetool-commands/help/>` - Display list of available nodetool commands.
