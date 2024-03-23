@@ -5,6 +5,7 @@ add_library(utils STATIC)
 target_sources(utils
   PRIVATE
     UUID_gen.cc
+    alien_worker.cc
     arch/powerpc/crc32-vpmsum/crc32_wrapper.cc
     arch/powerpc/crc32-vpmsum/crc32.S
     array-search.cc
