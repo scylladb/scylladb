@@ -38,6 +38,16 @@ create_keyspace_statement::create_keyspace_statement(const sstring& name, shared
     , _if_not_exists{if_not_exists}
 {
 }
+create_keyspace_statement::create_keyspace_statement(const sstring& name, bool if_not_exists) {
+
+    auto default_attrs = make_shared<ks_prop_defs>();
+
+    default_attrs->add_property(ks_prop_defs::KW_REPLICATION, {{ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY, "NetworkTopologyStrategy"}, {ks_prop_defs::REPLICATION_FACTOR_KEY, "3"}});
+
+    _name = name;
+    _attrs = default_attrs;
+    _if_not_exists = if_not_exists;
+}
 
 const sstring& create_keyspace_statement::keyspace() const
 {
