@@ -46,6 +46,7 @@ Nodetool
    nodetool-commands/settraceprobability
    nodetool-commands/setlogginglevel
    nodetool-commands/snapshot
+   nodetool-commands/sstableinfo
    nodetool-commands/statusbackup
    nodetool-commands/statusbinary
    nodetool-commands/statusgossip
@@ -125,6 +126,7 @@ Operations that are not listed below are currently not available.
 * :doc:`setlogginglevel</operating-scylla/nodetool-commands/setlogginglevel>` - sets the logging level threshold for Scylla classes
 * :doc:`settraceprobability </operating-scylla/nodetool-commands/settraceprobability/>` ``<value>`` - Sets the probability for tracing a request. race probability value
 * :doc:`snapshot </operating-scylla/nodetool-commands/snapshot>` :code:`[-t tag] [-cf column_family] <keyspace>`  - Take a snapshot of specified keyspaces or a snapshot of the specified table.
+* :doc:`sstableinfo </operating-scylla/nodetool-commands/sstableinfo>` - Get information about sstables per keyspace/table.
 * :doc:`statusbackup </operating-scylla/nodetool-commands/statusbackup/>` - Status of incremental backup.
 * :doc:`statusbinary </operating-scylla/nodetool-commands/statusbinary/>` - Status of native transport (binary protocol).
 * :doc:`statusgossip </operating-scylla/nodetool-commands/statusgossip/>` - Status of gossip.
