@@ -15,11 +15,42 @@ function(generate_scylla_version)
     set(version_gen_args
       --date-stamp "${Scylla_DATE_STAMP}")
   endif()
+  # bootstrap the versioning files
   execute_process(
     COMMAND ${CMAKE_SOURCE_DIR}/SCYLLA-VERSION-GEN
       ${version_gen_args}
       --output-dir "${CMAKE_CURRENT_BINARY_DIR}"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+  # we need to recreate the versioning files if the sha1 of repo is updated. to
+  # assure that the script _always_ recreate these files, we need to add a
+  # target depending on a file which can never be generated, so that the target
+  # is always built as a dependencies of the "default" target. the rule
+  # generating the never-generated file have to generate the version files, so
+  # that, as an intended side effect, the version files are updated when
+  # necessary.
+  set(phantom_file ${CMAKE_CURRENT_BINARY_DIR}/__i_never_exist_and_will_never__)
+  if(EXISTS ${phantom_file})
+    message(FATAL_ERROR "Please drop ${phantom_file}")
+  endif()
+  set(versioning_files
+    ${version_file}
+    ${release_file}
+    ${product_file})
+  list(APPEND CMAKE_CONFIGURE_DEPENDS ${versioning_files})
+  add_custom_command(
+    OUTPUT
+      ${versioning_files}
+      ${phantom_file}
+    COMMAND ${CMAKE_SOURCE_DIR}/SCYLLA-VERSION-GEN
+      ${version_gen_args}
+      --output-dir "${CMAKE_CURRENT_BINARY_DIR}"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Updating SCYLLA-PRODUCT-FILE, SCYLLA-VERSION-FILE and SCYLLA-RELEASE-FILE")
+  add_custom_target(
+    scylla-version-gen ALL
+    DEPENDS ${phantom_file}
+    COMMENT "Check release with SCYLLA-VERSION-GEN")
 
   file(STRINGS ${version_file} scylla_version)
   file(STRINGS ${release_file} scylla_release)
@@ -34,6 +65,8 @@ endfunction(generate_scylla_version)
 
 function(add_version_library name source)
   add_library(${name} OBJECT ${source})
+  add_dependencies(${name}
+    scylla-version-gen)
   target_compile_definitions(${name}
     PRIVATE
       SCYLLA_VERSION=\"${Scylla_VERSION}\"
