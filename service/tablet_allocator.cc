@@ -1083,7 +1083,8 @@ public:
                                            || src_info.state() == locator::node::state::left)
                        ? tablet_transition_kind::rebuild : tablet_transition_kind::migration;
             auto mig = tablet_migration_info {kind, source_tablet, src, dst};
-            auto mig_streaming_info = get_migration_streaming_info(topo, tmap.get_tablet_info(source_tablet.tablet), mig);
+            auto& src_tinfo = tmap.get_tablet_info(source_tablet.tablet);
+            auto mig_streaming_info = get_migration_streaming_info(topo, src_tinfo, mig);
 
             if (can_accept_load(nodes, mig_streaming_info)) {
                 apply_load(nodes, mig_streaming_info);
@@ -1106,6 +1107,13 @@ public:
                 }
             }
 
+            for (auto&& r : src_tinfo.replicas) {
+                if (nodes.contains(r.host)) {
+                    nodes[r.host].shards[r.shard].candidates.erase(source_tablet);
+                }
+            }
+
+            target_info.shards[dst.shard].tablet_count++;
             target_info.tablet_count += 1;
             target_info.update();
 
