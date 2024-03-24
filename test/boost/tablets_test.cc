@@ -1672,6 +1672,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
         for (auto h : {host1, host2, host3, host4}) {
             testlog.debug("Checking host {}", h);
             BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(h), 4);
+            BOOST_REQUIRE_LE(load.get_shard_imbalance(h), 1);
         }
     }
   }).get();
@@ -1861,6 +1862,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
                 auto l = load.get_avg_shard_load(h);
                 testlog.info("Load on host {}: {}", h, l);
                 min_max_load.update(l);
+                BOOST_REQUIRE_LE(load.get_shard_imbalance(h), 1);
             }
 
             testlog.debug("tablet metadata: {}", stm.get()->tablets());
