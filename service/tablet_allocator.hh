@@ -12,6 +12,7 @@
 #include "locator/tablets.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 namespace service {
 
@@ -123,6 +124,26 @@ public:
     /// Should be called when the node is no longer a leader.
     void on_leadership_lost();
 };
+
+// Represents metric for per-node load which we want to equalize between nodes.
+// It's an average per-shard load in terms of tablet count.
+using load_type = double;
+
+enum class tablet_replica_calculation_status {
+    success,
+    no_tablets_to_allocate,
+    not_enough_nodes,
+    more_than_one_error,
+    unknown_topology_strategy,
+};
+struct tablet_replica_calculation_result {
+    locator::tablet_map new_tablet_map;
+    tablet_replica_calculation_status status;
+};
+
+future<tablet_replica_calculation_result>
+calculate_tablet_replicas_for_new_rf(const locator::tablet_aware_replication_strategy*, schema_ptr s,
+    locator::token_metadata_ptr tm, std::map<sstring, sstring> ks_options);
 
 }
 
