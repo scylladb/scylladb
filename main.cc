@@ -1501,7 +1501,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             supervisor::notify("loading tablet metadata");
-            ss.local().load_tablet_metadata().get();
+            try {
+                ss.local().load_tablet_metadata().get();
+            } catch (...) {
+                if (!cfg->maintenance_mode()) {
+                    throw;
+                }
+                startlog.error("Failed to load tablet metadata (ignoring due to maintenance mode): {}", std::current_exception());
+            }
 
             // We do not support tablet re-sharding yet, see https://github.com/scylladb/scylladb/issues/16739.
             // To avoid undefined behaviour due to violated assumptions, that
