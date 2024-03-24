@@ -32,6 +32,7 @@
 #include <boost/algorithm/cxx11/iota.hpp>
 #include "test/lib/log.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/key_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 #include <seastar/core/coroutine.hh>
@@ -139,14 +140,6 @@ void endpoints_check(
     }
 }
 
-auto d2t = [](double d) -> int64_t {
-    // Double to unsigned long conversion will overflow if the
-    // input is greater than numeric_limits<long>::max(), so divide by two and
-    // multiply again later.
-    auto scale = std::numeric_limits<unsigned long>::max();
-    return static_cast<unsigned long>(d * static_cast<double>(scale >> 1)) << 1;
-};
-
 /**
  * Check the get_natural_endpoints() output for tokens between every two
  * adjacent ring points.
@@ -168,7 +161,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
 
     for (auto& rp : ring_points) {
         double cur_point1 = rp.point - 0.5;
-        token t1(dht::token::kind::key, d2t(cur_point1 / ring_points.size()));
+        token t1(dht::token::kind::key, tests::d2t(cur_point1 / ring_points.size()));
         auto endpoints1 = erm->get_natural_endpoints(t1);
 
         endpoints_check(ars_ptr, tmptr, endpoints1, topo);
@@ -181,7 +174,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         // identical to the one not taken from the cache.
         //
         double cur_point2 = rp.point - 0.2;
-        token t2(dht::token::kind::key, d2t(cur_point2 / ring_points.size()));
+        token t2(dht::token::kind::key, tests::d2t(cur_point2 / ring_points.size()));
         auto endpoints2 = erm->get_natural_endpoints(t2);
 
         endpoints_check(ars_ptr, tmptr, endpoints2, topo);
@@ -306,7 +299,7 @@ void simple_test() {
         auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
-            tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
+            tokens.insert({dht::token::kind::key, tests::d2t(ring_point / ring_points.size())});
             topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
@@ -402,7 +395,7 @@ void heavy_origin_test() {
                 ring_point rp = {token_point, address};
 
                 ring_points.emplace_back(rp);
-                tokens[address].emplace(token{dht::token::kind::key, d2t(token_point / total_eps)});
+                tokens[address].emplace(token{dht::token::kind::key, tests::d2t(token_point / total_eps)});
 
                 testlog.debug("adding node {} at {}", address, token_point);
 
@@ -483,7 +476,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             auto& topo = tm.get_topology();
             for (const auto& [ring_point, endpoint, id] : ring_points) {
                 std::unordered_set<token> tokens;
-                tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
+                tokens.insert({dht::token::kind::key, tests::d2t(ring_point / ring_points.size())});
                 topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
                 tm.update_host_id(id, endpoint);
                 co_await tm.update_normal_tokens(std::move(tokens), id);
@@ -574,7 +567,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
-            tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
+            tokens.insert({dht::token::kind::key, tests::d2t(ring_point / ring_points.size())});
             topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
             tm.update_host_id(id, endpoint);
             co_await tm.update_normal_tokens(std::move(tokens), id);
