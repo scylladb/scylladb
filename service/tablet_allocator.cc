@@ -29,6 +29,7 @@ seastar::logger lblogger("load_balancer");
 struct load_balancer_dc_stats {
     uint64_t calls = 0;
     uint64_t migrations_produced = 0;
+    uint64_t intranode_migrations_produced = 0;
     uint64_t migrations_skipped = 0;
     uint64_t tablets_skipped_node = 0;
     uint64_t tablets_skipped_rack = 0;
@@ -153,7 +154,7 @@ public:
 /// to them so that we can distribute load equally without overloading shards which are out of balance,
 /// but this is not implemented yet.
 ///
-/// The outline of the algorithm is as follows:
+/// The outline of the inter-node balancing algorithm is as follows:
 ///
 ///   1. Determine the set of nodes whose load should be balanced.
 ///   2. Pick the least-loaded node (target)
@@ -177,6 +178,13 @@ public:
 /// convergence checks, and the stop condition is that the source is drained. We still take target
 /// load into consideration and pick least-loaded targets first. When draining is not possible
 /// because there is no viable new replica for a tablet, load balancing will throw an exception.
+///
+/// After scheduling inter-node migrations, the algorithm schedules intra-node migrations.
+/// This means that across-node migrations can proceed in parallel with intra-node migrations
+/// if there is free capacity to carry them out, but across-node migrations have higher priority.
+///
+/// Intra-node migrations are scheduled for each node independently with the aim to equalize
+/// per-shard tablet count on each node.
 ///
 /// If the algorithm is called with active tablet migrations in tablet metadata, those are treated
 /// by load balancer as if they were already completed. This allows the algorithm to incrementally
@@ -224,7 +232,10 @@ class load_balancer {
         // The average shard load on this node.
         load_type avg_load = 0;
 
-        std::vector<shard_id> shards_by_load; // heap which tracks most-loaded shards using shards_by_load_cmp().
+        // heap which tracks most-loaded shards using shards_by_load_cmp().
+        // Valid during intra-node plan-making for nodes which are in the source node set.
+        std::vector<shard_id> shards_by_load;
+
         std::vector<shard_load> shards; // Indexed by shard_id to which a given shard_load corresponds.
 
         std::optional<locator::load_sketch> target_load_sketch;
@@ -636,6 +647,136 @@ public:
 
     bool in_shuffle_mode() const {
         return utils::get_local_injector().enter("tablet_allocator_shuffle");
+    }
+
+    shard_id rand_shard(shard_id shard_count) const {
+        static thread_local std::default_random_engine re{std::random_device{}()};
+        static thread_local std::uniform_int_distribution<shard_id> dist;
+        return dist(re) % shard_count;
+    }
+
+    future<migration_plan> make_node_plan(node_load_map& nodes, host_id host, node_load& node_load) {
+        migration_plan plan;
+        const tablet_metadata& tmeta = _tm->tablets();
+        bool shuffle = in_shuffle_mode();
+
+        if (node_load.shard_count <= 1) {
+            lblogger.debug("Node {} is balanced", host);
+            co_return plan;
+        }
+
+        auto& sketch = co_await node_load.get_load_sketch(_tm);
+
+        // Keeps candidate source shards in a heap which yields highest-loaded shard first.
+        std::vector<shard_id> src_shards;
+        src_shards.reserve(node_load.shard_count);
+        for (shard_id shard = 0; shard < node_load.shard_count; shard++) {
+            src_shards.push_back(shard);
+        }
+        std::make_heap(src_shards.begin(), src_shards.end(), node_load.shards_by_load_cmp());
+
+        size_t max_load = 0; // Tracks max load among shards which ran out of candidates.
+
+        while (true) {
+            co_await coroutine::maybe_yield();
+
+            if (src_shards.empty()) {
+                lblogger.debug("Unable to balance node {}: ran out of candidates, max load: {}, avg load: {}",
+                               host, max_load, node_load.avg_load);
+                break;
+            }
+
+            shard_id src, dst;
+
+            // Post-conditions:
+            // 1) src and dst are chosen.
+            // 2) src_shards.back() == src.
+            if (shuffle) {
+                src = src_shards[rand_shard(src_shards.size())];
+                std::swap(src_shards.back(), src_shards[src]);
+                do {
+                    dst = rand_shard(node_load.shard_count);
+                } while (src == dst); // There are at least two shards here so this converges.
+            } else {
+                std::pop_heap(src_shards.begin(), src_shards.end(), node_load.shards_by_load_cmp());
+                src = src_shards.back();
+                dst = sketch.next_shard(host);
+            }
+
+            auto push_back = seastar::defer([&] {
+                // When shuffling, src_shards is not a heap.
+                if (!shuffle) {
+                    std::push_heap(src_shards.begin(), src_shards.end(), node_load.shards_by_load_cmp());
+                }
+            });
+
+            auto& src_info = node_load.shards[src];
+            auto& dst_info = node_load.shards[dst];
+
+            // Convergence check
+
+            // When in shuffle mode, exit condition is guaranteed by running out of candidates or by load limit.
+            if (!shuffle && (src == dst || src_info.tablet_count <= dst_info.tablet_count + 1)) {
+                lblogger.debug("Node {} is balanced", host);
+                break;
+            }
+
+            if (src_info.candidates.empty()) {
+                lblogger.debug("No more candidates on shard {} of {}", src, host);
+                max_load = std::max(max_load, src_info.tablet_count);
+                src_shards.pop_back();
+                push_back.cancel();
+                continue;
+            }
+
+            auto tablet = *src_info.candidates.begin();
+
+            // Emit migration.
+
+            auto mig = tablet_migration_info {tablet_transition_kind::intranode_migration, tablet,
+                                              tablet_replica{host, src}, tablet_replica{host, dst}};
+            auto& tmap = tmeta.get_tablet_map(tablet.table);
+            auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
+            auto mig_streaming_info = get_migration_streaming_info(_tm->get_topology(), src_tinfo, mig);
+
+            if (!can_accept_load(nodes, mig_streaming_info)) {
+                _stats.for_dc(node_load.dc()).migrations_skipped++;
+                lblogger.debug("Unable to balance {}: load limit reached", host);
+                break;
+            }
+
+            apply_load(nodes, mig_streaming_info);
+            lblogger.debug("Adding migration: {}", mig);
+            _stats.for_dc(node_load.dc()).migrations_produced++;
+            _stats.for_dc(node_load.dc()).intranode_migrations_produced++;
+            plan.add(std::move(mig));
+
+            for (auto&& r : src_tinfo.replicas) {
+                if (nodes.contains(r.host)) {
+                    nodes[r.host].shards[r.shard].candidates.erase(tablet);
+                }
+            }
+
+            dst_info.tablet_count++;
+            src_info.tablet_count--;
+        }
+
+        co_return plan;
+    }
+
+    future<migration_plan> make_intranode_plan(node_load_map& nodes, const std::unordered_set<host_id>& skip_nodes) {
+        migration_plan plan;
+
+        for (auto&& [host, node_load] : nodes) {
+            if (skip_nodes.contains(host)) {
+                lblogger.debug("Skipped balancing of node {}", host);
+                continue;
+            }
+
+            plan.merge(co_await make_node_plan(nodes, host, node_load));
+        }
+
+        co_return plan;
     }
 
     future<migration_plan> make_internode_plan(const dc_name& dc, node_load_map& nodes,
@@ -1160,6 +1301,10 @@ public:
             plan.merge(co_await make_internode_plan(dc, nodes, nodes_to_drain, target));
         } else {
             _stats.for_dc(dc).stop_balance++;
+        }
+
+        if (_tm->tablets().balancing_enabled()) {
+            plan.merge(co_await make_intranode_plan(nodes, nodes_to_drain));
         }
 
         co_await utils::clear_gently(nodes);
