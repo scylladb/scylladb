@@ -16,6 +16,7 @@
 #include "utils/stall_free.hh"
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
+#include "locator/network_topology_strategy.hh"
 #include <utility>
 
 using namespace locator;
@@ -1148,6 +1149,32 @@ public:
         co_return std::move(plan);
     }
 };
+
+future<tablet_replica_calculation_result>
+calculate_tablet_replicas_for_new_rf(const tablet_aware_replication_strategy* rep, schema_ptr s, token_metadata_ptr tm,
+    std::map<sstring, sstring> ks_options) {
+
+    auto table_id = s->id();
+    tablet_map old_tablets = tm->tablets().get_tablet_map(table_id);
+
+    if (dynamic_cast<const locator::network_topology_strategy*>(rep) == nullptr) {
+        co_return tablet_replica_calculation_result{ old_tablets, tablet_replica_calculation_status::unknown_topology_strategy };
+    }
+
+    locator::replication_strategy_params params{ks_options, old_tablets.tablet_count()};
+
+    auto new_rep = abstract_replication_strategy::create_replication_strategy(
+                "NetworkTopologyStrategy", params);
+
+    auto tablet_aware = new_rep->maybe_as_tablet_aware();
+
+    if (!tablet_aware) {
+        co_return tablet_replica_calculation_result{ old_tablets, tablet_replica_calculation_status::unknown_topology_strategy };
+    }
+
+    auto new_tablets = co_await tablet_aware->reallocate_tablets(s, tm, old_tablets);
+    co_return tablet_replica_calculation_result{ new_tablets, tablet_replica_calculation_status::success };
+}
 
 class tablet_allocator_impl : public tablet_allocator::impl
                             , public service::migration_listener::empty_listener {
