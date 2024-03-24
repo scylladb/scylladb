@@ -634,205 +634,14 @@ public:
         return true;
     }
 
-    future<migration_plan> make_plan(dc_name dc) {
+    bool in_shuffle_mode() const {
+        return utils::get_local_injector().enter("tablet_allocator_shuffle");
+    }
+
+    future<migration_plan> make_internode_plan(const dc_name& dc, node_load_map& nodes,
+                                               const std::unordered_set<host_id>& nodes_to_drain,
+                                               host_id target) {
         migration_plan plan;
-
-        _stats.for_dc(dc).calls++;
-        lblogger.info("Examining DC {}", dc);
-
-        // Causes load balancer to move some tablet even though load is balanced.
-        auto shuffle = utils::get_local_injector().enter("tablet_allocator_shuffle");
-        if (shuffle) {
-            lblogger.warn("Running without convergence checks");
-        }
-
-        const locator::topology& topo = _tm->get_topology();
-
-        // Select subset of nodes to balance.
-
-        node_load_map nodes;
-        std::unordered_set<host_id> nodes_to_drain;
-
-        auto ensure_node = [&] (host_id host) {
-            if (nodes.contains(host)) {
-                return;
-            }
-            auto* node = topo.find_node(host);
-            if (!node) {
-                on_internal_error(lblogger, format("Node {} not found in topology", host));
-            }
-            node_load& load = nodes[host];
-            load.id = host;
-            load.node = node;
-            load.shard_count = node->get_shard_count();
-            load.shards.resize(load.shard_count);
-            if (!load.shard_count) {
-                throw std::runtime_error(format("Shard count of {} not found in topology", host));
-            }
-        };
-
-        topo.for_each_node([&] (const locator::node* node_ptr) {
-            if (node_ptr->dc_rack().dc != dc) {
-                return;
-            }
-            bool is_drained = node_ptr->get_state() == locator::node::state::being_decommissioned
-                              || node_ptr->get_state() == locator::node::state::being_removed;
-            if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
-                if (is_drained) {
-                    ensure_node(node_ptr->host_id());
-                    lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc);
-                    nodes_to_drain.emplace(node_ptr->host_id());
-                } else if (node_ptr->is_excluded() || _skiplist.contains(node_ptr->host_id())) {
-                    // Excluded nodes should not be chosen as targets for migration.
-                    lblogger.debug("Ignoring excluded or dead node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
-                } else {
-                    ensure_node(node_ptr->host_id());
-                }
-            }
-        });
-
-        // Compute tablet load on nodes.
-
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
-
-            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
-                auto trinfo = tmap.get_tablet_transition_info(tid);
-
-                // Check if any replica is on a node which has left.
-                // When node is replaced we don't rebuild as part of topology request.
-                for (auto&& r : ti.replicas) {
-                    auto* node = topo.find_node(r.host);
-                    if (!node) {
-                        on_internal_error(lblogger, format("Replica {} of tablet {} not found in topology",
-                                                           r, global_tablet_id{table, tid}));
-                    }
-                    if (node->left() && node->dc_rack().dc == dc) {
-                        ensure_node(r.host);
-                        nodes_to_drain.insert(r.host);
-                    }
-                }
-
-                // We reflect migrations in the load as if they already happened,
-                // optimistically assuming that they will succeed.
-                for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
-                    if (nodes.contains(replica.host)) {
-                        nodes[replica.host].tablet_count += 1;
-                        // This invariant is assumed later.
-                        if (replica.shard >= nodes[replica.host].shard_count) {
-                            auto gtid = global_tablet_id{table, tid};
-                            on_internal_error(lblogger, format("Tablet {} replica {} targets non-existent shard", gtid, replica));
-                        }
-                    }
-                }
-
-                return make_ready_future<>();
-            });
-        }
-
-        if (nodes.empty()) {
-            lblogger.debug("No nodes to balance.");
-            _stats.for_dc(dc).stop_balance++;
-            co_return plan;
-        }
-
-        // Detect finished drain.
-
-        for (auto i = nodes_to_drain.begin(); i != nodes_to_drain.end();) {
-            if (nodes[*i].tablet_count == 0) {
-                lblogger.info("Node {} is already drained, ignoring", *i);
-                nodes.erase(*i);
-                i = nodes_to_drain.erase(i);
-            } else {
-                ++i;
-            }
-        }
-
-        plan.set_has_nodes_to_drain(!nodes_to_drain.empty());
-
-        // Compute load imbalance.
-
-        load_type max_load = 0;
-        load_type min_load = 0;
-        std::optional<host_id> min_load_node = std::nullopt;
-        for (auto&& [host, load] : nodes) {
-            load.update();
-            _stats.for_node(dc, host).load = load.avg_load;
-
-            if (!nodes_to_drain.contains(host)) {
-                if (!min_load_node || load.avg_load < min_load) {
-                    min_load = load.avg_load;
-                    min_load_node = host;
-                }
-                if (load.avg_load > max_load) {
-                    max_load = load.avg_load;
-                }
-            }
-        }
-
-        for (auto&& [host, load] : nodes) {
-            lblogger.info("Node {}: rack={} avg_load={}, tablets={}, shards={}, state={}",
-                          host, load.rack(), load.avg_load, load.tablet_count, load.shard_count, load.state());
-        }
-
-        if (!min_load_node) {
-            lblogger.debug("No candidate nodes");
-            _stats.for_dc(dc).stop_no_candidates++;
-            co_return plan;
-        }
-
-        if (nodes_to_drain.empty()) {
-            if (!shuffle && (max_load == min_load || !_tm->tablets().balancing_enabled())) {
-                // load is balanced.
-                // TODO: Evaluate and fix intra-node balance.
-                _stats.for_dc(dc).stop_balance++;
-                co_return plan;
-            }
-            lblogger.info("target node: {}, avg_load: {}, max: {}", *min_load_node, min_load, max_load);
-        }
-
-        // We want to saturate the target node so we migrate several tablets in parallel, one for each shard
-        // on the target node. This assumes that the target node is well-balanced and that tablet migrations
-        // complete at the same time. Both assumptions are not generally true in practice, which we currently ignore.
-        // But they will be true typically, because we fill shards starting from least-loaded shards,
-        // so we naturally strive towards balance between shards.
-        //
-        // If target node is not balanced across shards, we will overload some shards. Streaming concurrency
-        // will suffer because more loaded shards will not participate, which will under-utilize the node.
-        // FIXME: To handle the above, we should rebalance the target node before migrating tablets from other nodes.
-
-        auto target = *min_load_node;
-        auto batch_size = nodes[target].shard_count;
-
-        // Compute per-shard load and candidate tablets.
-
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
-            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
-                auto trinfo = tmap.get_tablet_transition_info(tid);
-
-                if (is_streaming(trinfo)) {
-                    apply_load(nodes, get_migration_streaming_info(topo, ti, *trinfo));
-                }
-
-                for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
-                    if (!nodes.contains(replica.host)) {
-                        continue;
-                    }
-                    auto& node_load_info = nodes[replica.host];
-                    shard_load& shard_load_info = node_load_info.shards[replica.shard];
-                    if (shard_load_info.tablet_count == 0) {
-                        node_load_info.shards_by_load.push_back(replica.shard);
-                    }
-                    shard_load_info.tablet_count += 1;
-                    if (!trinfo) { // migrating tablets are not candidates
-                        shard_load_info.candidates.emplace(global_tablet_id {table, tid});
-                    }
-                }
-
-                return make_ready_future<>();
-            });
-        }
 
         // Prepare candidate nodes and shards for heap-based balancing.
 
@@ -879,9 +688,12 @@ public:
         std::make_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
 
         const tablet_metadata& tmeta = _tm->tablets();
+        const locator::topology& topo = _tm->get_topology();
         load_type max_off_candidate_load = 0; // max load among nodes which ran out of candidates.
+        auto batch_size = nodes[target].shard_count;
         const size_t max_skipped_migrations = nodes[target].shards.size() * 2;
         size_t skipped_migrations = 0;
+        auto shuffle = in_shuffle_mode();
         while (plan.size() < batch_size) {
             co_await coroutine::maybe_yield();
 
@@ -1150,6 +962,204 @@ public:
             // So node3 will have average load of 1, and node1 and node2 will have
             // average shard load of 7.
             lblogger.info("Not possible to achieve balance.");
+        }
+
+        co_return std::move(plan);
+    }
+
+    future<migration_plan> make_plan(dc_name dc) {
+        migration_plan plan;
+
+        _stats.for_dc(dc).calls++;
+        lblogger.info("Examining DC {}", dc);
+
+        // Causes load balancer to move some tablet even though load is balanced.
+        auto shuffle = in_shuffle_mode();
+        if (shuffle) {
+            lblogger.warn("Running without convergence checks");
+        }
+
+        const locator::topology& topo = _tm->get_topology();
+
+        // Select subset of nodes to balance.
+
+        node_load_map nodes;
+        std::unordered_set<host_id> nodes_to_drain;
+
+        auto ensure_node = [&] (host_id host) {
+            if (nodes.contains(host)) {
+                return;
+            }
+            auto* node = topo.find_node(host);
+            if (!node) {
+                on_internal_error(lblogger, format("Node {} not found in topology", host));
+            }
+            node_load& load = nodes[host];
+            load.id = host;
+            load.node = node;
+            load.shard_count = node->get_shard_count();
+            load.shards.resize(load.shard_count);
+            if (!load.shard_count) {
+                throw std::runtime_error(format("Shard count of {} not found in topology", host));
+            }
+        };
+
+        topo.for_each_node([&] (const locator::node* node_ptr) {
+            if (node_ptr->dc_rack().dc != dc) {
+                return;
+            }
+            bool is_drained = node_ptr->get_state() == locator::node::state::being_decommissioned
+                              || node_ptr->get_state() == locator::node::state::being_removed;
+            if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
+                if (is_drained) {
+                    ensure_node(node_ptr->host_id());
+                    lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc);
+                    nodes_to_drain.emplace(node_ptr->host_id());
+                } else if (node_ptr->is_excluded() || _skiplist.contains(node_ptr->host_id())) {
+                    // Excluded nodes should not be chosen as targets for migration.
+                    lblogger.debug("Ignoring excluded or dead node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
+                } else {
+                    ensure_node(node_ptr->host_id());
+                }
+            }
+        });
+
+        // Compute tablet load on nodes.
+
+        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            auto& tmap = tmap_;
+
+            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
+                auto trinfo = tmap.get_tablet_transition_info(tid);
+
+                // Check if any replica is on a node which has left.
+                // When node is replaced we don't rebuild as part of topology request.
+                for (auto&& r : ti.replicas) {
+                    auto* node = topo.find_node(r.host);
+                    if (!node) {
+                        on_internal_error(lblogger, format("Replica {} of tablet {} not found in topology",
+                                                           r, global_tablet_id{table, tid}));
+                    }
+                    if (node->left() && node->dc_rack().dc == dc) {
+                        ensure_node(r.host);
+                        nodes_to_drain.insert(r.host);
+                    }
+                }
+
+                // We reflect migrations in the load as if they already happened,
+                // optimistically assuming that they will succeed.
+                for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
+                    if (nodes.contains(replica.host)) {
+                        nodes[replica.host].tablet_count += 1;
+                        // This invariant is assumed later.
+                        if (replica.shard >= nodes[replica.host].shard_count) {
+                            auto gtid = global_tablet_id{table, tid};
+                            on_internal_error(lblogger, format("Tablet {} replica {} targets non-existent shard", gtid, replica));
+                        }
+                    }
+                }
+
+                return make_ready_future<>();
+            });
+        }
+
+        if (nodes.empty()) {
+            lblogger.debug("No nodes to balance.");
+            _stats.for_dc(dc).stop_balance++;
+            co_return plan;
+        }
+
+        // Detect finished drain.
+
+        for (auto i = nodes_to_drain.begin(); i != nodes_to_drain.end();) {
+            if (nodes[*i].tablet_count == 0) {
+                lblogger.info("Node {} is already drained, ignoring", *i);
+                nodes.erase(*i);
+                i = nodes_to_drain.erase(i);
+            } else {
+                ++i;
+            }
+        }
+
+        plan.set_has_nodes_to_drain(!nodes_to_drain.empty());
+
+        // Compute load imbalance.
+
+        load_type max_load = 0;
+        load_type min_load = 0;
+        std::optional<host_id> min_load_node = std::nullopt;
+        for (auto&& [host, load] : nodes) {
+            load.update();
+            _stats.for_node(dc, host).load = load.avg_load;
+
+            if (!nodes_to_drain.contains(host)) {
+                if (!min_load_node || load.avg_load < min_load) {
+                    min_load = load.avg_load;
+                    min_load_node = host;
+                }
+                if (load.avg_load > max_load) {
+                    max_load = load.avg_load;
+                }
+            }
+        }
+
+        for (auto&& [host, load] : nodes) {
+            lblogger.info("Node {}: rack={} avg_load={}, tablets={}, shards={}, state={}",
+                          host, load.rack(), load.avg_load, load.tablet_count, load.shard_count, load.state());
+        }
+
+        if (!min_load_node) {
+            lblogger.debug("No candidate nodes");
+            _stats.for_dc(dc).stop_no_candidates++;
+            co_return plan;
+        }
+
+        // We want to saturate the target node so we migrate several tablets in parallel, one for each shard
+        // on the target node. This assumes that the target node is well-balanced and that tablet migrations
+        // complete at the same time. Both assumptions are not generally true in practice, which we currently ignore.
+        // But they will be true typically, because we fill shards starting from least-loaded shards,
+        // so we naturally strive towards balance between shards.
+        //
+        // If target node is not balanced across shards, we will overload some shards. Streaming concurrency
+        // will suffer because more loaded shards will not participate, which will under-utilize the node.
+        // FIXME: To handle the above, we should rebalance the target node before migrating tablets from other nodes.
+
+        // Compute per-shard load and candidate tablets.
+
+        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            auto& tmap = tmap_;
+            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
+                auto trinfo = tmap.get_tablet_transition_info(tid);
+
+                if (is_streaming(trinfo)) {
+                    apply_load(nodes, get_migration_streaming_info(topo, ti, *trinfo));
+                }
+
+                for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
+                    if (!nodes.contains(replica.host)) {
+                        continue;
+                    }
+                    auto& node_load_info = nodes[replica.host];
+                    shard_load& shard_load_info = node_load_info.shards[replica.shard];
+                    if (shard_load_info.tablet_count == 0) {
+                        node_load_info.shards_by_load.push_back(replica.shard);
+                    }
+                    shard_load_info.tablet_count += 1;
+                    if (!trinfo) { // migrating tablets are not candidates
+                        shard_load_info.candidates.emplace(global_tablet_id {table, tid});
+                    }
+                }
+
+                return make_ready_future<>();
+            });
+        }
+
+        if (!nodes_to_drain.empty() || shuffle || (max_load != min_load && _tm->tablets().balancing_enabled())) {
+            host_id target = *min_load_node;
+            lblogger.info("target node: {}, avg_load: {}, max: {}", target, min_load, max_load);
+            plan.merge(co_await make_internode_plan(dc, nodes, nodes_to_drain, target));
+        } else {
+            _stats.for_dc(dc).stop_balance++;
         }
 
         co_await utils::clear_gently(nodes);
