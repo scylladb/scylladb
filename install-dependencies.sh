@@ -302,8 +302,6 @@ if $PRINT_NODE_EXPORTER; then
 fi
 
 ./seastar/install-dependencies.sh
-./tools/jmx/install-dependencies.sh
-./tools/java/install-dependencies.sh
 
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     apt-get -y install "${debian_base_packages[@]}"

@@ -12,12 +12,12 @@ Architecture: any
 Description: Scylla database main configuration file
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
-Replaces: %{product}-server (<< 1.1)
-Conflicts: %{product}-server (<< 1.1)
 
 Package: %{product}-server
 Architecture: any
 Depends: ${misc:Depends}, %{product}-conf (= ${binary:Version}), %{product}-python3 (= ${binary:Version})
+Replaces: %{product}-tools (<< 5.5)
+Breaks: %{product}-tools (<< 5.5)
 Description: Scylla database server binaries 
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
@@ -45,13 +45,18 @@ Conflicts: prometheus-node-exporter
 Description: Prometheus exporter for machine metrics
  Prometheus exporter for machine metrics, written in Go with pluggable metric collectors.
 
+Package: %{product}-jmx
+Depends: ${misc:Depends}
+Architecture: all
+Priority: optional
+Section: oldlibs
+Description: transitional package
+ This is a transitional package. It can safely be removed.
+
 Package: %{product}
 Section: metapackages
 Architecture: any
 Depends: %{product}-server (= ${binary:Version})
- , %{product}-jmx (= ${binary:Version})
- , %{product}-tools (= ${binary:Version})
- , %{product}-tools-core (= ${binary:Version})
  , %{product}-kernel-conf (= ${binary:Version})
  , %{product}-node-exporter (= ${binary:Version})
  , %{product}-cqlsh (= ${binary:Version})

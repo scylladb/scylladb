@@ -449,7 +449,6 @@ if $supervisor; then
     install -d -m755 "$rprefix"/supervisor
     install -m755 dist/common/supervisor/* -Dt "$rprefix"/supervisor
 fi
-
 SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_health_check scylla_kernel_check)
 SBINFILES+=" $(cd seastar/scripts; ls seastar-cpu-map.sh)"
 
