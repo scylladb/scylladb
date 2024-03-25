@@ -18,7 +18,10 @@
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/storage_options.hh"
 #include "data_dictionary/keyspace_element.hh"
-#include "gms/feature_service.hh"
+
+namespace gms {
+class feature_service;
+}
 
 namespace data_dictionary {
 

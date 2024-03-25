@@ -14,7 +14,6 @@
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
 #include "gms/inet_address.hh"
-#include "gms/feature_service.hh"
 #include "locator/snitch_base.hh"
 #include "locator/token_range_splitter.hh"
 #include "dht/token-sharding.hh"
@@ -30,6 +29,10 @@
 namespace replica {
 class database;
 class keyspace;
+}
+
+namespace gms {
+class feature_service;
 }
 
 namespace locator {

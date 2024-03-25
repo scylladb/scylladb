@@ -12,6 +12,7 @@
 #include "keyspace_metadata.hh"
 #include "schema/schema.hh"
 #include "cql3/util.hh"
+#include "gms/feature_service.hh"
 #include <fmt/core.h>
 #include <ios>
 #include <ostream>
