@@ -36,6 +36,8 @@
 #include "service/tablet_allocator.hh"
 #include "locator/types.hh"
 #include "locator/tablets.hh"
+#include "dht/auto_refreshing_sharder.hh"
+#include "mutation_writer/multishard_writer.hh"
 #include "locator/tablet_metadata_guard.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include <seastar/core/smp.hh>
@@ -5671,13 +5673,6 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         auto& tinfo = tmap.get_tablet_info(tablet.tablet);
         auto range = tmap.get_token_range(tablet.tablet);
         std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-        if (leaving_replica && leaving_replica->host == tm->get_my_id()) {
-            // The algorithm doesn't work with tablet migration within the same node because
-            // it assumes there is only one tablet replica, picked by the sharder, on local node.
-            throw std::runtime_error(fmt::format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
-                                            tablet, leaving_replica->shard, pending_replica->shard));
-        }
-
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
 
         streaming::stream_reason reason = std::invoke([&] {
@@ -5690,26 +5685,51 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             }
         });
 
-        auto& table = _db.local().find_column_family(tablet.table);
-        std::vector<sstring> tables = {table.schema()->cf_name()};
-        auto my_id = tm->get_my_id();
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm),
-                                                            guard.get_abort_source(),
-                                                            my_id, _snitch.local()->get_location(),
-                                                            format("Tablet {}", trinfo->transition),
-                                                            reason,
-                                                            topo_guard,
-                                                            std::move(tables));
-        tm = nullptr;
-        streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
-                _gossiper.get_unreachable_members()));
+        if (trinfo->transition == locator::tablet_transition_kind::intranode_migration) {
+            if (!leaving_replica || leaving_replica->host != tm->get_my_id()) {
+                throw std::runtime_error(fmt::format("Invalid leaving replica for intra-node migration, tablet: {}, leaving: {}",
+                                                     tablet, leaving_replica));
+            }
+            auto range = to_partition_range(tmap.get_token_range(tablet.tablet));
+            tm = nullptr;
+            co_await smp::submit_to(leaving_replica->shard, [this, tablet, pending_replica, reason, topo_guard, range] () -> future<> {
+                rtlogger.info("Starting intra-node streaming of tablet {} to shard {}", tablet, pending_replica->shard);
+                auto& table = _db.local().find_column_family(tablet.table);
+                dht::auto_refreshing_sharder sharder(table.shared_from_this(), dht::write_replica_set_selector::next);
+                auto estimated_partitions = 1; // FIXME
+                auto permit = co_await _db.local().obtain_reader_permit(table, "stream-session", db::no_timeout, {});
+                co_await mutation_writer::distribute_reader_and_consume_on_shards(table.schema(), sharder,
+                    table.make_streaming_reader(table.schema(), std::move(permit), range, gc_clock::now()),
+                    _stream_manager.local().make_streaming_consumer(estimated_partitions, reason, topo_guard),
+                    table.stream_in_progress());
+                rtlogger.info("Intra-node tablet streaming of {} finished", tablet, pending_replica->shard);
+            });
+        } else {
+            if (leaving_replica && leaving_replica->host == tm->get_my_id()) {
+                throw std::runtime_error(fmt::format("Cannot stream within the same node using regular migration, tablet: {}, shard {} -> {}",
+                                                     tablet, leaving_replica->shard, trinfo->pending_replica->shard));
+            }
+            auto& table = _db.local().find_column_family(tablet.table);
+            std::vector<sstring> tables = {table.schema()->cf_name()};
+            auto my_id = tm->get_my_id();
+            auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm),
+                                                                guard.get_abort_source(),
+                                                                my_id, _snitch.local()->get_location(),
+                                                                format("Tablet {}", trinfo->transition),
+                                                                reason,
+                                                                topo_guard,
+                                                                std::move(tables));
+            tm = nullptr;
+            streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
+                    _gossiper.get_unreachable_members()));
 
-        std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
-        for (auto r : streaming_info.read_from) {
-            ranges_per_endpoint[host2ip(r.host)].emplace_back(range);
+            std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
+            for (auto r: streaming_info.read_from) {
+                ranges_per_endpoint[host2ip(r.host)].emplace_back(range);
+            }
+            streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
+            co_await streamer->stream_async();
         }
-        streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
-        co_await streamer->stream_async();
 
         // If new pending tablet replica needs splitting, streaming waits for it to complete.
         // That's to provide a guarantee that once migration is over, the coordinator can finalize
