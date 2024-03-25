@@ -21,6 +21,8 @@ For example:
 
 ``nodetool refresh nba player_stats``
 
+.. _nodetool-refresh-load-and-stream:
+
 
 Load and Stream
 ---------------
