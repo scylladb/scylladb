@@ -1,35 +1,35 @@
 .. |SCYLLA_NAME| replace:: ScyllaDB
 
 .. |SRC_VERSION| replace:: 5.4
-.. |NEW_VERSION| replace:: 5.5
+.. |NEW_VERSION| replace:: 6.0
 
 .. |DEBIAN_SRC_REPO| replace:: Debian
-.. _DEBIAN_SRC_REPO: https://www.scylladb.com/download/?platform=debian-10&version=scylla-5.2
+.. _DEBIAN_SRC_REPO: https://www.scylladb.com/download/?platform=debian-10&version=scylla-5.4
 
 .. |UBUNTU_SRC_REPO| replace:: Ubuntu
-.. _UBUNTU_SRC_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-5.2
+.. _UBUNTU_SRC_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-5.4
 
 .. |SCYLLA_DEB_SRC_REPO| replace:: ScyllaDB deb repo (|DEBIAN_SRC_REPO|_, |UBUNTU_SRC_REPO|_)
 
 .. |SCYLLA_RPM_SRC_REPO| replace:: ScyllaDB rpm repo
-.. _SCYLLA_RPM_SRC_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-5.2
+.. _SCYLLA_RPM_SRC_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-5.4
 
 .. |DEBIAN_NEW_REPO| replace:: Debian
-.. _DEBIAN_NEW_REPO: https://www.scylladb.com/download/?platform=debian-10&version=scylla-5.4
+.. _DEBIAN_NEW_REPO: https://www.scylladb.com/download/?platform=debian-10&version=scylla-6.0
 
 .. |UBUNTU_NEW_REPO| replace:: Ubuntu
-.. _UBUNTU_NEW_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-5.4
+.. _UBUNTU_NEW_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-6.0
 
 .. |SCYLLA_DEB_NEW_REPO| replace:: ScyllaDB deb repo (|DEBIAN_NEW_REPO|_, |UBUNTU_NEW_REPO|_)
 
 .. |SCYLLA_RPM_NEW_REPO| replace:: ScyllaDB rpm repo
-.. _SCYLLA_RPM_NEW_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-5.4
+.. _SCYLLA_RPM_NEW_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-6.0
 
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: Scylla Metrics Update - Scylla 5.2 to 5.4
-.. _SCYLLA_METRICS: ../metric-update-5.2-to-5.4
+.. |SCYLLA_METRICS| replace:: Scylla Metrics Update - Scylla 5.4 to 6.0
+.. _SCYLLA_METRICS: ../metric-update-5.4-to-6.0
 
 =============================================================================
 Upgrade |SCYLLA_NAME| from |SRC_VERSION| to |NEW_VERSION|
@@ -66,10 +66,6 @@ We recommend upgrading the Monitoring Stack to the latest version.
 See the ScyllaDB Release Notes for the latest updates. The Release Notes are published 
 at the `ScyllaDB Community Forum <https://forum.scylladb.com/>`_.
 
-.. note::
-   
-   In ScyllaDB 5.5, Raft-based consistent cluster management for new and existing 
-   deployments is enabled by default and cannot be disabled.
 
 Upgrade Procedure
 =================
@@ -77,30 +73,26 @@ Upgrade Procedure
 A ScyllaDB upgrade is a rolling procedure that does **not** require full cluster shutdown.
 For each of the nodes in the cluster, serially (i.e., one node at a time), you will:
 
-* Check that the cluster's schema is synchronized
-* Drain the node and backup the data
-* Backup the configuration file
-* Stop ScyllaDB
-* Download and install new ScyllaDB packages
-* Start ScyllaDB
-* Validate that the upgrade was successful
+#. Check that the cluster's schema is synchronized.
+#. Drain the node and backup the data.
+#. Backup the configuration file.
+#. Stop ScyllaDB.
+#. Download and install new ScyllaDB packages.
+#. Start ScyllaDB.
+#. Validate that the upgrade was successful.
 
-Apply the following procedure **serially** on each node. Do not move to the next 
+Apply the procedure **serially** on each node. Do not move to the next 
 node before validating that the node you upgraded is up and running the new version.
 
 **During** the rolling upgrade, it is highly recommended:
 
 * Not to use the new |NEW_VERSION| features.
 * Not to run administration functions, such as repairs, refresh, rebuild, or add 
-  or remove nodes. See `sctool <https://manager.docs.scylladb.com/stable/sctool/>`_ 
-  for suspending ScyllaDB Manager (only available for ScyllaDB Enterprise) scheduled 
-  or running repairs.
+  or remove nodes.
 * Not to apply schema changes.
 
-**After** the upgrade, you may need to :ref:`verify <validate-raft-setup-enabled-default>` 
-that Raft was successfully initiated in your cluster. This step only applies 
-if you manually disabled the ``consistent_cluster_management`` option before
-upgrading to version 5.4.
+**After** the upgrade, enable consistent topology updates. 
+See :ref:`After Upgrading Every Node <upgrade-5.4-6.0-enable-consistent-topology>`.
 
 Upgrade Steps
 =============
@@ -173,8 +165,6 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
 
    .. group-tab:: Debian/Ubuntu
 
-        **To upgrade ScyllaDB:**
-
         #. Update the |SCYLLA_DEB_NEW_REPO| to |NEW_VERSION|.
 
         #. Install the new ScyllaDB version:
@@ -190,8 +180,6 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
 
    .. group-tab:: RHEL/CentOS
 
-        **To upgrade ScyllaDB:**
-
         #. Update the |SCYLLA_RPM_NEW_REPO|_  to |NEW_VERSION|.
         #. Install the new ScyllaDB version:
 
@@ -200,16 +188,26 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
                sudo yum clean all
                sudo yum update scylla\* -y
 
-.. note::
+   .. group-tab:: EC2/GCP/Azure Ubuntu Image
 
-   If you are running a ScyllaDB official image (for EC2 AMI, GCP, or Azure), 
-   you need to:
-   
-    * Download and install the new ScyllaDB release for Ubuntu; see 
-      the Debian/Ubuntu tab above for instructions.
-    * Update underlying OS packages.
+      If you’re using the ScyllaDB official image (recommended), see the **Debian/Ubuntu** 
+      tab for upgrade instructions.
 
-   See :doc:`Upgrade ScyllaDB Image </upgrade/ami-upgrade>` for details.
+      If you’re using your own image and installed ScyllaDB packages for Ubuntu or Debian, 
+      you need to apply an extended upgrade procedure:
+
+      #. Update the |SCYLLA_DEB_NEW_REPO| to |NEW_VERSION|.
+      #. Install the new ScyllaDB version with the additional ``scylla-machine-image`` package:
+
+            .. code-block:: console
+
+               sudo apt-get clean all
+               sudo apt-get update
+               sudo apt-get dist-upgrade scylla
+               sudo apt-get dist-upgrade scylla-machine-image
+
+      #. Run ``scylla_setup`` without ``running io_setup``.
+      #. Run ``sudo /opt/scylladb/scylla-machine-image/scylla_cloud_io_setup``.
 
 
 Start the node
@@ -232,54 +230,17 @@ Validate
 
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
 
-See |Scylla_METRICS|_ for more information.
+.. _upgrade-5.4-6.0-enable-consistent-topology:
 
 After Upgrading Every Node
 ===============================
 
-Skip this step if you upgraded from 5.2 to 5.4 with default settings
-
-This section only applies if you manually disabled the ``consistent_cluster_management`` 
-option before upgrading from version 5.2. to 5.4.
-
-.. _validate-raft-setup-enabled-default:
-
-Validate Raft Setup
--------------------------
-
-Enabling Raft causes the ScyllaDB cluster to start an internal Raft 
-initialization procedure as soon as every node is upgraded to the new version. 
-The goal of that procedure is to initialize data structures used by the Raft 
-algorithm to consistently manage cluster-wide metadata, such as table schemas.
-
-Assuming you performed the rolling upgrade procedure correctly (in particular, 
-ensuring that the schema is synchronized on every step), and if there are no 
-problems with cluster connectivity, that internal procedure should take a few 
-seconds to finish. However, the procedure requires full cluster availability.
-If one of the nodes fails before the procedure finishes (for example, due to 
-a hardware problem), the process may get stuck, which may prevent schema or 
-topology changes in your cluster.
-
-Therefore, following the rolling upgrade, you must verify that the internal 
-Raft initialization procedure has finished successfully by checking the logs 
-of every ScyllaDB node. If the process gets stuck, manual intervention is 
-required.
-
-Refer to the 
-:ref:`Verifying that the internal Raft upgrade procedure finished successfully <verify-raft-procedure>` 
-section for instructions on verifying that the procedure was successful and 
-proceeding if it gets stuck.
-
+After you upgrade every node, you should enable consistent topology updates.
+See :doc:`Enable Consistent Topology Updates </upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology>`
+for instructions.
 
 Rollback Procedure
 ==================
-
-.. include:: /upgrade/_common/warning_rollback.rst
-
-The following procedure describes a rollback from |SCYLLA_NAME| |NEW_VERSION|.x to 
-|SRC_VERSION|.y. Apply this procedure if an upgrade from |SRC_VERSION| to 
-|NEW_VERSION| fails before completing on all nodes. 
-Use this procedure only for nodes you upgraded to |NEW_VERSION|.
 
 .. warning::
 
@@ -289,20 +250,27 @@ Use this procedure only for nodes you upgraded to |NEW_VERSION|.
    point, the only way to restore a cluster to |SRC_VERSION| is by restoring it 
    from backup.
 
-ScyllaDB rollback is a rolling procedure that does **not** require full cluster shutdown.
+The following procedure describes a rollback from |SCYLLA_NAME| |NEW_VERSION|.x to 
+|SRC_VERSION|.y. Apply this procedure if an upgrade from |SRC_VERSION| to 
+|NEW_VERSION| fails before completing on all nodes. 
 
+* Use this procedure only on the nodes you upgraded to |NEW_VERSION|.
+* Execute the following commands one node at a time, moving to the next node 
+  only after the rollback procedure is completed successfully.
+
+ScyllaDB rollback is a rolling procedure that does **not** require full cluster shutdown.
 For each of the nodes you rollback to |SRC_VERSION|, serially (i.e., one node 
 at a time), you will:
 
-* Drain the node and stop Scylla
-* Retrieve the old ScyllaDB packages
-* Restore the configuration file
-* Reload systemd configuration
-* Restart ScyllaDB
-* Validate the rollback success
+#. Drain the node and stop Scylla.
+#. Retrieve the old ScyllaDB packages.
+#. Restore the configuration file.
+#. Reload systemd configuration.
+#. Restart ScyllaDB.
+#. Validate the rollback success.
 
-Apply the following procedure **serially** on each node. Do not move to the next 
-node before validating that the rollback was successful and the node is up and 
+Apply the procedure **serially** on each node. Do not move to the next node 
+before validating that the rollback was successful and the node is up and 
 running the old version.
 
 Rollback Steps
