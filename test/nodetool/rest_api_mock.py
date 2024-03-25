@@ -7,6 +7,7 @@
 import aiohttp
 import aiohttp.web
 import asyncio
+import contextlib
 import collections
 import json
 import logging
@@ -282,6 +283,16 @@ def set_expected_requests(server, expected_requests):
     payload = json.dumps([r.as_json() for r in expected_requests])
     r = requests.post(f"http://{ip}:{port}/{rest_server.EXPECTED_REQUESTS_PATH}", data=payload)
     r.raise_for_status()
+
+
+@contextlib.contextmanager
+def expected_requests(server, expected_requests):
+    clear_expected_requests(server)
+    set_expected_requests(server, expected_requests)
+    try:
+        yield
+    finally:
+        clear_expected_requests(server)
 
 
 if __name__ == '__main__':

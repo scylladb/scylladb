@@ -14,7 +14,7 @@ import requests.exceptions
 import time
 from typing import NamedTuple
 
-from rest_api_mock import expected_request
+import rest_api_mock
 
 
 def pytest_addoption(parser):
@@ -104,7 +104,7 @@ def jmx(request, rest_api_mock_server):
     workdir = os.path.join(os.path.dirname(jmx_path), "..")
     ip, api_port = rest_api_mock_server
     expected_requests = [
-            expected_request(
+            rest_api_mock.expected_request(
                 "GET",
                 "/column_family/",
                 response=[{"ks": "system_schema",
@@ -113,7 +113,7 @@ def jmx(request, rest_api_mock_server):
                           {"ks": "system_schema",
                            "cf": "computed_columns",
                            "type": "ColumnFamilies"}]),
-            expected_request(
+            rest_api_mock.expected_request(
                 "GET",
                 "/stream_manager/",
                 response=[])]
@@ -192,31 +192,28 @@ def cassandra_only(request):
 @pytest.fixture(scope="module")
 def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
     def invoker(method, *args, expected_requests=None):
-        if expected_requests is not None:
-            rest_api_mock.set_expected_requests(rest_api_mock_server, expected_requests)
+        with rest_api_mock.expected_requests(rest_api_mock_server, expected_requests or []):
+            if request.config.getoption("nodetool") == "scylla":
+                api_ip, api_port = rest_api_mock_server
+                cmd = [nodetool_path, "nodetool", method,
+                       "--logger-log-level", "scylla-nodetool=trace",
+                       "-h", api_ip,
+                       "-p", str(api_port)]
+            else:
+                jmx_ip, jmx_port = jmx
+                cmd = [nodetool_path, "-h", jmx_ip, "-p", str(jmx_port), method]
+            cmd += list(args)
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            sys.stdout.write(res.stdout)
+            sys.stderr.write(res.stderr)
 
-        if request.config.getoption("nodetool") == "scylla":
-            api_ip, api_port = rest_api_mock_server
-            cmd = [nodetool_path, "nodetool", method,
-                   "--logger-log-level", "scylla-nodetool=trace",
-                   "-h", api_ip,
-                   "-p", str(api_port)]
-        else:
-            jmx_ip, jmx_port = jmx
-            cmd = [nodetool_path, "-h", jmx_ip, "-p", str(jmx_port), method]
-        cmd += list(args)
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        sys.stdout.write(res.stdout)
-        sys.stderr.write(res.stderr)
+            expected_requests = [r for r in rest_api_mock.get_expected_requests(rest_api_mock_server)
+                                 if not r.exhausted()]
 
-        expected_requests = [r for r in rest_api_mock.get_expected_requests(rest_api_mock_server) if not r.exhausted()]
-        # Clear up any unconsumed requests, so the next test starts with a clean slate
-        rest_api_mock.clear_expected_requests(rest_api_mock_server)
+            # Check the return-code first, if the command failed probably not all requests were consumed
+            res.check_returncode()
+            assert len(expected_requests) == 0, ''.join(str(r) for r in expected_requests)
 
-        # Check the return-code first, if the command failed probably not all requests were consumed
-        res.check_returncode()
-        assert len(expected_requests) == 0, ''.join(str(r) for r in expected_requests)
-
-        return res.stdout
+            return res.stdout
 
     return invoker
