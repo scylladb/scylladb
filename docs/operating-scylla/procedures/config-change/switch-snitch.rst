@@ -54,7 +54,7 @@ For example, ``Ec2MultiRegionSnitch``:
 
 A node in the ``us-east-1`` region, us-east is the data center name, and 1 is the rack location. 
 
-4. Start the nodes in the cluster one by one.
+4. Start all the nodes in the cluster in parallel.
 
 .. include:: /rst_include/scylla-commands-start-index.rst
 
