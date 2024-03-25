@@ -47,13 +47,14 @@ private:
     std::vector<foreign_ptr<std::unique_ptr<shard_writer>>> _shard_writers;
     std::vector<future<>> _pending_consumers;
     std::vector<std::optional<queue_reader_handle_v2>> _queue_reader_handles;
-    unsigned _current_shard = -1;
+    dht::shard_replica_set _current_shards;
     uint64_t _consumed_partitions = 0;
     flat_mutation_reader_v2 _producer;
     std::function<future<> (flat_mutation_reader_v2)> _consumer;
 private:
-    unsigned shard_for_mf(const mutation_fragment_v2& mf) {
-        return _sharder.shard_of(mf.as_partition_start().key().token());
+    dht::shard_replica_set shard_for_mf(const mutation_fragment_v2& mf) {
+        auto token = mf.as_partition_start().key().token();
+        return _sharder.shard_for_writes(token);
     }
     future<> make_shard_writer(unsigned shard);
     future<stop_iteration> handle_mutation_fragment(mutation_fragment_v2 mf);
@@ -131,16 +132,31 @@ future<stop_iteration> multishard_writer::handle_mutation_fragment(mutation_frag
     auto f = make_ready_future<>();
     if (mf.is_partition_start()) {
         _consumed_partitions++;
-        if (unsigned shard = shard_for_mf(mf); shard != _current_shard) {
-            _current_shard = shard;
-            if (!bool(_shard_writers[shard])) {
-                f = make_shard_writer(shard);
+        auto shards = shard_for_mf(mf);
+        if (shards.empty()) [[unlikely]] {
+            return make_exception_future<stop_iteration>(std::runtime_error(
+                    format("multishard_writer: No shards for token {} of {}.{}",
+                           mf.as_partition_start().key().token(), _s->ks_name(), _s->cf_name())));
+        }
+        if (shards != _current_shards) {
+            _current_shards = shards;
+            for (auto shard : shards) {
+                if (!bool(_shard_writers[shard])) {
+                    f = f.then([this, shard] {
+                        return make_shard_writer(shard);
+                    });
+                }
             }
         }
     }
     return f.then([this, mf = std::move(mf)] () mutable {
-        assert(_current_shard != -1u);
-        return _queue_reader_handles[_current_shard]->push(std::move(mf));
+        assert(!_current_shards.empty());
+        if (_current_shards.size() == 1) [[likely]] {
+            return _queue_reader_handles[_current_shards[0]]->push(std::move(mf));
+        }
+        return seastar::parallel_for_each(_current_shards, [this, mf = std::move(mf)] (unsigned shard) {
+            return _queue_reader_handles[shard]->push(mutation_fragment_v2(*_s, mf.permit(), mf));
+        });
     }).then([] {
         return stop_iteration::no;
     });
