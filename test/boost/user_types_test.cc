@@ -101,7 +101,15 @@ SEASTAR_TEST_CASE(test_user_type) {
 }
 
 SEASTAR_TEST_CASE(test_invalid_user_type_statements) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
+    // The test creates ut4 with a lot of fields,
+    // this may take a while in debug builds,
+    // to avoid raft operation timeout set the threshold
+    // to some big value.
+    co_await utils::get_local_injector().enable_on_all("group0-raft-op-timeout-in-ms", false, {
+        {"value", "600000" } // ten minutes
+    });
+
+    co_await do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create type ut1 (a int)").discard_result().get();
 
         // non-frozen UDTs can't be part of primary key
