@@ -795,7 +795,7 @@ void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm, loc
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
     for (size_t i = 0; i < max_iterations; ++i) {
-        auto plan = talloc.balance_tablets(stm.get(), load_stats, std::move(skiplist)).get();
+        auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
         if (plan.empty()) {
             return;
         }
