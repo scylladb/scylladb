@@ -3448,6 +3448,9 @@ future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
         return seastar::async([&ss] {
             ss.check_ability_to_perform_topology_operation("decommission");
+            if (ss._operation_mode != mode::NORMAL) {
+                throw std::runtime_error(::format("Node in {} state; wait for status to become normal or restart", ss._operation_mode));
+            }
             std::exception_ptr leave_group0_ex;
             if (ss.raft_topology_change_enabled()) {
                 ss.raft_decommission().get();
@@ -3483,10 +3486,6 @@ future<> storage_service::decommission() {
                 temp.clear_gently().get();
                 if (num_tokens_after_all_left < 2) {
                     throw std::runtime_error("no other normal nodes in the ring; decommission would be pointless");
-                }
-
-                if (ss._operation_mode != mode::NORMAL) {
-                    throw std::runtime_error(::format("Node in {} state; wait for status to become normal or restart", ss._operation_mode));
                 }
 
                 ss.update_topology_change_info(::format("decommission {}", endpoint)).get();
