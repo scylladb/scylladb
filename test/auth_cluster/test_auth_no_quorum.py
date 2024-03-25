@@ -35,8 +35,7 @@ async def test_auth_no_quorum(manager: ManagerClient) -> None:
     # otherwise it could happen that all users are luckily placed on a single node
     roles = ["r" + unique_name() for _ in range(10)]
     for role in roles:
-        # if not exists due to https://github.com/scylladb/python-driver/issues/296
-        await cql.run_async(f"CREATE ROLE IF NOT EXISTS {role} WITH PASSWORD = '{role}' AND LOGIN = true")
+        await cql.run_async(f"CREATE ROLE {role} WITH PASSWORD = '{role}' AND LOGIN = true")
 
     # auth reads are eventually consistent so we need to sync all nodes
     await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
@@ -71,8 +70,7 @@ async def test_auth_raft_snapshot_transfer(manager: ManagerClient) -> None:
 
     roles = ["ro" + unique_name() for _ in range(10)]
     for role in roles:
-        # if not exists due to https://github.com/scylladb/python-driver/issues/296
-        await cql.run_async(f"CREATE ROLE IF NOT EXISTS {role}")
+        await cql.run_async(f"CREATE ROLE {role}")
 
     await trigger_snapshot(manager, servers[0])
 
