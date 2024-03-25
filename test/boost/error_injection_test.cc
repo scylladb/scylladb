@@ -29,6 +29,14 @@ using steady_clock = std::chrono::steady_clock;
 constexpr milliseconds sleep_msec(10); // Injection time sleep 10 msec
 constexpr minutes future_mins(10);     // Far in future        10 mins
 
+namespace std::chrono {
+template<class Clock, class Duration>
+std::ostream& boost_test_print_type(std::ostream& os, const std::chrono::time_point<Clock, Duration>& time_point) {
+    fmt::print(os, "{}", time_point);
+    return os;
+}
+}
+
 SEASTAR_TEST_CASE(test_inject_noop) {
     utils::error_injection<false> errinj;
 
@@ -86,7 +94,7 @@ SEASTAR_TEST_CASE(test_inject_sleep_duration) {
     errinj.enable("future_sleep");
     return errinj.inject("future_sleep", sleep_msec).then([start_time] {
         auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
-        BOOST_REQUIRE_GE(wait_time.count(), sleep_msec.count());
+        BOOST_REQUIRE_GE(wait_time, sleep_msec);
         return make_ready_future<>();
     });
 }
@@ -99,7 +107,8 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline_steady_clock) {
         auto deadline = steady_clock::now() + sleep_msec;
         errinj.enable("future_deadline");
         errinj.inject("future_deadline", deadline).then([deadline] {
-            BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(steady_clock::now() - deadline).count(), 0);
+            BOOST_REQUIRE_GE(steady_clock::now() - deadline,
+                             steady_clock::duration::zero());
             return make_ready_future<>();
         }).get();
     });
@@ -113,7 +122,8 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline_manual_clock) {
         auto deadline = seastar::manual_clock::now() + sleep_msec;
         errinj.enable("future_deadline");
         auto f = errinj.inject("future_deadline", deadline).then([deadline] {
-            BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(seastar::manual_clock::now() - deadline).count(), 0);
+            BOOST_REQUIRE_GE(seastar::manual_clock::now() - deadline,
+                             seastar::manual_clock::duration::zero());
             return make_ready_future<>();
         });
         manual_clock::advance(sleep_msec);
@@ -129,7 +139,8 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline_manual_clock_lambda) {
         auto deadline = seastar::manual_clock::now() + sleep_msec;
         errinj.enable("future_deadline");
         auto f = errinj.inject("future_deadline", deadline, [deadline] {
-            BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(seastar::manual_clock::now() - deadline).count(), 0);
+            BOOST_REQUIRE_GE(seastar::manual_clock::now() - deadline,
+                             seastar::manual_clock::duration::zero());
             return make_ready_future<>();
         });
         manual_clock::advance(sleep_msec);
@@ -145,7 +156,8 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline_db_clock) {
         auto deadline = db::timeout_clock::now() + sleep_msec;
         errinj.enable("future_deadline");
         errinj.inject("future_deadline", deadline).then([deadline] {
-            BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(db::timeout_clock::now() - deadline).count(), 0);
+            BOOST_REQUIRE_GE(db::timeout_clock::now() - deadline,
+                             db::timeout_clock::duration::zero());
             return make_ready_future<>();
         }).get();
     });
@@ -156,8 +168,8 @@ SEASTAR_TEST_CASE(test_inject_future_disabled) {
 
     auto start_time = steady_clock::now();
     return errinj.inject("futid", sleep_msec).then([start_time] {
-        auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
-        BOOST_REQUIRE_LT(wait_time.count(), sleep_msec.count());
+        auto wait_time = steady_clock::now() - start_time;
+        BOOST_REQUIRE_LT(wait_time, sleep_msec);
         return make_ready_future<>();
     });
 }
