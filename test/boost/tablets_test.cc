@@ -1688,7 +1688,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
 
         auto table1 = table_id(next_uuid());
 
-        unsigned shard_count = 1;
+        unsigned shard_count = 2;
 
         semaphore sem(1);
         shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
@@ -1699,6 +1699,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         });
 
         // host1 is loaded and host2 is empty, resulting in an imbalance.
+        // host1's shard 0 is loaded and shard 1 is empty, resulting in intra-node imbalance.
         stm.mutate_token_metadata([&] (auto& tm) {
             tm.update_host_id(host1, ip1);
             tm.update_host_id(host2, ip2);
