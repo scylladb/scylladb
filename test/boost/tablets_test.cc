@@ -1769,6 +1769,20 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
   }).get();
 }
 
+static
+void check_tablet_invariants(const tablet_metadata& tmeta) {
+    for (auto&& [table, tmap] : tmeta.all_tables()) {
+        tmap.for_each_tablet([&](auto tid, const tablet_info& tinfo) -> future<> {
+            std::unordered_set<host_id> hosts;
+            // Uniqueness of hosts
+            for (const auto& replica: tinfo.replicas) {
+                BOOST_REQUIRE(hosts.insert(replica.host).second);
+            }
+            return make_ready_future<>();
+        }).get();
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
   do_with_cql_env_thread([] (auto& e) {
     const int n_hosts = 6;
@@ -1852,7 +1866,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         testlog.debug("tablet metadata: {}", stm.get()->tablets());
         testlog.info("Total tablet count: {}, hosts: {}", total_tablet_count, hosts.size());
 
+        check_tablet_invariants(stm.get()->tablets());
+
         rebalance_tablets(e.get_tablet_allocator().local(), stm);
+
+        check_tablet_invariants(stm.get()->tablets());
 
         {
             load_sketch load(stm.get());
