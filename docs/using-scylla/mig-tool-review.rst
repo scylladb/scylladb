@@ -6,7 +6,7 @@ The following migration tools are available for migrating to ScyllaDB from compa
 such as Apache Cassandra, or from other Scylla clusters (ScyllaDB Open Source or Enterprise):
 
 * From SSTable to SSTable
-    - Based on ScyllaDB refresh
+    - Using nodetool refresh, :ref:`Load and Stream <nodetool-refresh-load-and-stream>` option.
     - On a large scale, it requires tooling to upload / transfer files from location to location.
 * From SSTable to CQL.
     - :doc:`sstableloader</operating-scylla/admin-tools/sstableloader/>`
