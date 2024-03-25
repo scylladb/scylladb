@@ -14,6 +14,7 @@
 #include "locator/token_metadata.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "exceptions/exceptions.hh"
+#include "gms/feature_service.hh"
 
 namespace cql3 {
 

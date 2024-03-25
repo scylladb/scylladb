@@ -20,6 +20,7 @@
 #include "db/system_keyspace.hh"
 #include "dht/boot_strapper.hh"
 #include "gms/gossiper.hh"
+#include "gms/feature_service.hh"
 #include "locator/tablets.hh"
 #include "locator/token_metadata.hh"
 #include "locator/network_topology_strategy.hh"

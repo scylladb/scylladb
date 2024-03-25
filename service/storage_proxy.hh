@@ -66,6 +66,10 @@ class gossiper;
 class feature_service;
 }
 
+namespace db {
+class system_keyspace;
+}
+
 namespace service {
 
 namespace paxos {

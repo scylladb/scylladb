@@ -13,6 +13,7 @@
 #include "streaming/stream_reason.hh"
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
+#include "gms/feature_service.hh"
 #include "message/messaging_service.hh"
 #include "repair/table_check.hh"
 #include "replica/database.hh"

@@ -13,7 +13,6 @@
 #include "schema/schema_fwd.hh"
 #include "schema_features.hh"
 #include "utils/hashing.hh"
-#include "gms/feature_service.hh"
 #include "schema_mutations.hh"
 #include "types/map.hh"
 #include "query-result-set.hh"

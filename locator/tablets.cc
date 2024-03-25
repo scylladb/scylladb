@@ -14,6 +14,7 @@
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
+#include "gms/feature_service.hh"
 
 #include <algorithm>
 #include <iterator>

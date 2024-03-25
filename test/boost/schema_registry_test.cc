@@ -20,6 +20,7 @@
 #include "types/list.hh"
 #include "utils/throttle.hh"
 #include "test/lib/cql_test_env.hh"
+#include "gms/feature_service.hh"
 
 static bytes random_column_name() {
     return to_bytes(to_hex(make_blob(32)));
