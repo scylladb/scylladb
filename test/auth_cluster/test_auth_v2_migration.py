@@ -117,7 +117,7 @@ async def check_auth_v2_works(manager: ManagerClient, hosts):
     assert len(user1_roles) == 2
     assert set([user1_roles[0].role, user1_roles[1].role]) == set(["users",  "user 1"])
 
-    await cql.run_async("CREATE ROLE IF NOT EXISTS user_after_migration")
+    await cql.run_async("CREATE ROLE user_after_migration")
     await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
     # see warmup_v1_static_values for background about checks below
     # check if it was added to a new table

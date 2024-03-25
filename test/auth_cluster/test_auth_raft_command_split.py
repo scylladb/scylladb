@@ -22,12 +22,11 @@ async def test_auth_raft_command_split(manager: ManagerClient) -> None:
     initial_perms = await cql.run_async("SELECT * FROM system_auth_v2.role_permissions")
 
     shared_role = "shared_role_" + unique_name()
-    await cql.run_async(f"CREATE ROLE IF NOT EXISTS {shared_role}")
+    await cql.run_async(f"CREATE ROLE {shared_role}")
 
     users = ["user_" + unique_name() for _ in range(30)]
     for user in users:
-        # if not exists due to https://github.com/scylladb/python-driver/issues/296
-        await cql.run_async(f"CREATE ROLE IF NOT EXISTS {user}")
+        await cql.run_async(f"CREATE ROLE {user}")
         await cql.run_async(f"GRANT ALL ON ROLE {shared_role} TO {user}")
 
     # this will trigger cascade of deletes which should be packed
