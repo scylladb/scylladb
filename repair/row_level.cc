@@ -3188,12 +3188,13 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
 }
 
 future<> repair_service::start() {
-    co_await load_history();
+    _load_history_done = load_history();
     co_await init_ms_handlers();
 }
 
 future<> repair_service::stop() {
     co_await _repair_module->stop();
+    co_await std::move(_load_history_done);
     co_await uninit_ms_handlers();
     if (this_shard_id() == 0) {
         co_await _gossiper.local().unregister_(_gossip_helper);
