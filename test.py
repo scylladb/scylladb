@@ -262,23 +262,23 @@ class TestSuite(ABC):
 
         pending = set()
         for shortname in lst:
-            t = os.path.join(self.name, shortname)
+            testname = os.path.join(self.name, shortname)
             casename = None
 
             # Check opt-out lists
             if shortname in self.disabled_tests:
                 continue
             if options.skip_patterns:
-                if any(skip_pattern in t for skip_pattern in options.skip_patterns):
+                if any(skip_pattern in testname for skip_pattern in options.skip_patterns):
                     continue
 
             # Check opt-in list
             if options.name:
                 for p in options.name:
                     pn = p.split('::', 2)
-                    if len(pn) == 1 and p in t:
+                    if len(pn) == 1 and p in testname:
                         break
-                    if len(pn) == 2 and pn[0] == t:
+                    if len(pn) == 2 and pn[0] == testname:
                         casename = pn[1]
                         break
                 else:
