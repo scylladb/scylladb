@@ -67,7 +67,7 @@ public:
     /**
      * Same as above but does not consult initialtoken config
      */
-    static std::unordered_set<token> get_random_bootstrap_tokens(const token_metadata_ptr tmptr, size_t num_tokens, check_token_endpoint check);
+    static std::unordered_set<token> get_random_bootstrap_tokens(const token_metadata_ptr tmptr, size_t num_tokens);
 
     static std::unordered_set<token> get_random_tokens(const token_metadata_ptr tmptr, size_t num_tokens);
 #if 0

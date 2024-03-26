@@ -63,7 +63,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
     }
 }
 
-std::unordered_set<token> boot_strapper::get_random_bootstrap_tokens(const token_metadata_ptr tmptr, size_t num_tokens, dht::check_token_endpoint check) {
+std::unordered_set<token> boot_strapper::get_random_bootstrap_tokens(const token_metadata_ptr tmptr, size_t num_tokens) {
     if (num_tokens < 1) {
         throw std::runtime_error("num_tokens must be >= 1");
     }
@@ -104,7 +104,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metada
         blogger.info("Get manually specified bootstrap_tokens={}", tokens);
         return tokens;
     }
-    return get_random_bootstrap_tokens(tmptr, num_tokens, check);
+    return get_random_bootstrap_tokens(tmptr, num_tokens);
 }
 
 std::unordered_set<token> boot_strapper::get_random_tokens(const token_metadata_ptr tmptr, size_t num_tokens) {
