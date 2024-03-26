@@ -67,10 +67,6 @@ public:
 
     friend ::fmt::formatter<UUID>;
 
-    sstring to_sstring() const {
-        return fmt::to_string(*this);
-    }
-
     friend std::ostream& operator<<(std::ostream& out, const UUID& uuid);
 
     bool operator==(const UUID& v) const noexcept = default;
