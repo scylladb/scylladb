@@ -200,23 +200,17 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
 }
 
 future<> service::start(::service::migration_manager& mm) {
-    auto create_keyspace_if_missing_or_noop = _used_by_maintenance_socket
-        ? make_ready_future<>()
-        : once_among_shards([this, &mm] {
+    if (!_used_by_maintenance_socket) {
+        co_await once_among_shards([this, &mm] {
             return create_keyspace_if_missing(mm);
         });
-
-    return create_keyspace_if_missing_or_noop.then([this] {
-        return _role_manager->start().then([this] {
-            return when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
-        });
-    }).then([this] {
-        _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
-    }).then([this] {
-        return once_among_shards([this] {
-            _mnotifier.register_listener(_migration_listener.get());
-            return make_ready_future<>();
-        });
+    }
+    co_await _role_manager->start();
+    co_await when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
+    _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
+    co_await once_among_shards([this] {
+        _mnotifier.register_listener(_migration_listener.get());
+        return make_ready_future<>();
     });
 }
 
