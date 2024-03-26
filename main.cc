@@ -1792,11 +1792,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
              */
             db.local().enable_autocompaction_toggle();
 
-            sl_controller.invoke_on_all([&qp, &group0_client] (qos::service_level_controller& controller) -> future<> {
-                return controller.reload_distributed_data_accessor(
-                        qp.local(), group0_client, sys_ks.local(), sys_dist_ks.local());
-            }).get();
-
             group0_service.start().get();
             auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
                 sl_controller.local().abort_group0_operations();
@@ -1842,6 +1837,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             startlog.info("SSTable data integrity checker is {}.",
                     cfg->enable_sstable_data_integrity_check() ? "enabled" : "disabled");
 
+            // This implicitly depends on node joining the cluster (join_cluster())
+            // with raft leader elected as only then service level mutation is put
+            // into scylla_local table. Calling it here avoids starting new cluster with
+            // older version only to immediately migrate it to the latest in the background.
+            sl_controller.invoke_on_all([&qp, &group0_client] (qos::service_level_controller& controller) -> future<> {
+                return controller.reload_distributed_data_accessor(
+                        qp.local(), group0_client, sys_ks.local(), sys_dist_ks.local());
+            }).get();
 
             const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
             const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
