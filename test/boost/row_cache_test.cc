@@ -4814,3 +4814,66 @@ SEASTAR_THREAD_TEST_CASE(test_preempt_cache_update) {
     }
 }
 #endif
+
+// Reproducer for scylladb/scylladb#18045.
+SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
+    auto s = schema_builder("ks", "cf")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("v", int32_type)
+        .build();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto make_ck = [&s] (int v) {
+        return clustering_key::from_deeply_exploded(*s, {data_value{v}});
+    };
+
+    auto pk = tests::generate_partition_key(s);
+    auto ck1 = make_ck(1);
+    auto ck2 = make_ck(2);
+    auto ck3 = make_ck(3);
+
+    // In the blocks below, we set up the following state:
+    // 1. Underlying row at ck1, live.
+    // 2. Cache entry at ck2, expired, discontinuous.
+    // 3. Cache entry at ck3, live, continuous.
+
+    auto dt_exp = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count() + 1);
+    mutation m(s, pk);
+    m.set_clustered_cell(ck1, "v", data_value(0), 1);
+    m.partition().apply_delete(*s, ck2, tombstone(1, dt_exp));
+    m.set_clustered_cell(ck3, "v", data_value(0), 1);
+
+    memtable_snapshot_source underlying(s);
+    underlying.apply(m);
+
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+    cache.populate(m);
+
+    with_allocator(tracker.allocator(), [&] {
+        auto& e = *cache.lookup(pk).partition().version()->partition().clustered_rows().begin();
+        tracker.get_lru().remove(e);
+        e.on_evicted(tracker);
+    });
+
+    // We have set up the desired state.
+    // Now we do a reverse query over the partition.
+    // This query will remove the expired entry at ck2, leaving cursor's _latest_it dangling.
+    // Then, it will populate the cache with ck3.
+    // Before the fix for issue #18045, this caused a (ASAN-triggering) use-after-free,
+    // because _latest_it was deferenced during the population.
+
+    tombstone_gc_state gc_state(nullptr);
+    auto slice = make_legacy_reversed(s, s->full_slice());
+    auto rd = cache.make_reader(
+        s->make_reversed(),
+        semaphore.make_permit(),
+        dht::partition_range::make_singular(pk),
+        slice,
+        nullptr,
+        streamed_mutation::forwarding::no,
+        mutation_reader::forwarding::no,
+        &gc_state);
+    auto close_rd = deferred_close(rd);
+    read_mutation_from_flat_mutation_reader(rd).get();
+}
