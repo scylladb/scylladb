@@ -4737,3 +4737,176 @@ SEASTAR_THREAD_TEST_CASE(test_cache_reader_semaphore_oom_kill) {
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().total_reads_killed_due_to_kill_limit, ++kill_limit_before);
     }
 }
+<<<<<<< HEAD
+=======
+
+// Reproducer for #16759.
+//
+#ifdef SCYLLA_ENABLE_PREEMPTION_SOURCE
+SEASTAR_THREAD_TEST_CASE(test_preempt_cache_update) {
+    // Starts requesting preemption after the given number of checks.
+    // On the first yield, blocks on a semaphore until it's later
+    // unblocked by the test.
+    struct preempter : public custom_preemption_source::impl {
+        semaphore wait_for_block{0};
+        semaphore wait_for_unblock{0};
+        uint64_t yields = 0;
+        int64_t until_preempt;
+        preempter(uint64_t count) : until_preempt(count) {}
+        bool should_preempt() override {
+            return (--until_preempt == 0);
+        }
+        void thread_yield() override {
+            if (yields++ == 0) {
+                wait_for_block.signal();
+                wait_for_unblock.wait().get();
+            }
+        }
+    };
+
+    // Create a few mutations with multiple rows.
+    simple_schema s;
+    auto keys = s.make_pkeys(3);
+    std::vector<mutation> mutations;
+    for (const auto& pk : keys) {
+        mutation m(s.schema(), pk);
+        for (int j = 0; j < 3; ++j) {
+            s.add_row(m, s.make_ckey(j), "example_value");
+        }
+        mutations.push_back(std::move(m));
+    }
+
+    // Test all possible preemption points.
+    for (uint64_t preempt_after = 1; true; ++preempt_after) {
+        testlog.trace("preempt after {}", preempt_after);
+        auto preempt_src = custom_preemption_source{std::make_unique<preempter>(preempt_after)};
+        auto& p = dynamic_cast<preempter&>(*preempt_src._impl);
+
+        // Set up the cache and populate it with the second mutation,
+        // so that the update can be preempted in the middle of a partition.
+        // It's a condition for reproducing #16759.
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+        underlying.apply(mutations[1]);
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+        cache.populate(mutations[1]);
+
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        // Update the cache (and the underlying source) with the mutations.
+        auto mt = make_lw_shared<replica::memtable>(s.schema());
+        for (const auto& m : mutations) {
+            mt->apply(m);
+        }
+        auto mt_copy = make_lw_shared<replica::memtable>(s.schema());
+        mt_copy->apply(*mt, semaphore.make_permit()).get();
+        auto update_fut = cache.update(row_cache::external_updater([&] { underlying.apply(mt_copy); }), *mt, preempt_src).then([&] {
+            // The update does not have to yield.
+            // We don't want the test to break if it doesn't yield.
+            // So if the test wasn't unblocked by a yield, we have to
+            // do it here.
+            p.wait_for_block.signal();
+        });
+
+        // Wait for the update thread to yield.
+        p.wait_for_block.wait().get();
+
+        {
+            // Read combined cache and memtables, and check that it produces
+            // the inserted data.
+            std::vector<flat_mutation_reader_v2> readers;
+            readers.push_back(cache.make_reader(s.schema(), semaphore.make_permit()));
+            readers.push_back(mt->make_flat_reader(s.schema(), semaphore.make_permit()));
+            auto at = assert_that(make_combined_reader(s.schema(), semaphore.make_permit(), std::move(readers)));
+            for (const auto& m : mutations) {
+                at.produces(m);
+            }
+            at.produces_end_of_stream();
+        }
+
+        // Unblock the update and wait for it to finish.
+        p.wait_for_unblock.signal();
+        update_fut.get();
+
+        {
+            // Read the cache after the update is over and check that it produces the inserted
+            // data.
+            auto at = assert_that(cache.make_reader(s.schema(), semaphore.make_permit()));
+            for (const auto& m : mutations) {
+                at.produces(m);
+            }
+            at.produces_end_of_stream();
+        }
+
+        // If a preemption request wasn't triggered in this loop, this means
+        // we have tested all preemption points and we are done.
+        if (p.until_preempt > 0) {
+            break;
+        }
+    }
+}
+#endif
+
+// Reproducer for scylladb/scylladb#18045.
+SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
+    auto s = schema_builder("ks", "cf")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("v", int32_type)
+        .build();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto make_ck = [&s] (int v) {
+        return clustering_key::from_deeply_exploded(*s, {data_value{v}});
+    };
+
+    auto pk = tests::generate_partition_key(s);
+    auto ck1 = make_ck(1);
+    auto ck2 = make_ck(2);
+    auto ck3 = make_ck(3);
+
+    // In the blocks below, we set up the following state:
+    // 1. Underlying row at ck1, live.
+    // 2. Cache entry at ck2, expired, discontinuous.
+    // 3. Cache entry at ck3, live, continuous.
+
+    auto dt_exp = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count() + 1);
+    mutation m(s, pk);
+    m.set_clustered_cell(ck1, "v", data_value(0), 1);
+    m.partition().apply_delete(*s, ck2, tombstone(1, dt_exp));
+    m.set_clustered_cell(ck3, "v", data_value(0), 1);
+
+    memtable_snapshot_source underlying(s);
+    underlying.apply(m);
+
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+    cache.populate(m);
+
+    with_allocator(tracker.allocator(), [&] {
+        auto& e = *cache.lookup(pk).partition().version()->partition().clustered_rows().begin();
+        tracker.get_lru().remove(e);
+        e.on_evicted(tracker);
+    });
+
+    // We have set up the desired state.
+    // Now we do a reverse query over the partition.
+    // This query will remove the expired entry at ck2, leaving cursor's _latest_it dangling.
+    // Then, it will populate the cache with ck3.
+    // Before the fix for issue #18045, this caused a (ASAN-triggering) use-after-free,
+    // because _latest_it was deferenced during the population.
+
+    tombstone_gc_state gc_state(nullptr);
+    auto slice = make_legacy_reversed(s, s->full_slice());
+    auto rd = cache.make_reader(
+        s->make_reversed(),
+        semaphore.make_permit(),
+        dht::partition_range::make_singular(pk),
+        slice,
+        nullptr,
+        streamed_mutation::forwarding::no,
+        mutation_reader::forwarding::no,
+        &gc_state);
+    auto close_rd = deferred_close(rd);
+    read_mutation_from_flat_mutation_reader(rd).get();
+}
+>>>>>>> 04db6d4bb1 (cache_flat_mutation_reader: only call get_iterator_in_latest() when pointing at a row)
