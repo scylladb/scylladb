@@ -5768,8 +5768,10 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             }
         }
 
+        auto new_replicas = locator::replace_replica(tinfo.replicas, src, dst);
+
         updates.push_back(canonical_mutation(replica::tablet_mutation_builder(guard.write_timestamp(), table)
-            .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
+            .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::tablet_transition_kind::migration)
             .build()));
