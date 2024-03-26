@@ -38,6 +38,11 @@ sharder::shard_of(const token& t) const {
     return dht::shard_of(_shard_count, _sharding_ignore_msb_bits, t);
 }
 
+shard_replica_set
+sharder::shard_for_writes(const token& t) const {
+    return {shard_of(t)};
+}
+
 token
 sharder::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
     return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);

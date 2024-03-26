@@ -392,6 +392,12 @@ means that operations which use such a sharder may escape from topology barrier 
 Such users should ensure that barriers synchronize with those operations in some other ways, for
 example by using the topology guard mechanism.
 
+Reads and writes may use different shards on a given host during intra-node tablet migration. Local
+replica acts as a coordinator for writes, which should respect the write replica set selector.
+This selector is reflected in the set of shards returned by the sharder. But since the selectors for reads
+may be different than for writes, the sharder provides separate methods for reads and writes. Reads should
+use sharder::shard_of(), while writes should use sharder::shard_for_writes().
+
 ## Tracking replica-side requests
 
 Do I have to hold effective_replication_map_ptr around reading on the replica side?
@@ -414,6 +420,32 @@ Unlike with static sharding, shards for a given key can change during node's lif
 This happens on tablet migration.
 
 Unlike with static sharding, consecutive tokens are not owned by consecutive shards (modulo shard count).
+
+## Shard assignment stability
+
+When tablet is not in transition, each host may contain at most one tablet replica, so there is a single shard for a given
+token and tablet sharder returns that shard, or shard 0 if there is no replica (for consistency with the current API).
+
+The sharder reports a given shard to be the owning shard for a given token as long as either the previous or next
+replica set has replica on that shard.
+
+This is necessary regardless of what the current read or write selectors in the tablet_transition_info
+are. The coordinator may use a different version of effective_replication_map. It may route read request to the leaving
+replica when the leaving replica already sees the write_both_read_new stage. The read should still be served successfully
+from the leaving tablet replica. Because of that, sharder responses should be stable throughout transition as to not
+cause discrepancy between the coordinator-side view of topology and the replica-side view.
+During transitions which are not intra-node migrations the coordinator decisions about target replica set may vary,
+affected by read and write selectors, but replica-side decisions about shard ownership are constant.
+
+Intra-node migration is the opposite. Coordinator-side decisions are constant but replica-side decisions of the sharder vary.
+A node may have two shard-replicas for a given token, but it's enough to read from one of them. The sharder returns the
+replica based on the current read selector. Similarly for writes, the sharder returns the set of owning shards based
+on the current write selector. It may return either the previous shard, the next shard, or both.
+Since coordinator decisions are not affected by stage changes during intra-node migration, this instability doesn't
+cause discrepancy between coordinator-side decisions and replica-side decisions.
+
+Also, due to fencing and barriers, coordinator-side version may be behind the replica-side version by at most one
+stage transition. It may also be ahead of the replica-side version by at most one stage transition.
 
 # Topology guards
 

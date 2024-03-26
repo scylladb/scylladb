@@ -10,6 +10,7 @@
 
 #include "dht/token.hh"
 #include <seastar/core/smp.hh>
+#include <boost/container/static_vector.hpp>
 
 namespace dht {
 
@@ -28,6 +29,10 @@ struct shard_and_token {
     token token;
 };
 
+/// Represents a set of shards that own a given token on a single host.
+/// It can be either of: none, single shard (no tablet migration), or two shards (during intra-node tablet migration).
+using shard_replica_set = boost::container::static_vector<unsigned, 2>;
+
 /**
  * Describes mapping between token space of a given table and owning shards on the local node.
  * The mapping reflected by this instance is constant for the lifetime of this sharder object.
@@ -45,9 +50,18 @@ public:
     sharder(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
     virtual ~sharder() = default;
     /**
-     * Calculates the shard that handles a particular token.
+     * Calculates the shard that handles a particular token for reads.
+     * Use shard_for_writes() to determine the set of shards that should receive writes.
      */
     virtual unsigned shard_of(const token& t) const;
+
+    /**
+     * Returns the set of shards which should receive a write to token t.
+     * During intra-node tablet migration, local writes need to be replicated to both the old and new shard.
+     * You should keep the effective_replication_map_ptr used to obtain this sharder alive around performing
+     * the writes so that topology coordinator can wait for all writes using this particular topology version.
+     */
+    virtual shard_replica_set shard_for_writes(const token& t) const;
 
     /**
      * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
@@ -110,5 +124,13 @@ struct fmt::formatter<dht::sharder> {
     auto format(const dht::sharder& sharder, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "sharder[shard_count={}, ignore_msb_bits={}]",
                               sharder.shard_count(), sharder.sharding_ignore_msb());
+    }
+};
+
+template<>
+struct fmt::formatter<dht::shard_replica_set> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const dht::shard_replica_set& rs, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{{}}}", fmt::join(rs, ", "));
     }
 };
