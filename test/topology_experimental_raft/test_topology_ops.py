@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bool):
     """Test basic topology operations using the topology coordinator."""
     cfg = {'enable_tablets' : tablets_enabled}
+    rf = 3
+    num_nodes = rf
+    if tablets_enabled:
+        num_nodes += 1
 
     logger.info("Bootstrapping first node")
     servers = [await manager.server_add(config=cfg)]
@@ -34,13 +38,11 @@ async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bo
     await manager.server_start(servers[0].server_id)
 
     logger.info("Bootstrapping other nodes")
-    servers += await manager.servers_add(3, config=cfg)
+    servers += await manager.servers_add(num_nodes, config=cfg)
 
     await wait_for_cql_and_get_hosts(manager.cql, servers, time.time() + 60)
     cql = await reconnect_driver(manager)
-    # FIXME: we disable background writes with tablets enabled because the test fails due to #17025.
-    # We need to re-enable them once this issue is fixed (by removing `if` here and above `await finish_writes()`).
-    finish_writes = await start_writes(cql) if not tablets_enabled else None
+    finish_writes = await start_writes(cql, rf)
 
     logger.info(f"Decommissioning node {servers[0]}")
     await manager.decommission_node(servers[0].server_id)
@@ -70,8 +72,7 @@ async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bo
     servers = servers[1:]
 
     logger.info("Checking results of the background writes")
-    if not tablets_enabled:
-        await finish_writes()
+    await finish_writes()
 
     for server in servers:
         await check_node_log_for_failed_mutations(manager, server)
@@ -84,13 +85,13 @@ async def check_node_log_for_failed_mutations(manager: ManagerClient, server: Se
     assert len(occurrences) == 0
 
 
-async def start_writes(cql: Session, concurrency: int = 3):
+async def start_writes(cql: Session, rf: int, concurrency: int = 3):
     logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")
 
     stop_event = asyncio.Event()
 
     ks_name = unique_name()
-    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}}")
+    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
     await cql.run_async(f"USE {ks_name}")
     await cql.run_async(f"CREATE TABLE tbl (pk int PRIMARY KEY, v int)")
 
