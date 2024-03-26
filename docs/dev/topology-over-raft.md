@@ -22,15 +22,87 @@ Nodes in state `left` may still appear as tablet replicas in host_id-based repli
 State transition diagram for nodes:
 ```mermaid
 stateDiagram-v2
-    none --> bootstrapping|replacing
+    none --> bootstrapping: join
+    none --> replacing: replace
+    state bootstrapping {
+        bs_join_group0 : join_group0
+        bs_left_token_ring : left_token_ring
+        bs_commit_cdc_generation : commit_cdc_generation
+        bs_write_both_read_old : write_both_read_old
+        bs_write_both_read_new : write_both_read_new
+        [*] --> bs_join_group0
+        bs_join_group0 --> bs_left_token_ring: rollback
+        bs_join_group0 --> [*]: rejected
+        bs_join_group0 --> bs_commit_cdc_generation
+        bs_commit_cdc_generation --> bs_write_both_read_old
+        bs_commit_cdc_generation --> bs_left_token_ring: rollback
+        bs_write_both_read_old --> bs_write_both_read_new: streaming completed
+        bs_write_both_read_old --> bs_left_token_ring: rollback
+        bs_write_both_read_new --> [*]
+        bs_left_token_ring --> [*]
+    }
+    state replacing {
+        rp_join_group0 : join_group0
+        rp_left_token_ring : left_token_ring
+        rp_tablet_draining : tablet_draining 
+        rp_write_both_read_old : write_both_read_old
+        rp_write_both_read_new : write_both_read_new
+        [*] --> rp_join_group0
+        rp_join_group0 --> rp_left_token_ring: rollback
+        rp_join_group0 --> rp_tablet_draining
+        rp_tablet_draining --> rp_write_both_read_old
+        rp_tablet_draining --> rp_left_token_ring: rollback
+        rp_join_group0 --> [*]: rejected
+        rp_write_both_read_old --> rp_write_both_read_new: streaming completed
+        rp_write_both_read_old --> rp_left_token_ring: rollback
+        rp_write_both_read_new --> [*]
+        rp_left_token_ring --> [*]
+    }
+    bootstrapping --> normal: operation succeeded
+    bootstrapping --> left: operation failed
+    replacing --> normal: operation succeeded
+    replacing --> left: operation failed
     none --> left: topology coordinator rejects the node
-    bootstrapping|replacing --> normal: operation succeeded
-    bootstrapping|replacing --> left: operation failed
     normal --> rebuilding: rebuild
-    normal --> decommissioning|removing: leave or remove
+    normal --> decommissioning: leave
+    normal --> removing: remove
+    state decommissioning {
+        de_left_token_ring : left_token_ring
+        de_tablet_draining : tablet_draining 
+        de_tablet_migration : tablet_migration
+        de_write_both_read_old: write_both_read_old
+        de_write_both_read_new : write_both_read_new
+        de_rollback_to_normal : rollback_to_normal
+        [*] --> de_tablet_draining
+        de_tablet_draining --> de_rollback_to_normal: rollback
+        de_rollback_to_normal --> de_tablet_migration
+        de_tablet_draining --> de_write_both_read_old
+        de_tablet_migration --> [*] 
+        de_write_both_read_old --> de_write_both_read_new: streaming completed
+        de_write_both_read_old --> de_rollback_to_normal: rollback
+        de_write_both_read_new --> de_left_token_ring
+        de_left_token_ring --> [*]
+    }
+    state removing {
+        re_tablet_draining : tablet_draining
+        re_tablet_migration : tablet_migration
+        re_write_both_read_old : write_both_read_old
+        re_write_both_read_new : write_both_read_new
+        re_rollback_to_normal : rollback_to_normal
+        [*] --> re_tablet_draining
+        re_tablet_draining --> re_rollback_to_normal: rollback
+        re_rollback_to_normal --> re_tablet_migration
+        re_tablet_migration --> [*]
+        re_tablet_draining --> re_write_both_read_old
+        re_write_both_read_old --> re_write_both_read_new: streaming completed
+        re_write_both_read_old --> re_rollback_to_normal: rollback
+        re_write_both_read_new --> [*]
+    }
     rebuilding --> normal: streaming completed
-    decommissioning|removing --> left: operation succeeded
-    decommissioning|removing --> normal: operation failed
+    decommissioning --> left: operation succeeded
+    decommissioning --> normal: operation failed
+    removing --> left: operation succeeded
+    removing --> normal: operation failed
 ```
 
 
