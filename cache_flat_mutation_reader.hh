@@ -452,7 +452,10 @@ future<> cache_flat_mutation_reader::read_from_underlying() {
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
                                     current_allocator().construct<rows_entry>(_ck_ranges_curr->start()->value()));
                                 // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
-                                auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), std::move(e), cmp);
+                                auto insert_result = rows.insert_before_hint(
+                                        _next_row.at_a_row() ? _next_row.get_iterator_in_latest_version() : rows.begin(),
+                                        std::move(e),
+                                        cmp);
                                 if (insert_result.second) {
                                     auto it = insert_result.first;
                                     _snp->tracker()->insert(*it);
@@ -469,7 +472,10 @@ future<> cache_flat_mutation_reader::read_from_underlying() {
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
                                     current_allocator().construct<rows_entry>(table_s, to_table_domain(_upper_bound), is_dummy::yes, is_continuous::no));
                                 // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
-                                auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), std::move(e), cmp);
+                                auto insert_result = rows.insert_before_hint(
+                                        _next_row.at_a_row() ? _next_row.get_iterator_in_latest_version() : rows.begin(),
+                                        std::move(e),
+                                        cmp);
                                 if (insert_result.second) {
                                     clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, _upper_bound);
                                     _snp->tracker()->insert(*insert_result.first);
@@ -630,7 +636,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
             current_allocator().construct<rows_entry>(table_schema(), cr.key(), cr.as_deletable_row()));
         new_entry->set_continuous(false);
         new_entry->set_range_tombstone(_current_tombstone);
-        auto it = _next_row.iterators_valid() ? _next_row.get_iterator_in_latest_version()
+        auto it = _next_row.iterators_valid() && _next_row.at_a_row() ? _next_row.get_iterator_in_latest_version()
                                               : mp.clustered_rows().lower_bound(cr.key(), cmp);
         auto insert_result = mp.mutable_clustered_rows().insert_before_hint(it, std::move(new_entry), cmp);
         it = insert_result.first;
@@ -695,7 +701,7 @@ bool cache_flat_mutation_reader::maybe_add_to_cache(const range_tombstone_change
 
         auto new_entry = alloc_strategy_unique_ptr<rows_entry>(
                 current_allocator().construct<rows_entry>(table_schema(), to_table_domain(rtc.position()), is_dummy::yes, is_continuous::no));
-        auto it = _next_row.iterators_valid() ? _next_row.get_iterator_in_latest_version()
+        auto it = _next_row.iterators_valid() && _next_row.at_a_row() ? _next_row.get_iterator_in_latest_version()
                                               : mp.clustered_rows().lower_bound(to_table_domain(rtc.position()), cmp);
         auto insert_result = mp.mutable_clustered_rows().insert_before_hint(it, std::move(new_entry), cmp);
         it = insert_result.first;
@@ -898,7 +904,10 @@ void cache_flat_mutation_reader::move_to_range(query::clustering_row_ranges::con
                     auto& rows = _snp->version()->partition().mutable_clustered_rows();
                     auto new_entry = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(table_schema(),
                             to_table_domain(_lower_bound), is_dummy::yes, is_continuous::no));
-                    return rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), std::move(new_entry), cmp);
+                    return rows.insert_before_hint(
+                            _next_row.at_a_row() ? _next_row.get_iterator_in_latest_version() : rows.begin(),
+                            std::move(new_entry),
+                            cmp);
                 });
                 auto it = insert_result.first;
                 if (insert_result.second) {
