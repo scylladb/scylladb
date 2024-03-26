@@ -15,12 +15,14 @@ from cassandra.protocol import WriteTimeout # type: ignore
 
 from test.pylib.manager_client import ManagerClient
 from test.topology.util import wait_for_token_ring_and_group0_consistency
+from test.topology.conftest import skip_mode
 
 
 logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_hints_manager_shutdown_hang(manager: ManagerClient) -> None:
     """Reproducer for #8079"""
     s1 = await manager.server_add(config={

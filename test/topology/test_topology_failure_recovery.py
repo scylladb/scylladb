@@ -6,6 +6,7 @@
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig
+from test.topology.conftest import skip_mode
 import pytest
 import logging
 import asyncio
@@ -17,6 +18,7 @@ async def inject_error_on(manager, error_name, servers):
     await asyncio.gather(*errs)
 
 @pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_topology_streaming_failure(request, manager: ManagerClient):
     """Fail streaming while doing a topology operation"""
     # decommission failure
