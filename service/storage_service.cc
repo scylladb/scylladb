@@ -5580,12 +5580,12 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
         auto& tinfo = tmap.get_tablet_info(tablet.tablet);
         auto range = tmap.get_token_range(tablet.tablet);
-        locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-        if (leaving_replica.host == tm->get_my_id()) {
+        std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
+        if (leaving_replica && leaving_replica->host == tm->get_my_id()) {
             // The algorithm doesn't work with tablet migration within the same node because
             // it assumes there is only one tablet replica, picked by the sharder, on local node.
             throw std::runtime_error(fmt::format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
-                                            tablet, leaving_replica.shard, trinfo->pending_replica.shard));
+                                            tablet, leaving_replica->shard, trinfo->pending_replica.shard));
         }
 
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
@@ -5661,8 +5661,11 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
 
             if (trinfo->stage == locator::tablet_transition_stage::cleanup) {
                 auto& tinfo = tmap.get_tablet_info(tablet.tablet);
-                locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-                if (leaving_replica.host != tm->get_my_id()) {
+                std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
+                if (!leaving_replica) {
+                    throw std::runtime_error(fmt::format("Tablet {} has no leaving replica", tablet));
+                }
+                if (leaving_replica->host != tm->get_my_id()) {
                     throw std::runtime_error(fmt::format("Tablet {} has leaving replica different than this one", tablet));
                 }
             } else if (trinfo->stage == locator::tablet_transition_stage::cleanup_target) {
@@ -5697,10 +5700,6 @@ static bool increases_replicas_per_rack(const locator::topology& topology, const
 
 future<> storage_service::move_tablet(table_id table, dht::token token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force, copy_tablet copy) {
     auto holder = _async_gate.hold();
-
-    if (copy) {
-        throw std::runtime_error("Tablet copying not implemented" /* yet */);
-    }
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
@@ -5772,7 +5771,15 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             }
         }
 
-        auto new_replicas = locator::replace_replica(tinfo.replicas, src, dst);
+        auto new_replicas = [&] {
+            if (!copy) {
+                return locator::replace_replica(tinfo.replicas, src, dst);
+            }
+
+            locator::tablet_replica_set result(tinfo.replicas);
+            result.push_back(dst);
+            return result;
+        }();
 
         updates.push_back(canonical_mutation(replica::tablet_mutation_builder(guard.write_timestamp(), table)
             .set_new_replicas(last_token, new_replicas)
