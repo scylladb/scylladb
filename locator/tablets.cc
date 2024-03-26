@@ -117,10 +117,10 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
     on_internal_error(tablet_logger, format("Invalid tablet transition kind: {}", static_cast<int>(trinfo.transition)));
 }
 
-tablet_replica get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
     auto leaving = substract_sets(tinfo.replicas, trinfo.next);
     if (leaving.empty()) {
-        throw std::runtime_error(format("No leaving replicas"));
+        return {};
     }
     if (leaving.size() > 1) {
         throw std::runtime_error(format("More than one leaving replica"));

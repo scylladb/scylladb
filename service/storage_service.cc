@@ -5578,12 +5578,12 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
         auto& tinfo = tmap.get_tablet_info(tablet.tablet);
         auto range = tmap.get_token_range(tablet.tablet);
-        locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-        if (leaving_replica.host == tm->get_my_id()) {
+        std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
+        if (leaving_replica && leaving_replica->host == tm->get_my_id()) {
             // The algorithm doesn't work with tablet migration within the same node because
             // it assumes there is only one tablet replica, picked by the sharder, on local node.
             throw std::runtime_error(fmt::format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
-                                            tablet, leaving_replica.shard, trinfo->pending_replica.shard));
+                                            tablet, leaving_replica->shard, trinfo->pending_replica.shard));
         }
 
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
@@ -5660,8 +5660,11 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
 
             if (trinfo->stage == locator::tablet_transition_stage::cleanup) {
                 auto& tinfo = tmap.get_tablet_info(tablet.tablet);
-                locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-                if (leaving_replica.host != tm->get_my_id()) {
+                std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
+                if (!leaving_replica) {
+                    throw std::runtime_error(fmt::format("Tablet {} has no leaving replica", tablet));
+                }
+                if (leaving_replica->host != tm->get_my_id()) {
                     throw std::runtime_error(fmt::format("Tablet {} has leaving replica different than this one", tablet));
                 }
             } else if (trinfo->stage == locator::tablet_transition_stage::cleanup_target) {

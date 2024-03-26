@@ -217,7 +217,7 @@ struct tablet_transition_info {
 };
 
 // Returns the leaving replica for a given transition.
-tablet_replica get_leaving_replica(const tablet_info&, const tablet_transition_info&);
+std::optional<tablet_replica> get_leaving_replica(const tablet_info&, const tablet_transition_info&);
 
 /// Represents intention to move a single tablet replica from src to dst.
 struct tablet_migration_info {
