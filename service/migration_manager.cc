@@ -1001,7 +1001,7 @@ static mutation make_group0_schema_version_mutation(const data_dictionary::datab
     mutation m(s, partition_key::from_singular(*s, "group0_schema_version"));
     auto cell = guard.with_raft()
         ? atomic_cell::make_live(*cdef->type, guard.write_timestamp(),
-                                 cdef->type->decompose(guard.new_group0_state_id().to_sstring()))
+                                 cdef->type->decompose(fmt::to_string(guard.new_group0_state_id())))
         : atomic_cell::make_dead(guard.write_timestamp(), gc_clock::now());
     m.set_clustered_cell(clustering_key::make_empty(), *cdef, std::move(cell));
     return m;

@@ -223,7 +223,7 @@ struct tagged_uuid {
     }
 
     sstring to_sstring() const {
-        return id.to_sstring();
+        return fmt::to_string(id);
     }
 };
 } // namespace utils

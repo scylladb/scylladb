@@ -51,7 +51,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
 
             for (const auto& c : cm.get_compactions()) {
                 cm::summary s;
-                s.id = c.compaction_uuid.to_sstring();
+                s.id = fmt::to_string(c.compaction_uuid);
                 s.ks = c.ks_name;
                 s.cf = c.cf_name;
                 s.unit = "keys";
@@ -158,7 +158,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
                 return s.write("[").then([&ctx, &s, &first] {
                     return ctx.db.local().get_compaction_manager().get_compaction_history([&s, &first](const db::compaction_history_entry& entry) mutable {
                         cm::history h;
-                        h.id = entry.id.to_sstring();
+                        h.id = fmt::to_string(entry.id);
                         h.ks = std::move(entry.ks);
                         h.cf = std::move(entry.cf);
                         h.compacted_at = entry.compacted_at;

@@ -161,7 +161,7 @@ BOOST_AUTO_TEST_CASE(test_long_type_string_conversions) {
 
 BOOST_AUTO_TEST_CASE(test_timeuuid_type_string_conversions) {
     auto now = utils::UUID_gen::get_time_UUID();
-    BOOST_REQUIRE(timeuuid_type->equal(timeuuid_type->from_string(now.to_sstring()), timeuuid_type->decompose(now)));
+    BOOST_REQUIRE(timeuuid_type->equal(timeuuid_type->from_string(fmt::to_string(now)), timeuuid_type->decompose(now)));
     auto uuid = utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"));
     BOOST_REQUIRE(timeuuid_type->equal(timeuuid_type->from_string("D2177dD0-EAa2-11de-a572-001B779C76e3"), timeuuid_type->decompose(uuid)));
 
@@ -169,7 +169,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_type_string_conversions) {
     test_parsing_fails(timeuuid_type, "D2177dD0-EAa2-11de-a572-001B779C76e3a");
     test_parsing_fails(timeuuid_type, "D2177dD0-EAa2-11de-a572001-B779C76e3");
     test_parsing_fails(timeuuid_type, "D2177dD0EAa211dea572001B779C76e3");
-    test_parsing_fails(timeuuid_type, utils::make_random_uuid().to_sstring());
+    test_parsing_fails(timeuuid_type, fmt::to_string(utils::make_random_uuid()));
 }
 
 BOOST_AUTO_TEST_CASE(test_simple_date_type_string_conversions) {
@@ -232,9 +232,9 @@ BOOST_AUTO_TEST_CASE(test_uuid_type_comparison) {
 
 BOOST_AUTO_TEST_CASE(test_uuid_type_string_conversions) {
     auto now = utils::UUID_gen::get_time_UUID();
-    BOOST_REQUIRE(uuid_type->equal(uuid_type->from_string(now.to_sstring()), uuid_type->decompose(now)));
+    BOOST_REQUIRE(uuid_type->equal(uuid_type->from_string(fmt::to_string(now)), uuid_type->decompose(now)));
     auto random = utils::make_random_uuid();
-    BOOST_REQUIRE(uuid_type->equal(uuid_type->from_string(random.to_sstring()), uuid_type->decompose(random)));
+    BOOST_REQUIRE(uuid_type->equal(uuid_type->from_string(fmt::to_string(random)), uuid_type->decompose(random)));
     auto uuid = utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"));
     BOOST_REQUIRE(uuid_type->equal(uuid_type->from_string("D2177dD0-EAa2-11de-a572-001B779C76e3"), uuid_type->decompose(uuid)));
 

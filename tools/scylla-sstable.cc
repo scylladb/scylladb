@@ -1225,7 +1225,7 @@ private:
     }
 
     void visit(const utils::UUID& uuid) {
-        _writer.String(uuid.to_sstring());
+        _writer.String(fmt::to_string(uuid));
     }
 
     template <typename Tag>
