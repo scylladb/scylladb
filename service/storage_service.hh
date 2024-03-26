@@ -106,6 +106,7 @@ class node_ops_meta_data;
 
 using start_hint_manager = seastar::bool_class<class start_hint_manager_tag>;
 using loosen_constraints = seastar::bool_class<class loosen_constraints_tag>;
+using copy_tablet = seastar::bool_class<class copy_tablet_tag>;
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -855,7 +856,7 @@ private:
     future<> track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
 
 public:
-    future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
+    future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no, copy_tablet copy = copy_tablet::no);
     future<> set_tablet_balancing_enabled(bool);
 
     // In the maintenance mode, other nodes won't be available thus we disabled joining

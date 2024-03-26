@@ -5695,13 +5695,17 @@ static bool increases_replicas_per_rack(const locator::topology& topology, const
     return m[dst_rack] + 1 > max;
 }
 
-future<> storage_service::move_tablet(table_id table, dht::token token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force) {
+future<> storage_service::move_tablet(table_id table, dht::token token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force, copy_tablet copy) {
     auto holder = _async_gate.hold();
+
+    if (copy) {
+        throw std::runtime_error("Tablet copying not implemented" /* yet */);
+    }
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.move_tablet(table, token, src, dst, force);
+            return ss.move_tablet(table, token, src, dst, force, copy);
         });
     }
 
