@@ -92,22 +92,20 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
     using namespace cql_transport;
     const auto& tm = *qp.proxy().get_token_metadata_ptr();
     const auto& feat = qp.proxy().features();
-    ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
 
     try {
         m = service::prepare_new_keyspace_announcement(qp.db().real_database(), _attrs->as_ks_metadata(_name, tm, feat), ts);
-
-        ret = ::make_shared<event::schema_change>(
-                event::schema_change::change_type::CREATED,
-                event::schema_change::target_type::KEYSPACE,
-                keyspace());
     } catch (const exceptions::already_exists_exception& e) {
         if (!_if_not_exists) {
           co_return coroutine::exception(std::current_exception());
         }
     }
 
+    auto ret = ::make_shared<event::schema_change>(
+        event::schema_change::change_type::CREATED,
+        event::schema_change::target_type::KEYSPACE,
+        keyspace());
     co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
