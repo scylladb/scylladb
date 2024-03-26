@@ -223,6 +223,22 @@ async def test_topology_changes(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
+async def test_mv_tablets_invalid_table(manager: ManagerClient):
+    """Scylla should return an HTTP error if the specified table is not found
+    """
+    servers = [await manager.server_add(),
+               await manager.server_add()]
+    src_host_id = await manager.get_host_id(servers[0].server_id)
+    dst_host_id = await manager.get_host_id(servers[1].server_id)
+    with pytest.raises(HTTPError, match="Can't find a column family"):
+        await manager.api.move_tablet(node_ip=servers[0].ip_addr,
+                                      ks="non-existent-ks", table="non-existent-table",
+                                      src_host=src_host_id, src_shard=0,
+                                      dst_host=dst_host_id, dst_shard=0,
+                                      token=0)
+
+
+@pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
