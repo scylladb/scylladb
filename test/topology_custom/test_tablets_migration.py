@@ -15,6 +15,52 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.asyncio
+async def test_tablet_transition_sanity(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets', 'consistent-topology-changes']}
+    host_ids = []
+    servers = []
+
+    async def make_server():
+        s = await manager.server_add(config=cfg)
+        servers.append(s)
+        host_ids.append(await manager.get_host_id(s.server_id))
+        await manager.api.disable_tablet_balancing(s.ip_addr)
+
+    await make_server()
+    await make_server()
+
+    cql = manager.get_cql()
+
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    logger.info(f"Tablet is on [{replicas}]")
+    assert len(replicas) == 1 and len(replicas[0].replicas) == 1
+
+    old_replica = replicas[0].replicas[0]
+    if old_replica[0] == host_ids[0]:
+        new_replica = (host_ids[1], 0)
+    elif old_replica[0] == host_ids[1]:
+        new_replica = (host_ids[0], 0)
+    else:
+        assert False, "Cannot find tablet on none of the servers"
+
+    logger.info(f"Move tablet {old_replica[0]} -> {new_replica[0]}")
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+
+    replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    logger.info(f"Tablet is now on [{replicas}]")
+    assert len(replicas) == 1
+    replicas = [ r[0] for r in replicas[0].replicas ]
+    assert len(replicas) == 1
+    assert new_replica[0] in replicas
+
+
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.asyncio
