@@ -375,6 +375,9 @@ public:
     // be replayed on the next reboot.
     replay_position min_position() const;
 
+    // (Re-)set data mix lifetime.
+    void update_max_data_lifetime(std::optional<uint64_t> commitlog_data_max_lifetime_in_seconds);
+
     typedef std::function<future<>(buffer_and_replay_position)> commit_load_reader_func;
 
     class segment_error : public std::exception {};

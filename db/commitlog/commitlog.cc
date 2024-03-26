@@ -1798,7 +1798,8 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
 }
 
 void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
-    if (!cfg.commitlog_data_max_lifetime_in_seconds) {
+    auto max = cfg.commitlog_data_max_lifetime_in_seconds;
+    if (!max) {
         return;
     }
 
@@ -1823,7 +1824,7 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
             }
 
             uint64_t time_since_first_added = std::chrono::duration_cast<std::chrono::seconds>(now - low_ts).count();
-            if (time_since_first_added >= *cfg.commitlog_data_max_lifetime_in_seconds) {
+            if (time_since_first_added >= *max) {
                 // There is data in this segment that has lived longer than allowed (might be flushed actually
                 // but can still affect compaction/resurrect stuff on replay). Collect all dirty 
                 // id:s (stuff keeping this segment alive), and ask for them to be memtable flushed
@@ -3375,6 +3376,11 @@ gc_clock::time_point db::commitlog::min_gc_time(const cf_id_type& id) const {
 db::replay_position db::commitlog::min_position() const {
     return _segment_manager->min_position();
 }
+
+void db::commitlog::update_max_data_lifetime(std::optional<uint64_t> commitlog_data_max_lifetime_in_seconds) {
+    _segment_manager->cfg.commitlog_data_max_lifetime_in_seconds = commitlog_data_max_lifetime_in_seconds;
+}
+
 
 future<std::vector<sstring>> db::commitlog::get_segments_to_replay() const {
     return _segment_manager->get_segments_to_replay();
