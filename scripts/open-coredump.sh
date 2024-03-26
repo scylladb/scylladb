@@ -53,6 +53,14 @@ Options:
     Print progress information when downloading the package and cloning
     the git repo.
 
+--ci
+    Designate the coredump as one coming from CI. These coredumps are
+    produced by a merge commit between the main branch (master or
+    enterprise) and the tested branch and this commit will not be
+    present in origin. Using this flag will force the main branch to
+    be checked out, instead of the commit hash obtained from the
+    ScyllaDB vesrsion.
+
 --artifact-dir,-d ARTIFACT_DIR
     Directory where the script will store all downloaded artifacts. If
     the directory doesn't exist, it will be created.
@@ -126,6 +134,7 @@ for required in eu-unstrip jq curl git; do
 done
 
 VERBOSE_LEVEL=1
+CORE_FROM_CI=0
 SCYLLA_S3_RELOC_SERVER_URL="${SCYLLA_S3_RELOC_SERVER_URL:-$SCYLLA_S3_RELOC_SERVER_DEFAULT_URL}"
 SCYLLA_REPO_PATH="${SCYLLA_REPO_PATH}"
 SCYLLA_BUILD_ID="${SCYLLA_BUILD_ID}"
@@ -146,6 +155,10 @@ do
             ;;
         "--quiet"|"-q")
             VERBOSE_LEVEL=0
+            shift 1
+            ;;
+        "--ci")
+            CORE_FROM_CI=1
             shift 1
             ;;
         "--artifact-dir"|"-d")
@@ -278,6 +291,10 @@ else
 fi
 
 COMMIT_HASH=$(cut -f3 -d. <<< $RELEASE)
+if [ $CORE_FROM_CI -eq 1 ]
+then
+    COMMIT_HASH=${MAIN_BRANCH}
+fi
 if [ "$(grep -o ~dev <<< $VERSION)" == "~dev" ]
 then
     BRANCH=${MAIN_BRANCH}
