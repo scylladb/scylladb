@@ -1553,9 +1553,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
                 api::unset_server_snitch(ctx).get();
             });
-            api::set_server_load_sstable(ctx, sys_ks).get();
+            api::set_server_column_family(ctx, sys_ks).get();
             auto stop_cf_api = defer_verbose_shutdown("column family API", [&ctx] {
-                api::unset_server_load_sstable(ctx).get();
+                api::unset_server_column_family(ctx).get();
             });
             static seastar::sharded<memory_threshold_guard> mtg;
             mtg.start(cfg->large_memory_allocation_warning_threshold()).get();
