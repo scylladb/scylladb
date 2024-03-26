@@ -282,6 +282,37 @@ def test_alter_keyspace_preserves_udt(cql):
         cql.execute(f"DROP TABLE IF EXISTS {ks}.tab")
         cql.execute(f"DROP KEYSPACE {ks}")
 
+# As requested in issue #16807, as long as there are any ScyllaDB features
+# not supported in tables with tablets, a CREATE KEYSPACE should print a
+# warning about the unsupported features - telling the user they may want
+# to consider creating the keyspace without tablets. This test checks that
+# the warning appears (and that it doesn't appear if a table is created
+# with tablets disabled).
+def test_create_keyspace_warn_tablets(cql, scylla_only, skip_without_tablets):
+    keyspace = unique_name()
+    try:
+        # When this test isn't skipped, creating a keyspace without any
+        # tablet parameters uses tablets by default - and should produce a
+        # warning:
+        f = cql.execute_async("CREATE KEYSPACE " + keyspace + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+        f.result() # results must be consumed before fetching warnings
+        warnings = '\n'.join(f.warnings)
+        assert 'tablets' in warnings
+        cql.execute(f"DROP KEYSPACE {keyspace}")
+        # If we explicitly ask for tablets, we also get the warning:
+        f = cql.execute_async("CREATE KEYSPACE " + keyspace + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 } AND TABLETS = { 'enabled': true }")
+        f.result()
+        warnings = '\n'.join(f.warnings)
+        assert 'tablets' in warnings
+        cql.execute(f"DROP KEYSPACE {keyspace}")
+        # If we explicitly ask to disable tablets, no warning:
+        f = cql.execute_async("CREATE KEYSPACE " + keyspace + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 } AND TABLETS = { 'enabled': false }")
+        f.result()
+        assert not f.warnings or not 'tablets' in '\n'.join(f.warnings)
+        cql.execute(f"DROP KEYSPACE {keyspace}")
+    finally:
+        cql.execute(f"DROP KEYSPACE IF EXISTS {keyspace}")
+
 # TODO: more tests for "WITH REPLICATION" syntax in CREATE TABLE.
 # TODO: check the "AND DURABLE_WRITES" option of CREATE TABLE.
 # TODO: confirm case insensitivity without quotes, and case sensitivity with them.
