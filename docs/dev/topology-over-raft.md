@@ -310,10 +310,15 @@ The behavioral difference between "migration" and "intranode_migration" transiti
 is performed. In case of intra-node migration, streaming is done by fast duplication of data by creating hard links to
 sstable files on the destination shard. Original sstable files on the source shard will be removed by the standard "cleanup" stage.
 
-When tablet is not in transition, the following invariants hold:
+Invariants:
 
-1. The storage layer (database) on any node contains writes for keys which belong to the tablet only if
-    that shard is one of the current tablet replicas.
+1. [INV-TABL-1] When tablet is not in transition, the storage layer (database) on any node contains writes for keys which
+    belong to the tablet only if that shard is one of the current tablet replicas.
+    During transition, previous replicas may contain writes.
+
+2. [INV-TABL-2] There is at most one transition per tablet happening at a time in the cluster. Operations started
+   on behalf of previous transitions can still run in the cluster, but they can have no side effects. This is ensured
+   by the proper use of the topology guard mechanism (see the "Topology guards" section).
 
 # Tablet splitting
 
@@ -360,6 +365,55 @@ process e.g. repair will be holding stale metadata when finalizing split. After 
 which is a result of splitting each preexisting tablet into two, is committed to group0.
 The replicas will react to that by remapping its compaction groups into a new set which is, at least,
 twice as large as the old one.
+
+# Sharding with tablets
+
+Each table can have different shard assignment for a given token computed from the placement of tablet replicas,
+from table's tablet_map.
+
+Generic code should not use static sharders, which only work with vnode-based tables. So it should not use
+schema::get_sharder() or dht::static_shard_of(). It should use erm::get_sharder() instead:
+
+    table& t;
+    auto erm = t.erm();
+    dht::sharder& sharder = erm->get_sharder(); // valid as long as erm is alive
+
+A sharder obtained from effective_replication_map reflects the tablet_map in that particular version of topology.
+
+Since effective_replication_map_ptr blocks topology barriers, it should not be held for long. If the
+code is long-running but doesn't need to work with a particular topology version, it should use auto_refreshing_sharder.
+It is a sharder implementation which automatically switches to the latest effective_replication_map_ptr of the table when it changes.
+
+   dht::auto_refreshing_sharder sharder(table.shared_from_this());
+
+If you use auto_refreshing_sharder, the results of sharder methods may be invalid after preemption point,
+since effective_replication_map instance used to obtain the results may no longer be alive. This
+means that operations which use such a sharder may escape from topology barrier and not be waited for.
+Such users should ensure that barriers synchronize with those operations in some other ways, for
+example by using the topology guard mechanism.
+
+## Tracking replica-side requests
+
+Do I have to hold effective_replication_map_ptr around reading on the replica side?
+
+No, it's enough that coordinator side holds it. If the coordinator side is no longer there,
+there are no consequences to that read, so waiting for the read is not necessary.
+
+Do I have to hold to effective_replication_map_ptr around writing on the replica side?
+
+Yes. Topology coordinator needs to wait for all writes to a tablet replica before cleaning it up to uphold [INV-TABL-1].
+Holding on to effective_replication_map_ptr on the coordinator side is not enough since the coordinator may
+already time-out or restart.
+
+Alternatively, if the writes are done on behalf of a topology operation (e.g. tablet migration), it's enough to use
+the topology guard mechanism, and hold the guard around writes instead of effective_replication_map_ptr.
+
+## Important differences from the static sharding
+
+Unlike with static sharding, shards for a given key can change during node's life time.
+This happens on tablet migration.
+
+Unlike with static sharding, consecutive tokens are not owned by consecutive shards (modulo shard count).
 
 # Topology guards
 
