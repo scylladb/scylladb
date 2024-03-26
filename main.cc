@@ -1793,13 +1793,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             db.local().enable_autocompaction_toggle();
 
             sl_controller.invoke_on_all([&qp, &group0_client] (qos::service_level_controller& controller) -> future<> {
-                return qos::get_service_level_distributed_data_accessor_for_current_version(
-                    sys_ks.local(),
-                    sys_dist_ks.local(),
-                    qp.local(), group0_client
-                    ).then([&controller] (auto data_accessor) {
-                        controller.set_distributed_data_accessor(std::move(data_accessor));
-                    });
+                return controller.reload_distributed_data_accessor(
+                        qp.local(), group0_client, sys_ks.local(), sys_dist_ks.local());
             }).get();
 
             group0_service.start().get();
