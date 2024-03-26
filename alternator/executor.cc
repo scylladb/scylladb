@@ -3717,9 +3717,9 @@ public:
     }
 };
 
-static std::tuple<rjson::value, size_t> describe_items(const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::optional<attrs_to_get>&& attrs_to_get, filter&& filter) {
+static future<std::tuple<rjson::value, size_t>> describe_items(const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::optional<attrs_to_get>&& attrs_to_get, filter&& filter) {
     describe_items_visitor visitor(selection.get_columns(), attrs_to_get, filter);
-    result_set->visit(visitor);
+    co_await result_set->visit_gently(visitor);
     auto scanned_count = visitor.get_scanned_count();
     rjson::value items = std::move(visitor).get_items();
     rjson::value items_descr = rjson::empty_object();
@@ -3736,7 +3736,7 @@ static std::tuple<rjson::value, size_t> describe_items(const cql3::selection::se
     if (!attrs_to_get || !attrs_to_get->empty()) {
         rjson::add(items_descr, "Items", std::move(items));
     }
-    return {std::move(items_descr), size};
+    co_return std::tuple<rjson::value, size_t>{std::move(items_descr), size};
 }
 
 static rjson::value encode_paging_state(const schema& schema, const service::pager::paging_state& paging_state) {
@@ -3826,7 +3826,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     }
     auto paging_state = rs->get_metadata().paging_state();
     bool has_filter = filter;
-    auto [items, size] = describe_items(*selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
+    auto [items, size] = co_await describe_items(*selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
     if (paging_state) {
         rjson::add(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
     }
