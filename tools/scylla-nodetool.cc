@@ -255,6 +255,18 @@ std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sst
     return keyspaces;
 }
 
+std::map<sstring, std::vector<sstring>> get_ks_to_cfs(scylla_rest_client& client) {
+    auto res = client.get("/column_family/");
+    std::map<sstring, std::vector<sstring>> keyspaces;
+    for (auto& element : res.GetArray()) {
+        const auto& cf_info = element.GetObject();
+        auto ks = rjson::to_string_view(cf_info["ks"]);
+        auto cf = rjson::to_string_view(cf_info["cf"]);
+        keyspaces[sstring(ks)].push_back(sstring(cf));
+    }
+    return keyspaces;
+}
+
 struct keyspace_and_tables {
     sstring keyspace;
     std::vector<sstring> tables;
@@ -811,6 +823,33 @@ void getlogginglevels_operation(scylla_rest_client& client, const bpo::variables
     }
 }
 
+void getsstables_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("keyspace") || !vm.count("table") || !vm.count("key")) {
+        throw std::invalid_argument("getsstables requires keyspace, table and partition key arguments");
+    }
+
+    const auto keyspace = vm["keyspace"].as<sstring>();
+    const auto table = vm["table"].as<sstring>();
+    const auto ks_to_cfs = get_ks_to_cfs(client);
+    if (!ks_to_cfs.contains(keyspace)) {
+        throw std::invalid_argument(format("unknown keyspace: {}", keyspace));
+    }
+    const auto tables = ks_to_cfs.at(keyspace);
+    if (auto it = std::find(tables.begin(), tables.end(), table); it == tables.end()) {
+        throw std::invalid_argument(format("unknown table: {}", table));
+    }
+
+    auto params = std::unordered_map<sstring, sstring>{{"key", vm["key"].as<sstring>()}};
+    if (vm.count("hex-format")) {
+        params["format"] = "hex";
+    }
+
+    auto res = client.get(seastar::format("/column_family/sstables/by_key/{}:{}", keyspace, table), std::move(params));
+    for (auto& sst : res.GetArray()) {
+        fmt::print("{}\n", rjson::to_string_view(sst));
+    }
+}
+
 void gettraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto res = client.get("/storage_service/trace_probability");
     fmt::print(std::cout, "Current trace probability: {}\n", res.GetDouble());
@@ -837,18 +876,6 @@ void gossipinfo_operation(scylla_rest_client& client, const bpo::variables_map&)
             fmt::print("  {}:{}\n", state, rjson::to_string_view(obj["value"]));
         }
     }
-}
-
-std::map<sstring, std::vector<sstring>> get_ks_to_cfs(scylla_rest_client& client) {
-    auto res = client.get("/column_family/");
-    std::map<sstring, std::vector<sstring>> keyspaces;
-    for (auto& element : res.GetArray()) {
-        const auto& cf_info = element.GetObject();
-        auto ks = rjson::to_string_view(cf_info["ks"]);
-        auto cf = rjson::to_string_view(cf_info["cf"]);
-        keyspaces[sstring(ks)].push_back(sstring(cf));
-    }
-    return keyspaces;
 }
 
 static uint64_t get_off_heap_memory_used(scylla_rest_client& client) {
@@ -1771,6 +1798,75 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
             params["tag"],
             params["sf"]);
     fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
+}
+
+void sstableinfo_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::vector<keyspace_and_table> requests;
+    if (vm.count("table")) {
+        const auto keyspace = vm["keyspace"].as<sstring>();
+        for (const auto& table : vm["table"].as<std::vector<sstring>>()) {
+            requests.push_back(keyspace_and_table{.keyspace = keyspace, .table = table});
+        }
+    } else if (vm.count("keyspace")) {
+        requests.push_back(keyspace_and_table{.keyspace = vm["keyspace"].as<sstring>()});
+    } else {
+        requests.push_back(keyspace_and_table{});
+    }
+
+    fmt::print("\n");
+
+    for (const auto& req : requests) {
+        std::unordered_map<sstring, sstring> params;
+        if (!req.keyspace.empty()) {
+            params["keyspace"] = req.keyspace;
+        }
+        if (!req.table.empty()) {
+            params["cf"] = req.table;
+        }
+        auto res = client.get("/storage_service/sstable_info", std::move(params));
+
+        for (const auto& entry : res.GetArray()) {
+            fmt::print("{:>8} : {}\n", "keyspace", rjson::to_string_view(entry["keyspace"]));
+            fmt::print("{:>8} : {}\n", "table", rjson::to_string_view(entry["table"]));
+            if (!entry.HasMember("sstables")) {
+                continue;
+            }
+            fmt::print("sstables :\n");
+            unsigned i = 0;
+            for (const auto& sstable : entry["sstables"].GetArray()) {
+                fmt::print("{:>8} :\n", i++);
+
+                // Keep the same order as the Java nodetool.
+                // NOTE: we keep the timestamp field as-is, while the Java nodetool re-formats it.
+                for (const auto& key : {"data_size", "filter_size", "index_size", "level", "size", "generation", "version", "timestamp"}) {
+                    std::string print_key = key;
+                    std::replace(print_key.begin(), print_key.end(), '_', ' ');
+                    if (sstable[key].IsNumber()) {
+                        fmt::print("{:>23} : {}\n", print_key, sstable[key]);
+                    } else {
+                        fmt::print("{:>23} : {}\n", print_key, rjson::to_string_view(sstable[key]));
+                    }
+                }
+
+                if (sstable.HasMember("properties")) {
+                    fmt::print("{:>23} :\n", "properties");
+                    for (const auto& property : sstable["properties"].GetArray()) {
+                        fmt::print("{:>16} : {}\n", rjson::to_string_view(property["key"]), rjson::to_string_view(property["value"]));
+                    }
+                }
+
+                if (sstable.HasMember("extended_properties")) {
+                    fmt::print("{:>23} :\n", "extended properties");
+                    for (const auto& extended_property : sstable["extended_properties"].GetArray()) {
+                        fmt::print("{:>35} :\n", rjson::to_string_view(extended_property["group"]));
+                        for (const auto& attribute : extended_property["attributes"].GetArray()) {
+                            fmt::print("{:>43} : {}\n", rjson::to_string_view(attribute["key"]), rjson::to_string_view(attribute["value"]));
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 static bool keyspace_uses_tablets(scylla_rest_client& client, const sstring& keyspace) {
@@ -2710,6 +2806,7 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"-pl", "--pull"},
     {"-pr", "--partitioner-range"},
     {"-hosts", "--in-hosts"},
+    {"-hf", "--hex-format"},
 };
 
 std::map<operation, operation_func> get_operations_with_func() {
@@ -3005,6 +3102,23 @@ Prints a table with the name and current logging level for each logger in Scylla
 )",
             },
             getlogginglevels_operation
+        },
+        {
+            {
+                "getsstables",
+                "Get the sstables that contain the given key",
+R"(
+)",
+                {
+                    typed_option<>("hex-format", "The key is given in hex dump format"),
+                },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to query", 1),
+                    typed_option<sstring>("table", "The table to query", 1),
+                    typed_option<sstring>("key", "The partition key for which we need to find the sstables", 1),
+                },
+            },
+            getsstables_operation
         },
         {
             {
@@ -3307,6 +3421,20 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             snapshot_operation
+        },
+        {
+            {
+                "sstableinfo",
+                "Information about sstables per keyspace/table",
+R"(
+)",
+                { },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace name", 1),
+                    typed_option<std::vector<sstring>>("table", "The table names (optional)", -1),
+                },
+            },
+            sstableinfo_operation,
         },
         {
             {
