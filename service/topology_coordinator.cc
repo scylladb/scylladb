@@ -2482,6 +2482,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
                 .set("node_state", node_state::normal)
                 .set("release_version", release_version)
                 .set("num_tokens", (uint32_t)num_tokens)
+                .set("tokens_string", "")
                 .set("shard_count", (uint32_t)std::stoi(shard_count))
                 .set("ignore_msb", (uint32_t)std::stoi(ignore_msb))
                 .set("cleanup_status", cleanup_status::clean)

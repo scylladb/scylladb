@@ -56,6 +56,7 @@ enum class cleanup_status : uint16_t {
 
 struct join_param {
     uint32_t num_tokens;
+    sstring tokens_string;
 };
 
 struct rebuild_param {

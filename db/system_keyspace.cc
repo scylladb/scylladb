@@ -224,6 +224,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("replaced_id", uuid_type)
             .with_column("rebuild_option", utf8_type)
             .with_column("num_tokens", int32_type)
+            .with_column("tokens_string", utf8_type)
             .with_column("shard_count", int32_type)
             .with_column("ignore_msb", int32_type)
             .with_column("cleanup_status", utf8_type)
@@ -2750,6 +2751,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         auto rack = row.get_as<sstring>("rack");
         auto release_version = row.get_as<sstring>("release_version");
         uint32_t num_tokens = row.get_as<int32_t>("num_tokens");
+        sstring tokens_string = row.get_as<sstring>("tokens_string");
         size_t shard_count = row.get_as<int32_t>("shard_count");
         uint8_t ignore_msb = row.get_as<int32_t>("ignore_msb");
         sstring cleanup_status = row.get_as<sstring>("cleanup_status");
@@ -2812,7 +2814,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             case service::node_state::bootstrapping:
                 // The tokens aren't generated right away when we enter the `bootstrapping` node state.
                 // Therefore we need to know the number of tokens when we generate them during the bootstrap process.
-                ret.req_param.emplace(host_id, service::join_param{num_tokens});
+                ret.req_param.emplace(host_id, service::join_param{num_tokens, tokens_string});
                 break;
             case service::node_state::replacing:
                 // If a node is replacing we need to know which node it is replacing and which nodes are ignored
