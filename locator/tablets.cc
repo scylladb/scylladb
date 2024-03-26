@@ -99,14 +99,8 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
     tablet_migration_streaming_info result;
     switch (trinfo.transition) {
         case tablet_transition_kind::migration:
-            result.read_from = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
-            result.written_to = std::unordered_set<tablet_replica>(trinfo.next.begin(), trinfo.next.end());
-            for (auto&& r : trinfo.next) {
-                result.read_from.erase(r);
-            }
-            for (auto&& r : tinfo.replicas) {
-                result.written_to.erase(r);
-            }
+            result.read_from = substract_sets(tinfo.replicas, trinfo.next);
+            result.written_to = substract_sets(trinfo.next, tinfo.replicas);
             return result;
         case tablet_transition_kind::rebuild:
             result.written_to.insert(trinfo.pending_replica);
@@ -124,10 +118,7 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
 }
 
 tablet_replica get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
-    std::unordered_set<tablet_replica> leaving(tinfo.replicas.begin(), tinfo.replicas.end());
-    for (auto&& r : trinfo.next) {
-        leaving.erase(r);
-    }
+    auto leaving = substract_sets(tinfo.replicas, trinfo.next);
     if (leaving.empty()) {
         throw std::runtime_error(format("No leaving replicas"));
     }
