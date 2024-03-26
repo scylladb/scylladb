@@ -2903,13 +2903,13 @@ struct to_string_impl_visitor {
         return format_if_not_empty(t, v, time_to_string);
     }
     sstring operator()(const timeuuid_type_impl& t, const timeuuid_type_impl::native_type* v) {
-        return format_if_not_empty(t, v, [] (const utils::UUID& v) { return v.to_sstring(); });
+        return format_if_not_empty(t, v, [] (const utils::UUID& v) { return fmt::to_string(v); });
     }
     sstring operator()(const tuple_type_impl& t, const tuple_type_impl::native_type* v) {
         return format_if_not_empty(t, v, [&t] (const tuple_type_impl::native_type& b) { return tuple_to_string(t, b); });
     }
     sstring operator()(const uuid_type_impl& u, const uuid_type_impl::native_type* v) {
-        return format_if_not_empty(u, v, [] (const utils::UUID& v) { return v.to_sstring(); });
+        return format_if_not_empty(u, v, [] (const utils::UUID& v) { return fmt::to_string(v); });
     }
     sstring operator()(const varint_type_impl& t, const varint_type_impl::native_type* v) {
         return format_if_not_empty(t, v, [] (const utils::multiprecision_int& v) { return v.str(); });

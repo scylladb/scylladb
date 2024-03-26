@@ -1036,7 +1036,7 @@ struct to_lua_visitor {
 
     void operator()(const concrete_type<utils::UUID>&, const emptyable<utils::UUID>* v) {
         // returns a string
-        push_sstring(l, v->get().to_sstring());
+        push_sstring(l, fmt::to_string(v->get())) ;
     }
 };
 }

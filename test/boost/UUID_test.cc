@@ -15,7 +15,7 @@
 
 BOOST_AUTO_TEST_CASE(test_generation_of_name_based_UUID) {
     auto uuid = utils::UUID_gen::get_name_UUID("systembatchlog");
-    BOOST_REQUIRE_EQUAL(uuid.to_sstring(), "0290003c-977e-397c-ac3e-fdfdc01d626b");
+    BOOST_REQUIRE_EQUAL(fmt::to_string(uuid), "0290003c-977e-397c-ac3e-fdfdc01d626b");
 }
 
 using utils::UUID;
@@ -42,7 +42,7 @@ BOOST_AUTO_TEST_CASE(test_from_string) {
     auto check = [] (sstring_view sv) {
         auto uuid = UUID(sv);
         BOOST_CHECK_EQUAL(uuid.version(), 4);
-        BOOST_CHECK_EQUAL(uuid.to_sstring(), sv);
+        BOOST_CHECK_EQUAL(fmt::to_string(uuid), sv);
         BOOST_CHECK_EQUAL((uuid.get_least_significant_bits() >> 62) & 0x3, 2);
     };
 
