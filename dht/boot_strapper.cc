@@ -77,9 +77,12 @@ std::unordered_set<token> boot_strapper::get_random_bootstrap_tokens(const token
     return tokens;
 }
 
-std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, const db::config& cfg, dht::check_token_endpoint check) {
+std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata_ptr tmptr, const db::config& cfg, dht::check_token_endpoint check) {
+    return get_bootstrap_tokens(std::move(tmptr), cfg.initial_token(), cfg.num_tokens(), check);
+}
+
+std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, sstring tokens_string, uint32_t num_tokens, check_token_endpoint check) {
     std::unordered_set<sstring> initial_tokens;
-    sstring tokens_string = cfg.initial_token();
     try {
         boost::split(initial_tokens, tokens_string, boost::is_any_of(sstring(", ")));
     } catch (...) {
@@ -101,7 +104,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metada
         blogger.info("Get manually specified bootstrap_tokens={}", tokens);
         return tokens;
     }
-    return get_random_bootstrap_tokens(tmptr, cfg.num_tokens(), check);
+    return get_random_bootstrap_tokens(tmptr, num_tokens, check);
 }
 
 std::unordered_set<token> boot_strapper::get_random_tokens(const token_metadata_ptr tmptr, size_t num_tokens) {
