@@ -43,7 +43,6 @@
 #include "utils/small_vector.hh"
 
 #include <boost/range/algorithm/equal.hpp>
-#include <boost/algorithm/clamp.hpp>
 #include <boost/version.hpp>
 #include <memory>
 #include <type_traits>
@@ -439,7 +438,7 @@ void
 chunked_vector<T, max_contiguous_allocation>::do_reserve_for_push_back() {
     if (_capacity == 0) {
         // allocate a bit of room in case utilization will be low
-        reserve(boost::algorithm::clamp(512 / sizeof(T), 1, max_chunk_capacity()));
+        reserve(std::clamp(512 / sizeof(T), size_t(1), max_chunk_capacity()));
     } else if (_capacity < max_chunk_capacity() / 2) {
         // exponential increase when only one chunk to reduce copying
         reserve(_capacity * 2);
