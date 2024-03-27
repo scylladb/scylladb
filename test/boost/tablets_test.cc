@@ -15,6 +15,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/test_utils.hh"
 #include "db/config.hh"
 #include "schema/schema_builder.hh"
 
@@ -26,6 +27,7 @@
 #include "locator/load_sketch.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/error_injection.hh"
+#include "utils/to_string.hh"
 
 using namespace locator;
 using namespace replica;

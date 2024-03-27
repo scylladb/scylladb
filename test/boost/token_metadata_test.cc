@@ -7,10 +7,13 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <fmt/ranges.h>
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/test_utils.hh"
 #include "locator/token_metadata.hh"
 #include "locator/simple_strategy.hh"
 #include "locator/everywhere_replication_strategy.hh"
+#include "utils/to_string.hh"
 
 using namespace locator;
 

@@ -41,6 +41,7 @@
 #include "service/topology_state_machine.hh"
 #include "topology_mutation.hh"
 #include "utils/error_injection.hh"
+#include "utils/to_string.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 
 #include "idl/join_node.dist.hh"

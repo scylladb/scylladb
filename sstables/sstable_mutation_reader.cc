@@ -11,6 +11,7 @@
 #include "column_translation.hh"
 #include "concrete_types.hh"
 #include "utils/fragment_range.hh"
+#include "utils/to_string.hh"
 
 #include <boost/range/algorithm/stable_partition.hpp>
 

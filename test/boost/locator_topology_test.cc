@@ -8,11 +8,14 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <fmt/ranges.h>
+
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/util/defer.hh>
 
 #include "locator/types.hh"
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/test_utils.hh"
 
 #include "locator/host_id.hh"
 #include "locator/topology.hh"

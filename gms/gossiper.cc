@@ -45,6 +45,7 @@
 #include "locator/token_metadata.hh"
 #include "utils/exceptions.hh"
 #include "utils/error_injection.hh"
+#include "utils/to_string.hh"
 
 namespace gms {
 

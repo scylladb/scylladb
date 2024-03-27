@@ -27,6 +27,7 @@
 #include "serializer.hh"
 #include "serializer_impl.hh"
 #include "utils/xx_hasher.hh"
+#include "utils/to_string.hh"
 #include "test/raft/helpers.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"

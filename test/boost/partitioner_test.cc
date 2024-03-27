@@ -17,10 +17,12 @@
 #include "schema/schema.hh"
 #include "types/types.hh"
 #include "schema/schema_builder.hh"
+#include "utils/to_string.hh"
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 #include "test/boost/total_order_check.hh"
 
 template <typename... Args>

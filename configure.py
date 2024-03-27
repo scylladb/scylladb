@@ -794,7 +794,6 @@ if args.list_artifacts:
 
 defines = ['XXH_PRIVATE_API',
            'SEASTAR_TESTING_MAIN',
-           'FMT_DEPRECATED_OSTREAM',
 ]
 
 scylla_raft_core = [

@@ -13,6 +13,7 @@
 #include "locator/types.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/sequenced_set.hh"
+#include "utils/to_string.hh"
 #include "locator/network_topology_strategy.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>

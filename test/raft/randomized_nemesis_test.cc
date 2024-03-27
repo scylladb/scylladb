@@ -33,7 +33,6 @@
 #include "test/raft/generator.hh"
 #include "test/raft/helpers.hh"
 
-#include "utils/to_string.hh"
 
 namespace std {
 

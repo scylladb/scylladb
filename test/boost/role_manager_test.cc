@@ -6,10 +6,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <fmt/ranges.h>
+
 #include "auth/standard_role_manager.hh"
 
 #include "test/lib/scylla_test_case.hh"
-
+#include "test/lib/test_utils.hh"
 #include "test/lib/cql_test_env.hh"
 
 auto make_manager(cql_test_env& env) {

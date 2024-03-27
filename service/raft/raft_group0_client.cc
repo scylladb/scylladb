@@ -21,6 +21,7 @@
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "replica/database.hh"
+#include "utils/to_string.hh"
 
 
 namespace service {
