@@ -139,14 +139,10 @@ public:
     }
 
     void push_back(const T& x) {
-        reserve_for_push_back();
-        new (addr(_size)) T(x);
-        ++_size;
+        emplace_back(x);
     }
     void push_back(T&& x) {
-        reserve_for_push_back();
-        new (addr(_size)) T(std::move(x));
-        ++_size;
+        emplace_back(std::move(x));
     }
     template <typename... Args>
     T& emplace_back(Args&&... args) {
