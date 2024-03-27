@@ -753,7 +753,7 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
         {
             std::vector<mutation> muts_to_apply;
             muts_to_apply.reserve(snp.cdc_generation_mutations.size());
-            const auto max_size = _db.local().commitlog()->max_record_size() / 2;
+            const auto max_size = _db.local().schema_commitlog()->max_record_size() / 2;
             for (const auto& m: snp.cdc_generation_mutations) {
                 auto mut = m.to_mutation(s);
                 if (m.representation().size() <= max_size) {
@@ -6307,7 +6307,7 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
                     cdc_generation_mutations = co_await ss.get_system_mutations(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
 
                     utils::get_local_injector().inject("cdc_generation_mutations_topology_snapshot_replication",
-                        [target_size=ss._db.local().commitlog()->max_record_size() * 2, &muts = cdc_generation_mutations] {
+                        [target_size=ss._db.local().schema_commitlog()->max_record_size() * 2, &muts = cdc_generation_mutations] {
                             // Copy mutations n times, where n is picked so that the memory size of all mutations
                             // together exceeds `commitlog()->max_record_size()`.
                             // We multiply by two to account for all possible deltas (like segment::entry_overhead_size).

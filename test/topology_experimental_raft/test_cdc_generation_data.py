@@ -11,7 +11,7 @@ if it didn't the command size would go over commitlog segment size limit making 
 @pytest.mark.asyncio
 async def test_send_data_in_parts(manager: ManagerClient):
     config = {
-        'commitlog_segment_size_in_mb': 2
+        'schema_commitlog_segment_size_in_mb': 2
     }
 
     first_server = await manager.server_add(config=config)
