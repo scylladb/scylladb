@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <fmt/ranges.h>
 #include "query-request.hh"
 #include "query-result.hh"
 #include "query-result-writer.hh"

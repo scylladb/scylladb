@@ -12,6 +12,7 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/test/unit_test.hpp>
 #include <stdint.h>
+#include <fmt/ranges.h>
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shared_ptr.hh>

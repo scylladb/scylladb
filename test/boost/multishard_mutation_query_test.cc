@@ -29,6 +29,7 @@
 
 #include "test/lib/scylla_test_case.hh"
 
+#include <fmt/ranges.h>
 #include <boost/range/algorithm/sort.hpp>
 #include <utility>
 

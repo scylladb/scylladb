@@ -8,6 +8,7 @@
 
 #include "auth/permissions_cache.hh"
 
+#include <fmt/ranges.h>
 #include "auth/authorizer.hh"
 #include "auth/service.hh"
 

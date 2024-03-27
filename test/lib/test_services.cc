@@ -20,6 +20,7 @@
 #include "utils/overloaded_functor.hh"
 #include <boost/program_options.hpp>
 #include <iostream>
+#include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
 
 static const sstring some_keyspace("ks");

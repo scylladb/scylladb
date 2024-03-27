@@ -8,15 +8,16 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-#include <seastar/core/sleep.hh>
 #include "dht/range_streamer.hh"
 #include "replica/database.hh"
 #include "gms/gossiper.hh"
 #include "log.hh"
 #include "streaming/stream_plan.hh"
 #include "db/config.hh"
-#include <seastar/core/semaphore.hh>
 #include <boost/range/adaptors.hpp>
+#include <fmt/ranges.h>
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/sleep.hh>
 #include "utils/stall_free.hh"
 
 namespace dht {

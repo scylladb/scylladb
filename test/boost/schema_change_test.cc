@@ -8,6 +8,7 @@
 
 
 #include <iostream>
+#include <fmt/ranges.h>
 #include <seastar/core/thread.hh>
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/util/defer.hh>

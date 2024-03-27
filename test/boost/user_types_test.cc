@@ -16,6 +16,7 @@
 #include "test/lib/exception_utils.hh"
 #include "db/config.hh"
 
+#include <fmt/ranges.h>
 #include <boost/algorithm/string/join.hpp>
 
 // Specifies that the given 'cql' query fails with the 'msg' message.

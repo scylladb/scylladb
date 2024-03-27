@@ -8,6 +8,7 @@
 
 #include "alternator/server.hh"
 #include "log.hh"
+#include <fmt/ranges.h>
 #include <seastar/http/function_handlers.hh>
 #include <seastar/http/short_streams.hh>
 #include <seastar/core/coroutine.hh>

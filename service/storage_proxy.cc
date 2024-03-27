@@ -9,6 +9,7 @@
  */
 
 #include <random>
+#include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
 #include "partition_range_compat.hh"

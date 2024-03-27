@@ -7,6 +7,7 @@
  */
 #include <iterator>
 #include <source_location>
+#include <fmt/ranges.h>
 
 #include "service/raft/group0_fwd.hh"
 #include "service/raft/raft_group0.hh"

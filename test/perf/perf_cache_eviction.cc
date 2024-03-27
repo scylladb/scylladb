@@ -7,6 +7,7 @@
  */
 
 #include <boost/range/irange.hpp>
+#include <fmt/ranges.h>
 #include "seastarx.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"

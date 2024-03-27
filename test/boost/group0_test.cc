@@ -16,6 +16,7 @@
 #include "utils/error_injection.hh"
 #include "transport/messages/result_message.hh"
 #include "service/migration_manager.hh"
+#include <fmt/ranges.h>
 #include <seastar/core/metrics_api.hh>
 
 static future<utils::chunked_vector<std::vector<managed_bytes_opt>>> fetch_rows(cql_test_env& e, std::string_view cql) {

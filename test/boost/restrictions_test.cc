@@ -8,6 +8,7 @@
 
 #include <boost/range/adaptors.hpp>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include "test/lib/scylla_test_case.hh"
 
 #include "cql3/cql_config.hh"

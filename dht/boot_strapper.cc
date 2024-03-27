@@ -12,6 +12,8 @@
 #include <boost/algorithm/string/erase.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
+#include <fmt/ranges.h>
+
 #include <seastar/core/coroutine.hh>
 
 #include "dht/boot_strapper.hh"

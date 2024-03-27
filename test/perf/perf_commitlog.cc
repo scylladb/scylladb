@@ -8,6 +8,7 @@
 
 #include <fstream>
 
+#include <fmt/ranges.h>
 #include <boost/range/irange.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>

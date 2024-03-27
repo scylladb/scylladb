@@ -17,6 +17,7 @@
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
 #include <utility>
+#include <fmt/ranges.h>
 
 using namespace locator;
 using namespace replica;

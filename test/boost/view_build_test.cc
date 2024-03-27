@@ -7,6 +7,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <fmt/ranges.h>
 
 #include "replica/database.hh"
 #include "db/view/view_builder.hh"

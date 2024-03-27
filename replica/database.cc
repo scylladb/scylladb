@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <fmt/ranges.h>
+#include <fmt/std.h>
 #include "log.hh"
 #include "replica/database_fwd.hh"
 #include "utils/lister.hh"

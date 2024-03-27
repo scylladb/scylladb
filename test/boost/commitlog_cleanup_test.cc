@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <fmt/ranges.h>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
 #include "db/commitlog/commitlog_replayer.hh"

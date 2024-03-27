@@ -9,6 +9,8 @@
 
 #include "db/hints/manager.hh"
 
+#include <fmt/ranges.h>
+
 // Seastar features.
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>

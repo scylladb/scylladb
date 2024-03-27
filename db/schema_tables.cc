@@ -44,6 +44,8 @@
 #include "db/extensions.hh"
 #include "utils/hashers.hh"
 
+#include <fmt/ranges.h>
+
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/core/coroutine.hh>

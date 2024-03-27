@@ -28,6 +28,7 @@
 #include <boost/range/irange.hpp>
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_set.hpp>
+#include <fmt/ranges.h>
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 #include "repair/table_check.hh"

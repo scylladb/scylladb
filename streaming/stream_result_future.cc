@@ -12,6 +12,7 @@
 #include "streaming/stream_exception.hh"
 #include "log.hh"
 #include <cfloat>
+#include <fmt/ranges.h>
 
 namespace streaming {
 

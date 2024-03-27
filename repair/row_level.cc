@@ -7,6 +7,7 @@
  */
 
 #include <exception>
+#include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
 #include "gms/endpoint_state.hh"
 #include "repair/repair.hh"
@@ -59,6 +60,16 @@
 #include "repair/reader.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/xx_hasher.hh"
+
+#if FMT_VERSION < 100000
+// fmt v10 introduced formatter for std::exception
+template <>
+struct fmt::formatter<seastar::timed_out_error> : fmt::formatter<std::string_view> {
+    auto format(const seastar::timed_out_error& e, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", e.what());
+    }
+};
+#endif
 
 extern logging::logger rlogger;
 

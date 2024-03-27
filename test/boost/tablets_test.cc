@@ -10,6 +10,7 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/random_utils.hh"
+#include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"

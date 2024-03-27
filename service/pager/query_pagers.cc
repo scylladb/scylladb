@@ -18,6 +18,8 @@
 #include "utils/result_combinators.hh"
 #include "db/view/delete_ghost_rows_visitor.hh"
 
+#include <fmt/ranges.h>
+
 template<typename T = void>
 using result = service::pager::query_pager::result<T>;
 

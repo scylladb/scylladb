@@ -11,6 +11,7 @@
 
 #include <vector>
 #include <chrono>
+#include <fmt/ranges.h>
 #include <seastar/core/shared_ptr.hh>
 #include "seastar/core/on_internal_error.hh"
 #include "sstables/shared_sstable.hh"

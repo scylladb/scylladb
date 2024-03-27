@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <fmt/ranges.h>
 
 #include "api/api.hh"
 #include "api/storage_service.hh"

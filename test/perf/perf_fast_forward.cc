@@ -15,6 +15,7 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include <json/json.h>
+#include <fmt/ranges.h>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/perf/perf.hh"

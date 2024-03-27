@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <set>
 #include <fmt/chrono.h>
+#include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/util/closeable.hh>

@@ -20,6 +20,8 @@
 #include <exception>
 #include <filesystem>
 
+#include <fmt/ranges.h>
+
 #include <seastar/core/align.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/metrics.hh>

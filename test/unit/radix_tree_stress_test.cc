@@ -15,6 +15,7 @@
 #include <iostream>
 #include <fmt/core.h>
 #include <fmt/ostream.h>
+#include <fmt/ranges.h>
 
 #include "utils/compact-radix-tree.hh"
 #include "radix_tree_printer.hh"
@@ -41,10 +42,11 @@ public:
     }
 };
 
-std::ostream& operator<<(std::ostream& out, const test_data& d) {
-    out << d.value();
-    return out;
-}
+template <> struct fmt::formatter<test_data> : fmt::formatter<std::string_view> {
+    auto format(const test_data& d, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", d.value());
+    }
+};
 
 using test_tree = tree<test_data>;
 

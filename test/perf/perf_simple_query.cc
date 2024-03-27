@@ -8,9 +8,10 @@
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
-#include <json/json.h>
-
 #include <boost/range/irange.hpp>
+#include <json/json.h>
+#include <fmt/ranges.h>
+
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/alternator_test_env.hh"
 #include "test/perf/perf.hh"

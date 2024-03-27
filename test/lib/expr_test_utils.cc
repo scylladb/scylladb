@@ -7,6 +7,7 @@
  */
 
 #include "expr_test_utils.hh"
+#include <fmt/ranges.h>
 
 namespace cql3 {
 namespace expr {
