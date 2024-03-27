@@ -81,6 +81,8 @@ public:
     }
     // Will call the callback functor when this feature is enabled, unless
     // the returned listener_registration is destroyed earlier.
+    [[nodiscard("the listener_registration returned by when_enabled must be kept alive "
+                "in order to keep the callback registered")]]
     listener_registration when_enabled(seastar::noncopyable_function<void()> callback) const {
         struct wrapper : public listener {
             seastar::noncopyable_function<void()> _func;
