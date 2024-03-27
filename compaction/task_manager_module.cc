@@ -576,6 +576,41 @@ future<> table_scrub_sstables_compaction_task_impl::run() {
     });
 }
 
+future<> regenerate_bloom_filters_compaction_task_impl::run() {
+    auto res = co_await _db.map_reduce0([&] (replica::database& db) -> future<sstables::compaction_stats> {
+        sstables::compaction_stats stats;
+        tasks::task_info parent_info{_status.id, _status.shard};
+        auto& compaction_module = db.get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<shard_regenerate_bloom_filters_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _column_families, _conditions, stats);
+        co_await task->done();
+        co_return stats;
+    }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
+    if (_stats) {
+        *_stats = res;
+    }
+}
+
+future<> shard_regenerate_bloom_filters_compaction_task_impl::run() {
+    _stats = co_await map_reduce(_column_families, [&] (sstring cfname) -> future<sstables::compaction_stats> {
+        sstables::compaction_stats stats{};
+        tasks::task_info parent_info{_status.id, _status.shard};
+        auto& compaction_module = _db.get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<table_regenerate_bloom_filters_compaction_task_impl>(parent_info, _status.keyspace, cfname, _status.id, _db, _conditions, stats);
+        co_await task->done();
+        co_return stats;
+    }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
+}
+
+future<> table_regenerate_bloom_filters_compaction_task_impl::run() {
+    auto& cm = _db.get_compaction_manager();
+    auto& cf = _db.find_column_family(_status.keyspace, _status.table);
+    tasks::task_info info{_status.id, _status.shard};
+    co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) mutable -> future<> {
+        auto r = co_await cm.perform_bloom_filter_regeneration(ts, _conditions, info);
+        _stats += r.value_or(sstables::compaction_stats{});
+    });
+}
+
 future<> table_reshaping_compaction_task_impl::run() {
     auto start = std::chrono::steady_clock::now();
     auto total_size = co_await _dir.map_reduce0([&] (sstables::sstable_directory& d) -> future<uint64_t> {

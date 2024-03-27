@@ -100,6 +100,7 @@ std::string_view to_string(compaction_type type) {
     case compaction_type::Upgrade: return "Upgrade";
     case compaction_type::Reshape: return "Reshape";
     case compaction_type::Split: return "Split";
+    case compaction_type::BloomFilterRegeneration: return "BloomFilterRegeneration";
     }
     on_internal_error_noexcept(clogger, format("Invalid compaction type {}", int(type)));
     return "(invalid)";
@@ -1780,6 +1781,7 @@ compaction_type compaction_type_options::type() const {
         compaction_type::Reshard,
         compaction_type::Reshape,
         compaction_type::Split,
+        compaction_type::BloomFilterRegeneration,
     };
     static_assert(std::variant_size_v<compaction_type_options::options_variant> == std::size(index_to_type));
     return index_to_type[_options.index()];
@@ -1812,6 +1814,9 @@ static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstable
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::split split_options) {
             return std::make_unique<split_compaction>(table_s, std::move(descriptor), cdata, std::move(split_options), progress_monitor);
+        }
+        std::unique_ptr<compaction> operator()(compaction_type_options::bloom_filter_regeneration) {
+            return nullptr; // bypasses the normal compaction code-path
         }
     } visitor_factory{table_s, std::move(descriptor), cdata, progress_monitor};
 
@@ -1863,6 +1868,34 @@ future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_desc
     co_return res;
 }
 
+future<compaction_result> regenerate_sstable_filters(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor) {
+    progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(table_s, use_backlog_tracker::no));
+    auto d = defer([&] { progress_monitor.reset_generator(); });
+
+    auto schema = table_s.schema();
+    auto permit = table_s.make_compaction_reader_permit();
+
+    for (const auto& sst : descriptor.sstables) {
+        clogger.info("Regenerating the bloom filter for sstable {}", sst->get_filename());
+
+        auto new_filter = sstables::generate_bloom_filter(schema, permit, sst);
+
+        //TODO: implement
+        //
+        // Two options:
+        // 1) create a new sstable by hard-linking components of `sst`, replace the filter, then seal it (how will this interact with ICS sstable runs?)
+        // 2) mutate existing sstable, replacing the filter on it (crash-safety is hard to achieve, what if we crash mid-way overwriting the filter)
+    }
+
+    co_return compaction_result {
+        .new_sstables = {},
+        .stats = {
+            .ended_at = db_clock::now(),
+            .compacted_sstables = descriptor.sstables.size(),
+        },
+    };
+}
+
 future<compaction_result>
 compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor) {
     if (descriptor.sstables.empty()) {
@@ -1873,6 +1906,9 @@ compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cd
             && std::get<compaction_type_options::scrub>(descriptor.options.options()).operation_mode == compaction_type_options::scrub::mode::validate) {
         // Bypass the usual compaction machinery for dry-mode scrub
         return scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s, progress_monitor);
+    } else if (descriptor.options.type() == compaction_type::BloomFilterRegeneration) {
+        // Bypass the usual compaction machinery for bloom-filter-regeneration
+        return regenerate_sstable_filters(std::move(descriptor), cdata, table_s, progress_monitor);
     }
     return compaction::run(make_compaction(table_s, std::move(descriptor), cdata, progress_monitor));
 }

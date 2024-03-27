@@ -965,6 +965,54 @@
          ]
       },
       {
+         "path":"/storage_service/keyspace_regenerate_sstable_bloom_filters/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Regenerate the bloom filters of sstables",
+               "type": "long",
+               "nickname":"regenerate_sstable_bloom_filters",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma-separated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"force",
+                     "description":"Regenerate all filters unconditionally",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"filter_size_mismatch_tolerance",
+                     "description":"Regenerate the bloom filter if calculated size differes from actual size more than this tolerance (default to 0.5)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/flush",
          "operations":[
             {

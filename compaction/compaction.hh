@@ -77,6 +77,7 @@ struct compaction_stats {
     std::chrono::time_point<db_clock> ended_at;
     uint64_t start_size = 0;
     uint64_t end_size = 0;
+    uint64_t compacted_sstables = 0;
     uint64_t validation_errors = 0;
     // Bloom filter checks during max purgeable calculation
     uint64_t bloom_filter_checks = 0;
@@ -85,6 +86,7 @@ struct compaction_stats {
         ended_at = std::max(ended_at, r.ended_at);
         start_size += r.start_size;
         end_size += r.end_size;
+        compacted_sstables += r.compacted_sstables;
         validation_errors += r.validation_errors;
         bloom_filter_checks += r.bloom_filter_checks;
         return *this;

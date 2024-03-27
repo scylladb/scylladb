@@ -988,6 +988,15 @@ public:
 // Validation errors are logged individually.
 future<bool> validate_checksums(shared_sstable sst, reader_permit permit);
 
+/// Generate a new bloom filter for the sstable
+///
+/// Use the sstable's partition count estimate, the schema's bloom filter fp
+/// chance and add all partitions from the index to the filter.
+///
+/// Can be used to regenerate filters for sstables, which have too small or
+/// too large filters.
+future<utils::filter_ptr> generate_bloom_filter(schema_ptr schema, reader_permit permit, shared_sstable sst);
+
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;
 
