@@ -133,7 +133,7 @@ SEASTAR_TEST_CASE(test_commitlog_cleanups) {
 
         // Cleanup the tablet.
         e.db().invoke_on_all([&] (replica::database& db) {
-            return db.find_column_family("ks", "cf").cleanup_tablet(db, e.get_system_keyspace().local(), locator::tablet_id(0));
+            return db.find_column_family("ks", "cf").cleanup_tablet(db, e.get_system_keyspace().local(), locator::tablet_id(0), false);
         }).get();
         BOOST_REQUIRE_EQUAL(get_num_rows(), 0);
 
@@ -178,7 +178,7 @@ SEASTAR_TEST_CASE(test_commitlog_cleanup_record_gc) {
         };
         auto cleanup_tablet = [&] (std::string cf) {
             auto& db = e.local_db();
-            db.find_column_family("ks", cf).cleanup_tablet(db, e.get_system_keyspace().local(), locator::tablet_id(0)).get();
+            db.find_column_family("ks", cf).cleanup_tablet(db, e.get_system_keyspace().local(), locator::tablet_id(0), false).get();
         };
         auto get_num_records = [&] {
             auto res = e.execute_cql("select * from system.commitlog_cleanups;").get();

@@ -594,9 +594,9 @@ private:
     storage_group* storage_group_for_token(dht::token token) const noexcept;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
-    // Return compaction group if table owns a single one. Otherwise, null is returned.
-    compaction_group* single_compaction_group_if_available() const noexcept;
-    compaction_group* get_compaction_group(size_t id) const noexcept;
+public:
+    compaction_group* get_compaction_group(size_t id) const;
+private:
     // Select a compaction group from a given token.
     compaction_group& compaction_group_for_token(dht::token token) const noexcept;
     // Return compaction groups, present in this shard, that own a particular token range.
@@ -841,7 +841,7 @@ public:
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
     future<> update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
-    future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id);
+    future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id, bool deallocate_sg = true);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     shard_id shard_of(const mutation& m) const {
@@ -1220,8 +1220,6 @@ public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
 
-    // FIXME: get rid of it once no users.
-    compaction::table_state& as_table_state() const noexcept;
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
 
