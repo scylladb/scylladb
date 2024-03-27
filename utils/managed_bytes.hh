@@ -593,7 +593,8 @@ sstring to_hex(const managed_bytes_opt& b);
 
 // The formatters below are used only by tests.
 template <> struct fmt::formatter<managed_bytes_view> : fmt::formatter<string_view> {
-    auto format(const managed_bytes_view& v, fmt::format_context& ctx) const {
+    template <typename FormatContext>
+    auto format(const managed_bytes_view& v, FormatContext& ctx) const {
         auto out = ctx.out();
         for (bytes_view frag : fragment_range(v)) {
             out = fmt::format_to(out, "{}", fmt_hex(frag));
@@ -607,7 +608,8 @@ inline std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
 }
 
 template <> struct fmt::formatter<managed_bytes> : fmt::formatter<string_view> {
-    auto format(const managed_bytes& b, fmt::format_context& ctx) const {
+    template <typename FormatContext>
+    auto format(const managed_bytes& b, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", managed_bytes_view(b));
     }
 };
@@ -617,7 +619,8 @@ inline std::ostream& operator<<(std::ostream& os, const managed_bytes& b) {
 }
 
 template <> struct fmt::formatter<managed_bytes_opt> : fmt::formatter<string_view> {
-    auto format(const managed_bytes_opt& opt, fmt::format_context& ctx) const {
+    template <typename FormatContext>
+    auto format(const managed_bytes_opt& opt, FormatContext& ctx) const {
         if (opt) {
             return fmt::format_to(ctx.out(), "{}", *opt);
         }
