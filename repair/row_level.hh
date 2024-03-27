@@ -110,6 +110,8 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     seastar::semaphore _memory_sem;
     seastar::named_semaphore _load_parallelism_semaphore = {16, named_semaphore_exception_factory{"Load repair history parallelism"}};
 
+    future<> _load_history_done = make_ready_future<>();
+
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
 
