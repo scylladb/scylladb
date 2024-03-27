@@ -50,6 +50,11 @@ def test_leveled_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, r"sstable_size_in_mb value \(-5\) must be positive|sstable_size_in_mb must be larger than 0, but was -5", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : -5 }")
 
 def test_not_allowed_options(cql, table1):
-    assert_throws(cql, table1, r"Invalid compaction strategy options {{abc, -54.54}} for chosen strategy type|Properties specified \[abc\] are not understood by SizeTieredCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'abc' : -54.54 }")
-    assert_throws(cql, table1, r"Invalid compaction strategy options {{dog, 3}} for chosen strategy type|Properties specified \[dog\] are not understood by TimeWindowCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'dog' : 3 }")
-    assert_throws(cql, table1, r"Invalid compaction strategy options {{compaction_window_size, 4}} for chosen strategy type|Properties specified \[compaction_window_size\] are not understood by LeveledCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'compaction_window_size' : 4 }")
+    def scylla_error(**kwargs):
+        template = "Invalid compaction strategy options {{{}}} for chosen strategy type"
+        options = ', '.join(f"{{{k}, {v}}}" for k, v in kwargs.items())
+        return template.format(options)
+
+    assert_throws(cql, table1, rf"{scylla_error(abc=-54.54)}|Properties specified \[abc\] are not understood by SizeTieredCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'abc' : -54.54 }")
+    assert_throws(cql, table1, rf"{scylla_error(dog=3)}||Properties specified \[dog\] are not understood by TimeWindowCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'dog' : 3 }")
+    assert_throws(cql, table1, rf"{scylla_error(compaction_window_size=4)}|Properties specified \[compaction_window_size\] are not understood by LeveledCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'compaction_window_size' : 4 }")
