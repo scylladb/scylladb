@@ -38,7 +38,7 @@ rows_assertions::is_empty() {
     auto row_count = rs.size();
     if (row_count != 0) {
         auto&& first_row = *rs.rows().begin();
-        fail(format("Expected no rows, but got {:d}. First row: {}", row_count, fmt::to_string(first_row)));
+        fail(format("Expected no rows, but got {:d}. First row: {}", row_count, first_row));
     }
     return {*this};
 }
