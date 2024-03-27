@@ -17,3 +17,8 @@ limitations while applying the procedure:
   retry, or the node refuses to boot on subsequent attempts, consult the 
   :doc:`Handling Membership Change Failures </operating-scylla/procedures/cluster-management/handling-membership-change-failures>`
   document. 
+* The ``system_auth`` keyspace has not been upgraded to ``system_auth_v2``. 
+  As a result, if ``authenticator`` is set to ``PasswordAuthenticator``, you must 
+  increase the replication factor of the ``system_auth`` keyspace. It is 
+  recommended to set ``system_auth`` replication factor to the number of nodes 
+  in each DC.
