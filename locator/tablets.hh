@@ -113,7 +113,7 @@ tablet_replica_set replace_replica(const tablet_replica_set& rs, tablet_replica 
     return result;
 }
 
-/// Substracts 'sub' from 'rs' and returns the result
+/// Subtracts 'sub' from 'rs' and returns the result
 /// Replicas from 'sub' that are missing in 'rs' are ignored
 inline
 std::unordered_set<tablet_replica> substract_sets(const tablet_replica_set& rs, const tablet_replica_set& sub) {
