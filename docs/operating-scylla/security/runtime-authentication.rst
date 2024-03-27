@@ -1,6 +1,7 @@
 Enable and Disable Authentication Without Downtime
 ==================================================
 
+.. scylladb_include_flag:: upgrade-note-runtime-authentication.rst
 
 Authentication is the process where login accounts and their passwords are verified, and the user is allowed access into the database. Authentication is done internally within Scylla and is not done with a third party. Users and passwords are created with :doc:`roles </operating-scylla/security/authorization>` using a ``CREATE ROLE`` statement. This procedure enables Authentication on the Scylla servers using a transit state, allowing clients to work with or without Authentication at the same time. In this state, you can update the clients (application using Scylla/Apache Cassandra drivers) one at the time. Once all the clients are using Authentication, you can enforce Authentication on all Scylla nodes as well. If you would rather perform a faster authentication procedure where all clients (application using Scylla/Apache Cassandra drivers) will stop working until they are updated to work with Authentication, refer to :doc:`Enable Authentication </operating-scylla/security/runtime-authentication>`.
 
@@ -10,29 +11,6 @@ Enable Authentication Without Downtime
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This procedure allows you to enable authentication on a live Scylla cluster without downtime.
-
-Prerequisites
--------------
-
-Set the ``system_auth`` keyspace replication factor to the number of nodes in the datacenter and set the class to ``NetworkTopologyStrategy`` (required in production environments):
-
-For example:
-
-* Single DC (NetworkTopologyStrategy)
-
-  .. code-block:: cql
-
-      ALTER KEYSPACE system_auth WITH REPLICATION =
-        { 'class' : 'NetworkTopologyStrategy', '<name of DC>' : <new RF> };
-
-* Multi - DC (NetworkTopologyStrategy)
-
-  .. code-block:: cql
-
-     ALTER KEYSPACE system_auth WITH REPLICATION =
-        {'class' : 'NetworkTopologyStrategy', '<name of DC 1>' : <new RF>, '<name of DC 2>' : <new RF>};
-
-The names of the DCs must match the datacenter names specified in the rack & DC configuration file: ``/etc/scylla/cassandra-rackdc.properties``.
 
 Procedure
 ---------
@@ -95,14 +73,6 @@ Procedure
 
    .. include:: /rst_include/scylla-commands-restart-index.rst
 
-#. Run repair on the ``system_auth`` keyspace, one node at a time on all the nodes in the cluster.
-
-   For example:
-
-   .. code-block:: cql
-
-      nodetool repair system_auth
-
 #. Verify that all the client applications are working correctly with authentication enabled.
                               
 
@@ -136,13 +106,8 @@ Procedure
 
    .. include:: /rst_include/scylla-commands-restart-index.rst
 
-#. Run repair on the ``system_auth`` keyspace, one node at a time on all the nodes in the cluster.
-
-   For example:
-
-   .. code-block:: cql
-
-      nodetool repair system_auth
-
 #. Verify that all the client applications are working correctly with authentication disabled.
 
+.. _runtime-authentication-upgrade-info:
+
+.. scylladb_include_flag:: upgrade-warning-runtime-authentication.rst
