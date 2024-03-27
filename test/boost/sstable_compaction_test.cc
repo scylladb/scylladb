@@ -1788,6 +1788,18 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_table_state(), { sst });
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
+        // sstable which should not be included because of droppable ratio of 0.3, will actually be included
+        // because the droppable ratio check has been disabled with unchecked_tombstone_compaction set to true
+        {
+            std::map<sstring, sstring> options;
+            options.emplace("tombstone_threshold", "0.5f");
+            options.emplace("tombstone_compaction_interval", "3600");
+            options.emplace("unchecked_tombstone_compaction", "true");
+            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
+            sstables::test(sst).set_data_file_write_time(db_clock::now() - std::chrono::seconds(7200));
+            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_table_state(), { sst });
+            BOOST_REQUIRE(descriptor.sstables.size() == 1);
+        }
     });
 }
 

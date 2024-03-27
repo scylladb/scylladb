@@ -31,7 +31,8 @@ The following options are available for all compaction strategies.
      'class' : 'compaction_strategy_name', 
      'enabled' : (true | false),
      'tombstone_threshold' : ratio,
-     'tombstone_compaction_interval' : sec}
+     'tombstone_compaction_interval' : sec,
+     'unchecked_tombstone_compaction' : (true | false)}
 
 
 
@@ -62,6 +63,11 @@ The following options are available for all compaction strategies.
 
 ``tombstone_compaction_interval`` (default: 86400s (1 day))
    An SSTable that is suitable for single SSTable compaction, according to tombstone_threshold will not be compacted if it is newer than tombstone_compaction_interval. 
+
+=====
+
+``unchecked_tombstone_compaction`` (default: false)
+   If unchecked_tombstone_compaction is set to true, tombstone_threshold will be ignored, and an SSTable will be compacted according to tombstone_compaction_interval.
 
 =====
 

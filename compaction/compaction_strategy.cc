@@ -65,6 +65,9 @@ bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& s
     if (db_clock::now()-_tombstone_compaction_interval < sst->data_file_write_time()) {
         return false;
     }
+    if (_unchecked_tombstone_compaction) {
+        return true;
+    }
     auto droppable_ratio = sst->estimate_droppable_tombstone_ratio(compaction_time, t.get_tombstone_gc_state(), t.schema());
     return droppable_ratio >= _tombstone_threshold;
 }
@@ -140,6 +143,24 @@ static db_clock::duration validate_tombstone_compaction_interval(const std::map<
     return tombstone_compaction_interval;
 }
 
+static bool validate_unchecked_tombstone_compaction(const std::map<sstring, sstring>& options) {
+    auto unchecked_tombstone_compaction = compaction_strategy_impl::DEFAULT_UNCHECKED_TOMBSTONE_COMPACTION;
+    auto tmp_value = compaction_strategy_impl::get_value(options, compaction_strategy_impl::UNCHECKED_TOMBSTONE_COMPACTION_OPTION);
+    if (tmp_value.has_value()) {
+        if (tmp_value != "true" && tmp_value != "false") {
+            throw exceptions::configuration_exception(fmt::format("{} value ({}) must be \"true\" or \"false\"", compaction_strategy_impl::UNCHECKED_TOMBSTONE_COMPACTION_OPTION, tmp_value));
+        }
+        unchecked_tombstone_compaction = tmp_value == "true";
+    }
+    return unchecked_tombstone_compaction;
+}
+
+static bool validate_unchecked_tombstone_compaction(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto unchecked_tombstone_compaction = validate_unchecked_tombstone_compaction(options);
+    unchecked_options.erase(compaction_strategy_impl::UNCHECKED_TOMBSTONE_COMPACTION_OPTION);
+    return unchecked_tombstone_compaction;
+}
+
 void compaction_strategy_impl::validate_options_for_strategy_type(const std::map<sstring, sstring>& options, sstables::compaction_strategy_type type) {
     auto unchecked_options = options;
     compaction_strategy_impl::validate_options(options, unchecked_options);
@@ -169,6 +190,7 @@ void compaction_strategy_impl::validate_options_for_strategy_type(const std::map
 void compaction_strategy_impl::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     validate_tombstone_threshold(options, unchecked_options);
     validate_tombstone_compaction_interval(options, unchecked_options);
+    validate_unchecked_tombstone_compaction(options, unchecked_options);
 
     auto it = options.find("enabled");
     if (it != options.end() && it->second != "true" && it->second != "false") {
@@ -180,6 +202,7 @@ void compaction_strategy_impl::validate_options(const std::map<sstring, sstring>
 compaction_strategy_impl::compaction_strategy_impl(const std::map<sstring, sstring>& options) {
     _tombstone_threshold = validate_tombstone_threshold(options);
     _tombstone_compaction_interval = validate_tombstone_compaction_interval(options);
+    _unchecked_tombstone_compaction = validate_unchecked_tombstone_compaction(options);
 }
 
 } // namespace sstables

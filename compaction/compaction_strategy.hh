@@ -30,7 +30,6 @@ class compaction_strategy_impl;
 class sstable;
 class sstable_set;
 struct compaction_descriptor;
-struct resharding_descriptor;
 
 class compaction_strategy {
     ::shared_ptr<compaction_strategy_impl> _compaction_strategy_impl;

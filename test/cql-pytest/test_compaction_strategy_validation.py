@@ -27,6 +27,8 @@ def test_common_options(cql, table1):
     assert_throws(cql, table1, r"tombstone_threshold value \(-0.4\) must be between 0.0 and 1.0|tombstone_threshold must be greater than 0, but was -0.400000", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'tombstone_threshold' : -0.4 }")
     assert_throws(cql, table1, r"tombstone_threshold value \(5.5\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'tombstone_threshold' : 5.5 }")
     assert_throws(cql, table1, r"tombstone_compaction_interval value \(-7000ms\) must be positive", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'tombstone_compaction_interval' : -7 }")
+    assert_throws(cql, table1, r"unchecked_tombstone_compaction value \(maybe\) must be \"true\" or \"false\"|'unchecked_tombstone_compaction' should be either 'true' or 'false', not 'maybe'", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'unchecked_tombstone_compaction' : 'maybe' }")
+    assert_throws(cql, table1, r"enabled value \(certainly\) must be \"true\" or \"false\"|enabled should either be 'true' or 'false', not certainly", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'enabled' : 'certainly' }")
 
 def test_size_tiered_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, r"min_sstable_size value \(-1\) must be non negative|min_sstable_size must be non negative: -1", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'min_sstable_size' : -1 }")

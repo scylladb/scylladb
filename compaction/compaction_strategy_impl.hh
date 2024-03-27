@@ -16,20 +16,22 @@
 namespace sstables {
 
 class sstable_set_impl;
-class resharding_descriptor;
 
 class compaction_strategy_impl {
 public:
     static constexpr float DEFAULT_TOMBSTONE_THRESHOLD = 0.2f;
     // minimum interval needed to perform tombstone removal compaction in seconds, default 86400 or 1 day.
     static constexpr std::chrono::seconds DEFAULT_TOMBSTONE_COMPACTION_INTERVAL() { return std::chrono::seconds(86400); }
+    static constexpr auto DEFAULT_UNCHECKED_TOMBSTONE_COMPACTION = false;
     static constexpr auto TOMBSTONE_THRESHOLD_OPTION = "tombstone_threshold";
     static constexpr auto TOMBSTONE_COMPACTION_INTERVAL_OPTION = "tombstone_compaction_interval";
+    static constexpr auto UNCHECKED_TOMBSTONE_COMPACTION_OPTION = "unchecked_tombstone_compaction";
 protected:
     bool _use_clustering_key_filter = false;
     bool _disable_tombstone_compaction = false;
     float _tombstone_threshold = DEFAULT_TOMBSTONE_THRESHOLD;
     db_clock::duration _tombstone_compaction_interval = DEFAULT_TOMBSTONE_COMPACTION_INTERVAL();
+    bool _unchecked_tombstone_compaction = DEFAULT_UNCHECKED_TOMBSTONE_COMPACTION;
 public:
     static std::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name);
     static void validate_min_max_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
