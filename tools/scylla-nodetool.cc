@@ -363,6 +363,10 @@ using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
 
 std::map<operation, operation_func> get_operations_with_func();
 
+void checkandrepaircdcstreams_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/cdc_streams_check_and_repair");
+}
+
 void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.count("cleanup_arg")) {
         const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "cleanup_arg");
@@ -2812,6 +2816,19 @@ const std::map<std::string_view, std::string_view> option_substitutions{
 std::map<operation, operation_func> get_operations_with_func() {
 
     const static std::map<operation, operation_func> operations_with_func {
+        {
+            {
+                "checkAndRepairCdcStreams",
+                "Checks that CDC streams reflect current cluster topology and regenerates them if not",
+R"(
+Warning: DO NOT use this while performing other administrative tasks, like
+bootstrapping or decommissioning a node.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/checkandrepaircdcstreams.html
+)",
+            },
+            checkandrepaircdcstreams_operation
+        },
         {
             {
                 "cleanup",
