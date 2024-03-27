@@ -78,6 +78,9 @@ std::vector<canonical_mutation>& group0_state_machine_merger::get_command_mutati
         [] (topology_change& chng) -> std::vector<canonical_mutation>& {
             return chng.mutations;
         },
+        [] (mixed_change& chng) -> std::vector<canonical_mutation>& {
+            return chng.mutations;
+        },
         [] (write_mutations& muts) -> std::vector<canonical_mutation>& {
             return muts.mutations;
         }

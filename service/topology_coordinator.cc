@@ -723,7 +723,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<locator::tablet_map>
     reallocate_tablets_for_new_rf(schema_ptr s, locator::token_metadata_ptr tm,
-                                  std::unordered_map<sstring, size_t> new_dc_rep_factor) {
+                                  std::unordered_map<sstring, sstring> new_dc_rep_factor) {
         locator::tablet_map map{1};
         co_return map;
     }
@@ -756,59 +756,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_await start_cleanup_on_dirty_nodes(std::move(guard), true);
             break;
         case global_topology_request::keyspace_rf_change: {
-            rtlogger.info("smaron global_topology_request::keyspace_rf_change");
-
             while (true) {
-                rtlogger.info("smaron global_topology_request::keyspace_rf_change while");
                 auto tmptr = get_token_metadata_ptr();
                 sstring ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
                 std::unordered_map<sstring, sstring> new_rf_per_dc = *_topo_sm._topology.new_keyspace_rf_change_rf_per_dc;
                 std::vector<canonical_mutation> updates;
-                for (const auto& table : _db.find_keyspace(ks_name).metadata()->tables()) {
-                    rtlogger.info("smaron global_topology_request::keyspace_rf_change table:{}", table);
-                    std::unordered_map<sstring, size_t> new_rf_per_int_dc;
-                    for (const auto& pair : new_rf_per_dc) {
-                        new_rf_per_int_dc.insert(std::pair{pair.first, std::stoi(pair.second)});
-                    }
-                    rtlogger.info("smaron new_rf_per_int_dc:{}", new_rf_per_int_dc);
+                auto& ks = _db.find_keyspace(ks_name);
 
-                    // == START mocking new tablets map ==
-                    // currently just drops the last tablets replica, i.e. works only for lowering the RF
-                    auto new_tablet_map = co_await reallocate_tablets_for_new_rf(table, tmptr, new_rf_per_int_dc);
+                for (const auto& table : ks.metadata()->tables()) {
+                    // TODO: check status, but first rebase on top of PawelZ's PR
+//                    auto repl_strategy = ks.get_replication_strategy_ptr()->maybe_as_tablet_aware();
+//                    auto [new_tablet_map, status] = co_await reallocate_tablets_for_new_rf(repl_strategy, table, tmptr, new_rf_per_dc);
+                    auto new_tablet_map = co_await reallocate_tablets_for_new_rf(table, tmptr, new_rf_per_dc);
 
-                    locator::tablet_map old_tablet_map = tmptr->tablets().get_tablet_map(table->id());
-                    for (auto tb : old_tablet_map.tablet_ids()) {
-                        const locator::tablet_info &ti = old_tablet_map.get_tablet_info(tb);
-                        locator::tablet_replica_set replicas = ti.replicas;
-                        rtlogger.info("smaron old tablet {} map for {}", tb, replicas);
-                    }
-
-                    for (auto tb : new_tablet_map.tablet_ids()) {
-                        const locator::tablet_info &ti = new_tablet_map.get_tablet_info(tb);
-                        locator::tablet_replica_set replicas = ti.replicas;
-                        rtlogger.info("smaron new tablet {} map for {}", tb, replicas);
-                    }
-
-                    /*                    locator::tablet_map old_tablet_map = tmptr->tablets().get_tablet_map(table->id());
-                    auto new_tablet_map = old_tablet_map;
-
-                    for (auto tb : old_tablet_map.tablet_ids()) {
-                        const locator::tablet_info &ti = old_tablet_map.get_tablet_info(tb);
-                        locator::tablet_replica_set replicas = ti.replicas;
-                        rtlogger.info("smaron old tablet {} map for {}", tb, replicas);
-                    }
-
-                    for (auto tb : new_tablet_map.tablet_ids()) {
-                        locator::tablet_info &ti = new_tablet_map.get_tablet_info(tb);
-                        locator::tablet_replica_set& replicas = ti.replicas;
-//                        auto last_replica = replicas[0];
-//                        last_replica.shard = (last_replica.shard + 1) % 3;
-//                        replicas.push_back(last_replica);
-                        replicas.pop_back();
-                        rtlogger.info("smaron new tablet {} map for {}", tb, replicas);
-
-                    }
-*/                    // == END mocking new tablets map ==
 
                     auto tablet_id = new_tablet_map.first_tablet();
                     while (true) {
@@ -827,23 +787,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     }
                 }
-                // TODO: move alter schema mutations here, not in the cql
-                // include mm here, first do schema mutation, then tablets mutation, then topo mutations?
-                // do schema mut under one raft guard, tablet mut under another one?
+
                 updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
                                                              .set_transition_state(topology::transition_state::tablet_migration)
                                                              .set_version(_topo_sm._topology.version + 1)
                                                              .del_global_topology_request()
                                                              .build()));
+                unsigned topo_muts_count = updates.size();
 
                 std::map<sstring, sstring> opts (new_rf_per_dc.begin(), new_rf_per_dc.end());
-                auto ks_md = keyspace_metadata::new_keyspace(ks_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", opts, 2);
-                auto m = service::prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
-                updates.emplace_back(*m.begin());
+                auto ks_md = keyspace_metadata::new_keyspace(ks_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", opts, std::nullopt);
+                auto schema_muts = service::prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                for (auto& m : schema_muts)
+                    updates.emplace_back(m);
 
                 sstring reason = format("ALTER tablets KEYSPACE called with new RF-per-DC settings: {}", new_rf_per_dc);
                 rtlogger.info("do update {} reason {}", updates, reason);
-                schema_change change{std::move(updates)};
+                mixed_change change{updates, topo_muts_count};
                 group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
                 try {
                     co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), &_as);
@@ -2393,6 +2353,7 @@ future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
     auto& topology = tm->get_topology();
 
     locator::load_stats stats;
+    co_return std::move(stats);
     static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
     std::unordered_map<table_id, size_t> total_replicas;

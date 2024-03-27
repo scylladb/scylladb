@@ -205,6 +205,8 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
         // This means `apply` skipped the change due to previous state ID mismatch.
         throw group0_concurrent_modification{};
     }
+
+    co_return ;
 }
 
 future<> raft_group0_client::add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as) {
@@ -296,7 +298,7 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* 
 }
 
 template<typename Command>
-requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations>
+requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, mixed_change> || std::same_as<Command, write_mutations>
 group0_command raft_group0_client::prepare_command(Command change, group0_guard& guard, std::string_view description) {
     group0_command group0_cmd {
         .change{std::move(change)},
@@ -497,6 +499,7 @@ void raft_group0_client::set_query_result(utils::UUID query_id, service::broadca
 
 template group0_command raft_group0_client::prepare_command(schema_change change, group0_guard& guard, std::string_view description);
 template group0_command raft_group0_client::prepare_command(topology_change change, group0_guard& guard, std::string_view description);
+template group0_command raft_group0_client::prepare_command(mixed_change change, group0_guard& guard, std::string_view description);
 template group0_command raft_group0_client::prepare_command(write_mutations change, group0_guard& guard, std::string_view description);
 template group0_command raft_group0_client::prepare_command(broadcast_table_query change, std::string_view description);
 template group0_command raft_group0_client::prepare_command(write_mutations change, std::string_view description);

@@ -165,11 +165,12 @@ sstring to_string(const event::schema_change::change_type t) {
 
 sstring to_string(const event::schema_change::target_type t) {
     switch (t) {
-    case event::schema_change::target_type::KEYSPACE: return "KEYSPACE";
-    case event::schema_change::target_type::TABLE:    return "TABLE";
-    case event::schema_change::target_type::TYPE:     return "TYPE";
-    case event::schema_change::target_type::FUNCTION: return "FUNCTION";
-    case event::schema_change::target_type::AGGREGATE:return "AGGREGATE";
+    case event::schema_change::target_type::KEYSPACE:        return "KEYSPACE";
+    case event::schema_change::target_type::TABLET_KEYSPACE: return "KEYSPACE";
+    case event::schema_change::target_type::TABLE:           return "TABLE";
+    case event::schema_change::target_type::TYPE:            return "TYPE";
+    case event::schema_change::target_type::FUNCTION:        return "FUNCTION";
+    case event::schema_change::target_type::AGGREGATE:       return "AGGREGATE";
     }
     assert(false && "unreachable");
 }
@@ -1667,6 +1668,7 @@ void cql_server::response::serialize(const event::schema_change& event, uint8_t 
     write_string(event.keyspace);
     switch (event.target) {
     case event::schema_change::target_type::KEYSPACE:
+    case event::schema_change::target_type::TABLET_KEYSPACE:
         break;
     case event::schema_change::target_type::TYPE:
     case event::schema_change::target_type::TABLE:

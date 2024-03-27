@@ -1029,32 +1029,25 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
     warnings = std::move(cql_warnings);
 
     auto request_id = guard->new_group0_state_id();
-    log.info("smaron request_id: {}", request_id);
 
+    ce = std::move(ret);
     if (!m.empty()) {
         auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
-        for (auto& warn : warnings)
-            if (warn == "ALTER TABLETS KS")
-                description = "tablets " + description;
-        co_await remote_.get().mm.announce(std::move(m), std::move(*guard), description);
+        if (ce && ce->target == cql_transport::event::schema_change::target_type::TABLET_KEYSPACE)
+            co_await remote_.get().mm.announce<service::topology_change>(std::move(m), std::move(*guard), description);
+        else
+            co_await remote_.get().mm.announce<service::schema_change>(std::move(m), std::move(*guard), description);
     }
 
-    // TODO: if we're performing alter tablets ks, wait until global topology req finishes.
-    //       Whether we're performing alter tablets ks could be indicated
-    //       by a special value returned from prepare_schema_mutations()
-    // TODO: wait_for_topology_request_completion doesn't wait for global requests,
-    //       but only for the non-global ones and cdc. This needs to be fixed
-    log.info("smaron warnings: {}", warnings);
-//    if (not warnings.empty())
-//        log.info("smaron warnings.back(): {}", warnings.back());
+// TODO: implement waiting for global topo req to complete
 //    if (not warnings.empty() && warnings.back() == "ALTER TABLETS KS") {
 //         auto error = co_await remote_.get().ss.wait_for_topology_request_completion(request_id);
 //         if (!error.empty()) {
+//             log.error("smaron request_id: {}, error: {}", request_id, error);
 //             throw std::runtime_error(fmt::format("alter_tablets_keyspace failed with: {}", error));
 //         }
 //     }
 
-    ce = std::move(ret);
 
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)

@@ -64,6 +64,10 @@ future<gms::inet_address> wait_for_ip(raft::server_id id, const raft_address_map
 using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology_cmd_result>(
         raft::term_t, uint64_t, const raft_topology_cmd&)>;
 
+future<locator::tablet_map>
+reallocate_tablets_for_new_rf(schema_ptr s, locator::token_metadata_ptr tm,
+    std::unordered_map<sstring, sstring> new_dc_rep_factor);
+
 future<> run_topology_coordinator(
         seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
         netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
