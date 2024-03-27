@@ -57,6 +57,9 @@ def get_linked_issues_based_on_pr_body(repo, number):
         for match in matches:
             issue_number_from_pr_body.append(match)
             print(f"Found issue number: {match}")
+    else:
+        print(f"PR {pr.number} has no supported ref to an Issue. returning {pr.number} for label update")
+        issue_number_from_pr_body.append(pr.number)
     return issue_number_from_pr_body
 
 
@@ -69,8 +72,12 @@ def sync_labels(repo, number, label, action, is_issue=False):
         if is_issue:
             target = repo.get_issue(pr_or_issue_number)
         else:
-            target = repo.get_issue(int(pr_or_issue_number))
+            target = repo.get_pull(int(pr_or_issue_number))
         if action == 'labeled':
+            print(target)
+            print(target.get_labels())
+            print('*******')
+            print(label)
             target.add_to_labels(label)
             print(f"Label '{label}' successfully added.")
         elif action == 'unlabeled':
