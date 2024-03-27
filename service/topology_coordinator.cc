@@ -1436,11 +1436,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     case node_state::bootstrapping: {
                         assert(!node.rs->ring);
                         auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
+                        auto tokens_string = std::get<join_param>(node.req_param.value()).tokens_string;
                         // A node have just been accepted and does not have tokens assigned yet
                         // Need to assign random tokens to the node
                         auto tmptr = get_token_metadata_ptr();
-                        auto bootstrap_tokens = dht::boot_strapper::get_random_bootstrap_tokens(
-                                tmptr, num_tokens, dht::check_token_endpoint::yes);
+                        std::unordered_set<token> bootstrap_tokens;
+                        try {
+                            bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, tokens_string, num_tokens, dht::check_token_endpoint::yes);
+                        } catch (...) {
+                            _rollback = fmt::format("Failed to assign tokens: {}", std::current_exception());
+                        }
 
                         auto [gen_uuid, guard, mutation] = co_await prepare_and_broadcast_cdc_generation_data(
                                 tmptr, take_guard(std::move(node)), bootstrapping_info{bootstrap_tokens, *node.rs});
@@ -2483,6 +2488,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
                 .set("node_state", node_state::normal)
                 .set("release_version", release_version)
                 .set("num_tokens", (uint32_t)num_tokens)
+                .set("tokens_string", "")
                 .set("shard_count", (uint32_t)std::stoi(shard_count))
                 .set("ignore_msb", (uint32_t)std::stoi(ignore_msb))
                 .set("cleanup_status", cleanup_status::clean)

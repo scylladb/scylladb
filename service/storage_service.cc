@@ -1116,6 +1116,7 @@ std::vector<canonical_mutation> storage_service::build_mutation_from_join_params
         .set("rack", params.rack)
         .set("release_version", params.release_version)
         .set("num_tokens", params.num_tokens)
+        .set("tokens_string", params.tokens_string)
         .set("shard_count", params.shard_count)
         .set("ignore_msb", params.ignore_msb)
         .set("cleanup_status", cleanup_status::clean)
@@ -1624,6 +1625,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         .rack = _snitch.local()->get_rack(),
         .release_version = version::release(),
         .num_tokens = _db.local().get_config().num_tokens(),
+        .tokens_string = _db.local().get_config().initial_token(),
         .shard_count = smp::count,
         .ignore_msb =  _db.local().get_config().murmur3_partitioner_ignore_msb_bits(),
         .supported_features = boost::copy_range<std::vector<sstring>>(_feature_service.supported_feature_set()),
