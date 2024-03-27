@@ -111,7 +111,11 @@ data_type type_generator::operator()(std::mt19937& engine, is_multi_cell multi_c
     //
     // To cover all this, we simply disallow it altogether when multi_cell is
     // no, which will be the case in all the above cases.
-    while (!multi_cell && type == duration_type) {
+    //
+    // We also disallow boolean type in keys, due to the poor value distribution
+    // it provides. Generating keys which have a boolean in it, are prone to
+    // collision and will result in poor cardinality.
+    while (!multi_cell && (type == duration_type || type == boolean_type)) {
         type = (*this)(engine, multi_cell);
     }
     return type;
