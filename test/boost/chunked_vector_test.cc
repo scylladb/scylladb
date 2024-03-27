@@ -241,3 +241,52 @@ BOOST_AUTO_TEST_CASE(test_amoritzed_reserve) {
     amortized_reserve(v, 1);
     BOOST_REQUIRE_EQUAL(v.capacity(), 8);
 }
+
+struct push_back_item {
+    std::unique_ptr<int> p;
+    push_back_item() = default;
+    push_back_item(int v) : p(std::make_unique<int>(v)) {}
+    // Note: the copy constructor adds 1 to the copied-from value
+    // so it can be checked by test, in constrast to the move constructor.
+    push_back_item(const push_back_item& x) : push_back_item(x.value() + 1) {}
+    push_back_item(push_back_item&& x) noexcept : p(std::exchange(x.p, nullptr)) {}
+
+    int value() const noexcept { return *p; }
+};
+
+template <class VectorType>
+static void do_test_push_back_using_existing_element(std::function<void (VectorType&, const push_back_item&)> do_push_back, size_t count = 1000) {
+    VectorType v;
+    v.push_back(0);
+    for (size_t i = 0; i < count; i++) {
+        do_push_back(v, v.back());
+    }
+    for (size_t i = 0; i < count; i++) {
+        BOOST_REQUIRE_EQUAL(v[i].value(), i);
+    }
+}
+
+// Reproducer for https://github.com/scylladb/scylladb/issues/18072
+// Test that we can push or emplace_back that copies another element
+// that exists in the chunked_vector by reference.
+// When reallocation occurs, the vector implementation must
+// make sure that the new element is constructed first, before
+// the reference to the existing element is invalidated.
+// See also https://lists.isocpp.org/std-proposals/2024/03/9467.php
+BOOST_AUTO_TEST_CASE(test_push_back_using_existing_element) {
+    do_test_push_back_using_existing_element<std::vector<push_back_item>>([] (std::vector<push_back_item>& v, const push_back_item& x) { v.push_back(x); });
+    do_test_push_back_using_existing_element<std::vector<push_back_item>>([] (std::vector<push_back_item>& v, const push_back_item& x) { v.emplace_back(x); });
+
+    // Choose `max_contiguous_allocation` to exercise all cases in chunked_vector::reserve_and_emplace_back:
+    // - Initial allocation (based on chunked_vector::min_chunk_capacity())
+    // - Then the chunk is doubled, until it reaches half the max_chunk_size
+    // - Then the chunk is reallocated to the max_chunk_size
+    // - From then on, new chunks are allocated using max_chunk_size
+    constexpr size_t max_contiguous_allocation = 4 * utils::chunked_vector<push_back_item>::min_chunk_capacity() * sizeof(push_back_item);
+    using chunked_vector_type = utils::chunked_vector<push_back_item, max_contiguous_allocation>;
+
+    do_test_push_back_using_existing_element<chunked_vector_type>([] (chunked_vector_type& v, const push_back_item& x) { v.push_back(x); },
+            chunked_vector_type::max_chunk_capacity() + 2);
+    do_test_push_back_using_existing_element<chunked_vector_type>([] (chunked_vector_type& v, const push_back_item& x) { v.emplace_back(x); },
+            chunked_vector_type::max_chunk_capacity() + 2);
+}

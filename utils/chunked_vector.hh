@@ -78,12 +78,8 @@ public:
         return std::clamp(512 / sizeof(T), size_t(1), max_chunk_capacity());
     }
 private:
-    void reserve_for_push_back() {
-        if (_size == _capacity) {
-            do_reserve_for_push_back();
-        }
-    }
-    void do_reserve_for_push_back();
+    std::pair<chunk_ptr, size_t> get_chunk_before_emplace_back();
+    void set_chunk_after_emplace_back(std::pair<chunk_ptr, size_t>) noexcept;
     size_t make_room(size_t n, bool stop_after_one);
     chunk_ptr new_chunk(size_t n);
     T* addr(size_t i) const {
@@ -146,11 +142,24 @@ public:
     }
     template <typename... Args>
     T& emplace_back(Args&&... args) {
-        reserve_for_push_back();
-        auto& ret = *new (addr(_size)) T(std::forward<Args>(args)...);
+        pointer ret;
+        if (_capacity > _size) {
+            ret = new (addr(_size)) T(std::forward<Args>(args)...);
+        } else {
+            // Allocate an empty new chunk for the new element.
+            // It's ok to lose it if `new` below throws as
+            // there are still no side effects on existing elements.
+            auto x = get_chunk_before_emplace_back();
+            // Emplace the new element in the newly allocated chunk.
+            ret = new (x.first.get() + _size % max_chunk_capacity()) T(std::forward<Args>(args)...);
+            // Setting the new chunk back is noexcept,
+            // as throwing at this stage may lose data if emplacing used the move-constructor.
+            set_chunk_after_emplace_back(std::move(x));
+        }
         ++_size;
-        return ret;
+        return *ret;
     }
+
     void pop_back() {
         --_size;
         addr(_size)->~T();
@@ -434,18 +443,56 @@ chunked_vector<T, max_contiguous_allocation>::make_room(size_t n, bool stop_afte
 }
 
 template <typename T, size_t max_contiguous_allocation>
-void
-chunked_vector<T, max_contiguous_allocation>::do_reserve_for_push_back() {
+std::pair<typename chunked_vector<T, max_contiguous_allocation>::chunk_ptr, size_t> chunked_vector<T, max_contiguous_allocation>::get_chunk_before_emplace_back() {
+    // Allocate a new chunk that will either replace the first, non-full chunk
+    // or will be appended to the chunks list
+    size_t new_chunk_capacity;
     if (_capacity == 0) {
+        // This is the first allocation in the chunked_vector, therefore
         // allocate a bit of room in case utilization will be low
-        reserve(min_chunk_capacity());
+        new_chunk_capacity = min_chunk_capacity();
     } else if (_capacity < max_chunk_capacity() / 2) {
+        // We're expanding the first chunk now,
         // exponential increase when only one chunk to reduce copying
-        reserve(_capacity * 2);
+        new_chunk_capacity = _capacity * 2;
     } else {
+        // This case is for expanding the first chunk to max_chunk_capcity, or when adding more chunks, so
         // add a chunk at a time later, since no copying will take place
-        reserve((_capacity / max_chunk_capacity() + 1) * max_chunk_capacity());
+        new_chunk_capacity = max_chunk_capacity();
+        if (_chunks.capacity() == _chunks.size()) {
+            // Ensure place for the new chunk before emplacing the new element
+            // Since emplacing the new chunk_ptr into _chunks below must not throw.
+            _chunks.reserve(_chunks.size() * 2);
+        }
     }
+    return std::make_pair(new_chunk(new_chunk_capacity), new_chunk_capacity);
+}
+
+template <typename T, size_t max_contiguous_allocation>
+void chunked_vector<T, max_contiguous_allocation>::set_chunk_after_emplace_back(std::pair<chunk_ptr, size_t> x) noexcept {
+    auto new_chunk_ptr = std::move(x.first);
+    auto new_chunk_capacity = x.second;
+    // If the new chunk os replacing the first chunk, migrate the existing elements onto it.
+    // Otherwise, just append it to the _chunks vector.
+    // Note that this part must not throw, since we've already emplaced the new element into the
+    // vector. If we lose the new_chunk now, we might lose data if we the new element was move-constructed.
+    auto last_chunk_size = _size % max_chunk_capacity();
+    if (last_chunk_size) {
+        // We're reallocating the last chunk, so migrate the existing elements to the newly allocated chunk.
+        // This is safe since we require that the values are nothrow_move_constructible.
+        migrate(_chunks.back().get(), _chunks.back().get() + last_chunk_size, new_chunk_ptr.get());
+        _chunks.back() = std::move(new_chunk_ptr);
+    } else {
+        // If all (or none) of the existing chunks are full,
+        // the new chunk will contain only the emplaced element,
+        // and so we just need to append it to _chunks,
+        // without migrating any existing elements.
+        _chunks.emplace_back(std::move(new_chunk_ptr));
+    }
+    // `(_chunks.size() - 1) * max_chunk_capacity()` is the capcity of all chunks except the last chunk.
+    // If this is the first chunk - that part would be 0.
+    // Add to it the last chunk `new_chunk_capacity`.
+    _capacity = (_chunks.size() - 1) * max_chunk_capacity() + new_chunk_capacity;
 }
 
 template <typename T, size_t max_contiguous_allocation>
