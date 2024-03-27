@@ -2,6 +2,9 @@ Nodetool status
 ===============
 **status** - This command prints the cluster information for a single keyspace or all keyspaces.
 
+The keyspace argument is required to calculate effective ownership information (``Owns`` column).
+For tablet keyspaces, a table is also required for effective ownership.
+
 For example:
 
 ::
