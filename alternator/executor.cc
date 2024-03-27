@@ -3717,9 +3717,9 @@ public:
     }
 };
 
-static std::tuple<rjson::value, size_t> describe_items(const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::optional<attrs_to_get>&& attrs_to_get, filter&& filter) {
+static future<std::tuple<rjson::value, size_t>> describe_items(const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::optional<attrs_to_get>&& attrs_to_get, filter&& filter) {
     describe_items_visitor visitor(selection.get_columns(), attrs_to_get, filter);
-    result_set->visit(visitor);
+    co_await result_set->visit_gently(visitor);
     auto scanned_count = visitor.get_scanned_count();
     rjson::value items = std::move(visitor).get_items();
     rjson::value items_descr = rjson::empty_object();
@@ -3736,7 +3736,7 @@ static std::tuple<rjson::value, size_t> describe_items(const cql3::selection::se
     if (!attrs_to_get || !attrs_to_get->empty()) {
         rjson::add(items_descr, "Items", std::move(items));
     }
-    return {std::move(items_descr), size};
+    co_return std::tuple<rjson::value, size_t>{std::move(items_descr), size};
 }
 
 static rjson::value encode_paging_state(const schema& schema, const service::pager::paging_state& paging_state) {
@@ -3777,18 +3777,18 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
 static future<executor::request_return_type> do_query(service::storage_proxy& proxy,
         schema_ptr schema,
         const rjson::value* exclusive_start_key,
-        dht::partition_range_vector&& partition_ranges,
-        std::vector<query::clustering_range>&& ck_bounds,
-        std::optional<attrs_to_get>&& attrs_to_get,
+        dht::partition_range_vector partition_ranges,
+        std::vector<query::clustering_range> ck_bounds,
+        std::optional<attrs_to_get> attrs_to_get,
         uint32_t limit,
         db::consistency_level cl,
-        filter&& filter,
+        filter filter,
         query::partition_slice::option_set custom_opts,
         service::client_state& client_state,
         cql3::cql_stats& cql_stats,
         tracing::trace_state_ptr trace_state,
         service_permit permit) {
-    lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
+    lw_shared_ptr<service::pager::paging_state> old_paging_state = nullptr;
 
     tracing::trace(trace_state, "Performing a database query");
 
@@ -3798,7 +3798,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         if (schema->clustering_key_size() > 0) {
             pos = pos_from_json(*exclusive_start_key, schema);
         }
-        paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+        old_paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
     auto regular_columns = boost::copy_range<query::column_id_vector>(
@@ -3817,34 +3817,28 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     // FIXME: should be moved above, set on opts, so get_max_result_size knows it?
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
-    query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
+    query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(old_paging_state));
     auto p = service::pager::query_pagers::pager(proxy, schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
-    return p->fetch_page(limit, gc_clock::now(), executor::default_timeout()).then(
-            [p = std::move(p), schema, cql_stats, partition_slice = std::move(partition_slice),
-             selection = std::move(selection), query_state_ptr = std::move(query_state_ptr),
-             attrs_to_get = std::move(attrs_to_get),
-             query_options = std::move(query_options),
-             filter = std::move(filter)] (std::unique_ptr<cql3::result_set> rs) mutable {
-        if (!p->is_exhausted()) {
-            rs->get_metadata().set_paging_state(p->state());
-        }
-        auto paging_state = rs->get_metadata().paging_state();
-        bool has_filter = filter;
-        auto [items, size] = describe_items(*selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
-        if (paging_state) {
-            rjson::add(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
-        }
-        if (has_filter){
-            cql_stats.filtered_rows_read_total += p->stats().rows_read_total;
-            // update our "filtered_row_matched_total" for all the rows matched, despited the filter
-            cql_stats.filtered_rows_matched_total += size;
-        }
-        if (is_big(items)) {
-            return make_ready_future<executor::request_return_type>(make_streamed(std::move(items)));
-        }
-        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(items)));
-    });
+    std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
+    if (!p->is_exhausted()) {
+        rs->get_metadata().set_paging_state(p->state());
+    }
+    auto paging_state = rs->get_metadata().paging_state();
+    bool has_filter = filter;
+    auto [items, size] = co_await describe_items(*selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
+    if (paging_state) {
+        rjson::add(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
+    }
+    if (has_filter){
+        cql_stats.filtered_rows_read_total += p->stats().rows_read_total;
+        // update our "filtered_row_matched_total" for all the rows matched, despited the filter
+        cql_stats.filtered_rows_matched_total += size;
+    }
+    if (is_big(items)) {
+        co_return executor::request_return_type(make_streamed(std::move(items)));
+    }
+    co_return executor::request_return_type(make_jsonable(std::move(items)));
 }
 
 static dht::token token_for_segment(int segment, int total_segments) {

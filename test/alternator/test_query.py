@@ -592,3 +592,34 @@ def test_query_paging_string(test_table_ss):
     got_sort_keys = [x['c'] for x in got_items]
     expected_sort_keys = sorted(x['c'] for x in items)
     assert got_sort_keys == expected_sort_keys
+
+# The following test reproduces #17995: A Query returning a large page
+# composed of many small rows, which causes a lot of processing work for
+# outputting the result, and the risk (before #17995 is fixed) to stall.
+# To see the stall, an option like '--blocked-reactor-notify-ms', '5'
+# must be added to Scylla in test/alternator/run, as the default stall
+# threshold is higher than the one that this test produces.
+# Because this test is slow (takes several seconds to build the large
+# partition) and can't fail or even log a stall without different
+# configuration, we skip it by default, using the "veryslow" mark.
+# Remove this mark, and set the --block-reactor-notify-ms option, to run
+# this test.
+@pytest.mark.veryslow
+def test_query_large_page_small_rows(test_table_sn):
+    p = random_string()
+    # Experimentally, Scylla considers the rows we insert below (which each
+    # have a 10-byte string partition key with a one byte name, a numeric
+    # clustering key with a one byte name, and no other data) as being 32
+    # bytes in size, and returns 32772 of these rows in one (nominally) 1MB
+    # page of Query. So if the partition has just 30,000 rows, it will be
+    # returned entirely in one page.
+    N = 30_000
+    with test_table_sn.batch_writer() as batch:
+        for i in range(N):
+            batch.put_item({'p': p, 'c': i})
+
+    got_items = test_table_sn.query(KeyConditions={
+        'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+        ConsistentRead=True)['Items']
+    n = len(got_items)
+    assert n == N

@@ -193,6 +193,23 @@ public:
         }
     }
 
+    // visit_gently() is like visit(), except it may yield between rows and
+    // returns a future that will resolve when it's done. We only yield
+    // between rows, not between individual cells, which is a good compromise
+    // if we assume that individual rows are not too large.
+    future<> visit_gently(ResultVisitor auto& visitor) const {
+        auto column_count = get_metadata().column_count();
+        return do_for_each(_rows, [&visitor, column_count] (auto& row) {
+            visitor.start_row();
+            for (auto i = 0u; i < column_count; i++) {
+                auto& cell = row[i];
+                visitor.accept_value(cell ? managed_bytes_view_opt(*cell) : managed_bytes_view_opt());
+            }
+            visitor.end_row();
+        });
+    }
+
+
     class builder;
 };
 
