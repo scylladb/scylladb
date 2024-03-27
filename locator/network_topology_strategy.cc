@@ -412,23 +412,21 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
         sstring rack;
         utils::small_vector<node_load, 3> nodes;
     };
-    using candidates_list = std::deque<rack_candidates>;
-    candidates_list candidate_racks;
+    using candidates_list = std::vector<rack_candidates>;
+    candidates_list existing_racks;
 
-    // We use this vector to start allocating from an
+    // We use this list to start allocating from an
     // unpoplated rack.
-    std::vector<candidates_list::iterator> new_racks;
+    candidates_list new_racks;
 
     for (const auto& [rack, nodes] : all_dc_racks) {
         co_await coroutine::maybe_yield();
         if (nodes.empty()) {
             continue;
         }
-        auto& candidate = candidate_racks.emplace_back(rack);
         const auto& existing = replicas_per_rack[rack];
-        if (existing.empty()) {
-            new_racks.emplace_back(candidate_racks.end() - 1);
-        }
+        auto& candidate = existing.empty() ?
+                new_racks.emplace_back(rack) : existing_racks.emplace_back(rack);
         for (const auto& node : nodes) {
             const auto& host_id = node->host_id();
             if (!existing.contains(host_id)) {
@@ -436,7 +434,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
             }
         }
         if (candidate.nodes.empty()) {
-            candidate_racks.pop_back();
+            existing_racks.pop_back();
             tablet_logger.trace("allocate_replica {}.{}: no candidate nodes left on rack={}", s->ks_name(), s->cf_name(), rack);
             // Note that this rack can't be in new_racks since
             // those had no existing replicas and if current rack has no nodes
@@ -450,16 +448,28 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
         std::stable_sort(candidate.nodes.begin(), candidate.nodes.end(), node_load_cmp);
     }
 
+    candidates_list candidate_racks;
+
+    // ensure fairness across racks (in particular if rf < number_of_racks)
+    // by rotating the racks order
+    auto append_candidate_racks = [&] (candidates_list& racks) {
+        if (auto size = racks.size()) {
+            auto it = racks.begin() + tb.id % size;
+            std::move(it, racks.end(), std::back_inserter(candidate_racks));
+            std::move(racks.begin(), it, std::back_inserter(candidate_racks));
+        }
+    };
+
+    append_candidate_racks(new_racks);
+    append_candidate_racks(existing_racks);
+
     if (candidate_racks.empty()) {
         on_internal_error(tablet_logger,
                 format("allocate_replica {}.{}: no candidate racks found for dc={} allocated={} rf={}: existing={}",
                         s->ks_name(), s->cf_name(), dc, dc_node_count, dc_rf, replicas_per_rack));
     }
 
-    // ensure fairness across racks (in particular if rf < number_of_racks)
-    candidates_list::iterator candidate_rack = new_racks.empty()
-            ? candidate_racks.begin() + (tb.id % candidate_racks.size())
-            : new_racks[tb.id % new_racks.size()];
+    auto candidate_rack = candidate_racks.begin();
 
     auto allocate_replica = [&] (candidates_list::iterator& candidate) {
         const auto& rack = candidate->rack;
