@@ -50,8 +50,9 @@ def test_leveled_compaction_strategy_options(cql, table1):
 def test_not_allowed_options(cql, table1):
     def scylla_error(**kwargs):
         template = "Invalid compaction strategy options {{{}}} for chosen strategy type"
-        options = ', '.join(f"{{{k}, {v}}}" for k, v in kwargs.items())
-        return template.format(options)
+        options1 = ', '.join(f"{{{k}, {v}}}" for k, v in kwargs.items())
+        options2 = ', '.join(f"\"{k}\": \"{v}\"" for k, v in kwargs.items())
+        return '|'.join([template.format(options1), template.format(options2)])
 
     assert_throws(cql, table1, rf"{scylla_error(abc=-54.54)}|Properties specified \[abc\] are not understood by SizeTieredCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'abc' : -54.54 }")
     assert_throws(cql, table1, rf"{scylla_error(dog=3)}||Properties specified \[dog\] are not understood by TimeWindowCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'dog' : 3 }")
