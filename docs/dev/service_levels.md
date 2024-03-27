@@ -6,7 +6,7 @@ There are two system tables that are used to facilitate the service level featur
 ### Service Level Attachment Table
 
 ```
-    CREATE TABLE system_auth.role_attributes (
+    CREATE TABLE system_auth_v2.role_attributes (
     role text,
     attribute_name text,
     attribute_value text,
@@ -23,7 +23,7 @@ So for example in order to find out which `service_level` is attached to role `r
 one can run the following query:
 
 ```
-SELECT * FROM  system_auth.role_attributes WHERE role='r' and attribute_name='service_level'
+SELECT * FROM  system_auth_v2.role_attributes WHERE role='r' and attribute_name='service_level'
 
 ```
 
