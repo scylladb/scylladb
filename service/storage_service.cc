@@ -5601,9 +5601,10 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
         auto& table = _db.local().find_column_family(tablet.table);
         std::vector<sstring> tables = {table.schema()->cf_name()};
+        auto my_id = tm->get_my_id();
         auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm),
                                                             guard.get_abort_source(),
-                                                            tm->get_my_id(), _snitch.local()->get_location(),
+                                                            my_id, _snitch.local()->get_location(),
                                                             format("Tablet {}", trinfo->transition),
                                                             reason,
                                                             topo_guard,
