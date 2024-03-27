@@ -136,4 +136,5 @@ def test_invalid_format(nodetool):
             ("compactionhistory", "-F", "foo"),
             {},
             ["error processing arguments: invalid format foo, valid formats are: {text, json, yaml}",
+             "error processing arguments: invalid format foo, valid formats are: [\"text\", \"json\", \"yaml\"]",
              "nodetool: arguments for -F are json,yaml only."])
