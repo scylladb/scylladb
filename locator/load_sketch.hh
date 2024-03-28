@@ -38,6 +38,7 @@ class load_sketch {
     };
     struct node_load {
         std::vector<shard_load> _shards;
+        uint64_t _load = 0; // In tablets.
 
         node_load(size_t shard_count) : _shards(shard_count) {
             shard_id next_shard = 0;
@@ -47,12 +48,11 @@ class load_sketch {
             }
         }
 
-        uint64_t load() const {
-            uint64_t result = 0;
-            for (auto&& s : _shards) {
-                result += s.load;
-            }
-            return result;
+        uint64_t& load() noexcept {
+            return _load;
+        }
+        const uint64_t& load() const noexcept {
+            return _load;
         }
     };
     std::unordered_map<host_id, node_load> _nodes;
@@ -84,6 +84,7 @@ public:
                     }
                     node_load& n = _nodes.at(replica.host);
                     if (replica.shard < n._shards.size()) {
+                        n.load() += 1;
                         n._shards[replica.shard].load += 1;
                     }
                 }
@@ -109,8 +110,21 @@ public:
         shard_load& s = n._shards.back();
         auto shard = s.id;
         s.load += 1;
+        n.load() += 1;
         std::push_heap(n._shards.begin(), n._shards.end(), shard_load_cmp());
         return shard;
+    }
+
+    void unload(host_id node, shard_id shard) {
+        auto& n = _nodes.at(node);
+        for (auto& shard_load : n._shards) {
+            if (shard_load.id == shard) {
+                assert(shard_load.load > 0);
+                --shard_load.load;
+                break;
+            }
+        }
+        std::make_heap(n._shards.begin(), n._shards.end(), shard_load_cmp());
     }
 
     uint64_t get_load(host_id node) const {
