@@ -502,8 +502,13 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
         bool if_not_exists = false;
         bool default_unset = false;
         std::optional<expression> json_value;
+        bool is_local_replica = false;
     }
-    : K_INSERT K_INTO cf=columnFamilyName
+    : K_INSERT K_INTO
+        (
+            cf=columnFamilyName
+            | K_LOCAL_REPLICA '(' cf=columnFamilyName ')' { is_local_replica = true; }
+        )
         ('(' c1=cident { column_names.push_back(c1); }  ( ',' cn=cident { column_names.push_back(cn); } )* ')'
             K_VALUES
             '(' v1=term { values.push_back(std::move(v1)); } ( ',' vn=term { values.push_back(std::move(vn)); } )* ')'
@@ -514,7 +519,8 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
                                                        std::move(attrs),
                                                        std::move(column_names),
                                                        std::move(values),
-                                                       if_not_exists);
+                                                       if_not_exists,
+                                                       is_local_replica);
               }
         | K_JSON
           json_token=jsonValue { json_value = std::move(json_token); }
@@ -526,7 +532,8 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
                                                        std::move(attrs),
                                                        std::move(*json_value),
                                                        if_not_exists,
-                                                       default_unset);
+                                                       default_unset,
+                                                       is_local_replica);
               }
         )
     ;
@@ -566,8 +573,12 @@ updateStatement returns [std::unique_ptr<raw::update_statement> expr]
         auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>> operations;
         std::optional<expression> cond_opt;
+        bool is_local_replica = false;
     }
-    : K_UPDATE cf=columnFamilyName
+    : K_UPDATE (
+            cf=columnFamilyName
+            | K_LOCAL_REPLICA '(' cf=columnFamilyName ')' { is_local_replica = true; }
+      )
       ( usingClause[attrs] )?
       K_SET columnOperation[operations] (',' columnOperation[operations])*
       K_WHERE wclause=whereClause
@@ -578,7 +589,8 @@ updateStatement returns [std::unique_ptr<raw::update_statement> expr]
                                                   std::move(operations),
                                                   std::move(wclause),
                                                   std::move(cond_opt),
-                                                  if_exists);
+                                                  if_exists,
+                                                  is_local_replica);
      }
     ;
 
@@ -606,9 +618,14 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
         std::vector<std::unique_ptr<cql3::operation::raw_deletion>> column_deletions;
         bool if_exists = false;
         std::optional<expression> cond_opt;
+        bool is_local_replica = false;
     }
     : K_DELETE ( dels=deleteSelection { column_deletions = std::move(dels); } )?
-      K_FROM cf=columnFamilyName
+      K_FROM
+      (
+            cf=columnFamilyName
+            | K_LOCAL_REPLICA '(' cf=columnFamilyName ')' { is_local_replica = true; }
+      )
       ( usingTimestampTimeoutClause[attrs] )?
       K_WHERE wclause=whereClause
       ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions { cond_opt = std::move(conditions); } ))?
@@ -618,7 +635,8 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
                                             std::move(column_deletions),
                                             std::move(wclause),
                                             std::move(cond_opt),
-                                            if_exists);
+                                            if_exists,
+                                            is_local_replica);
       }
     ;
 
@@ -647,7 +665,7 @@ pruneMaterializedViewStatement returns [std::unique_ptr<raw::select_statement> e
     }
 	: K_PRUNE K_MATERIALIZED K_VIEW cf=columnFamilyName (K_WHERE w=whereClause { wclause = std::move(w); } )? ( usingClause[attrs] )?
 	  {
-	        auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
+	        auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache, false);
 	        return std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
             std::vector<shared_ptr<raw_selector>>(), std::move(wclause), std::move(limit), std::move(per_partition_limit),
             std::vector<::shared_ptr<cql3::column_identifier::raw>>(), std::move(attrs));
@@ -2094,6 +2112,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_EXECUTE
         | K_MUTATION_FRAGMENTS
         | K_EFFECTIVE
+        | K_LOCAL_REPLICA
         ) { $str = $k.text; }
     ;
 
@@ -2304,6 +2323,8 @@ K_PRUNE:       P R U N E;
 K_EXECUTE:     E X E C U T E;
 
 K_MUTATION_FRAGMENTS:    M U T A T I O N '_' F R A G M E N T S;
+
+K_LOCAL_REPLICA:         L O C A L '_' R E P L I C A;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');
