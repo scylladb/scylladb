@@ -57,6 +57,9 @@ def get_linked_issues_based_on_pr_body(repo, number):
         for match in matches:
             issue_number_from_pr_body.append(match)
             print(f"Found issue number: {match}")
+    else:
+        print(f"PR {pr.number} has no supported ref to an Issue. returning {pr.number} for label update")
+        issue_number_from_pr_body.append(pr.number)
     return issue_number_from_pr_body
 
 
