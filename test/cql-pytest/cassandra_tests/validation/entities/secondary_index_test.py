@@ -93,8 +93,9 @@ def dotestCreateAndDropIndex(cql, table, indexName, addKeyspaceOnDrop):
         f"DROP INDEX {KEYSPACE}.{indexName}")
 
 @pytest.fixture(scope="module")
-def table1(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(a int primary key, b int)") as table:
+# FIXME: LWT is not supported with tablets yet. See #18066
+def table1(cql, test_keyspace_vnodes):
+    with create_table(cql, test_keyspace_vnodes, "(a int primary key, b int)") as table:
         yield table
 
 # Reproduces #8717 (CREATE INDEX IF NOT EXISTS was broken):
@@ -449,6 +450,9 @@ TOO_BIG = 1024 * 65
 # both singly and in batches (CASSANDRA-10536)
 # Reproduces #8627
 @pytest.mark.xfail(reason="issue #8627")
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testIndexOnCompositeValueOver64k(cql, test_keyspace):
     too_big = bytearray([1])*TOO_BIG
     with create_table(cql, test_keyspace, "(a int, b int, c blob, PRIMARY KEY (a))") as table:
@@ -468,6 +472,9 @@ def testIndexOnCompositeValueOver64k(cql, test_keyspace):
                    "APPLY BATCH",
                    too_big)
 
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testIndexOnPartitionKeyInsertValueOver64k(cql, test_keyspace):
     too_big = bytearray([1])*TOO_BIG
     with create_table(cql, test_keyspace, "(a int, b int, c blob, PRIMARY KEY ((a, b)))") as table:
@@ -522,6 +529,9 @@ def testIndexOnPartitionKeyWithStaticColumnAndNoRows(cql, test_keyspace):
         execute(cql, table, "UPDATE %s SET s=? WHERE pk1=? AND pk2=?", 9, 1, 20)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE pk2 = ?", 20), [1, 20, None, 9, None])
 
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testIndexOnClusteringColumnInsertValueOver64k(cql, test_keyspace):
     too_big = bytearray([1])*TOO_BIG
     with create_table(cql, test_keyspace, "(a int, b int, c blob, PRIMARY KEY ((a, b)))") as table:
@@ -554,6 +564,9 @@ def testIndexOnClusteringColumnInsertValueOver64k(cql, test_keyspace):
 
 # Reproduces #8627
 @pytest.mark.xfail(reason="issue #8627")
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testIndexOnFullCollectionEntryInsertCollectionValueOver64k(cql, test_keyspace):
     too_big = bytearray([1])*TOO_BIG
     map = {0: too_big}
