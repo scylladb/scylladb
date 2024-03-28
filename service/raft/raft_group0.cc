@@ -205,7 +205,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
     auto& rpc_ref = *rpc;
     auto storage = std::make_unique<raft_sys_table_storage>(qp, gid, my_id);
     auto& persistence_ref = *storage;
-    auto* cl = qp.proxy().get_db().local().commitlog();
+    auto* cl = qp.proxy().get_db().local().schema_commitlog();
     auto config = raft::server::configuration {
         .on_background_error = [gid, this](std::exception_ptr e) {
             _raft_gr.abort_server(gid, fmt::format("background error, {}", e));

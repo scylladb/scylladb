@@ -36,7 +36,7 @@ raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::
     , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
     , _pending_op_fut(make_ready_future<>())
     // max_mutation_size = 1/2 of commitlog segment size, thus _max_mutation_size is set 1/3 of commitlog segment size to leave space for metadata.
-    , _max_mutation_size(_qp.db().get_config().commitlog_segment_size_in_mb() * 1024 * 1024 / 3)
+    , _max_mutation_size(_qp.db().get_config().schema_commitlog_segment_size_in_mb() * 1024 * 1024 / 3)
 {
     static const auto store_cql = format("INSERT INTO system.{} (group_id, term, \"index\", data) VALUES (?, ?, ?, ?)",
         db::system_keyspace::RAFT);
