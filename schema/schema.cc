@@ -554,8 +554,6 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._type == y._raw._type
         && x._raw._gc_grace_seconds == y._raw._gc_grace_seconds
         && x.paxos_grace_seconds() == y.paxos_grace_seconds()
-        && x._raw._dc_local_read_repair_chance == y._raw._dc_local_read_repair_chance
-        && x._raw._read_repair_chance == y._raw._read_repair_chance
         && x._raw._min_compaction_threshold == y._raw._min_compaction_threshold
         && x._raw._max_compaction_threshold == y._raw._max_compaction_threshold
         && x._raw._min_index_interval == y._raw._min_index_interval
@@ -699,8 +697,6 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     out = fmt::format_to(out, ",cfType={}", cf_type_to_sstring(s._raw._type));
     out = fmt::format_to(out, ",comparator={}", cell_comparator::to_sstring(s));
     out = fmt::format_to(out, ",comment={}", s._raw._comment);
-    out = fmt::format_to(out, ",readRepairChance={}", s._raw._read_repair_chance);
-    out = fmt::format_to(out, ",dcLocalReadRepairChance={}", s._raw._dc_local_read_repair_chance);
     out = fmt::format_to(out, ",tombstoneGcOptions={}", s.tombstone_gc_options().to_sstring());
     out = fmt::format_to(out, ",gcGraceSeconds={}", s._raw._gc_grace_seconds);
     out = fmt::format_to(out, ",keyValidator={}", s.thrift_key_validator());
@@ -959,13 +955,11 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
     os << "}";
 
     os << "\n    AND crc_check_chance = " << crc_check_chance();
-    os << "\n    AND dclocal_read_repair_chance = " << dc_local_read_repair_chance();
     os << "\n    AND default_time_to_live = " << default_time_to_live().count();
     os << "\n    AND gc_grace_seconds = " << gc_grace_seconds().count();
     os << "\n    AND max_index_interval = " << max_index_interval();
     os << "\n    AND memtable_flush_period_in_ms = " << memtable_flush_period();
     os << "\n    AND min_index_interval = " << min_index_interval();
-    os << "\n    AND read_repair_chance = " << read_repair_chance();
     os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
     os << "\n    AND paxos_grace_seconds = " << paxos_grace_seconds().count();
     os << "\n    AND tombstone_gc = {";

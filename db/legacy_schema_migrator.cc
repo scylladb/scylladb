@@ -357,12 +357,6 @@ public:
                 builder.set_regular_column_name_type(db::schema_tables::parse_type(comparator));
             }
 
-            if (td.has("read_repair_chance")) {
-                builder.set_read_repair_chance(td.get_as<double>("read_repair_chance"));
-            }
-            if (td.has("local_read_repair_chance")) {
-                builder.set_dc_local_read_repair_chance(td.get_as<double>("local_read_repair_chance"));
-            }
             if (td.has("gc_grace_seconds")) {
                 builder.set_gc_grace_seconds(td.get_as<int32_t>("gc_grace_seconds"));
             }

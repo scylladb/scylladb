@@ -1257,7 +1257,6 @@ private:
             cf_def.__set_column_type(cf_type_to_sstring(s->type()));
             cf_def.__set_comparator_type(cell_comparator::to_sstring(*s));
             cf_def.__set_comment(s->comment());
-            cf_def.__set_read_repair_chance(s->read_repair_chance());
             std::vector<ColumnDef> columns;
             if (!s->thrift().is_dynamic()) {
                 for (auto&& c : s->regular_columns()) {
@@ -1279,7 +1278,6 @@ private:
             cf_def.__set_compression_options(make_options(s->get_compressor_params().get_options()));
             cf_def.__set_bloom_filter_fp_chance(s->bloom_filter_fp_chance());
             cf_def.__set_caching("all");
-            cf_def.__set_dclocal_read_repair_chance(s->dc_local_read_repair_chance());
             cf_def.__set_memtable_flush_period_in_ms(s->memtable_flush_period());
             cf_def.__set_default_time_to_live(s->default_time_to_live().count());
             cf_def.__set_speculative_retry(s->speculative_retry().to_sstring());
@@ -1366,9 +1364,6 @@ private:
         if (cf_def.__isset.comment) {
             builder.set_comment(cf_def.comment);
         }
-        if (cf_def.__isset.read_repair_chance) {
-            builder.set_read_repair_chance(cf_def.read_repair_chance);
-        }
         if (cf_def.__isset.gc_grace_seconds) {
             builder.set_gc_grace_seconds(cf_def.gc_grace_seconds);
         }
@@ -1392,9 +1387,6 @@ private:
         }
         if (cf_def.__isset.bloom_filter_fp_chance) {
             builder.set_bloom_filter_fp_chance(cf_def.bloom_filter_fp_chance);
-        }
-        if (cf_def.__isset.dclocal_read_repair_chance) {
-            builder.set_dc_local_read_repair_chance(cf_def.dclocal_read_repair_chance);
         }
         if (cf_def.__isset.memtable_flush_period_in_ms) {
             builder.set_memtable_flush_period(cf_def.memtable_flush_period_in_ms);
