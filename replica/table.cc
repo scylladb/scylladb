@@ -551,6 +551,7 @@ storage_group_manager::~storage_group_manager() = default;
 
 class single_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
+    storage_group* _single_sg;
 
     compaction_group& get_compaction_group() const noexcept {
         return const_cast<compaction_group&>(*_compaction_groups.begin());
@@ -559,10 +560,11 @@ public:
     single_storage_group_manager(replica::table& t)
         : _t(t)
     {
-        storage_group_vector r;
+        storage_group_map r;
         auto cg = std::make_unique<compaction_group>(_t, size_t(0), dht::token_range::make_open_ended_both_sides());
-        r.push_back(std::make_unique<storage_group>(std::move(cg), &_compaction_groups));
+        r[0] = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
         _storage_groups = std::move(r);
+        _single_sg = _storage_groups.at(0).get();
     }
 
     future<> update_effective_replication_map(const locator::effective_replication_map& erm) override { return make_ready_future(); }
@@ -591,7 +593,7 @@ public:
         return 0;
     }
     storage_group* storage_group_for_token(dht::token token) const noexcept override {
-        return storage_groups().begin()->get();
+        return _single_sg;
     }
 
     locator::resize_decision::seq_number_t split_ready_seq_number() const noexcept override {
@@ -636,10 +638,9 @@ public:
         , _my_host_id(erm.get_token_metadata().get_my_id())
         , _tablet_map(&erm.get_token_metadata().tablets().get_tablet_map(schema()->id()))
     {
-        storage_group_vector ret;
+        storage_group_map ret;
 
         auto& tmap = tablet_map();
-        ret.reserve(tmap.tablet_count());
 
         for (auto tid : tmap.tablet_ids()) {
             auto range = tmap.get_token_range(tid);
@@ -650,7 +651,7 @@ public:
             }
             // FIXME: don't allocate compaction groups for tablets that aren't present in this shard.
             auto cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
-            ret.emplace_back(std::make_unique<storage_group>(std::move(cg), &_compaction_groups));
+            ret[tid.value()] = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
         }
         _storage_groups = std::move(ret);
     }
@@ -670,7 +671,7 @@ public:
             on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size_log2={} size={} token={}",
                                                     idx, log2_storage_groups(), storage_groups().size(), t));
         }
-        auto& sg = storage_groups()[idx];
+        auto& sg = storage_groups().at(idx);
         if (!t.is_minimum() && !t.is_maximum() && sg && !sg->token_range().contains(t, dht::token_comparator())) {
             on_fatal_internal_error(tlogger, format("storage_group_of: storage_group idx={} range={} does not contain token={}",
                     idx, sg->token_range(), t));
@@ -685,7 +686,7 @@ public:
         return storage_group_of(t).first;
     }
     storage_group* storage_group_for_token(dht::token token) const noexcept override {
-        return storage_groups()[storage_group_of(token).first].get();
+        return storage_groups().at(storage_group_of(token).first).get();
     }
 
     locator::resize_decision::seq_number_t split_ready_seq_number() const noexcept override {
@@ -791,7 +792,7 @@ bool tablet_storage_group_manager::all_storage_groups_split() {
         return true;
     }
 
-    auto split_ready = std::ranges::all_of(storage_groups(),
+    auto split_ready = std::ranges::all_of(storage_groups() | boost::adaptors::map_values,
         std::bind(&storage_group::set_split_mode, std::placeholders::_1, std::ref(compaction_groups())));
 
     // The table replica will say to coordinator that its split status is ready by
@@ -820,7 +821,7 @@ sstables::compaction_type_options::split tablet_storage_group_manager::split_com
 future<> tablet_storage_group_manager::split_all_storage_groups() {
     sstables::compaction_type_options::split opt = split_compaction_options();
 
-    for (auto& storage_group : storage_groups()) {
+    for (auto& storage_group : storage_groups() | boost::adaptors::map_values) {
         co_await storage_group->split(compaction_groups(), opt);
     }
 }
@@ -864,7 +865,7 @@ compaction_group* table::single_compaction_group_if_available() const noexcept {
 }
 
 compaction_group* table::get_compaction_group(size_t id) const noexcept {
-    return storage_groups()[id]->main_compaction_group().get();
+    return storage_groups().at(id)->main_compaction_group().get();
 }
 
 std::pair<size_t, locator::tablet_range_side>
@@ -882,7 +883,7 @@ storage_group* table::storage_group_for_token(dht::token token) const noexcept {
 
 compaction_group& tablet_storage_group_manager::compaction_group_for_token(dht::token token) const noexcept {
     auto [idx, range_side] = storage_group_of(token);
-    auto& sg = *storage_groups()[idx];
+    auto& sg = *storage_groups().at(idx);
     return *sg.select_compaction_group(range_side);
 }
 
@@ -898,7 +899,7 @@ utils::chunked_vector<compaction_group*> tablet_storage_group_manager::compactio
     size_t candidate_end = tr.end() ? storage_group_id_for_token(tr.end()->value()) : (storage_groups().size() - 1);
 
     while (candidate_start <= candidate_end) {
-        auto& sg = storage_groups()[candidate_start++];
+        auto& sg = storage_groups().at(candidate_start++);
         if (!sg) {
             continue;
         }
@@ -933,7 +934,7 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
                                           sst->get_filename(), first_id, last_id));
     }
 
-    auto& sg = storage_groups()[first_id];
+    auto& sg = storage_groups().at(first_id);
 
     if (first_range_side != last_range_side) {
         return *sg->main_compaction_group();
@@ -950,7 +951,7 @@ compaction_group_list& table::compaction_groups() const noexcept {
     return _sg_manager->compaction_groups();
 }
 
-const storage_group_vector& table::storage_groups() const noexcept {
+const storage_group_map& table::storage_groups() const noexcept {
     return _sg_manager->storage_groups();
 }
 
@@ -2010,7 +2011,7 @@ locator::table_load_stats table::table_load_stats(std::function<bool(locator::gl
     stats.split_ready_seq_number = _sg_manager->split_ready_seq_number();
 
     for (unsigned id = 0; id < storage_groups().size(); id++) {
-        auto& sg = storage_groups()[id];
+        auto& sg = storage_groups().at(id);
         if (!sg) {
             continue;
         }
@@ -2027,8 +2028,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
     auto table_id = schema()->id();
     size_t old_tablet_count = old_tmap.tablet_count();
     size_t new_tablet_count = new_tmap.tablet_count();
-    storage_group_vector new_storage_groups;
-    new_storage_groups.resize(new_tmap.tablet_count());
+    storage_group_map new_storage_groups;
 
     if (!old_tablet_count) {
         on_internal_error(tlogger, format("Table {} had zero tablets, it should never happen when splitting.", table_id));
@@ -2048,11 +2048,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
 
     // Stop the released main compaction groups asynchronously
     future<> stop_fut = make_ready_future<>();
-    for (unsigned id = 0; id < storage_groups().size(); id++) {
-        auto& sg = storage_groups()[id];
-        if (!sg) {
-            continue;
-        }
+    for (auto& [id, sg] : storage_groups()) {
         if (!sg->main_compaction_group()->empty()) {
             on_internal_error(tlogger, format("Found that storage of group {} for table {} wasn't split correctly, " \
                                               "therefore groups cannot be remapped with the new tablet count.",
@@ -3521,7 +3517,7 @@ future<> compaction_group::cleanup() {
 future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
     auto holder = async_gate().hold();
 
-    auto& sg = storage_groups()[tid.value()];
+    auto& sg = storage_groups().at(tid.value());
 
     for (auto& cg_ptr : sg->compaction_groups()) {
         if (!cg_ptr) {

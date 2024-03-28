@@ -9,6 +9,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
 
+#include "absl-flat_hash_map.hh"
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "compaction/compaction_backlog_manager.hh"
@@ -224,14 +225,14 @@ public:
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const;
 };
 
-using storage_group_vector = utils::chunked_vector<std::unique_ptr<storage_group>>;
+using storage_group_map = flat_hash_map<size_t, std::unique_ptr<storage_group>>;
 
 class storage_group_manager {
 protected:
     // The compaction group list is only a helper for accessing the groups managed by the storage groups.
     // The list entries are unlinked automatically when the storage group, they belong to, is removed.
     compaction_group_list _compaction_groups;
-    storage_group_vector _storage_groups;
+    storage_group_map _storage_groups;
 
 public:
     virtual ~storage_group_manager();
@@ -243,10 +244,10 @@ public:
         return _compaction_groups;
     }
 
-    const storage_group_vector& storage_groups() const noexcept {
+    const storage_group_map& storage_groups() const noexcept {
         return _storage_groups;
     }
-    storage_group_vector& storage_groups() noexcept {
+    storage_group_map& storage_groups() noexcept {
         return _storage_groups;
     }
 
