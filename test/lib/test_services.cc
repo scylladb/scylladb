@@ -54,6 +54,7 @@ class table_for_tests::table_state : public compaction::table_state {
     std::vector<sstables::shared_sstable> _compacted_undeleted;
     tombstone_gc_state _tombstone_gc_state;
     mutable compaction_backlog_tracker _backlog_tracker;
+    seastar::condition_variable _staging_condition;
 private:
     replica::table& table() const noexcept {
         return *_data.cf;
@@ -117,6 +118,9 @@ public:
     }
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
+    }
+    seastar::condition_variable& get_staging_done_condition() noexcept override {
+        return _staging_condition;
     }
 };
 

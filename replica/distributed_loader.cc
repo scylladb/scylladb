@@ -154,11 +154,11 @@ struct reshard_shard_descriptor {
     }
 };
 
-// Collects shared SSTables from all shards and returns a vector containing them all.
+// Collects shared SSTables from all shards and sstables that require cleanup and returns a vector containing them all.
 // This function assumes that the list of SSTables can be fairly big so it is careful to
 // manipulate it in a do_for_each loop (which yields) instead of using standard accumulators.
 future<sstables::sstable_directory::sstable_info_vector>
-collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir) {
+collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::owned_ranges_ptr owned_ranges_ptr) {
     auto info_vec = sstables::sstable_directory::sstable_info_vector();
 
     // We want to make sure that each distributed object reshards about the same amount of data.
@@ -170,10 +170,30 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir) {
     auto coordinator = this_shard_id();
     // We will first move all of the foreign open info to temporary storage so that we can sort
     // them. We want to distribute bigger sstables first.
-    co_await dir.invoke_on_all([&info_vec, coordinator] (sstables::sstable_directory& d) -> future<> {
+    const auto* sorted_owned_ranges_ptr = owned_ranges_ptr.get();
+    co_await dir.invoke_on_all([&] (sstables::sstable_directory& d) -> future<> {
+        auto shared_sstables = d.retrieve_shared_sstables();
+        sstables::sstable_directory::sstable_info_vector need_cleanup;
+        if (sorted_owned_ranges_ptr) {
+            co_await d.filter_sstables([&] (sstables::shared_sstable sst) -> future<bool> {
+                if (needs_cleanup(sst, *sorted_owned_ranges_ptr)) {
+                    need_cleanup.push_back(co_await sst->get_open_info());
+                    co_return false;
+                }
+                co_return true;
+            });
+        }
+        if (shared_sstables.empty() && need_cleanup.empty()) {
+            co_return;
+        }
         co_await smp::submit_to(coordinator, [&] () -> future<> {
-            for (auto& info : d.retrieve_shared_sstables()) {
-                info_vec.push_back(std::move(info));
+            info_vec.reserve(info_vec.size() + shared_sstables.size() + need_cleanup.size());
+            for (auto& info : shared_sstables) {
+                info_vec.emplace_back(std::move(info));
+                co_await coroutine::maybe_yield();
+            }
+            for (auto& info : need_cleanup) {
+                info_vec.emplace_back(std::move(info));
                 co_await coroutine::maybe_yield();
             }
         });
@@ -196,9 +216,15 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_info_vector source)
     });
 
     for (auto& info : source) {
-        auto shard_it = boost::min_element(destinations, std::mem_fn(&reshard_shard_descriptor::total_size_smaller));
-        shard_it->uncompressed_data_size += info.uncompressed_data_size;
-        shard_it->info_vec.push_back(std::move(info));
+        // Choose the stable shard owner with the smallest amount of accumulated work.
+        // Note that for sstables that need cleanup via resharding, owners may contain
+        // a single shard.
+        auto shard_it = boost::min_element(info.owners, [&] (const shard_id& lhs, const shard_id& rhs) {
+            return destinations[lhs].total_size_smaller(destinations[rhs]);
+        });
+        auto& dest = destinations[*shard_it];
+        dest.uncompressed_data_size += info.uncompressed_data_size;
+        dest.info_vec.push_back(std::move(info));
         co_await coroutine::maybe_yield();
     }
 
@@ -206,7 +232,8 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_info_vector source)
 }
 
 future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vector<reshard_shard_descriptor> reshard_jobs,
-                             sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
+                             sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,
+                             compaction::owned_ranges_ptr owned_ranges_ptr) {
 
     uint64_t total_size = boost::accumulate(reshard_jobs | boost::adaptors::transformed(std::mem_fn(&reshard_shard_descriptor::size)), uint64_t(0));
     if (total_size == 0) {
@@ -221,7 +248,12 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
         auto info_vec = std::move(reshard_jobs[this_shard_id()].info_vec);
         auto& cm = db.local().get_compaction_manager();
         auto max_threshold = table.schema()->max_compaction_threshold();
-        co_await d.reshard(std::move(info_vec), cm, table, max_threshold, creator);
+        // make shard-local copy of owned_ranges
+        compaction::owned_ranges_ptr local_owned_ranges_ptr;
+        if (owned_ranges_ptr) {
+            local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*owned_ranges_ptr);
+        }
+        co_await d.reshard(std::move(info_vec), cm, table, max_threshold, creator, std::move(local_owned_ranges_ptr));
         co_await d.move_foreign_sstables(dir);
     }));
 
@@ -235,10 +267,10 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
 //  - The second part calls each shard's distributed object to reshard the SSTables they were
 //    assigned.
 future<>
-distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
-    auto all_jobs = co_await collect_all_shared_sstables(dir);
+distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr) {
+    auto all_jobs = co_await collect_all_shared_sstables(dir, db, ks_name, table_name, owned_ranges_ptr);
     auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
-    co_await run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator));
+    co_await run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator), std::move(owned_ranges_ptr));
 }
 
 future<sstables::generation_type>
@@ -348,6 +380,17 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             shard_gen[s].store(shard_generation_base * smp::count + s, std::memory_order_relaxed);
         }
 
+        // Pass owned_ranges_ptr to reshard to piggy-back cleanup on the resharding compaction.
+        // Note that needs_cleanup() is inaccurate and may return false positives,
+        // maybe triggerring resharding+cleanup unnecessarily for some sstables.
+        // But this is resharding on refresh (sstable loading via upload dir),
+        // which will usually require resharding anyway.
+        //
+        // FIXME: take multiple compaction groups into account
+        // - segregate resharded tables into compaction groups
+        // - split the keyspace local ranges per compaction_group as done in table::perform_cleanup_compaction
+        //   so that cleanup can be considered per compaction group
+        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(ks));
         reshard(directory, db, ks, cf, [&global_table, upload, &shard_gen] (shard_id shard) mutable {
             // we need generation calculated by instance of cf at requested shard
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
@@ -355,7 +398,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             return global_table->make_sstable(upload.native(), sstables::generation_from_value(gen),
                     global_table->get_sstables_manager().get_highest_supported_format(),
                     sstables::sstable::format_types::big, &error_handler_gen_for_upload_dir);
-        }).get();
+        }, owned_ranges_ptr).get();
 
         reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [global_table, upload, &shard_gen] (shard_id shard) {
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);

@@ -32,14 +32,18 @@ class column_family_test {
 public:
     column_family_test(lw_shared_ptr<replica::column_family> cf) : _cf(cf) {}
 
-    future<> add_sstable(sstables::shared_sstable sstable) {
+    future<> add_sstable(sstables::shared_sstable sstable, sstables::offstrategy offstrategy = sstables::offstrategy::no) {
+        if (offstrategy) {
+            // Otherwise, on_compaction_completion always adds the new_sstabes to the main set
+            return _cf->add_sstable_and_update_cache(sstable, offstrategy);
+        }
         auto new_sstables = { sstable };
         return _cf->as_table_state().on_compaction_completion(sstables::compaction_completion_desc{ .new_sstables = new_sstables }, sstables::offstrategy::no);
     }
 
     future<> rebuild_sstable_list(compaction::table_state& table_s, const std::vector<sstables::shared_sstable>& new_sstables,
-            const std::vector<sstables::shared_sstable>& sstables_to_remove) {
-        return table_s.on_compaction_completion(sstables::compaction_completion_desc{ .old_sstables = sstables_to_remove, .new_sstables = new_sstables }, sstables::offstrategy::no);
+            const std::vector<sstables::shared_sstable>& sstables_to_remove, sstables::offstrategy offstrategy = sstables::offstrategy::no) {
+        return table_s.on_compaction_completion(sstables::compaction_completion_desc{ .old_sstables = sstables_to_remove, .new_sstables = new_sstables }, offstrategy);
     }
 
     static void update_sstables_known_generation(replica::column_family& cf, unsigned generation) {
