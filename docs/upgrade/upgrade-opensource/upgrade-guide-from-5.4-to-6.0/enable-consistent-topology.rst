@@ -32,8 +32,8 @@ Prerequisites
 
     features - Feature SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES is enabled
 
-  Alternatively, this can be checked programmatically by checking whether ``value`` column under the key ``enabled_features`` contains the name of the feature in the ``system.scylla_local`` table.
-  For example, this can be done with the following bash command:
+  Alternatively, this can be verified programmatically by checking whether ``value`` column under the key ``enabled_features`` contains the name of the feature in the ``system.scylla_local`` table.
+  For example, this can be done with the following bash script:
 
   .. code-block:: bash
 
@@ -57,6 +57,9 @@ In particular, you must abstain from:
 * :doc:`Cluster management procedures </operating-scylla/procedures/cluster-management/index>` (adding, replacing, removing, decommissioning nodes etc.).
 * Running :doc:`nodetool repair </operating-scylla/nodetool-commands/repair>`.
 * Running :doc:`nodetool checkAndRepairCdcStreams </operating-scylla/nodetool-commands/checkandrepaircdcstreams>`.
+* Any modifications of :doc:`authentication </operating-scylla/security/authentication>` and :doc:`authorization </operating-scylla/security/enable-authorization>` settings.
+* Any change of authorization via :doc:`CQL API </operating-scylla/security/authorization>`.
+* Doing schema changes.
 
 Running the procedure
 =====================
