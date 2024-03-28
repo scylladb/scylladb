@@ -3176,3 +3176,70 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto schema_ptr = ss.schema();
+        auto sst = env.make_sstable(schema_ptr);
+
+        // create a bloom filter
+        auto sst_test = sstables::test(sst);
+        sst_test.create_bloom_filter(100);
+        auto total_reclaimable_memory = sst_test.total_reclaimable_memory_size();
+
+        // Test sstable::reclaim_memory_from_components() :
+        BOOST_REQUIRE_EQUAL(sst_test.reclaim_memory_from_components(), total_reclaimable_memory);
+        BOOST_REQUIRE_EQUAL(sst_test.total_reclaimable_memory_size(), 0);
+        BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), 0);
+    });
+}
+
+std::pair<shared_sstable, size_t> create_sstable_with_bloom_filter(test_env& env, test_env_sstables_manager& sst_mgr, schema_ptr sptr, uint64_t estimated_partitions) {
+    auto sst = env.make_sstable(sptr);
+    sstables::test(sst).create_bloom_filter(estimated_partitions);
+    auto sst_bf_memory = sst->filter_memory_size();
+    sst_mgr.increment_total_reclaimable_memory_and_maybe_reclaim(sst.get());
+    return {sst, sst_bf_memory};
+}
+
+SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_under_pressure) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto schema_ptr = ss.schema();
+
+        auto& sst_mgr = env.manager();
+
+        // Verify nothing it reclaimed when under threshold
+        auto [sst1, sst1_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 70);
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
+
+        auto [sst2, sst2_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 20);
+        // Confirm reclaim was still not triggered
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
+
+        // Verify manager reclaims from the largest sst when the total usage crosses thresold.
+        auto [sst3, sst3_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 50);
+        // sst1 has the most reclaimable memory
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst3->filter_memory_size(), sst3_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst1_bf_memory);
+
+        // Reclaim should also work on the latest sst being added
+        auto [sst4, sst4_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 100);
+        // sst4 should have been reclaimed
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst3->filter_memory_size(), sst3_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst4->filter_memory_size(), 0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst1_bf_memory + sst4_bf_memory);
+    }, {
+        // limit available memory to the sstables_manager to test reclaiming.
+        // this will set the reclaim threshold to 100 bytes.
+        .available_memory = 1000
+    });
+}
