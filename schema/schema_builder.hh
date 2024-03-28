@@ -96,24 +96,6 @@ public:
 
     schema_builder& set_paxos_grace_seconds(int32_t seconds);
 
-    schema_builder& set_dc_local_read_repair_chance(double chance) {
-        _raw._dc_local_read_repair_chance = chance;
-        return *this;
-    }
-
-    double get_dc_local_read_repair_chance() const {
-        return _raw._dc_local_read_repair_chance;
-    }
-
-    schema_builder& set_read_repair_chance(double chance) {
-        _raw._read_repair_chance = chance;
-        return *this;
-    }
-
-    double get_read_repair_chance() const {
-        return _raw._read_repair_chance;
-    }
-
     schema_builder& set_crc_check_chance(double chance) {
         _raw._crc_check_chance = chance;
         return *this;
