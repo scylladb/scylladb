@@ -37,8 +37,7 @@ def test_nonexistent_keyspace(nodetool):
             ("compact", "non_existent_ks"),
             {"expected_requests": [
                 expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.MULTIPLE,
-                                 response=["system"]),
-                expected_request("POST", "/storage_service/keyspace_compaction/non_existent_ks")]},
+                                 response=["system"])]},
             ["nodetool: Keyspace [non_existent_ks] does not exist.",
              "error processing arguments: keyspace non_existent_ks does not exist"])
 

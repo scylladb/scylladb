@@ -402,7 +402,7 @@ def test_netstats(nodetool, flag):
     res = nodetool(*args, expected_requests=expected_requests)
 
     _check_output(
-            res,
+            res.stdout,
             human_readable,
             mode,
             streams,

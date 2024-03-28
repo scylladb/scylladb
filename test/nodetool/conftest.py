@@ -191,7 +191,7 @@ def cassandra_only(request):
 
 @pytest.fixture(scope="module")
 def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
-    def invoker(method, *args, expected_requests=None):
+    def invoker(method, *args, expected_requests=None, check_return_code=True):
         with rest_api_mock.expected_requests(rest_api_mock_server, expected_requests or []):
             if request.config.getoption("nodetool") == "scylla":
                 api_ip, api_port = rest_api_mock_server
@@ -210,10 +210,14 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
             expected_requests = [r for r in rest_api_mock.get_expected_requests(rest_api_mock_server)
                                  if not r.exhausted()]
 
-            # Check the return-code first, if the command failed probably not all requests were consumed
-            res.check_returncode()
-            assert len(expected_requests) == 0, ''.join(str(r) for r in expected_requests)
+            unexpected_requests = rest_api_mock.get_unexpected_requests(rest_api_mock_server)
 
-            return res.stdout
+            # Check the return-code first, if the command failed probably not all requests were consumed
+            if check_return_code:
+                res.check_returncode()
+            assert len(expected_requests) == 0, ''.join(str(r) for r in expected_requests)
+            assert unexpected_requests == 0
+
+            return res
 
     return invoker

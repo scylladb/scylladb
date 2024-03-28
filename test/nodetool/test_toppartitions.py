@@ -119,11 +119,12 @@ def test_toppartitions(nodetool, request, empty_samplings, samplers):
     if request.config.getoption("nodetool") == "scylla":
         # scylla sends list_size, while cassandra's nodetool does not.
         params['list_size'] = str(list_size)
-    actual_output = nodetool("toppartitions", *args, expected_requests=[
+    res = nodetool("toppartitions", *args, expected_requests=[
         expected_request("GET", "/storage_service/toppartitions/",
                          params=params,
                          response=response),
     ])
+    actual_output = res.stdout
 
     expected_output = ''
     first = True

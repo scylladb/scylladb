@@ -18,10 +18,10 @@ def test_enablegossip(nodetool):
 
 
 def test_statusgossip(nodetool):
-    out = nodetool("statusgossip", expected_requests=[
+    res = nodetool("statusgossip", expected_requests=[
         expected_request("GET", "/storage_service/gossiping", response=False)])
-    assert out == "not running\n"
+    assert res.stdout == "not running\n"
 
-    out = nodetool("statusgossip", expected_requests=[
+    res = nodetool("statusgossip", expected_requests=[
         expected_request("GET", "/storage_service/gossiping", response=True)])
-    assert out == "running\n"
+    assert res.stdout == "running\n"

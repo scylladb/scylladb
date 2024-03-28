@@ -68,7 +68,7 @@ def test_repair_all_single_keyspace(nodetool):
             response=1),
         expected_request("GET", "/storage_service/repair_async/ks1", params={"id": "1"}, response="SUCCESSFUL")])
 
-    assert _remove_log_timestamp(res) == """\
+    assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #1, repairing 1 ranges for keyspace ks1 (parallelism=SEQUENTIAL, full=true)
 Repair session 1
 Repair session 1 finished
@@ -112,7 +112,7 @@ def test_repair_all_two_keyspaces(nodetool):
             response=4),
         expected_request("GET", "/storage_service/repair_async/ks2", params={"id": "4"}, response="SUCCESSFUL")])
 
-    assert _remove_log_timestamp(res) == """\
+    assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #3, repairing 1 ranges for keyspace ks1 (parallelism=SEQUENTIAL, full=true)
 Repair session 3
 Repair session 3 finished
@@ -141,7 +141,7 @@ def test_repair_keyspace(nodetool):
             response=1),
         expected_request("GET", "/storage_service/repair_async/ks", params={"id": "1"}, response="SUCCESSFUL")])
 
-    assert _remove_log_timestamp(res) == """\
+    assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #1, repairing 1 ranges for keyspace ks (parallelism=SEQUENTIAL, full=true)
 Repair session 1
 Repair session 1 finished
@@ -168,7 +168,7 @@ def test_repair_one_table(nodetool):
             response=1),
         expected_request("GET", "/storage_service/repair_async/ks", params={"id": "1"}, response="SUCCESSFUL")])
 
-    assert _remove_log_timestamp(res) == """\
+    assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #1, repairing 1 ranges for keyspace ks (parallelism=SEQUENTIAL, full=true)
 Repair session 1
 Repair session 1 finished
@@ -195,7 +195,7 @@ def test_repair_two_tables(nodetool):
             response=1),
         expected_request("GET", "/storage_service/repair_async/ks", params={"id": "1"}, response="SUCCESSFUL")])
 
-    assert _remove_log_timestamp(res) == """\
+    assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #1, repairing 1 ranges for keyspace ks (parallelism=SEQUENTIAL, full=true)
 Repair session 1
 Repair session 1 finished
@@ -223,7 +223,7 @@ def test_repair_long_progress(nodetool):
         expected_request("GET", "/storage_service/repair_async/ks", params={"id": "1"}, response="RUNNING"),
         expected_request("GET", "/storage_service/repair_async/ks", params={"id": "1"}, response="SUCCESSFUL")])
 
-    assert _remove_log_timestamp(res) == """\
+    assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #1, repairing 1 ranges for keyspace ks (parallelism=SEQUENTIAL, full=true)
 Repair session 1
 Repair session 1 finished
@@ -254,6 +254,55 @@ def test_repair_failed(nodetool):
          },
         ["error: Repair job has failed with the error message: ",
          "Repair session 1 failed"])
+
+
+def test_repair_all_three_keyspaces_failed(nodetool):
+    """Check that given three keyspaces to repair, if the second one fails, the
+    third one isn't even started."""
+    expected_requests = [
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"},
+                         response=["ks1", "ks2", "ks3"]),
+        expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.ANY,
+                         response=["ks1", "ks2", "ks3"]),
+        JMX_COLUMN_FAMILIES_REQUEST,
+        JMX_STREAM_MANAGER_REQUEST,
+        expected_request(
+            "POST",
+            "/storage_service/repair_async/ks1",
+            params={
+                "trace": "false",
+                "ignoreUnreplicatedKeyspaces": "false",
+                "parallelism": "parallel",
+                "incremental": "false",
+                "pullRepair": "false",
+                "primaryRange": "false",
+                "jobThreads": "1"},
+            response=10),
+        expected_request("GET", "/storage_service/repair_async/ks1", params={"id": "10"}, response="RUNNING"),
+        expected_request("GET", "/storage_service/repair_async/ks1", params={"id": "10"}, response="SUCCESSFUL"),
+        JMX_COLUMN_FAMILIES_REQUEST,
+        JMX_STREAM_MANAGER_REQUEST,
+        expected_request(
+            "POST",
+            "/storage_service/repair_async/ks2",
+            params={
+                "trace": "false",
+                "ignoreUnreplicatedKeyspaces": "false",
+                "parallelism": "parallel",
+                "incremental": "false",
+                "pullRepair": "false",
+                "primaryRange": "false",
+                "jobThreads": "1"},
+            response=11),
+        expected_request("GET", "/storage_service/repair_async/ks2", params={"id": "11"}, response="FAILED")]
+
+    # Check that repair of ks3 is not even started, after repair of ks2 failed
+    utils.check_nodetool_fails_with_error_contains(
+        nodetool,
+        ("repair",),
+        {"expected_requests": expected_requests},
+        ["error: Repair job has failed with the error message: ",
+         "Repair session 11 failed"])
 
 
 def _do_test_repair_options(
@@ -359,7 +408,7 @@ def _do_test_repair_options(
 
     res = nodetool(*args, expected_requests=expected_requests)
 
-    assert _remove_log_timestamp(res) == """\
+    assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #1, repairing 1 ranges for keyspace ks (parallelism=SEQUENTIAL, full=true)
 Repair session 1
 Repair session 1 finished
@@ -432,7 +481,7 @@ def test_repair_parallelism_precedence(nodetool):
             response=1),
         expected_request("GET", "/storage_service/repair_async/ks", params={"id": "1"}, response="SUCCESSFUL")])
 
-    assert _remove_log_timestamp(res) == """\
+    assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #1, repairing 1 ranges for keyspace ks (parallelism=SEQUENTIAL, full=true)
 Repair session 1
 Repair session 1 finished
@@ -460,7 +509,7 @@ def test_repair_dc_precedence(nodetool):
             response=1),
         expected_request("GET", "/storage_service/repair_async/ks", params={"id": "1"}, response="SUCCESSFUL")])
 
-    assert _remove_log_timestamp(res) == """\
+    assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #1, repairing 1 ranges for keyspace ks (parallelism=SEQUENTIAL, full=true)
 Repair session 1
 Repair session 1 finished
@@ -501,7 +550,7 @@ def test_repair_unused_options(request, nodetool, jobs, full):
             response=1),
         expected_request("GET", "/storage_service/repair_async/ks", params={"id": "1"}, response="SUCCESSFUL")])
 
-    assert _remove_log_timestamp(res) == """\
+    assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #1, repairing 1 ranges for keyspace ks (parallelism=SEQUENTIAL, full=true)
 Repair session 1
 Repair session 1 finished

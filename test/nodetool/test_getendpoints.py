@@ -14,11 +14,12 @@ def test_getendpoints(nodetool, num_endpoints):
     table = 'cf0'
     key = '42'
     endpoints = [f"127.0.0.{i}" for i in range(num_endpoints)]
-    actual_output = nodetool("getendpoints", keyspace, table, key, expected_requests=[
+    res = nodetool("getendpoints", keyspace, table, key, expected_requests=[
         expected_request("GET", f"/storage_service/natural_endpoints/{keyspace}",
                          params={"cf": table, "key": key},
                          response=endpoints),
     ])
+    actual_output = res.stdout
 
     expected_output = ''.join(f"{endpoint}\n" for endpoint in endpoints)
     assert actual_output == expected_output

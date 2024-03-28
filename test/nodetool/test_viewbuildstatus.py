@@ -104,7 +104,8 @@ def test_viewbuildstatus(request, nodetool, args, statuses, returncode):
         if all(status == 'SUCCESS' for status in statuses):
             # invalid argument
             with pytest.raises(CalledProcessError) as exc_info:
-                actual_output = nodetool("viewbuildstatus", *args, expected_requests=expected_requests)
+                res = nodetool("viewbuildstatus", *args, expected_requests=expected_requests)
+                actual_output = res.stdout
             assert exc_info.type is CalledProcessError
             assert exc_info.value.returncode == 1
             expected_stdout, expected_stderr = format_invalid_argument_error(is_scylla)
@@ -112,10 +113,12 @@ def test_viewbuildstatus(request, nodetool, args, statuses, returncode):
             assert expected_stderr in exc_info.value.stderr
         else:
             with pytest.raises(CalledProcessError) as exc_info:
-                actual_output = nodetool("viewbuildstatus", *args, expected_requests=expected_requests)
+                res = nodetool("viewbuildstatus", *args, expected_requests=expected_requests)
+                actual_output = res.stdout
             assert exc_info.type is CalledProcessError
             assert exc_info.value.returncode == 1
             assert exc_info.value.output == expected_output
     else:
-        actual_output = nodetool("viewbuildstatus", *args, expected_requests=expected_requests)
+        res = nodetool("viewbuildstatus", *args, expected_requests=expected_requests)
+        actual_output = res.stdout
         assert actual_output == expected_output

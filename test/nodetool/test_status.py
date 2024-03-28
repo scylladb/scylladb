@@ -262,7 +262,7 @@ def _do_test_status(request, nodetool, status_query_target, node_list, resolve=N
     res = nodetool(*args, expected_requests=expected_requests)
 
     effective_ownership_unknown = keyspace is None or (table is None and keyspace_uses_tablets)
-    validate_status_output(res, keyspace, nodes, ownership, bool(resolve), effective_ownership_unknown)
+    validate_status_output(res.stdout, keyspace, nodes, ownership, bool(resolve), effective_ownership_unknown)
 
 
 def test_status_no_keyspace_single_dc(request, nodetool):

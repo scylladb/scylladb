@@ -103,9 +103,11 @@ def _make_expected_request(req_json):
 
 class rest_server():
     EXPECTED_REQUESTS_PATH = "__expected_requests__"
+    UNEXPECTED_REQUESTS_PATH = "__unexpected_requests__"
 
     def __init__(self):
         self.expected_requests = collections.defaultdict(list)
+        self.unexpected_requests = 0
 
     @staticmethod
     def _request_key(method, path):
@@ -113,6 +115,9 @@ class rest_server():
 
     async def get_expected_requests(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         return aiohttp.web.json_response([r.as_json() for rl in self.expected_requests.values() for r in rl])
+
+    async def get_unexpected_requests(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        return aiohttp.web.json_response(self.unexpected_requests)
 
     async def post_expected_requests(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         payload = await request.json()
@@ -123,6 +128,7 @@ class rest_server():
 
     async def delete_expected_requests(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         self.expected_requests.clear()
+        self.unexpected_requests = 0
         return aiohttp.web.json_response({})
 
     async def handle_generic_request(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
@@ -131,11 +137,13 @@ class rest_server():
         try:
             expected_requests = self.expected_requests[request_key]
         except KeyError:
+            self.unexpected_requests += 1
             return aiohttp.web.Response(status=404, text=f"Request {request_key} not found in expected requests")
 
         this_req = expected_request(request.method, request.path, params=dict(request.query))
 
         if len(expected_requests) == 0:
+            self.unexpected_requests += 1
             logger.error(f"unexpected request, expected no request, got {this_req}")
             return aiohttp.web.Response(status=500, text=f"Expected no requests, got {this_req}")
 
@@ -149,6 +157,7 @@ class rest_server():
 
         if expected_req is None:
             reqs = '\n'.join([str(r) for r in expected_requests])
+            self.unexpected_requests += 1
             logger.error(f"unexpected request, request {this_req} matches none of the expected requests:\n{reqs}")
             return aiohttp.web.Response(status=500, text=f"Request {this_req} doesn't match any expected request")
 
@@ -196,6 +205,7 @@ async def run_server(ip, port):
         aiohttp.web.get(f"/{server.EXPECTED_REQUESTS_PATH}", wrap_handler(server.get_expected_requests)),
         aiohttp.web.post(f"/{server.EXPECTED_REQUESTS_PATH}", wrap_handler(server.post_expected_requests)),
         aiohttp.web.delete(f"/{server.EXPECTED_REQUESTS_PATH}", wrap_handler(server.delete_expected_requests)),
+        aiohttp.web.get(f"/{server.UNEXPECTED_REQUESTS_PATH}", wrap_handler(server.get_unexpected_requests)),
         # Register all required rest API paths.
         # Unfortunately, we have to register here all the different routes, used by tests.
         # Fortunately, aiohttp supports variable paths and with that, there is not that many paths to register.
@@ -259,6 +269,19 @@ def get_expected_requests(server):
     except json.decoder.JSONDecodeError:
         logger.exception('unable to decode server response as JSON: %r', r)
         raise
+
+
+def get_unexpected_requests(server):
+    """Get the number of unexpeced requests from the server.
+
+    Any requests which didn't match an expected request is unexpected.
+    The amount of such requests is stored in a counter.
+    This counter is reset when clear_expected_requests() is called.
+    """
+    ip, port = server
+    r = requests.get(f"http://{ip}:{port}/{rest_server.UNEXPECTED_REQUESTS_PATH}")
+    r.raise_for_status()
+    return r.json()
 
 
 def clear_expected_requests(server):

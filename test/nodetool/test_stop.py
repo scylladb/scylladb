@@ -36,6 +36,7 @@ def test_stop_unsupported(nodetool):
                 "POST",
                 "/compaction_manager/stop_compaction",
                 params={"type": compaction_type},
+                multiple=expected_request.ANY,
                 response={"code": 500,
                           "message": f"std::runtime_error (Compaction type {compaction_type} is unsupported)"},
                 response_status=500)

@@ -13,6 +13,10 @@ from rest_api_mock import expected_request
 from utils import format_size
 
 
+null_ownership_error = ("Non-system keyspaces don't have the same replication settings, "
+                        "effective ownership information is meaningless")
+
+
 class Host(NamedTuple):
     dc: str
     rack: str
@@ -100,6 +104,13 @@ def test_ring(request, nodetool, keyspace, resolve_ip, host_status, host_state):
         pass
     else:
         expected_requests.append(
+            expected_request(
+                    "GET",
+                    "/storage_service/ownership/null",
+                    response_status=500,
+                    multiple=expected_request.ANY,
+                    response={"message": f"std::runtime_error({null_ownership_error})", "code": 500}))
+        expected_requests.append(
             expected_request('GET', f'/storage_service/ownership/{keyspace}',
                              response=map_to_json(endpoint_to_ownership, str)))
     expected_requests += [
@@ -129,7 +140,8 @@ def test_ring(request, nodetool, keyspace, resolve_ip, host_status, host_state):
         args.append(keyspace)
     if resolve_ip:
         args.append(resolve_ip)
-    actual_output = nodetool('ring', *args, expected_requests=expected_requests)
+    res = nodetool('ring', *args, expected_requests=expected_requests)
+    actual_output = res.stdout
 
     expected_output = f'''
 Datacenter: {host.dc}

@@ -54,14 +54,14 @@ def test_removenode_ignore_nodes_two_nodes(nodetool):
 def test_removenode_status(nodetool):
     res = nodetool("removenode", "status", expected_requests=[
         expected_request("GET", "/storage_service/removal_status", response="SOME STATUS")])
-    assert res == "RemovalStatus: SOME STATUS\n"
+    assert res.stdout == "RemovalStatus: SOME STATUS\n"
 
 
 def test_removenode_force(nodetool):
     res = nodetool("removenode", "force", expected_requests=[
         expected_request("GET", "/storage_service/removal_status", response="SOME STATUS"),
         expected_request("POST", "/storage_service/force_remove_completion")])
-    assert res == "RemovalStatus: SOME STATUS\n"
+    assert res.stdout == "RemovalStatus: SOME STATUS\n"
 
 
 def test_removenode_status_with_ignore_dead_nodes(nodetool, scylla_only):
