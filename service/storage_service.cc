@@ -744,7 +744,7 @@ future<> storage_service::topology_transition() {
     _topology_state_machine.event.broadcast();
 }
 
-future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
+void storage_service::merge_topology_snapshot_in_thread(raft_topology_snapshot snp) {
     if (!snp.cdc_generation_mutations.empty()) {
         auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
 
@@ -759,10 +759,10 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
                 if (m.representation().size() <= max_size) {
                     muts_to_apply.push_back(std::move(mut));
                 } else {
-                    co_await split_mutation(std::move(mut), muts_to_apply, max_size);
+                    split_mutation(std::move(mut), muts_to_apply, max_size).get();
                 }
             }
-            frozen_muts_to_apply = freeze(muts_to_apply);
+            frozen_muts_to_apply = freeze_gently_in_thread(muts_to_apply);
         }
 
         // Apply non-atomically so as not to hit the commitlog size limit.
@@ -770,29 +770,31 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
         // it's referenced from the topology table.
         // By applying the cdc_generations_v3 mutations before topology mutations
         // we ensure that the lack of atomicity isn't a problem here.
-        co_await max_concurrent_for_each(frozen_muts_to_apply, 128, [&] (const frozen_mutation& m) -> future<> {
+        max_concurrent_for_each(frozen_muts_to_apply, 128, [&] (const frozen_mutation& m) -> future<> {
             return _db.local().apply(s, m, {}, db::commitlog::force_sync::yes, db::no_timeout);
-        });
+        }).get();
     }
 
     // Apply system.topology and system.topology_requests mutations atomically
     // to have a consistent state after restart
     {
         std::vector<mutation> muts;
-        muts.reserve(snp.topology_mutations.size());
+        muts.reserve(snp.topology_mutations.size() + snp.topology_requests_mutations.size());
         {
             auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
             boost::transform(snp.topology_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
+                seastar::thread::maybe_yield();
                 return m.to_mutation(s);
             });
         }
         if (snp.topology_requests_mutations.size()) {
             auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
             boost::transform(snp.topology_requests_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
+                seastar::thread::maybe_yield();
                 return m.to_mutation(s);
             });
         }
-        co_await _db.local().apply(freeze(muts), db::no_timeout);
+        _db.local().apply(freeze_gently_in_thread(muts), db::no_timeout).get();
     }
 }
 

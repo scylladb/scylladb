@@ -232,6 +232,16 @@ public:
 
 frozen_mutation freeze(const mutation& m);
 std::vector<frozen_mutation> freeze(const std::vector<mutation>&);
+// Caller is responsible for keeping the argument stable in memory
+// freeze_gently may yield only between mutations, threfore it's suitable for
+// a long vector of short mutations.
+future<std::vector<frozen_mutation>> freeze_gently(const std::vector<mutation>&);
+frozen_mutation freeze_gently_in_thread(const mutation& m);
+// Until we have freeze_gently(const mutation&), if there are large
+// mutations that may cause stalls, the caller is advised to start an async
+// thread and use freeze_gently_in_thread.
+std::vector<frozen_mutation> freeze_gently_in_thread(const std::vector<mutation>&);
+
 std::vector<mutation> unfreeze(const std::vector<frozen_mutation>&);
 // Caller is responsible for keeping the argument stable in memory
 future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation>);

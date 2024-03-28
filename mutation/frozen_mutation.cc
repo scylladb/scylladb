@@ -7,6 +7,8 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include "frozen_mutation.hh"
 #include "schema/schema_registry.hh"
 #include "mutation_partition.hh"
@@ -131,10 +133,44 @@ frozen_mutation freeze(const mutation& m) {
     return frozen_mutation{ m };
 }
 
+frozen_mutation freeze_gently_in_thread(const mutation& m) {
+    mutation_partition_serializer part_ser(*m.schema(), m.partition());
+
+    bytes_ostream bytes;
+    ser::writer_of_mutation<bytes_ostream> wom(bytes);
+
+    std::move(wom).write_table_id(m.schema()->id())
+                  .write_schema_version(m.schema()->version())
+                  .write_key(m.key())
+                  .partition([&] (auto wr) mutable {
+                    part_ser.write_gently(std::move(wr)).get();
+                  }).end_mutation();
+    return frozen_mutation(std::move(bytes), m.key());
+}
+
+std::vector<frozen_mutation> freeze_gently_in_thread(const std::vector<mutation>& muts) {
+    std::vector<frozen_mutation> result;
+    result.reserve(muts.size());
+    for (const auto& m : muts) {
+        result.emplace_back(freeze_gently_in_thread(m));
+    }
+    return result;
+}
+
 std::vector<frozen_mutation> freeze(const std::vector<mutation>& muts) {
     return boost::copy_range<std::vector<frozen_mutation>>(muts | boost::adaptors::transformed([] (const mutation& m) {
         return freeze(m);
     }));
+}
+
+future<std::vector<frozen_mutation>> freeze_gently(const std::vector<mutation>& muts) {
+    std::vector<frozen_mutation> result;
+    result.reserve(muts.size());
+    for (const auto& m : muts) {
+        result.emplace_back(freeze(m));
+        co_await coroutine::maybe_yield();
+    }
+    co_return result;
 }
 
 std::vector<mutation> unfreeze(const std::vector<frozen_mutation>& muts) {
