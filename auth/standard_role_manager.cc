@@ -143,7 +143,7 @@ const resource_set& standard_role_manager::protected_resources() const {
     return resources;
 }
 
-future<> standard_role_manager::create_metadata_tables_if_missing() const {
+future<> standard_role_manager::create_legacy_metadata_tables_if_missing() const {
     static const sstring create_role_members_query = fmt::format(
             "CREATE TABLE {}.{} ("
             "  role text,"
@@ -155,17 +155,17 @@ future<> standard_role_manager::create_metadata_tables_if_missing() const {
 
 
     return when_all_succeed(
-            create_metadata_table_if_missing(
+            create_legacy_metadata_table_if_missing(
                     meta::roles_table::name,
                     _qp,
                     meta::roles_table::creation_query(),
                     _migration_manager),
-            create_metadata_table_if_missing(
+            create_legacy_metadata_table_if_missing(
                     meta::role_members_table::name,
                     _qp,
                     create_role_members_query,
                     _migration_manager),
-            create_metadata_table_if_missing(
+            create_legacy_metadata_table_if_missing(
                     meta::role_attributes_table::name,
                     _qp,
                     meta::role_attributes_table::creation_query(),
@@ -236,24 +236,30 @@ future<> standard_role_manager::migrate_legacy_metadata() {
 
 future<> standard_role_manager::start() {
     return once_among_shards([this] {
-        return this->create_metadata_tables_if_missing().then([this] {
+        return futurize_invoke([this] () {
+            if (legacy_mode(_qp)) {
+                return this->create_legacy_metadata_tables_if_missing();
+            }
+            return make_ready_future<>();
+        }).then([this] {
             _stopped = auth::do_after_system_ready(_as, [this] {
                 return seastar::async([this] {
-                    _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
+                    if (legacy_mode(_qp)) {
+                        _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
-                    if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get()) {
-                        if (this->legacy_metadata_exists()) {
-                            log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
+                        if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get()) {
+                            if (this->legacy_metadata_exists()) {
+                                log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
+                            }
+
+                            return;
                         }
 
-                        return;
+                        if (this->legacy_metadata_exists()) {
+                            this->migrate_legacy_metadata().get();
+                            return;
+                        }
                     }
-
-                    if (this->legacy_metadata_exists()) {
-                        this->migrate_legacy_metadata().get();
-                        return;
-                    }
-
                     create_default_role_if_missing().get();
                 });
             });

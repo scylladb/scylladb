@@ -172,7 +172,7 @@ service::service(
                       used_by_maintenance_socket) {
 }
 
-future<> service::create_keyspace_if_missing(::service::migration_manager& mm) const {
+future<> service::create_legacy_keyspace_if_missing(::service::migration_manager& mm) const {
     assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
     auto db = _qp.db();
 
@@ -200,12 +200,12 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
 }
 
 future<> service::start(::service::migration_manager& mm) {
-    auto create_keyspace_if_missing_or_noop = _used_by_maintenance_socket
-        ? make_ready_future<>()
-        : once_among_shards([this, &mm] {
-            return create_keyspace_if_missing(mm);
+    auto create_keyspace_if_missing_or_noop = make_ready_future<>();
+    if (legacy_mode(_qp) && !_used_by_maintenance_socket) {
+        create_keyspace_if_missing_or_noop = once_among_shards([this, &mm] {
+            return create_legacy_keyspace_if_missing(mm);
         });
-
+    }
     return create_keyspace_if_missing_or_noop.then([this] {
         return _role_manager->start().then([this] {
             return when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
@@ -249,51 +249,6 @@ void service::update_cache_config() {
 void service::reset_authorization_cache() {
     _permissions_cache->reset();
     _qp.reset_cache();
-}
-
-future<bool> service::has_existing_legacy_users() const {
-    if (!_qp.db().has_schema(meta::legacy::AUTH_KS, meta::legacy::USERS_CF)) {
-        return make_ready_future<bool>(false);
-    }
-
-    static const sstring default_user_query = format("SELECT * FROM {}.{} WHERE {} = ?",
-            meta::legacy::AUTH_KS,
-            meta::legacy::USERS_CF,
-            meta::user_name_col_name);
-
-    static const sstring all_users_query = format("SELECT * FROM {}.{} LIMIT 1",
-            meta::legacy::AUTH_KS,
-            meta::legacy::USERS_CF);
-
-    // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default user, we
-    // can potentially avoid doing a range query with a high consistency level.
-
-    return _qp.execute_internal(
-            default_user_query,
-            db::consistency_level::ONE,
-            {meta::DEFAULT_SUPERUSER_NAME},
-            cql3::query_processor::cache_internal::yes).then([this](auto results) {
-        if (!results->empty()) {
-            return make_ready_future<bool>(true);
-        }
-
-        return _qp.execute_internal(
-                default_user_query,
-                db::consistency_level::QUORUM,
-                {meta::DEFAULT_SUPERUSER_NAME},
-                cql3::query_processor::cache_internal::yes).then([this](auto results) {
-            if (!results->empty()) {
-                return make_ready_future<bool>(true);
-            }
-
-            return _qp.execute_internal(
-                    all_users_query,
-                    db::consistency_level::QUORUM,
-                    cql3::query_processor::cache_internal::no).then([](auto results) {
-                return make_ready_future<bool>(!results->empty());
-            });
-        });
-    });
 }
 
 future<permission_set>
