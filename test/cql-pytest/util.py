@@ -331,8 +331,18 @@ class config_value_context:
         self._original_value = None
 
     def __enter__(self):
-        self._original_value = literal_eval(
-            self._cql.execute(f"SELECT value FROM system.config WHERE name='{self._key}'").one().value)
+        res = self._cql.execute(f"SELECT type, value FROM system.config WHERE name='{self._key}'").one()
+        type = res.type
+        value = res.value
+        if type == 'bool':
+            if value.lower() in ['true', '1', 'yes', 'on']:
+                self._original_value = True
+            elif value.lower() in ['false', '0', 'no', 'off']:
+                self._original_value = False
+            else:
+                raise ValueError(f"Invalid boolean value '{value}'")
+        else:
+            self._original_value = literal_eval(value)
         if isinstance(self._original_value, list):
             self._original_value = "".join(c for c in self._original_value if c.isalnum())
         self._cql.execute(f"UPDATE system.config SET value='{self._value}' WHERE name='{self._key}'")

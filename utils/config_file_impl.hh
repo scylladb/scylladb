@@ -11,6 +11,7 @@
 
 #include <iterator>
 #include <boost/regex.hpp>
+#include <boost/lexical_cast.hpp>
 
 #include <yaml-cpp/yaml.h>
 #include <boost/any.hpp>
@@ -204,13 +205,21 @@ void utils::config_file::named_value<T>::set_value(const YAML::Node& node) {
     _source = config_source::SettingsFile;
 }
 
+template<>
+bool utils::config_file::lexical_cast<bool>(sstring value);
+
+template<typename T>
+T utils::config_file::lexical_cast(sstring value) {
+    return boost::lexical_cast<T>(value);
+}
+
 template<typename T>
 bool utils::config_file::named_value<T>::set_value(sstring value, config_source src) {
     if ((_liveness != liveness::LiveUpdate) || (src == config_source::CQL && !_cf->are_live_updatable_config_params_changeable_via_cql())) {
         return false;
     }
 
-    (*this)(boost::lexical_cast<T>(value), src);
+    (*this)(lexical_cast<T>(value), src);
     return true;
 }
 
@@ -232,7 +241,7 @@ future<bool> utils::config_file::named_value<T>::set_value_on_all_shards(sstring
         co_return false;
     }
 
-    co_await smp::invoke_on_all([this, value = boost::lexical_cast<T>(value), src] () {
+    co_await smp::invoke_on_all([this, value = lexical_cast<T>(value), src] () {
         (*this)(value, src);
     });
     co_return true;

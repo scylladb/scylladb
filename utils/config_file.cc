@@ -14,6 +14,7 @@
 #include <boost/program_options.hpp>
 #include <boost/any.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include <boost/algorithm/string.hpp>
 
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
@@ -441,4 +442,15 @@ sstring utils::config_file::config_src::source_name() const noexcept {
     }
 
     __builtin_unreachable();
+}
+
+template<>
+bool utils::config_file::lexical_cast<bool>(sstring value) {
+    boost::algorithm::to_lower(value);
+    if (value == "true" || value == "yes" || value == "on" || value == "1") {
+        return true;
+    } else if (value == "false" || value == "no" || value == "off" || value == "0") {
+        return false;
+    }
+    throw boost::bad_lexical_cast();
 }
