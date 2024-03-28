@@ -15,7 +15,7 @@
 namespace db {
 
 namespace system_auth_keyspace {
-    enum class version_t: int64_t {
+    enum struct version_t: int64_t {
         v1 = 1,
         v2 = 2,
     };
