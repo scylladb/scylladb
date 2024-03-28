@@ -10,6 +10,7 @@
 
 import pytest
 import time
+import requests
 from botocore.exceptions import ClientError
 from util import create_test_table, new_test_table, random_string, full_scan, full_query, multiset, list_tables
 
@@ -538,3 +539,35 @@ def test_lsi_and_gsi_same_name(dynamodb):
                 }
             ])
         table.delete()
+
+# Test that the LSI table can be addressed in Scylla's REST API (obviously,
+# since this test is for the REST API, it is Scylla-only and can't be run on
+# DynamoDB).
+# At the time this test was written, the LSI's name has a "!" in it, so this
+# test reproduces a bug in URL decoding (#5883). But the goal of this test
+# isn't to insist that a table backing an LSI must have a specific name,
+# but rather that whatever name it does have - it can be addressed.
+def test_lsi_name_rest_api(test_table_lsi_1, rest_api):
+    # See that the LSI is listed in list of tables. It will be a table
+    # whose CQL name contains the Alternator table's name, and the
+    # LSI's name ('hello'). As of this writing, it will actually be
+    # alternator_<name>:<name>!:<lsi> - but the test doesn't enshrine this.
+    resp = requests.get(f'{rest_api}/column_family/name')
+    resp.raise_for_status()
+    lsi_rest_name = None
+    for name in resp.json():
+        if test_table_lsi_1.name in name and 'hello' in name:
+            lsi_rest_name = name
+            break
+    assert lsi_rest_name
+    # Attempt to run a request on this LSI's table name "lsi_rest_name".
+    # We'll use the compaction_strategy request here, but if for some
+    # reason in the future we decide to drop that request, any other
+    # request will be fine.
+    resp = requests.get(f'{rest_api}/column_family/compaction_strategy/' + lsi_rest_name)
+    resp.raise_for_status()
+    # Let's make things difficult for the server by URL encoding the
+    # lsi_rest_name - exposing issue #5883.
+    encoded_lsi_rest_name = requests.utils.quote(lsi_rest_name)
+    resp = requests.get(f'{rest_api}/column_family/compaction_strategy/' + encoded_lsi_rest_name)
+    resp.raise_for_status()
