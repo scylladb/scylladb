@@ -244,9 +244,9 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     // snapshot from the sender and must have updated our
     // address map with its IP address.
     const auto msg = format("Failed to apply snapshot from {}: ip address of the sender is not found", from_ip);
-    co_await coroutine::return_exception(raft::transport_error(msg));
+    return make_exception_future(raft::transport_error(msg));
   }
-  try {
+  return async([this, from_id, from_ip = std::move(*from_ip), snp = std::move(snp)] () mutable {
     // Note that this may bring newer state than the group0 state machine raft's
     // log, so some raft entries may be double applied, but since the state
     // machine is idempotent it is not a problem.
@@ -254,11 +254,11 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     auto holder = _gate.hold();
 
     slogger.trace("transfer snapshot from {} index {} snp id {}", from_ip, snp.idx, snp.id);
-    netw::messaging_service::msg_addr addr{*from_ip, 0};
+    netw::messaging_service::msg_addr addr{from_ip, 0};
     auto& as = _abort_source;
 
     // (Ab)use MIGRATION_REQUEST to also transfer group0 history table mutation besides schema tables mutations.
-    auto [_, cm] = co_await _mm._messaging.send_migration_request(addr, as, netw::schema_pull_options { .group0_snapshot_transfer = true });
+    auto [_, cm] = _mm._messaging.send_migration_request(addr, as, netw::schema_pull_options { .group0_snapshot_transfer = true }).get();
     if (!cm) {
         // If we're running this code then remote supports Raft group 0, so it should also support canonical mutations
         // (which were introduced a long time ago).
@@ -276,8 +276,8 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         tables.push_back(db::system_keyspace::topology_requests()->id());
         tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
 
-        topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+        topology_snp = ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)}).get();
 
         tables = std::vector<table_id>();
         tables.reserve(auth_tables.size());
@@ -287,32 +287,32 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         }
         tables.push_back(db::system_keyspace::service_levels_v2()->id());
 
-        raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+        raft_snp = ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)}).get();
     }
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
 
     // TODO ensure atomicity of snapshot application in presence of crashes (see TODO in `apply`)
 
-    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
+    auto read_apply_mutex_holder = _client.hold_read_apply_mutex(as).get();
 
-    co_await _mm.merge_schema_from(addr, std::move(*cm));
+    _mm.merge_schema_from(addr, std::move(*cm)).get();
 
     if (topology_snp && !topology_snp->mutations.empty()) {
-        co_await _ss.merge_topology_snapshot(std::move(*topology_snp));
+        _ss.merge_topology_snapshot(std::move(*topology_snp)).get();
         // Flush so that current supported and enabled features are readable before commitlog replay
-        co_await _sp.get_db().local().flush(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+        _sp.get_db().local().flush(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY).get();
     }
 
     if (raft_snp) {
-        co_await mutate_locally(std::move(raft_snp->mutations), _sp);
+        mutate_locally(std::move(raft_snp->mutations), _sp).get();
     }
 
-    co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
-  } catch (const abort_requested_exception&) {
-    throw raft::request_aborted();
-  }
+    _sp.mutate_locally({std::move(history_mut)}, nullptr).get();
+  }).handle_exception_type([] (const abort_requested_exception&) {
+    return make_exception_future(raft::request_aborted());
+  });
 }
 
 future<> group0_state_machine::abort() {
