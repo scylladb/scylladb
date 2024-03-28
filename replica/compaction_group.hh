@@ -17,6 +17,7 @@
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
 #include <boost/intrusive/list.hpp>
+#include <absl/container/flat_hash_map.h>
 
 #pragma once
 
@@ -224,14 +225,14 @@ public:
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const;
 };
 
-using storage_group_vector = utils::chunked_vector<std::unique_ptr<storage_group>>;
+using storage_group_map = absl::flat_hash_map<size_t, std::unique_ptr<storage_group>, absl::Hash<size_t>>;
 
 class storage_group_manager {
 protected:
     // The compaction group list is only a helper for accessing the groups managed by the storage groups.
     // The list entries are unlinked automatically when the storage group, they belong to, is removed.
     compaction_group_list _compaction_groups;
-    storage_group_vector _storage_groups;
+    storage_group_map _storage_groups;
 
 public:
     virtual ~storage_group_manager();
@@ -243,12 +244,14 @@ public:
         return _compaction_groups;
     }
 
-    const storage_group_vector& storage_groups() const noexcept {
+    const storage_group_map& storage_groups() const noexcept {
         return _storage_groups;
     }
-    storage_group_vector& storage_groups() noexcept {
+    storage_group_map& storage_groups() noexcept {
         return _storage_groups;
     }
+    // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
+    storage_group* storage_group_for_id(const schema_ptr&, size_t i) const;
 
     compaction_group* single_compaction_group_if_available() noexcept {
         return _compaction_groups.size() == 1 ? &_compaction_groups.front() : nullptr;
