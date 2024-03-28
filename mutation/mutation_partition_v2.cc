@@ -1108,7 +1108,7 @@ mutation_partition_v2::maybe_drop(const schema& s,
             return next_i;
         }
     } else if (!e.continuous() && !next_continuous) {
-        if (!e.dummy() && e.range_tombstone()) {
+        if (!e.dummy()) {
             return next_i;
         }
     } else {
