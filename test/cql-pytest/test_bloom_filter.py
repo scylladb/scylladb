@@ -5,13 +5,20 @@
 import pytest
 import rest_api
 import nodetool
-from util import new_test_table
+from util import new_test_table, config_value_context
 from cassandra.protocol import ConfigurationException
+
+# Disable component memory reclamation by setting the threshold to max value
+@pytest.fixture(scope="module")
+def disable_component_memory_reclaim(cql):
+    with config_value_context(cql, 'components_memory_reclaim_threshold', '1'):
+        yield
 
 # Test inserts `N` rows into table, flushes it 
 # and tries to read `M` non-existing keys.
 # Then bloom filter's false-positive ratio is checked.
 @pytest.mark.parametrize("N,M,fp_chance", [(500, 1000, 0.1)])
+<<<<<<< HEAD
 def test_bloom_filter(scylla_only, cql, test_keyspace, N, M, fp_chance):
     with new_test_table(cql, test_keyspace, "a int PRIMARY KEY", 
         f"WITH bloom_filter_fp_chance = {fp_chance}") as table:
@@ -24,6 +31,12 @@ def test_bloom_filter(scylla_only, cql, test_keyspace, N, M, fp_chance):
         read_stmt = cql.prepare(f"SELECT * FROM {table} WHERE a = ? BYPASS CACHE")
         for k in range(N, N+M):
             cql.execute(read_stmt, [k])
+=======
+def test_bloom_filter(scylla_only, cql, test_keyspace, disable_component_memory_reclaim, N, M, fp_chance):
+    def run_test(cql, test_keyspace, N, M, fp_chance):
+        with new_test_table(cql, test_keyspace, "a int PRIMARY KEY",
+            f"WITH bloom_filter_fp_chance = {fp_chance}") as table:
+>>>>>>> d86505e399 (test_bloom_filter.py: disable reclaiming memory from components)
 
         fp = rest_api.get_column_family_metric(cql, 
           "bloom_filter_false_positives", table)
