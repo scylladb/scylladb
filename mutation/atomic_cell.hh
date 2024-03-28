@@ -283,8 +283,7 @@ public:
         return atomic_cell_view(managed_bytes_view(v));
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const atomic_cell_view& acv);
-
+    friend fmt::formatter<class atomic_cell>;
     class printer {
         const abstract_type& _type;
         const atomic_cell_view& _cell;
@@ -378,7 +377,6 @@ public:
     }
     static atomic_cell make_live_uninitialized(const abstract_type& type, api::timestamp_type timestamp, size_t size);
     friend class atomic_cell_or_collection;
-    friend std::ostream& operator<<(std::ostream& os, const atomic_cell& ac);
 
     class printer : atomic_cell_view::printer {
     public:
