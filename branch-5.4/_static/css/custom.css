@@ -1,0 +1,46 @@
+/* Override theme styles */
+
+/* Home */
+.topic-box--product p {
+    margin-bottom: 0;
+}
+
+@media screen and (min-width: 640px) {
+    .hero__title {
+        max-width: 550px;
+    }
+}
+
+/* Description lists */ 
+.content blockquote {
+    padding-left: 20px;
+}
+
+.content blockquote li p {
+    margin-bottom: 5px;
+}
+
+.content blockquote dl dt {
+    font-weight: normal;
+}
+
+.content blockquote .std-term {
+    font-weight: bold;    
+}
+
+h3 .pre {
+    font-size: 16px;
+    font-weight: bold;
+}
+
+hr {
+    max-width: 100%;
+}
+
+dl dt:hover > a.headerlink {
+    visibility: visible;
+}
+
+dl.confval {
+    border-bottom: 1px solid #cacaca;
+}
