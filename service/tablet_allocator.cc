@@ -16,6 +16,7 @@
 #include "utils/stall_free.hh"
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
+#include "locator/network_topology_strategy.hh"
 #include <utility>
 
 using namespace locator;
@@ -51,6 +52,7 @@ struct load_balancer_cluster_stats {
 using dc_name = sstring;
 
 class load_balancer_stats_manager {
+    sstring group_name;
     std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
     std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
     load_balancer_cluster_stats _cluster_stats;
@@ -61,7 +63,7 @@ class load_balancer_stats_manager {
     void setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
         namespace sm = seastar::metrics;
         auto dc_lb = dc_label(dc);
-        _metrics.add_group("load_balancer", {
+        _metrics.add_group(group_name, {
             sm::make_counter("calls", sm::description("number of calls to the load balancer"),
                              stats.calls)(dc_lb),
             sm::make_counter("migrations_produced", sm::description("number of migrations produced by the load balancer"),
@@ -75,7 +77,7 @@ class load_balancer_stats_manager {
         namespace sm = seastar::metrics;
         auto dc_lb = dc_label(dc);
         auto node_lb = node_label(node);
-        _metrics.add_group("load_balancer", {
+        _metrics.add_group(group_name, {
             sm::make_gauge("load", sm::description("node load during last load balancing"),
                            stats.load)(dc_lb)(node_lb)
         });
@@ -84,7 +86,7 @@ class load_balancer_stats_manager {
     void setup_metrics(load_balancer_cluster_stats& stats) {
         namespace sm = seastar::metrics;
         // FIXME: we can probably improve it by making it per resize type (split, merge or none).
-        _metrics.add_group("load_balancer", {
+        _metrics.add_group(group_name, {
             sm::make_counter("resizes_emitted", sm::description("number of resizes produced by the load balancer"),
                 stats.resizes_emitted),
             sm::make_counter("resizes_revoked", sm::description("number of resizes revoked by the load balancer"),
@@ -94,7 +96,9 @@ class load_balancer_stats_manager {
         });
     }
 public:
-    load_balancer_stats_manager() {
+    load_balancer_stats_manager(sstring group_name):
+        group_name(std::move(group_name))
+    {
         setup_metrics(_cluster_stats);
     }
 
@@ -1146,6 +1150,32 @@ public:
     }
 };
 
+future<tablet_replica_calculation_result>
+calculate_tablet_replicas_for_new_rf(const tablet_aware_replication_strategy* rep, schema_ptr s, token_metadata_ptr tm,
+    std::map<sstring, sstring> ks_options) {
+
+    auto table_id = s->id();
+    tablet_map old_tablets = tm->tablets().get_tablet_map(table_id);
+
+    if (dynamic_cast<const locator::network_topology_strategy*>(rep) == nullptr) {
+        co_return tablet_replica_calculation_result{ old_tablets, tablet_replica_calculation_status::unknown_topology_strategy };
+    }
+
+    locator::replication_strategy_params params{ks_options, old_tablets.tablet_count()};
+
+    auto new_rep = abstract_replication_strategy::create_replication_strategy(
+                "NetworkTopologyStrategy", params);
+
+    auto tablet_aware = new_rep->maybe_as_tablet_aware();
+
+    if (!tablet_aware) {
+        co_return tablet_replica_calculation_result{ old_tablets, tablet_replica_calculation_status::unknown_topology_strategy };
+    }
+
+    auto new_tablets = co_await tablet_aware->reallocate_tablets(s, tm, old_tablets);
+    co_return tablet_replica_calculation_result{ new_tablets, tablet_replica_calculation_status::success };
+}
+
 class tablet_allocator_impl : public tablet_allocator::impl
                             , public service::migration_listener::empty_listener {
     const tablet_allocator::config _config;
@@ -1157,7 +1187,8 @@ public:
     tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
             : _config(std::move(cfg))
             , _migration_notifier(mn)
-            , _db(db) {
+            , _db(db)
+            , _load_balancer_stats("load_balancer") {
         if (_config.initial_tablets_scale == 0) {
             throw std::runtime_error("Initial tablets scale must be positive");
         }

@@ -270,6 +270,11 @@ public:
         return _dc_nodes;
     }
 
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<const node*>>>&
+    get_datacenter_rack_nodes() const noexcept {
+        return _dc_rack_nodes;
+    }
+
     const std::unordered_map<sstring,
                        std::unordered_map<sstring,
                                           std::unordered_set<inet_address>>>&

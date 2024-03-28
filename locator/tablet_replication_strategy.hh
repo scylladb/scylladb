@@ -39,6 +39,12 @@ public:
     /// Generates tablet_map for a new table.
     /// Runs under group0 guard.
     virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, unsigned initial_scale) const = 0;
+
+    /// Generates tablet_map for a new table or when increasing replication factor.
+    /// For a new table, cur_tablets is initialized with the tablet_count,
+    /// otherwise, cur_tablets is a copy of the current tablet_map.
+    /// Runs under group0 guard.
+    virtual future<tablet_map> reallocate_tablets(schema_ptr, token_metadata_ptr, tablet_map cur_tablets) const = 0;
 };
 
 } // namespace locator
