@@ -36,6 +36,34 @@ public:
         _size = 0;
     }
 
+    /// split current memory_data_sink_buffers into two at the given offset.
+    /// the buffers at the right side of the split point are left in current
+    /// instance.
+    ///
+    /// @param pos the split point
+    /// @return a new instance of memory_data_sink_buffers with given size
+    memory_data_sink_buffers split_at(size_t pos) {
+        assert(_size >= pos);
+        memory_data_sink_buffers slice;
+        auto split_point = _bufs.begin();
+        while (pos > 0) {
+            size_t buf_size = split_point->size();
+            if (buf_size > pos) {
+                slice.put(split_point->share().prefix(pos));
+                split_point->trim_front(pos);
+                break;
+            } else {
+                slice.put(std::move(*split_point));
+                pos -= buf_size;
+            }
+            ++split_point;
+        }
+        std::move(split_point, _bufs.end(), _bufs.begin());
+        _bufs.resize(std::distance(split_point, _bufs.end()));
+        _size -= slice.size();
+        return slice;
+    }
+
     memory_data_sink_buffers() = default;
 
     memory_data_sink_buffers(memory_data_sink_buffers&& other)
