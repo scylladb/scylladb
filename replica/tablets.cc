@@ -352,7 +352,10 @@ class tablet_sstable_set : public sstables::sstable_set_impl {
     schema_ptr _schema;
     locator::tablet_map _tablet_map;
     // Keep a single (compound) sstable_set per tablet/storage_group
-    std::vector<lw_shared_ptr<sstables::sstable_set>> _sstable_sets;
+    absl::flat_hash_map<size_t, lw_shared_ptr<sstables::sstable_set>, absl::Hash<size_t>> _sstable_sets;
+    // Used when ordering is required for correctness, but hot paths will use flat_hash_map
+    // which provides faster lookup time.
+    std::set<size_t> _sstable_set_ids;
     size_t _size = 0;
     uint64_t _bytes_on_disk = 0;
 
@@ -361,15 +364,13 @@ public:
         : _schema(std::move(s))
         , _tablet_map(tmap.tablet_count())
     {
-        _sstable_sets.reserve(sgm.storage_groups().size());
-        for (const auto& sg : sgm.storage_groups()) {
+        for (const auto& [id, sg] : sgm.storage_groups()) {
             if (sg) {
                 auto set = sg->make_sstable_set();
                 _size += set->size();
                 _bytes_on_disk += set->bytes_on_disk();
-                _sstable_sets.emplace_back(std::move(set));
-            } else {
-                _sstable_sets.emplace_back();
+                _sstable_sets[id] = std::move(set);
+                _sstable_set_ids.insert(id);
             }
         }
     }
@@ -420,6 +421,15 @@ public:
             mutation_reader::forwarding,
             const sstables::sstable_predicate&) const override;
 
+    // Will always return an engaged sstable set ptr.
+    const lw_shared_ptr<sstables::sstable_set>& find_sstable_set(size_t i) const {
+        auto it = _sstable_sets.find(i);
+        if (it == _sstable_sets.end() || !it->second) [[unlikely]] {
+            on_internal_error(tablet_logger, format("SSTable set wasn't found for tablet {} of table {}.{}", i, schema()->ks_name(), schema()->cf_name()));
+        }
+        return it->second;
+    }
+
 private:
     size_t group_of(const dht::token& t) const noexcept {
         return _tablet_map.get_tablet_id(t).id;
@@ -443,6 +453,12 @@ private:
     stop_iteration for_each_sstable_set_until(const dht::partition_range&, std::function<stop_iteration(lw_shared_ptr<sstables::sstable_set>)>) const;
     future<stop_iteration> for_each_sstable_set_gently_until(const dht::partition_range&, std::function<future<stop_iteration>(lw_shared_ptr<sstables::sstable_set>)>) const;
 
+    auto subrange(const dht::partition_range& pr) const {
+        size_t candidate_start = pr.start() ? group_of(pr.start()->value().token()) : size_t(0);
+        size_t candidate_end = pr.end() ? group_of(pr.end()->value().token()) : (_tablet_map.tablet_count() - 1);
+        return std::ranges::subrange(_sstable_set_ids.lower_bound(candidate_start), _sstable_set_ids.upper_bound(candidate_end));
+    }
+
     friend class tablet_incremental_selector;
 };
 
@@ -461,27 +477,23 @@ future<std::optional<tablet_transition_stage>> read_tablet_transition_stage(cql3
 }
 
 stop_iteration tablet_sstable_set::for_each_sstable_set_until(const dht::partition_range& pr, std::function<stop_iteration(lw_shared_ptr<sstables::sstable_set>)> func) const {
-    size_t candidate_start = pr.start() ? group_of(pr.start()->value().token()) : size_t(0);
-    size_t candidate_end = pr.end() ? group_of(pr.end()->value().token()) : (_sstable_sets.size() - 1);
-    for (auto i = candidate_start; i <= candidate_end; i++) {
-        if (const auto& set = _sstable_sets[i]) {
+    for (const auto& i : subrange(pr)) {
+            // FIXME: indentation.
+            const auto& set = find_sstable_set(i);
             if (func(set) == stop_iteration::yes) {
                 return stop_iteration::yes;
             }
-        }
     }
     return stop_iteration::no;
 }
 
 future<stop_iteration> tablet_sstable_set::for_each_sstable_set_gently_until(const dht::partition_range& pr, std::function<future<stop_iteration>(lw_shared_ptr<sstables::sstable_set>)> func) const {
-    size_t candidate_start = pr.start() ? group_of(pr.start()->value().token()) : size_t(0);
-    size_t candidate_end = pr.end() ? group_of(pr.end()->value().token()) : (_sstable_sets.size() - 1);
-    for (auto i = candidate_start; i <= candidate_end; i++) {
-        if (const auto& set = _sstable_sets[i]) {
+    for (const auto& i : subrange(pr)) {
+            // FIXME: indentation.
+            const auto& set = find_sstable_set(i);
             if (co_await func(set) == stop_iteration::yes) {
                 co_return stop_iteration::yes;
             }
-        }
     }
     co_return stop_iteration::no;
 }
@@ -556,11 +568,11 @@ public:
         if (!_cur_set || pos.token() >= _lowest_next_token) {
             auto idx = _tset.group_of(token);
             if (!token.is_maximum()) {
-                _cur_set = _tset._sstable_sets[idx];
+                _cur_set = _tset.find_sstable_set(idx);
             }
             // Set the next token to point to the next engaged storage group.
             // It will be considered later on when the _cur_set is exhausted
-            _lowest_next_token = find_lowest_next_token(idx+1);
+            _lowest_next_token = find_lowest_next_token(idx);
         }
 
         if (!_cur_set) {
@@ -603,13 +615,11 @@ public:
 
 private:
     // Find the start token of the first engaged sstable_set
-    // starting the search from `idx`.
-    dht::token find_lowest_next_token(size_t idx) {
-        while (idx < _tset._sstable_sets.size()) {
-            if (_tset._sstable_sets[idx]) {
-                return _tset.first_token_of(idx);
-            }
-            ++idx;
+    // starting the search from `current_idx` (exclusive).
+    dht::token find_lowest_next_token(size_t current_idx) {
+        auto it = _tset._sstable_set_ids.upper_bound(current_idx);
+        if (it != _tset._sstable_set_ids.end()) {
+            return _tset.first_token_of(*it);
         }
         return dht::maximum_token();
     }
@@ -629,10 +639,7 @@ tablet_sstable_set::create_single_key_sstable_reader(
         const sstables::sstable_predicate& predicate) const {
     // The singular partition_range start bound must be engaged.
     auto idx = group_of(pr.start()->value().token());
-    const auto& set = _sstable_sets[idx];
-    if (!set) {
-        return make_empty_flat_reader_v2(cf->schema(), std::move(permit));
-    }
+    const auto& set = find_sstable_set(idx);
     return set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate);
 }
 

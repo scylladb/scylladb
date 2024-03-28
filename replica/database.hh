@@ -591,6 +591,8 @@ private:
     // Select a compaction group from a given token.
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token token) const noexcept;
     storage_group* storage_group_for_token(dht::token token) const noexcept;
+    // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
+    storage_group* storage_group_for_id(size_t i) const;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
     // Return compaction group if table owns a single one. Otherwise, null is returned.
@@ -607,7 +609,7 @@ private:
     // Returns a list of all compaction groups.
     compaction_group_list& compaction_groups() const noexcept;
     // Returns a list of all storage groups.
-    const storage_group_vector& storage_groups() const noexcept;
+    const storage_group_map& storage_groups() const noexcept;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
 
