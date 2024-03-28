@@ -88,6 +88,15 @@ void service_level_controller::set_distributed_data_accessor(service_level_distr
     }
 }
 
+future<> service_level_controller::reload_distributed_data_accessor(cql3::query_processor& qp, service::raft_group0_client& g0, db::system_keyspace& sys_ks, db::system_distributed_keyspace& sys_dist_ks) {
+    auto accesor = co_await qos::get_service_level_distributed_data_accessor_for_current_version(
+            sys_ks,
+            sys_dist_ks,
+            qp,
+            g0);
+    set_distributed_data_accessor(std::move(accesor));
+}
+
 future<> service_level_controller::drain() {
     if (this_shard_id() != global_controller) {
         co_return;
