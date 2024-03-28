@@ -90,8 +90,6 @@ static logging::logger mylogger("alter_keyspace");
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
-    // TODO: for tablets-enabled keyspace, check if migrating away from networktopologystrategy
-    //       we shouldn't allow switching strategies for tablets-enabled keyspaces
     using namespace cql_transport;
     try {
         event::schema_change::target_type target_type = event::schema_change::target_type::KEYSPACE;
@@ -105,6 +103,10 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         std::vector<sstring> warnings;
 
         if (ks.get_replication_strategy().uses_tablets()) {
+            if (_attrs->get_replication_strategy_class() != "NetworkTopologyStrategy")
+                throw make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
+                        exceptions::invalid_request_exception("For tablets-enabled keyspaces, only NetworkTopologyStrategy replication strategy is supported"));
+
             if (qp.topology_global_queue_empty()) {
                 service::topology_mutation_builder builder(ts);
                 builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
@@ -117,7 +119,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 target_type = event::schema_change::target_type::TABLET_KEYSPACE;
             } else {
                 throw make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
-                        exceptions::invalid_request_exception("alter_keyspace_statement::prepare_schema_mutations(): topology mutation cannot be performed while other request is ongoing"));
+                        exceptions::invalid_request_exception("Another global topology request ongoing, please retry."));
             }
         }
         else {
