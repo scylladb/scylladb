@@ -43,7 +43,6 @@
 #include "utils/small_vector.hh"
 
 #include <boost/range/algorithm/equal.hpp>
-#include <boost/algorithm/clamp.hpp>
 #include <boost/version.hpp>
 #include <memory>
 #include <type_traits>
@@ -75,12 +74,8 @@ public:
         return std::max(max_contiguous_allocation / sizeof(T), size_t(1));
     }
 private:
-    void reserve_for_push_back() {
-        if (_size == _capacity) {
-            do_reserve_for_push_back();
-        }
-    }
-    void do_reserve_for_push_back();
+    std::pair<chunk_ptr, size_t> get_chunk_before_emplace_back();
+    void set_chunk_after_emplace_back(std::pair<chunk_ptr, size_t>) noexcept;
     size_t make_room(size_t n, bool stop_after_one);
     chunk_ptr new_chunk(size_t n);
     T* addr(size_t i) const {
@@ -136,21 +131,23 @@ public:
     }
 
     void push_back(const T& x) {
-        reserve_for_push_back();
-        new (addr(_size)) T(x);
-        ++_size;
+        emplace_back(x);
     }
     void push_back(T&& x) {
-        reserve_for_push_back();
-        new (addr(_size)) T(std::move(x));
-        ++_size;
+        emplace_back(std::move(x));
     }
     template <typename... Args>
     T& emplace_back(Args&&... args) {
-        reserve_for_push_back();
-        auto& ret = *new (addr(_size)) T(std::forward<Args>(args)...);
+        pointer ret;
+        if (_capacity > _size) {
+            ret = new (addr(_size)) T(std::forward<Args>(args)...);
+        } else {
+            auto x = get_chunk_before_emplace_back();
+            ret = new (x.first.get() + _size % max_chunk_capacity()) T(std::forward<Args>(args)...);
+            set_chunk_after_emplace_back(std::move(x));
+        }
         ++_size;
-        return ret;
+        return *ret;
     }
     void pop_back() {
         --_size;
@@ -435,18 +432,33 @@ chunked_vector<T, max_contiguous_allocation>::make_room(size_t n, bool stop_afte
 }
 
 template <typename T, size_t max_contiguous_allocation>
-void
-chunked_vector<T, max_contiguous_allocation>::do_reserve_for_push_back() {
+typename std::pair<typename chunked_vector<T, max_contiguous_allocation>::chunk_ptr, size_t> chunked_vector<T, max_contiguous_allocation>::get_chunk_before_emplace_back() {
+    size_t new_chunk_capacity;
     if (_capacity == 0) {
         // allocate a bit of room in case utilization will be low
-        reserve(boost::algorithm::clamp(512 / sizeof(T), 1, max_chunk_capacity()));
+        new_chunk_capacity = std::clamp(512 / sizeof(T), size_t(1), max_chunk_capacity());
     } else if (_capacity < max_chunk_capacity() / 2) {
         // exponential increase when only one chunk to reduce copying
-        reserve(_capacity * 2);
+        new_chunk_capacity = _capacity * 2;
     } else {
         // add a chunk at a time later, since no copying will take place
-        reserve((_capacity / max_chunk_capacity() + 1) * max_chunk_capacity());
+        new_chunk_capacity = max_chunk_capacity();
     }
+    return std::make_pair(new_chunk(new_chunk_capacity), new_chunk_capacity);
+}
+
+template <typename T, size_t max_contiguous_allocation>
+void chunked_vector<T, max_contiguous_allocation>::set_chunk_after_emplace_back(std::pair<chunk_ptr, size_t> x) noexcept {
+    auto& new_last_chunk = x.first;
+    auto& new_chunk_capacity = x.second;
+    auto last_chunk_size = _size % max_chunk_capacity();
+    if (last_chunk_size) {
+        migrate(_chunks.back().get(), _chunks.back().get() + last_chunk_size, new_last_chunk.get());
+        _chunks.back() = std::move(new_last_chunk);
+    } else {
+        _chunks.emplace_back(std::move(new_last_chunk));
+    }
+    _capacity = (_chunks.size() - 1) * max_chunk_capacity() + new_chunk_capacity;
 }
 
 template <typename T, size_t max_contiguous_allocation>

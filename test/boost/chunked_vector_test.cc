@@ -241,3 +241,34 @@ BOOST_AUTO_TEST_CASE(test_amoritzed_reserve) {
     amortized_reserve(v, 1);
     BOOST_REQUIRE_EQUAL(v.capacity(), 8);
 }
+
+struct push_back_item {
+    std::unique_ptr<int> p;
+    push_back_item() = default;
+    push_back_item(int v) : p(std::make_unique<int>(v)) {}
+    push_back_item(const push_back_item& x) : push_back_item(x.value() + 1) {}
+    push_back_item(push_back_item&& x) noexcept : p(std::exchange(x.p, nullptr)) {}
+
+    int value() const noexcept { return *p; }
+};
+
+template <class VectorType>
+static void do_test_push_back_using_existing_element(std::function<void (VectorType&, const push_back_item&)> do_push_back) {
+    VectorType v;
+    v.push_back(0);
+    for (int i = 0; i < 1000; i++) {
+        do_push_back(v, v.back());
+    }
+    for (int i = 0; i < 1000; i++) {
+        BOOST_REQUIRE_EQUAL(v[i].value(), i);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_push_back_using_existing_element) {
+    do_test_push_back_using_existing_element<std::vector<push_back_item>>([] (std::vector<push_back_item>& v, const push_back_item& x) { v.push_back(x); });
+    do_test_push_back_using_existing_element<std::vector<push_back_item>>([] (std::vector<push_back_item>& v, const push_back_item& x) { v.emplace_back(x); });
+
+    using chunked_vector_type = utils::chunked_vector<push_back_item, 512>;
+    do_test_push_back_using_existing_element<chunked_vector_type>([] (chunked_vector_type& v, const push_back_item& x) { v.push_back(x); });
+    do_test_push_back_using_existing_element<chunked_vector_type>([] (chunked_vector_type& v, const push_back_item& x) { v.emplace_back(x); });
+}
