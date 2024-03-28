@@ -1300,6 +1300,9 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
                 }
             }
         }
+        if (intersections.empty()) {
+            throw std::runtime_error("The range specified by startToken and endToken does not intersect with any ranges owned by this node");
+        }
         ranges = std::move(intersections);
     }
 
