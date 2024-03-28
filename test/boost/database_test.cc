@@ -972,9 +972,9 @@ SEASTAR_THREAD_TEST_CASE(read_max_size) {
                         }
                     } catch (std::runtime_error& e) {
                         if (should_throw) {
-                            testlog.trace("Exception thrown, as expected: {}", e);
+                            testlog.trace("Exception thrown, as expected: {}", e.what());
                         } else {
-                            BOOST_FAIL(fmt::format("Expected no exception, but caught: {}", e));
+                            BOOST_FAIL(fmt::format("Expected no exception, but caught: {}", e.what()));
                         }
                     }
                 }
@@ -1044,7 +1044,7 @@ SEASTAR_THREAD_TEST_CASE(unpaged_mutation_read_global_limit) {
                 BOOST_REQUIRE(size != 0);
                 BOOST_FAIL("Expected exception, but none was thrown.");
             } catch (std::runtime_error& e) {
-                testlog.trace("Exception thrown, as expected: {}", e);
+                testlog.trace("Exception thrown, as expected: {}", e.what());
             }
         }
     }, std::move(cfg)).get();
