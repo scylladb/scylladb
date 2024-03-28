@@ -42,6 +42,7 @@
 #include <utility>
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
+#include "seastar/rpc/rpc_types.hh"
 #include "utils/exceptions.hh"
 #include "utils/error_injection.hh"
 
@@ -931,16 +932,31 @@ future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, genera
     auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::milliseconds(2000);
     auto max_duration = echo_interval + std::chrono::milliseconds(_failure_detector_timeout_ms());
-    while (is_enabled()) {
+
+    rpc::cancellable canceller;
+    auto tmr = timer([&canceller] {
+        canceller.cancel();
+    });
+    auto sub = _abort_source.subscribe([&tmr, &canceller] () noexcept {
+        tmr.cancel();
+        canceller.cancel();
+    });
+    while (is_enabled() && !_abort_source.abort_requested()) {
         bool failed = false;
         try {
             logger.debug("failure_detector_loop: Send echo to node {}, status = started", node);
-            co_await _messaging.send_gossip_echo(netw::msg_addr(node), gossip_generation.value(), max_duration);
+            tmr.arm(max_duration);
+            co_await _messaging.send_gossip_echo(netw::msg_addr(node), gossip_generation.value(), canceller);
             logger.debug("failure_detector_loop: Send echo to node {}, status = ok", node);
+        } catch (const abort_requested_exception&) {
+            co_return;
+        } catch (const rpc::canceled_error&) {
+            co_return;
         } catch (...) {
             failed = true;
             logger.warn("failure_detector_loop: Send echo to node {}, status = failed: {}", node, std::current_exception());
         }
+        tmr.cancel();
         auto now = gossiper::clk::now();
         diff = now - last;
         if (!failed) {
@@ -963,7 +979,7 @@ future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, genera
                     node, _live_endpoints, _live_endpoints_version, live_endpoints_version);
             co_return;
         } else  {
-            co_await sleep_abortable(echo_interval, _abort_source);
+            co_await sleep_abortable(echo_interval, _abort_source).handle_exception_type([] (const abort_requested_exception&) {});
         }
     }
     co_return;
