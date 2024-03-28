@@ -25,6 +25,9 @@ def is_scylla(cql):
     names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     yield any('scylla' in name for name in names)
 
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testInsertSetIfNotExists(cql, test_keyspace, is_scylla):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s set<int>)") as table:
         assertRows(execute(cql, table, "INSERT INTO %s (k, s) VALUES (0, {1, 2, 3}) IF NOT EXISTS"),
@@ -472,6 +475,9 @@ def check_invalid_list(cql, table, condition, expected):
     assertRows(execute(cql, table, "SELECT * FROM %s"), row(0, ["foo", "bar", "foobar"]))
 
 # Migrated from cql_tests.py:TestCQL.list_item_conditional_test()
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testListItem(cql, test_keyspace):
     for frozen in [False, True]:   
         typename = "list<text>"
@@ -496,6 +502,9 @@ def testListItem(cql, test_keyspace):
 
 # Test expanded functionality from CASSANDRA-6839,
 # migrated from cql_tests.py:TestCQL.expanded_list_item_conditional_test()
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testExpandedListItem(cql, test_keyspace):
     for frozen in [False, True]:   
         typename = "list<text>"
@@ -670,6 +679,9 @@ def testWholeMap(cql, test_keyspace):
             check_invalid_map(cql, table, "m IN null", SyntaxException)
 
 # Migrated from cql_tests.py:TestCQL.map_item_conditional_test()
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testMapItem(cql, test_keyspace):
     for frozen in [False, True]:   
         typename = "map<text,text>"
@@ -696,6 +708,9 @@ def testMapItem(cql, test_keyspace):
             else:
                 assert list(execute(cql, table, "UPDATE %s set m['foo'] = 'bar', m['bar'] = 'foo' WHERE k = 1 IF m[?] IN (?, ?)", "foo", "blah", None))[0][0] == True
 
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testFrozenWithNullValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, m frozen<list<text>>)") as table:
         execute(cql, table, "INSERT INTO %s (k, m) VALUES (0, null)")
@@ -714,6 +729,9 @@ def testFrozenWithNullValues(cql, test_keyspace):
 
 # Test expanded functionality from CASSANDRA-6839,
 # migrated from cql_tests.py:TestCQL.expanded_map_item_conditional_test()
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testExpandedMapItem(cql, test_keyspace):
     for frozen in [False, True]:   
         typename = "map<text,text>"

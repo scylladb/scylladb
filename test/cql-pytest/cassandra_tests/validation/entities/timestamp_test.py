@@ -58,6 +58,9 @@ def testTimestampTTL(cql, test_keyspace):
                    [1, None, None])
 
 # Migrated from cql_tests.py:TestCQL.invalid_custom_timestamp_test()
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18066")]), "vnodes"],
+                         indirect=True)
 def testInvalidCustomTimestamp(cql, test_keyspace):
     # Conditional updates
     with create_table(cql, test_keyspace, "(k int, v int, PRIMARY KEY (k, v))") as table:
