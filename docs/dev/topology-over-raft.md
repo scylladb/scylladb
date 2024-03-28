@@ -435,6 +435,9 @@ CREATE TABLE system.topology (
     unpublished_cdc_generations set<tuple<timestamp, timeuuid>> static,
     global_topology_request text static,
     new_cdc_generation_data_uuid timeuuid static,
+    new_keyspace_rf_change_ks_name text static,
+    new_keyspace_rf_change_rf_per_dc frozen<map<text, text>> static,
+    // TODO: this schema is heavily outdated, should I update it with the remaining columns?
     PRIMARY KEY (key, host_id)
 )
 ```
@@ -462,6 +465,8 @@ There are also a few static columns for cluster-global properties:
 - `global_topology_request` - if set, contains one of the supported global topology requests
 - `new_cdc_generation_data_uuid` - used in `commit_cdc_generation` state, the time UUID of the generation to be committed
 - `upgrade_state` - describes the progress of the upgrade to raft-based topology.
+- 'new_keyspace_rf_change_ks_name' - the name of the KS that is being the target of the scheduled ALTER KS statement 
+- 'new_keyspace_rf_change_rf_per_dc' - the RF per DC map to be used when executing the scheduled ALTER KS statement
 
 # Join procedure
 

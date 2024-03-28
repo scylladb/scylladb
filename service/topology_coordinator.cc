@@ -29,6 +29,7 @@
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
 #include "service/qos/service_level_controller.hh"
+#include "service/migration_manager.hh"
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group0.hh"
@@ -720,6 +721,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    future<locator::tablet_map>
+    reallocate_tablets_for_new_rf(schema_ptr s, locator::token_metadata_ptr tm,
+                                  std::unordered_map<sstring, sstring> new_dc_rep_factor) {
+        locator::tablet_map map{1};
+        co_return map;
+    }
+
     // Precondition: there is no node request and no ongoing topology transition
     // (checked under the guard we're holding).
     future<> handle_global_request(group0_guard guard) {
@@ -747,6 +755,65 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         case global_topology_request::cleanup:
             co_await start_cleanup_on_dirty_nodes(std::move(guard), true);
             break;
+        case global_topology_request::keyspace_rf_change: {
+            while (true) {
+                auto tmptr = get_token_metadata_ptr();
+                sstring ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
+                std::unordered_map<sstring, sstring> new_rf_per_dc = *_topo_sm._topology.new_keyspace_rf_change_rf_per_dc;
+                std::vector<canonical_mutation> updates;
+                auto& ks = _db.find_keyspace(ks_name);
+
+                for (const auto& table : ks.metadata()->tables()) {
+                    // TODO: check status, but first rebase on top of PawelZ's PR
+//                    auto repl_strategy = ks.get_replication_strategy_ptr()->maybe_as_tablet_aware();
+//                    auto [new_tablet_map, status] = co_await reallocate_tablets_for_new_rf(repl_strategy, table, tmptr, new_rf_per_dc);
+                    auto new_tablet_map = co_await reallocate_tablets_for_new_rf(table, tmptr, new_rf_per_dc);
+
+
+                    auto tablet_id = new_tablet_map.first_tablet();
+                    while (true) {
+                        auto& tablet_info = new_tablet_map.get_tablet_info(tablet_id);
+                        auto last_token = new_tablet_map.get_last_token(tablet_id);
+                        updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table->id())
+                                                 .set_new_replicas(last_token, tablet_info.replicas)
+                                                 .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                                                 .set_transition(last_token, locator::tablet_transition_kind::rf_change)
+                                                 .build());
+
+                        if (auto next_tablet = new_tablet_map.next_tablet(tablet_id); next_tablet.has_value()) {
+                            tablet_id = *next_tablet;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+                                                             .set_transition_state(topology::transition_state::tablet_migration)
+                                                             .set_version(_topo_sm._topology.version + 1)
+                                                             .del_global_topology_request()
+                                                             .build()));
+                unsigned topo_muts_count = updates.size();
+
+                std::map<sstring, sstring> opts (new_rf_per_dc.begin(), new_rf_per_dc.end());
+                auto ks_md = keyspace_metadata::new_keyspace(ks_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", opts, std::nullopt);
+                auto schema_muts = service::prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                for (auto& m : schema_muts)
+                    updates.emplace_back(m);
+
+                sstring reason = format("ALTER tablets KEYSPACE called with new RF-per-DC settings: {}", new_rf_per_dc);
+                rtlogger.info("do update {} reason {}", updates, reason);
+                mixed_change change{updates, topo_muts_count};
+                group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
+                try {
+                    co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), &_as);
+                    break;
+                } catch (group0_concurrent_modification&) {
+                    rtlogger.info("handle_global_request(): concurrent modification, retrying");
+                }
+            }
+            break;
+        }
         }
     }
 
@@ -944,7 +1011,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
 
         for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
-            auto s = _db.find_schema(table_id);
             auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
             // Sequence number is monotonically increasing, globally. Therefore, it can be used to identify a decision.
             resize_decision.sequence_number = tmap.resize_decision().next_sequence_number();
@@ -1057,9 +1123,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     }
                     if (do_barrier()) {
-                        rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
+                        auto next_transition_stage = (trinfo.transition == locator::tablet_transition_kind::rf_change)
+                                                     ? locator::tablet_transition_stage::end_migration
+                                                     : locator::tablet_transition_stage::write_both_read_old;
+                        rtlogger.debug("Will set tablet {} stage to {}", gid, next_transition_stage);
                         updates.emplace_back(get_mutation_builder()
-                            .set_stage(last_token, locator::tablet_transition_stage::write_both_read_old)
+                            .set_stage(last_token, next_transition_stage)
                             // Create session a bit earlier to avoid adding barrier
                             // to the streaming stage to create sessions on replicas.
                             .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()))
@@ -1099,7 +1168,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                     if (advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
                         rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, trinfo.pending_replica);
-                        auto dst = trinfo.pending_replica.host;
+                        auto dst = trinfo.pending_replica->host;
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
                                    netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
                     })) {
@@ -1153,7 +1222,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 case locator::tablet_transition_stage::cleanup_target:
                     if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target", [&] {
-                        locator::tablet_replica dst = trinfo.pending_replica;
+                        locator::tablet_replica dst = *trinfo.pending_replica;
                         if (is_excluded(raft::server_id(dst.host.uuid()))) {
                             rtlogger.info("Tablet cleanup of {} on {} skipped because node is excluded and doesn't need to revert migration", gid, dst);
                             return make_ready_future<>();
@@ -2284,6 +2353,7 @@ future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
     auto& topology = tm->get_topology();
 
     locator::load_stats stats;
+    co_return std::move(stats);
     static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
     std::unordered_map<table_id, size_t> total_replicas;

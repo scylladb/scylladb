@@ -61,7 +61,7 @@ public:
 class event::schema_change : public event {
 public:
     enum class change_type { CREATED, UPDATED, DROPPED };
-    enum class target_type { KEYSPACE, TABLE, TYPE, FUNCTION, AGGREGATE };
+    enum class target_type { KEYSPACE, TABLE, TYPE, FUNCTION, AGGREGATE, TABLET_KEYSPACE };
 
     const change_type change;
     const target_type target;

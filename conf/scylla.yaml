@@ -275,13 +275,13 @@ batch_size_fail_threshold_in_kb: 1024
 # broadcast_rpc_address: 1.2.3.4
 
 # Uncomment to enable experimental features
-# experimental_features:
+experimental_features:
 #     - udf
 #     - alternator-streams
-#     - consistent-topology-changes
+- consistent-topology-changes
 #     - broadcast-tables
 #     - keyspace-storage-options
-#     - tablets
+- tablets
 
 # The directory where hints files are stored if hinted handoff is enabled.
 # hints_directory: /var/lib/scylla/hints

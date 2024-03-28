@@ -164,6 +164,13 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
         co_await _ss.topology_transition();
     },
+    [&] (mixed_change& chng) -> future<> {
+        auto topo_mut = std::vector<canonical_mutation>(chng.mutations.begin(), chng.mutations.begin()+chng.topo_muts_count);
+        auto schema_mut = std::vector<canonical_mutation>(chng.mutations.begin()+chng.topo_muts_count, chng.mutations.end());
+        co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(topo_mut));
+        co_await _ss.topology_transition();
+        co_return co_await _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(schema_mut));
+    },
     [&] (write_mutations& muts) -> future<> {
         return write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
     }

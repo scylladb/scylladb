@@ -17,6 +17,7 @@
 #include "service/migration_manager.hh"
 #include "service/forward_service.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/storage_service.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
@@ -42,15 +43,21 @@ const sstring query_processor::CQL_VERSION = "3.3.1";
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
 struct query_processor::remote {
-    remote(service::migration_manager& mm, service::forward_service& fwd, service::raft_group0_client& group0_client)
-            : mm(mm), forwarder(fwd), group0_client(group0_client) {}
+    remote(service::migration_manager &mm, service::forward_service &fwd,
+           service::storage_service &ss, service::raft_group0_client &group0_client)
+            : mm(mm), forwarder(fwd), ss(ss), group0_client(group0_client) {}
 
-    service::migration_manager& mm;
-    service::forward_service& forwarder;
-    service::raft_group0_client& group0_client;
+    service::migration_manager &mm;
+    service::forward_service &forwarder;
+    service::storage_service &ss;
+    service::raft_group0_client &group0_client;
 
     seastar::gate gate;
 };
+
+bool query_processor::topology_global_queue_empty() {
+    return remote().first.get().ss.topology_global_queue_empty();
+}
 
 static service::query_state query_state_for_internal_call() {
     return {service::client_state::for_internal_calls(), empty_service_permit()};
@@ -498,8 +505,8 @@ query_processor::~query_processor() {
 }
 
 void query_processor::start_remote(service::migration_manager& mm, service::forward_service& forwarder,
-                                  service::raft_group0_client& group0_client) {
-    _remote = std::make_unique<struct remote>(mm, forwarder, group0_client);
+                                   service::storage_service& ss, service::raft_group0_client& group0_client) {
+    _remote = std::make_unique<struct remote>(mm, forwarder, ss, group0_client);
 }
 
 future<> query_processor::stop_remote() {
@@ -1021,12 +1028,26 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
     auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, guard->write_timestamp());
     warnings = std::move(cql_warnings);
 
-    if (!m.empty()) {
-        auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
-        co_await remote_.get().mm.announce(std::move(m), std::move(*guard), description);
-    }
+    auto request_id = guard->new_group0_state_id();
 
     ce = std::move(ret);
+    if (!m.empty()) {
+        auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
+        if (ce && ce->target == cql_transport::event::schema_change::target_type::TABLET_KEYSPACE)
+            co_await remote_.get().mm.announce<service::topology_change>(std::move(m), std::move(*guard), description);
+        else
+            co_await remote_.get().mm.announce<service::schema_change>(std::move(m), std::move(*guard), description);
+    }
+
+// TODO: implement waiting for global topo req to complete
+//    if (not warnings.empty() && warnings.back() == "ALTER TABLETS KS") {
+//         auto error = co_await remote_.get().ss.wait_for_topology_request_completion(request_id);
+//         if (!error.empty()) {
+//             log.error("smaron request_id: {}, error: {}", request_id, error);
+//             throw std::runtime_error(fmt::format("alter_tablets_keyspace failed with: {}", error));
+//         }
+//     }
+
 
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)

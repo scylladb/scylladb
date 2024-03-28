@@ -83,6 +83,7 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
 
     using sc = cql_transport::event::schema_change;
     res.serialize({sc::change_type::CREATED, sc::target_type::KEYSPACE, "foo"}, version);
+    res.serialize({sc::change_type::CREATED, sc::target_type::TABLET_KEYSPACE, "foo"}, version);
     res.serialize({sc::change_type::CREATED, sc::target_type::TABLE, "foo", "bar"}, version);
     res.serialize({sc::change_type::CREATED, sc::target_type::TYPE, "foo", "bar"}, version);
     res.serialize({sc::change_type::CREATED, sc::target_type::FUNCTION, "foo", "bar", "zed"}, version);

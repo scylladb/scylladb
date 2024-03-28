@@ -31,7 +31,7 @@ namespace service {
 
 // It is also required in order to perform group 0 changes
 // See `group0_guard::impl` for more detailed explanations.
-class group0_guard {
+class   group0_guard {
     friend class raft_group0_client;
     struct impl;
     std::unique_ptr<impl> _impl;
@@ -137,7 +137,7 @@ public:
     requires std::same_as<Command, broadcast_table_query> || std::same_as<Command, write_mutations>
     group0_command prepare_command(Command change, std::string_view description);
     template<typename Command>
-    requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations>
+    requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, mixed_change> || std::same_as<Command, write_mutations>
     group0_command prepare_command(Command change, group0_guard& guard, std::string_view description);
     // Checks maximum allowed serialized command size, server rejects bigger commands with command_is_too_big_error exception
     size_t max_command_size() const;

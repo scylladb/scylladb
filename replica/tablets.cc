@@ -250,7 +250,7 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             for (auto&& r : tablet_replicas) {
                 pending.erase(r);
             }
-            if (pending.size() == 0) {
+            if (pending.empty() && transition != tablet_transition_kind::rf_change) {
                 throw std::runtime_error(format("Stage set but no pending replica for table {} tablet {}",
                                                 table, current->tid));
             }
@@ -263,7 +263,7 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
                 session_id = service::session_id(row.get_as<utils::UUID>("session"));
             }
             current->map.set_tablet_transition_info(current->tid, tablet_transition_info{stage, transition,
-                    std::move(new_tablet_replicas), *pending.begin(), session_id});
+                    std::move(new_tablet_replicas), (pending.empty() ? std::nullopt : std::make_optional(*pending.begin())), session_id});
         }
 
         current->map.set_tablet(current->tid, tablet_info{std::move(tablet_replicas)});

@@ -8,11 +8,13 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <boost/range/algorithm.hpp>
 #include <seastar/core/coroutine.hh>
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/topology_mutation.hh"
 #include "db/system_keyspace.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
@@ -37,6 +39,9 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
 }
 
 void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {
+        // TODO: when processing a tablet-enabled keyspace,
+        //       we must check if the new RF differs by at most 1 from the old RF,
+        //       and fail the query if that's not the case
         auto tmp = _name;
         std::transform(tmp.begin(), tmp.end(), tmp.begin(), ::tolower);
         if (is_system_keyspace(tmp)) {
@@ -81,25 +86,59 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 #endif
 }
 
+static logging::logger mylogger("alter_keyspace");
+
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+    using namespace cql_transport;
     try {
-        auto old_ksm = qp.db().find_keyspace(_name).metadata();
+        event::schema_change::target_type target_type = event::schema_change::target_type::KEYSPACE;
+        auto ks = qp.db().find_keyspace(_name);
+        auto ks_md = ks.metadata();
+
         const auto& tm = *qp.proxy().get_token_metadata_ptr();
         const auto& feat = qp.proxy().features();
+        auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, tm, feat);
+        std::vector<mutation> muts;
+        std::vector<sstring> warnings;
 
-        auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(), _attrs->as_ks_metadata_update(old_ksm, tm, feat), ts);
+        if (ks.get_replication_strategy().uses_tablets()) {
+            if (_attrs->get_replication_strategy_class() != "NetworkTopologyStrategy")
+                throw make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
+                        exceptions::invalid_request_exception("For tablets-enabled keyspaces, only NetworkTopologyStrategy replication strategy is supported"));
 
-        using namespace cql_transport;
+            if (qp.topology_global_queue_empty()) {
+                service::topology_mutation_builder builder(ts);
+                builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
+                builder.set_new_keyspace_rf_change_data(_name, _attrs->get_replication_map());
+                service::topology_change change{{builder.build()}};
+                auto topo_schema = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+                boost::transform(change.mutations, std::back_inserter(muts), [topo_schema] (const canonical_mutation& cm) {
+                    return cm.to_mutation(topo_schema);
+                });
+                target_type = event::schema_change::target_type::TABLET_KEYSPACE;
+            } else {
+                throw make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
+                        exceptions::invalid_request_exception("Another global topology request ongoing, please retry."));
+            }
+        }
+        else {
+            auto schema_mutations = service::prepare_keyspace_update_announcement(qp.db().real_database(), ks_md_update, ts);
+            muts.insert(muts.begin(), schema_mutations.begin(), schema_mutations.end());
+        }
+
         auto ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::KEYSPACE,
+                target_type,
                 keyspace());
 
-        return make_ready_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>()));
+        return make_ready_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(std::make_tuple(std::move(ret), std::move(muts), warnings));
     } catch (data_dictionary::no_such_keyspace& e) {
         return make_exception_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(exceptions::invalid_request_exception("Unknown keyspace " + _name));
+    } catch (std::exception& e) {
+        throw;
     }
+
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
@@ -107,16 +146,19 @@ cql3::statements::alter_keyspace_statement::prepare(data_dictionary::database db
     return std::make_unique<prepared_statement>(make_shared<alter_keyspace_statement>(*this));
 }
 
-static logging::logger mylogger("alter_keyspace");
 
+// TODO: when we execute 2 ALTER KS statements fast enough,
+//       cqlsh returns `NoHostAvailable:` error,
+//       which is not especially informative - this needs to be improved.
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::alter_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     std::vector<sstring> warnings = check_against_restricted_replication_strategies(qp, keyspace(), *_attrs, qp.get_cql_stats());
-    return schema_altering_statement::execute(qp, state, options, std::move(guard)).then([warnings = std::move(warnings)] (::shared_ptr<messages::result_message> msg) {
-        for (const auto& warning : warnings) {
-            msg->add_warning(warning);
-            mylogger.warn("{}", warning);
-        }
-        return msg;
-    });
+    co_return co_await schema_altering_statement::execute(qp, state, options, std::move(guard)).then(
+            [warnings = std::move(warnings)](::shared_ptr<messages::result_message> msg) {
+                for (const auto &warning: warnings) {
+                    msg->add_warning(warning);
+                    mylogger.warn("{}", warning);
+                }
+                return msg;
+            });
 }
