@@ -5769,15 +5769,15 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             }
         }
 
-        updates.push_back(canonical_mutation(replica::tablet_mutation_builder(guard.write_timestamp(), table)
+        updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table)
             .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::tablet_transition_kind::migration)
-            .build()));
-        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+            .build());
+        updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
             .set_transition_state(topology::transition_state::tablet_migration)
             .set_version(_topology_state_machine._topology.version + 1)
-            .build()));
+            .build());
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
         rtlogger.info("{}", reason);
