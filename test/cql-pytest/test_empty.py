@@ -258,3 +258,74 @@ def test_empty_string_for_nonstring_partition_key2(cql, test_keyspace):
         # a number.
         with pytest.raises(InvalidRequest):
             cql.execute(f"INSERT INTO {table} (p,v) VALUES ('', 3)")
+
+# Tests for empty values in collections. In issue #5825 it was suspected
+# that support for such empty values is broken, but these tests demonstrate
+# that it is working as expected.
+def test_empty_string_in_collection(cql, test_keyspace):
+    schema = 'p int primary key, v list<text>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p,v) VALUES ({p}, ['hi',''])")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE p={p}")) == [(p, ['hi',''])]
+        # Prepared version of the same test.
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
+        cql.execute(stmt, [['hello','']])
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE p={p}")) == [(p, ['hello',''])]
+
+def test_empty_int_in_collection(cql, test_keyspace):
+    schema = 'p int primary key, v list<int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p,v) VALUES ({p}, [1, blobAsInt(0x)])")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE p={p}")) == [(p, [1,None])]
+        # There is no official way to do this same test with a prepared
+        # statment because there is no official way to pass an empty
+        # integer value. There is an unofficial way (and arguably buggy) by
+        # passing None - see the next test:
+
+# Null values are not allowed inside collections, and as we see below
+# indeed a non-prepared statement attempted to put a null in a list is
+# rejected. But in a prepared statement, because of a peculiarity or even
+# bug of the Python driver, a None value in a list is converted to an
+# *empty* value (value of length 0), instead of the expected null value
+# (length -1), so a None in a list should behave like an empty value in
+# test_empty_*_in_collection above. Reproduces #5825.
+def test_null_string_in_collection(cql, test_keyspace):
+    schema = 'p int primary key, v list<text>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        with pytest.raises(InvalidRequest, match='null is not supported inside collections'):
+            cql.execute(f"INSERT INTO {table} (p,v) VALUES ({p}, ['hi', null])")
+        # Prepared-statement version of the same test. Because of a driver
+        # bug, the None below is *not* converted to a null as a expected,
+        # but rather to an empty string. So the expected behavior from Scylla
+        # and Cassandra is not to print "null is not supported" but to put an
+        # actual empty string in the list.
+        # If the driver's behavior here ever changes (fixed?), this test will
+        # need to be changed as well (and probably moved to test_null.py).
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
+        cql.execute(stmt, [['hello',None]])
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE p={p}")) == [(p, ['hello',''])]
+
+# Same as the above test_null_string_in_collection, just with a null int
+# instead of null string. As in the above test, a bug or peculiarity in the
+# driver causes the prepared-statement version of this test to write an
+# empty int instead of a (forbidden) null. In this test, the empty int
+# causes Cassandra to get confused and to fail the write with a nondescript
+# server error (citing a NullPointerException), hence the cassandra_bug tag.
+# Reproduces #5825.
+def test_null_int_in_collection(cql, test_keyspace, cassandra_bug):
+    schema = 'p int primary key, v list<int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        with pytest.raises(InvalidRequest, match='null is not supported inside collections'):
+            cql.execute(f"INSERT INTO {table} (p,v) VALUES ({p}, [1, null])")
+        # If the driver's behavior here ever changes (fixed?), this test will
+        # need to be changed as well (and probably moved to test_null.py).
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
+        cql.execute(stmt, [[2,None]])
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE p={p}")) == [(p, [2,None])]
