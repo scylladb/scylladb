@@ -27,6 +27,8 @@ As a result, in order to make sure that you can keep on reading the old data wit
 
 After you run a repair, you can decrease the CL. If RF has only been changed in a particular Data Center (DC) only the nodes in that DC have to be repaired.
 
+It is recommended to increment RF per a DC by **one** at a time.
+
 Example
 =======
 
