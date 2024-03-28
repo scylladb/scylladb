@@ -107,7 +107,7 @@ public:
 
     virtual ~tablet_sharder() = default;
 
-    virtual unsigned shard_of(const dht::token& t) const override {
+    virtual unsigned shard_for_reads(const token& t) const override {
         ensure_tablet_map();
         auto tid = _tmap->get_tablet_id(t);
         // FIXME: Consider throwing when there is no owning shard on the current host rather than returning 0.
@@ -126,7 +126,7 @@ public:
         return shards;
     }
 
-    virtual std::optional<dht::shard_and_token> next_shard(const token& t) const override {
+    virtual std::optional<dht::shard_and_token> next_shard_for_reads(const token& t) const override {
         ensure_tablet_map();
         std::optional<tablet_id> tb = _tmap->get_tablet_id(t);
         while ((tb = _tmap->next_tablet(*tb))) {
@@ -139,10 +139,10 @@ public:
         return std::nullopt;
     }
 
-    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const override {
+    virtual token token_for_next_shard_for_reads(const token& t, shard_id shard, unsigned spans = 1) const override {
         ensure_tablet_map();
         auto token = t;
-        while (auto s_a_t = next_shard(token)) {
+        while (auto s_a_t = next_shard_for_reads(token)) {
             token = s_a_t->token;
             if (s_a_t->shard == shard) {
                 if (--spans == 0) {

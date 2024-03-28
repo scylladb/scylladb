@@ -58,18 +58,42 @@ public:
      * Calculates the shard that handles a particular token for reads.
      * Use shard_for_writes() to determine the set of shards that should receive writes.
      */
-    virtual unsigned shard_of(const token& t) const;
+    [[deprecated("Use shard_for_reads()/shard_for_writes() instead")]]
+    virtual unsigned shard_of(const token& t) const {
+        return shard_for_reads(t);
+    }
+
+    /**
+     * Returns the shard that handles a particular token for reads.
+     * Use shard_for_writes() to determine the set of shards that should receive writes.
+     *
+     * When there is no tablet migration, the function is equivalent to the lambda:
+     *
+     *   [] (const token& t) {
+     *      auto shards = shard_for_writes();
+     *      assert(shards.size() <= 1);
+     *      return shards.empty() ? 0 : shards[0];
+     *   }
+     *
+     */
+    virtual unsigned shard_for_reads(const token& t) const;
 
     /**
      * Returns the set of shards which should receive a write to token t.
      * During intra-node tablet migration, local writes need to be replicated to both the old and new shard.
      * You should keep the effective_replication_map_ptr used to obtain this sharder alive around performing
      * the writes so that topology coordinator can wait for all writes using this particular topology version.
+     *
+     * Unlike shard_for_reads(), returns an empty vector (instead of 0) if the token is not owned by this node.
      */
     virtual shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel = std::nullopt) const;
 
     /**
-     * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
+     * Gets the first token greater than `t` that is in shard `shard` for reads, and is a shard boundary (its first token).
+     *
+     * It holds that:
+     *
+     *   shard_for_reads(token_for_next_shard(t, shard)) == shard
      *
      * If the `spans` parameter is greater than zero, the result is the same as if the function
      * is called `spans` times, each time applied to its return value, but efficiently. This allows
@@ -79,15 +103,29 @@ public:
      *
      * On overflow, maximum_token() is returned.
      */
-    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
+    virtual token token_for_next_shard_for_reads(const token& t, shard_id shard, unsigned spans = 1) const;
+
+    [[deprecated("Use token_for_next_shard_for_reads() instead")]]
+    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const {
+        return token_for_next_shard_for_reads(t, shard, spans);
+    }
 
     /**
      * Finds the next token greater than t which is owned by a different shard than the owner of t
      * and returns that token and its owning shard. If no such token exists, returns nullopt.
      *
      * The next shard may not necessarily be a successor of the shard owning t.
+     *
+     * The returned shard is the shard for reads:
+     *
+     *     shard_for_reads(next_shard(t)->token) == next_shard(t)->shard
      */
-    virtual std::optional<shard_and_token> next_shard(const token& t) const;
+    virtual std::optional<shard_and_token> next_shard_for_reads(const token& t) const;
+
+    [[deprecated("Use next_shard_for_reads() instead")]]
+    virtual std::optional<shard_and_token> next_shard(const token& t) const {
+        return next_shard_for_reads(t);
+    }
 
     /**
      * @return number of shards configured for this partitioner

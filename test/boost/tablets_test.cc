@@ -745,10 +745,10 @@ SEASTAR_TEST_CASE(test_sharder) {
 
         auto& tm = tokm.tablets().get_tablet_map(table1);
         tablet_sharder sharder(tokm, table1);
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[0])), 3);
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[1])), 0); // missing
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[2])), 1);
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[3])), 0); // missing
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[0])), 3);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[1])), 0); // missing
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[2])), 1);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[3])), 0); // missing
 
         BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[0])), dht::shard_replica_set{3});
         BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[1])), dht::shard_replica_set{});
@@ -757,10 +757,10 @@ SEASTAR_TEST_CASE(test_sharder) {
 
         // Shard for read should be stable across stages of migration. The coordinator may route
         // requests to the leaving replica even if the stage on the replica side is use_new.
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[4])), 5);
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[5])), 5);
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[6])), 5);
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[7])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[4])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[5])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[6])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[7])), 5);
         BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[4])), dht::shard_replica_set{5});
         BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[5])), dht::shard_replica_set{5});
         BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[6])), dht::shard_replica_set{5});

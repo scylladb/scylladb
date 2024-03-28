@@ -1359,7 +1359,7 @@ class db_user_types_storage;
 // Policy for distributed<database>:
 //   broadcast metadata writes
 //   local metadata reads
-//   use shard_of() for data
+//   use table::shard_for_reads()/table::shard_for_writes() for data
 
 class database : public peering_sharded_service<database> {
     friend class ::database_test;

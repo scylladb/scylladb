@@ -396,7 +396,7 @@ Reads and writes may use different shards on a given host during intra-node tabl
 replica acts as a coordinator for writes, which should respect the write replica set selector.
 This selector is reflected in the set of shards returned by the sharder. But since the selectors for reads
 may be different than for writes, the sharder provides separate methods for reads and writes. Reads should
-use sharder::shard_of(), while writes should use sharder::shard_for_writes().
+use sharder::shard_for_reads(), while writes should use sharder::shard_for_writes().
 
 ## Tracking replica-side requests
 

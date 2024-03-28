@@ -34,25 +34,25 @@ sharder::sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits)
 {}
 
 unsigned
-sharder::shard_of(const token& t) const {
+sharder::shard_for_reads(const token& t) const {
     return dht::shard_of(_shard_count, _sharding_ignore_msb_bits, t);
 }
 
 shard_replica_set
 sharder::shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel) const {
-    return {shard_of(t)};
+    return {shard_for_reads(t)};
 }
 
 token
-sharder::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
+sharder::token_for_next_shard_for_reads(const token& t, shard_id shard, unsigned spans) const {
     return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
 }
 
 std::optional<shard_and_token>
-sharder::next_shard(const token& t) const {
-    auto shard = shard_of(t);
+sharder::next_shard_for_reads(const token& t) const {
+    auto shard = shard_for_reads(t);
     auto next_shard = shard + 1 == _shard_count ? 0 : shard + 1;
-    auto next_token = token_for_next_shard(t, next_shard);
+    auto next_token = token_for_next_shard_for_reads(t, next_shard);
     if (next_token == dht::maximum_token()) {
         return std::nullopt;
     }
@@ -136,7 +136,7 @@ decorated_key::less_comparator::operator()(const decorated_key& lhs, const ring_
 }
 
 unsigned static_shard_of(const schema& s, const token& t) {
-    return s.get_sharder().shard_of(t);
+    return s.get_sharder().shard_for_reads(t);
 }
 
 std::optional<dht::token_range>

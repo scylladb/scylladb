@@ -44,8 +44,8 @@ public:
 
     virtual ~auto_refreshing_sharder() = default;
 
-    virtual unsigned shard_of(const dht::token& token) const override {
-        return _sharder->shard_of(token);
+    virtual unsigned shard_for_reads(const token& t) const override {
+        return _sharder->shard_for_reads(t);
     }
 
     virtual dht::shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel) const override {
@@ -55,12 +55,12 @@ public:
         return _sharder->shard_for_writes(t, sel);
     }
 
-    virtual std::optional<dht::shard_and_token> next_shard(const dht::token& t) const override {
-        return _sharder->next_shard(t);
+    virtual std::optional<dht::shard_and_token> next_shard_for_reads(const dht::token& t) const override {
+        return _sharder->next_shard_for_reads(t);
     }
 
-    virtual dht::token token_for_next_shard(const dht::token& t, shard_id shard, unsigned spans = 1) const override {
-        return _sharder->token_for_next_shard(t, shard, spans);
+    virtual dht::token token_for_next_shard_for_reads(const dht::token& t, shard_id shard, unsigned spans = 1) const override {
+        return _sharder->token_for_next_shard_for_reads(t, shard, spans);
     }
 };
 

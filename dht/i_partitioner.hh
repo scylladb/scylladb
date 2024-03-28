@@ -74,7 +74,12 @@ public:
 };
 
 // Returns the owning shard number for vnode-based replication strategies.
-// Use table::shard_of() for the general case.
+// For the general case, use the sharder obtained from table's effective replication map.
+//
+//   table& tbl;
+//   auto erm = tbl.get_effective_replication_map();
+//   auto& sharder = erm->get_sharder();
+//
 unsigned static_shard_of(const schema&, const token&);
 
 inline decorated_key decorate_key(const schema& s, const partition_key& key) {
