@@ -51,6 +51,7 @@
 #include "querier.hh"
 #include "cache_temperature.hh"
 #include <unordered_set>
+#include "utils/error_injection.hh"
 #include "utils/updateable_value.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/keyspace_metadata.hh"
@@ -1172,7 +1173,8 @@ private:
             mutation&& m,
             flat_mutation_reader_v2_opt existings,
             tracing::trace_state_ptr tr_state,
-            gc_clock::time_point now) const;
+            gc_clock::time_point now,
+            db::timeout_clock::time_point timeout) const;
 
     mutable row_locker _row_locker;
     future<row_locker::lock_holder> local_base_lock(
@@ -1425,7 +1427,13 @@ private:
     size_t max_memory_streaming_concurrent_reads() { return _dbcfg.available_memory * 0.02; }
     static constexpr size_t max_count_system_concurrent_reads{10};
     size_t max_memory_system_concurrent_reads() { return _dbcfg.available_memory * 0.02; };
-    size_t max_memory_pending_view_updates() const { return _dbcfg.available_memory * 0.1; }
+    size_t max_memory_pending_view_updates() const {
+        auto ret = _dbcfg.available_memory * 0.1;
+        utils::get_local_injector().inject("view_update_limit", [&ret] {
+            ret = 250000;
+        });
+        return ret;
+    }
 
     struct db_stats {
         uint64_t total_writes = 0;
