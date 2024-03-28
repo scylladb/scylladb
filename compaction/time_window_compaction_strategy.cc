@@ -36,6 +36,10 @@ const std::unordered_map<sstring, std::chrono::seconds> time_window_compaction_s
 const std::unordered_map<sstring, time_window_compaction_strategy_options::timestamp_resolutions> time_window_compaction_strategy_options::valid_timestamp_resolutions = {
     { "MICROSECONDS", timestamp_resolutions::microsecond },
     { "MILLISECONDS", timestamp_resolutions::millisecond },
+    { "SECONDS",      timestamp_resolutions::seconds },
+    { "MINUTES",      timestamp_resolutions::minutes },
+    { "HOURS",        timestamp_resolutions::hours },
+    { "DAYS",         timestamp_resolutions::days },
 };
 
 static std::chrono::seconds validate_compaction_window_unit(const std::map<sstring, sstring>& options) {
