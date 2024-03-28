@@ -23,6 +23,9 @@ Procedure
 
 .. include:: /rst_include/scylla-commands-start-index.rst
 
-5. Verify the node is up and has returned to the Scylla cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status/>`.
+5. Verify the node is up and has returned to the Scylla cluster, and CQL port is available
+
+   * :doc:`nodetool status </operating-scylla/nodetool-commands/status/>`.
+   * ``cqlsh -e "SHOW VERSION" || exit 1``
 
 6. Repeat this procedure for all the relevant nodes in the cluster.
