@@ -89,7 +89,7 @@ public:
         // get the delimeter if any
         auto it = ctx.begin();
         auto end = ctx.end();
-        if (it != end) {
+        if (it != end && *it != '}') {
             int group_size = *it++ - '0';
             if (group_size < 0 ||
                 static_cast<size_t>(group_size) > sizeof(uint64_t)) {
