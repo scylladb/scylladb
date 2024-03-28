@@ -174,6 +174,20 @@ def test_tags_return_empty_body(dynamodb, test_table):
     response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
     assert not response.text
 
+# Reproduces issue #16233
+def test_create_table_without_keyschema(dynamodb, test_table_s):
+    payload = '{"TableName": "alternator_Test1", "*ttributeDefinitions": [{"AttributeName": "lock_key", "AttributeType": "S"}, {"AttributeName": "sort_key", "AttributeType": "S"}], "BillingMode": "PAY_PER_REQUEST"}'
+    req = get_signed_request(dynamodb, 'CreateTable', payload)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert "ValidationException" in response.text and "Missing KeySchema member" in response.text
+
+# Reproduces issue #16233
+def test_create_table_without_attribute_definition(dynamodb, test_table_s):
+    payload = '{"TableName": "alternator_Test2", "KeySchema": [{"AttributeName": "lock_key", "KeyType": "HASH"}, {"AttributeName": "sort_key", "KeyType": "RANGE"}], "BillingMode": "PAY_PER_REQUEST"}'
+    req = get_signed_request(dynamodb, 'CreateTable', payload)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert "ValidationException" in response.text and "No Attribute Schemas Defined" in response.text
+
 # Test that incorrect number values are detected
 def test_incorrect_numbers(dynamodb, test_table):
     for incorrect in ["NaN", "Infinity", "-Infinity", "-NaN", "dog", "-dog"]:
