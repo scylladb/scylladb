@@ -291,8 +291,10 @@ public:
     // Equivalent to with(cp).build()
     schema_ptr build(compact_storage cp);
 
-    schema_ptr build();
+    schema_ptr build() &;
+    schema_ptr build() &&;
 private:
+    schema_ptr build(schema::raw_schema& raw);
     friend class default_names;
     void prepare_dense_schema(schema::raw_schema& raw);
 
