@@ -19,7 +19,6 @@
 
 namespace db {
 class extensions;
-class seed_provider_type;
 class config;
 namespace view {
 class view_update_generator;

@@ -58,6 +58,9 @@
 #include "checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
 
+#include "compress.hh"
+#include "bytes_ostream.hh"
+
 static logging::logger clogger("commitlog");
 
 using namespace std::chrono_literals;
@@ -110,6 +113,13 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
 
     if (cfg.commitlog_flush_threshold_in_mb() >= 0) {
         c.commitlog_flush_threshold_in_mb = cfg.commitlog_flush_threshold_in_mb();
+    }
+
+    auto& copts = cfg.commitlog_compression();
+    if (!copts.class_name.empty()) {
+        std::map<sstring, sstring> tmp(copts.parameters.begin(), copts.parameters.end());
+        tmp["class_name"] = copts.class_name;
+        c.compressor = compressor::create(tmp, "class_name");
     }
 
     return c;
@@ -636,7 +646,7 @@ detail::sector_split_iterator::sector_split_iterator(base_iterator i, base_itera
     : _iter(i)
     , _end(e)
     , _ptr(i != e ? const_cast<char*>(i->get()) : nullptr)
-    , _size(i != e ? sector_size - sector_overhead_size : 0)
+    , _size(i != e ? (sector_size != 0 ? sector_size - sector_overhead_size : i->size()) : 0)
     , _sector_size(sector_size)
 {}
 
@@ -644,7 +654,10 @@ detail::sector_split_iterator& detail::sector_split_iterator::operator++() {
     assert(_iter != _end);
     _ptr += _sector_size;
     // check if we have more pages in this temp-buffer (in out case they are always aligned + sized in page units)
-    auto rem = _iter->size() - std::distance(_iter->get(), const_cast<const char*>(_ptr));
+    auto rem = _sector_size != 0 
+        ? _iter->size() - std::distance(_iter->get(), const_cast<const char*>(_ptr))
+        : 0
+        ;
     if (rem == 0) {
         if (++_iter == _end) {
             _ptr = nullptr;
@@ -655,6 +668,9 @@ detail::sector_split_iterator& detail::sector_split_iterator::operator++() {
         assert(rem >= _sector_size);
         // booh. ugly.
         _ptr = const_cast<char*>(_iter->get());
+        if (_sector_size == 0) {
+            _size = _iter->size();
+        }
     }
     return *this;
 }
@@ -714,6 +730,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     using dispose_mode = segment_manager::dispose_mode;
 
     ::shared_ptr<segment_manager> _segment_manager;
+    ::shared_ptr<compressor> _compressor;
 
     descriptor _desc;
     named_file _file;
@@ -799,6 +816,8 @@ public:
     static constexpr uint32_t segment_magic = ('S'<<24) |('C'<< 16) | ('L' << 8) | 'C';
     static constexpr uint32_t multi_entry_size_magic = 0xffffffff;
 
+    static constexpr std::string_view compression_tag = "COMP";
+
     // The commit log (chained) sync marker/header size in bytes (int: length + int: checksum [segmentId, position])
     static constexpr size_t sync_marker_size = 2 * sizeof(uint32_t);
 
@@ -853,6 +872,10 @@ public:
         if (can_delete()) {
             _segment_manager->discard_unused_segments();
         }
+    }
+
+    compressor* compressor() const {
+        return _compressor.get();
     }
 
     bool must_sync() {
@@ -989,6 +1012,19 @@ public:
         co_return me;
     }
 
+    uint32_t segment_meta_size() const {
+        if (_desc.ver < descriptor::segment_version_4) {
+            return 0;
+        }
+        size_t s = sizeof(uint32_t);
+        if (_compressor) {
+            s += 2 * sizeof(uint32_t) + compression_tag.size()
+                + _compressor->name().size()
+                ;
+        }
+        return uint32_t(s);
+    }
+
     /**
      * Allocate a new buffer
      */
@@ -997,7 +1033,7 @@ public:
 
         auto overhead = segment_overhead_size;
         if (_file_pos == 0) {
-            overhead += descriptor_header_size;
+            overhead += descriptor_header_size + segment_meta_size();
         }
 
         s += overhead;
@@ -1065,13 +1101,35 @@ public:
             write(out, _desc.ver);
             write(out, _desc.id);
             write(out, uint32_t(_alignment));
+
             crc32_nbo crc;
             crc.process(_desc.ver);
             crc.process<int32_t>(_desc.id & 0xffffffff);
             crc.process<int32_t>(_desc.id >> 32);
             crc.process<uint32_t>(uint32_t(_alignment));
-            write(out, crc.checksum());
             header_size = descriptor_header_size;
+
+            if (_desc.ver >= descriptor::segment_version_4) {
+                auto s = segment_meta_size();
+                header_size += s;
+
+                write(out, uint32_t(s));
+                crc.process(s);
+
+                if (_compressor) {
+                    auto put_string = [&](std::string_view v) {
+                        assert(v.size() < std::numeric_limits<uint32_t>::max());
+                        write(out, uint32_t(v.size()));
+                        crc.process(uint32_t(v.size()));
+                        out.write(v.data(), v.size());
+                        crc.process_bytes(v.data(), v.size());
+                    };
+                    put_string(compression_tag);
+                    put_string(_compressor->name());
+                }
+            }
+
+            write(out, crc.checksum());
         }
 
         if (!termination) {
@@ -1440,10 +1498,82 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
         s = co_await active_segment(timeout);
     }
 
+    class compressed_entry_writer_wrapper final : public entry_writer {
+        db::commitlog::entry_writer& _writer;
+        bytes_ostream compressed;
+        std::vector<bytes_ostream> extra;
+        size_t _size = 0;
+        compressor* _comp = nullptr;
+    public:
+        compressed_entry_writer_wrapper(db::commitlog::entry_writer& wr) 
+            : entry_writer(wr.sync, wr.num_entries), _writer(wr), extra(wr.num_entries - 1) 
+        {}
+        const cf_id_type& id(size_t i) const override {
+            return _writer.id(i);
+        }
+        void compress(segment& seg, bytes_ostream& dst, size_t i) {
+            dst = {};
+            auto size = _writer.size(seg, i);
+            auto tmp = fragmented_temporary_buffer::allocate_to_fit(size);
+            output os(segment::frag_ostream_type(detail::sector_split_iterator(tmp.begin(), tmp.end(), 0), size));
+            _writer.write(seg, os, i);
+            _comp->compress(tmp, dst);
+            dst.reduce_chunk_count();
+        }
+        void write(segment& seg, output& out, const bytes_ostream& src) const {
+            for (auto&& frag : src) {
+                out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
+            }
+        }
+        size_t size(segment& seg) override {
+            auto size = _writer.size(seg);
+            if (!seg.compressor()) {
+                return size;
+            }
+            if (_comp != seg.compressor()) {
+                _size = 0;
+            }
+
+            _comp = seg.compressor();
+
+            if (_size != size) {
+                _size = size;
+                compress(seg, compressed, 0);
+                for (size_t i = 1; i < num_entries; ++i) {
+                    compress(seg, extra.at(i - 1), i);
+                }
+            }
+            return compressed.size() + std::accumulate(extra.begin(), extra.end(), size_t{}, [](size_t s, const bytes_ostream& os) {
+                return s + os.size();
+            });
+        }
+        size_t size(segment& seg, size_t i ) override {
+            if (!seg.compressor()) {
+                return _writer.size(seg, i);
+            }
+            return i == 0 ? compressed.size() : extra.at(i - 1).size();
+        }
+        size_t size() const override {
+            on_internal_error(clogger, "Should not reach");
+        }
+        void write(segment& seg, output& out, size_t i) const override {
+            if (!seg.compressor()) {
+                _writer.write(seg, out, i);
+            } else {
+                write(seg, out, i == 0 ? compressed : extra.at(i - 1));
+            }
+        }
+        void result(size_t i, rp_handle h) override {
+            _writer.result(i, std::move(h));
+        }
+    };
+
+    compressed_entry_writer_wrapper wrap(writer);
+
     for (;;) {
         using write_result = segment::write_result;
 
-        switch (s->allocate(writer, permit, timeout)) {
+        switch (s->allocate(wrap, permit, timeout)) {
             case write_result::ok:
                 co_return writer.result();
             case write_result::must_sync:
@@ -1964,6 +2094,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     }
 
     auto s = co_await _reserve_segments.pop_eventually();
+    s->_compressor = cfg.compressor;
     _segments.push_back(s);
     _segments.back()->reset_sync_time();
     co_return s;
@@ -2799,6 +2930,7 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
         bool failed = false;
         fragmented_temporary_buffer::reader frag_reader;
         fragmented_temporary_buffer buffer, initial;
+        ::shared_ptr<compressor> _compressor;
 
         work(file f, descriptor din, commit_load_reader_func fn, position_type o = 0)
                 : f(f), d(din), func(std::move(fn)), fin(make_file_input_stream(f, 0, make_file_input_stream_options())), start_off(o) {
@@ -2899,16 +3031,43 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
             crc.process<int32_t>(id >> 32);
             crc.process<uint32_t>(alignment);
 
-            auto cs = crc.checksum();
-            if (cs != checksum) {
-                throw header_checksum_error();
-            }
-
             this->id = id;
             this->next = 0;
             this->alignment = alignment;
             this->initial = std::move(buf);
             this->pos = this->initial.size_bytes();
+
+            if (ver >= descriptor::segment_version_4) {
+                auto meta_size = checksum;
+
+                buf = co_await read_data(meta_size); // size includes itself, which is same size as final checksum
+                in = buf.get_istream();
+
+                crc.process(meta_size);
+
+                auto read_string = [&] {
+                    auto s = read<uint32_t>(in);
+                    std::string res(s, 0);
+                    in.read_to(s, res.begin());
+                    crc.process(s);
+                    crc.process_bytes(res.data(), res.size());
+                    return res;
+                };
+                while (in.bytes_left() > sizeof(uint32_t)) {
+                    auto key = read_string();
+                    auto val = read_string();
+
+                    if (key == segment::compression_tag) {
+                        _compressor = compressor::create(val, {});
+                    }
+                }
+                checksum = read<uint32_t>(in);
+            }
+
+            auto cs = crc.checksum();
+            if (cs != checksum) {
+                throw header_checksum_error();
+            }
         }
 
         future<fragmented_temporary_buffer> read_data(size_t size) {
@@ -3154,6 +3313,16 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
 
             buf = co_await read_data(size - entry_header_size);
 
+            if (_compressor) {
+                bytes_ostream tmp;
+                auto s = _compressor->uncompress(buf, tmp);
+                buf = fragmented_temporary_buffer::allocate_to_fit(s);
+                auto os = buf.get_ostream();
+                for (auto&& v : tmp) {
+                    os.write(reinterpret_cast<const char*>(v.data()), v.size());
+                }
+            }
+
             co_await func({std::move(buf), rp});
         }
 
@@ -3184,6 +3353,11 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
     }
 
     file f;
+    descriptor d(filename, pfx);
+
+    if (d.ver > descriptor::segment_version_4) {
+        throw std::invalid_argument(fmt::format("File {} has unknown version {}", filename, d.ver));
+    }
 
     try {
         f = co_await open_file_dma(filename, open_flags::ro);
@@ -3202,7 +3376,6 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
 
     f = make_checked_file(commit_error_handler, std::move(f));
 
-    descriptor d(filename, pfx);
     work w(std::move(f), d, std::move(next), off);
 
     co_await w.read_file();

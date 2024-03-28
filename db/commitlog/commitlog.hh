@@ -25,6 +25,8 @@ namespace seastar { class file; }
 
 #include "seastarx.hh"
 
+class compressor;
+
 namespace db {
 
 class config;
@@ -122,6 +124,8 @@ public:
         std::optional<segment_id_type> base_segment_id;
 
         const db::extensions * extensions = nullptr;
+
+        seastar::shared_ptr<::compressor> compressor;
     };
 
     struct descriptor {
@@ -135,7 +139,9 @@ public:
         static inline constexpr uint32_t segment_version_1 = 1u;
         static inline constexpr uint32_t segment_version_2 = 2u;
         static inline constexpr uint32_t segment_version_3 = 3u;
-        static inline constexpr uint32_t current_version = segment_version_3;
+        static inline constexpr uint32_t segment_version_4 = 4u;
+
+        static inline constexpr uint32_t current_version = segment_version_4;
 
         descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;

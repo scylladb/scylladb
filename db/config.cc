@@ -34,6 +34,7 @@
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/relabel_config.hh>
 #include <seastar/util/file.hh>
+#include "utils/rjson.hh"
 
 namespace utils {
 
@@ -62,8 +63,23 @@ log_level_map_to_json(const std::unordered_map<sstring, log_level>& llm) {
 
 static
 json::json_return_type
-seed_provider_to_json(const db::seed_provider_type& spt) {
-    return value_to_json("seed_provider_type");
+class_and_options_type_to_json(const db::class_and_options_type& spt) {
+    rjson::value map1 = rjson::empty_object();
+    rjson::add_with_string_name(map1, "class_name", rjson::from_string(spt.class_name));
+    if (!spt.parameters.empty()) {
+        rjson::value map2 = rjson::from_string_map(std::map<sstring, sstring>(spt.parameters.begin(), spt.parameters.end()));
+        rjson::value arr2 = rjson::empty_array();
+
+        rjson::push_back(arr2, std::move(map2));
+        rjson::add_with_string_name(map1, "parameters", std::move(arr2));
+    }
+
+    rjson::value result = rjson::empty_array();
+    rjson::push_back(result, std::move(map1));
+
+    json::json_return_type ret(sstring{});
+    ret._res = rjson::print(result);
+    return ret;
 }
 
 static
@@ -143,7 +159,7 @@ template <>
 const config_type config_type_for<int32_t> = config_type("integer", value_to_json<int32_t>);
 
 template <>
-const config_type config_type_for<db::seed_provider_type> = config_type("seed provider", seed_provider_to_json);
+const config_type config_type_for<db::class_and_options_type> = config_type("class and options", class_and_options_type_to_json);
 
 template <>
 const config_type config_type_for<std::vector<enum_option<db::experimental_features_t>>> = config_type(
@@ -181,12 +197,12 @@ struct convert<seastar::log_level> {
 };
 
 template<>
-struct convert<db::config::seed_provider_type> {
-    static bool decode(const Node& node, db::config::seed_provider_type& rhs) {
+struct convert<db::class_and_options_type> {
+    static bool decode(const Node& node, db::class_and_options_type& rhs) {
         if (!node.IsSequence()) {
             return false;
         }
-        rhs = db::config::seed_provider_type();
+        rhs = db::class_and_options_type();
         for (auto& n : node) {
             if (!n.IsMap()) {
                 continue;
@@ -544,6 +560,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Total space used for commitlogs. If the used space goes above this value, Scylla rounds up to the next nearest segment multiple and flushes memtables to disk for the oldest commitlog segments, removing those log segments. This reduces the amount of data to replay on startup, and prevents infrequently-updated tables from indefinitely keeping commitlog segments. A small total commitlog space tends to cause more flush activity on less-active tables.\n"
         "\n"
         "Related information: Configuring memtable throughput")
+    , commitlog_compression(this, "commitlog_compression", value_status::Used, {}, 
+        "Compression to apply to the commit log. If omitted, the commit log will be written uncompressed.  LZ4, Snappy, Zstd and Deflate compressors are supported")
     /* Note: Unused. Retained for upgrade compat. Deprecate and remove in a cycle or two. */
     , commitlog_reuse_segments(this, "commitlog_reuse_segments", value_status::Unused, true,
         "Whether or not to reuse commitlog segments when finished instead of deleting them. Can improve commitlog latency on some file systems.\n")
@@ -1204,25 +1222,25 @@ void db::config::maybe_in_workdir(named_value<string_list>& tos, const char* sub
 const sstring db::config::default_tls_priority("SECURE128:-VERS-TLS1.0");
 
 template <>
-struct fmt::formatter<db::seed_provider_type> {
+struct fmt::formatter<db::class_and_options_type> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    auto format(const db::seed_provider_type& s, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "seed_provider_type{{class={}, params={}}}",
+    auto format(const db::class_and_options_type& s, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{class={}, params={}}}",
                               s.class_name, s.parameters);
     }
 };
 
 namespace db {
 
-std::ostream& operator<<(std::ostream& os, const db::seed_provider_type& s) {
-    os << "seed_provider_type{class=" << s.class_name << ", params=" << s.parameters << "}";
+std::ostream& operator<<(std::ostream& os, const db::class_and_options_type& s) {
+    os << "{class=" << s.class_name << ", params=" << s.parameters << "}";
     return os;
 }
 
-std::istream& operator>>(std::istream& is, db::seed_provider_type& s) {
+std::istream& operator>>(std::istream& is, db::class_and_options_type& s) {
     // FIXME -- this operator is used, in particular, by boost lexical_cast<>
     // it's here just to make the code compile, but it's not yet called for real
-    throw std::runtime_error("reading seed_provider_type from istream is not implemented");
+    throw std::runtime_error("reading class_and_options_type from istream is not implemented");
     return is;
 }
 
@@ -1248,7 +1266,7 @@ auto fmt::formatter<db::error_injection_at_startup>::format(const db::error_inje
 namespace utils {
 
 template<>
-void config_file::named_value<db::config::seed_provider_type>::add_command_line_option(
+void config_file::named_value<db::class_and_options_type>::add_command_line_option(
                 boost::program_options::options_description_easy_init& init) {
     init((hyphenate(name()) + "-class-name").data(),
                     value_ex<sstring>()->notifier(
@@ -1372,9 +1390,9 @@ template struct utils::config_file::named_value<seastar::log_level>;
 namespace utils {
 
 sstring
-config_value_as_json(const db::seed_provider_type& v) {
+config_value_as_json(const db::class_and_options_type& v) {
     // We don't support converting this to json yet
-    return "seed_provider_type";
+    return "class_and_options_type";
 }
 
 sstring

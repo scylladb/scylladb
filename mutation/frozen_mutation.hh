@@ -236,6 +236,9 @@ std::vector<mutation> unfreeze(const std::vector<frozen_mutation>&);
 // Caller is responsible for keeping the argument stable in memory
 future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation>);
 
+void freeze_to(bytes_ostream& out, const mutation&);
+size_t frozen_size(const mutation&);
+
 struct frozen_mutation_and_schema {
     frozen_mutation fm;
     schema_ptr s;

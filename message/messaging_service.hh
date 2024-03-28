@@ -47,7 +47,6 @@ namespace gms {
 }
 
 namespace db {
-class seed_provider_type;
 class config;
 }
 
