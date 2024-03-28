@@ -264,8 +264,17 @@ public:
     // Note: must be called after token_metadata has been initialized.
     virtual dht::token_range_vector get_ranges(inet_address ep) const = 0;
 
+    [[deprecated("Use shard_for_reads()/shard_for_writes()")]]
     shard_id shard_of(const schema& s, dht::token t) const {
-        return get_sharder(s).shard_of(t);
+        return shard_for_reads(s, t);
+    }
+
+    shard_id shard_for_reads(const schema& s, dht::token t) const {
+        return get_sharder(s).shard_for_reads(t);
+    }
+
+    dht::shard_replica_set shard_for_writes(const schema& s, dht::token t) const {
+        return get_sharder(s).shard_for_writes(t);
     }
 };
 
