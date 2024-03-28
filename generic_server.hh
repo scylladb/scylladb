@@ -53,7 +53,7 @@ public:
 
     virtual future<> process_request() = 0;
 
-    virtual void on_connection_close();
+    virtual future<> on_connection_close();
 
     virtual future<> shutdown();
 };

@@ -8,6 +8,7 @@
 
 #include "generic_server.hh"
 
+#include "seastar/core/future.hh"
 #include "utils/to_string.hh"
 
 #include <seastar/core/when_all.hh>
@@ -76,23 +77,24 @@ future<> connection::process()
             handle_error(std::move(f));
         });
     }).finally([this] {
-        return _pending_requests_gate.close().then([this] {
-            on_connection_close();
-            return _ready_to_respond.handle_exception([] (std::exception_ptr ep) {
-                if (is_broken_pipe_or_connection_reset(ep)) {
-                    // expected if another side closes a connection or we're shutting down
-                    return;
-                }
-                std::rethrow_exception(ep);
-            }).finally([this] {
-                 return _write_buf.close();
+        return _pending_requests_gate.close().then([this] {        
+            return on_connection_close().then([this] {
+                return _ready_to_respond.handle_exception([] (std::exception_ptr ep) {
+                    if (is_broken_pipe_or_connection_reset(ep)) {
+                        // expected if another side closes a connection or we're shutting down
+                        return;
+                    }
+                    std::rethrow_exception(ep);
+                }).finally([this] {
+                    return _write_buf.close();
+                });
             });
         });
     });
 }
 
-void connection::on_connection_close()
-{
+future<> connection::on_connection_close() {
+    return make_ready_future<>();
 }
 
 future<> connection::shutdown()
