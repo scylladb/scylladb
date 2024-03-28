@@ -18,6 +18,15 @@ struct sstring_hash {
     size_t operator()(std::string_view v) const noexcept;
 };
 
+template <typename T>
+requires std::is_integral_v<T>
+struct integral_hash {
+    using is_transparent = void;
+    size_t operator()(T v) const noexcept {
+        return absl::Hash<T>{}(v);
+    }
+};
+
 struct sstring_eq {
     using is_transparent = void;
     bool operator()(std::string_view a, std::string_view b) const noexcept {
@@ -28,6 +37,10 @@ struct sstring_eq {
 template <typename K, typename V, typename... Ts>
 struct flat_hash_map : public absl::flat_hash_map<K, V, Ts...> {
 };
+
+template <typename V>
+struct flat_hash_map<size_t, V>
+        : public absl::flat_hash_map<size_t, V, integral_hash<size_t>> {};
 
 template <typename V>
 struct flat_hash_map<sstring, V>
