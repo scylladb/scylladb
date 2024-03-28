@@ -1343,9 +1343,16 @@ schema_builder& schema_builder::without_indexes() {
     return *this;
 }
 
-schema_ptr schema_builder::build() {
-    schema::raw_schema new_raw = _raw; // Copy so that build() remains idempotent.
+schema_ptr schema_builder::build() && {
+    return build(_raw);
+}
 
+schema_ptr schema_builder::build() & {
+    schema::raw_schema new_raw = _raw; // Copy so that build() remains idempotent.
+    return build(new_raw);
+}
+
+schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
     schema_static_props static_props{};
     for (const auto& c: static_configurators()) {
         c(new_raw._ks_name, new_raw._cf_name, static_props);
