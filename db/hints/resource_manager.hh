@@ -20,6 +20,8 @@
 #include "utils/small_vector.hh"
 #include "utils/updateable_value.hh"
 #include "enum_set.hh"
+#include "db/hints/internal/common.hh"
+#include "gms/inet_address.hh"
 
 // Usually we don't define namespace aliases in our headers
 // but this one is already entrenched.
@@ -31,7 +33,6 @@ class storage_proxy;
 
 namespace gms {
     class gossiper;
-    class inet_address;
 } // namespace gms
 
 namespace db {
@@ -46,7 +47,8 @@ class manager;
 
 class space_watchdog {
 private:
-    using ep_key_type = gms::inet_address;
+    using endpoint_id = internal::endpoint_id;
+
     static const std::chrono::seconds _watchdog_period;
 
     struct manager_hash {
@@ -58,6 +60,18 @@ private:
         bool operator()(const std::reference_wrapper<manager>& m1, const std::reference_wrapper<manager>& m2) const {
             return std::addressof(m1.get()) == std::addressof(m2.get());
         }
+    };
+
+    // This enum indicates the status of this object.
+    // When hinted handoff is being migrated from using IPs to using host IDs
+    // after an upgrade, we might need to modify the hint directory's contents.
+    // Since `space_watchdog` browses it on a regular basis and since we want
+    // to avoid race conditions, we will need to stop doing that until the migration
+    // is finished.
+    enum class status {
+        RUNNING,    // Space watchdog operates normally.
+        SUSPENDED   // Space watchdog doesn't scan hint directories.
+                    // This status indicates no endpoint managers are running.
     };
 
 public:
@@ -80,6 +94,8 @@ private:
     seastar::abort_source _as;
     int _files_count = 0;
 
+    status _status = status::RUNNING;
+
 public:
     space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map);
     void start();
@@ -88,6 +104,9 @@ public:
     seastar::named_semaphore& update_lock() {
         return _update_lock;
     }
+
+    future<> suspend() noexcept;
+    void resume() noexcept;
 
 private:
     /// \brief Check that hints don't occupy too much disk space.
@@ -110,9 +129,11 @@ private:
     /// value.
     ///
     /// \param path directory to scan
-    /// \param ep_name end point ID (as a string)
+    /// \param shard_manager the hint manager managing the directory specified by `path`
+    /// \param maybe_ep_key endpoint ID corresponding to the scanned directory
     /// \return future that resolves when scanning is complete
-    future<> scan_one_ep_dir(fs::path path, manager& shard_manager, ep_key_type ep_key);
+    future<> scan_one_ep_dir(fs::path path, manager& shard_manager,
+            std::optional<std::variant<locator::host_id, gms::inet_address>> maybe_ep_key);
 };
 
 class resource_manager {
@@ -193,6 +214,18 @@ public:
     /// The hints::managers can be added either before or after resource_manager starts.
     /// If resource_manager is already started, the hints manager will also be started.
     future<> register_manager(manager& m);
+
+    /// \brief Make the underlying `space_watchdog` stop scaninng the hint directory.
+    ///
+    /// Calling this function multiple times in a row has no additional side effects
+    /// and the behavior is defined -- if scanning has been suspended, this is a NO-OP.
+    future<> suspend_scanning() noexcept;
+    
+    /// \brief Make the underlying `space_watchdog` resume scanning the hint directory.
+    ///
+    /// Calling this function multiple times in a row has no additional side effects
+    /// and the behavior is defined -- if scanning has been resumed, this is a NO-OP.
+    void resume_scanning() noexcept;
 };
 
 }
