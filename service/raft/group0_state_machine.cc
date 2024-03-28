@@ -300,7 +300,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     _mm.merge_schema_from(addr, std::move(*cm)).get();
 
     if (topology_snp && !topology_snp->mutations.empty()) {
-        _ss.merge_topology_snapshot(std::move(*topology_snp)).get();
+        _ss.merge_topology_snapshot_in_thread(std::move(*topology_snp));
         // Flush so that current supported and enabled features are readable before commitlog replay
         _sp.get_db().local().flush(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY).get();
     }
