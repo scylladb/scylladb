@@ -13,6 +13,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include "utils/disk-error-handler.hh"
 #include "seastarx.hh"
+#include <optional>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/seastar.hh>
 #include "utils/div_ceil.hh"
@@ -91,28 +92,25 @@ future<> space_watchdog::stop() noexcept {
 }
 
 // Called under the end_point_hints_manager::file_update_mutex() of the corresponding end_point_hints_manager instance.
-future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, ep_key_type ep_key) {
-    return do_with(std::move(path), [this, ep_key, &shard_manager] (fs::path& path) {
-        // It may happen that we get here and the directory has already been deleted in the context of manager::drain_for().
-        // In this case simply bail out.
-        return file_exists(path.native()).then([this, ep_key, &shard_manager, &path] (bool exists) {
-            if (!exists) {
-                return make_ready_future<>();
-            } else {
-                return lister::scan_dir(path, lister::dir_entry_types::of<directory_entry_type::regular>(), [this, ep_key, &shard_manager] (fs::path dir, directory_entry de) {
-                    // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
-                    if (_files_count == 1) {
-                        shard_manager.add_ep_with_pending_hints(ep_key);
-                    }
-                    ++_files_count;
+future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, std::optional<endpoint_id> maybe_ep) {
+    // It may happen that we get here and the directory has already been deleted in the context of manager::drain_for().
+    // In this case simply bail out.
+    if (!co_await file_exists(path.native())) {
+        co_return;
+    }
 
-                    return io_check(file_size, (dir / de.name.c_str()).c_str()).then([this] (uint64_t fsize) {
-                        _total_size += fsize;
-                    });
-                });
-            }
-        });
-    });
+    co_await lister::scan_dir(path, lister::dir_entry_types::of<directory_entry_type::regular>(),
+            coroutine::lambda([this, maybe_ep, &shard_manager] (fs::path dir, directory_entry de) -> future<> {
+        // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
+        if (maybe_ep && _files_count == 1) {
+            shard_manager.add_ep_with_pending_hints(*maybe_ep);
+        }
+        ++_files_count;
+
+        const auto filename = (std::move(dir) / std::move(de.name)).native();
+        auto& size_counter = maybe_ep ? _total_valid_size : _total_invalid_size;
+        size_counter += co_await io_check(file_size, filename);
+    }));
 }
 
 // Called from the context of a seastar::thread.
@@ -135,7 +133,9 @@ void space_watchdog::on_timer() {
     //
 
     for (auto& per_device_limits : _per_device_limits_map | boost::adaptors::map_values) {
-        _total_size = 0;
+        _total_valid_size = 0;
+        _total_invalid_size = 0;
+
         for (manager& shard_manager : per_device_limits.managers) {
             shard_manager.clear_eps_with_pending_hints();
             lister::scan_dir(shard_manager.hints_dir(), lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &shard_manager] (fs::path dir, directory_entry de) {
@@ -146,14 +146,25 @@ void space_watchdog::on_timer() {
                 // not hintable).
                 // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
                 // continue to enumeration - there is no one to change them.
-                const internal::endpoint_id ep{de.name};
+                const auto maybe_ep = std::invoke([&] () -> std::optional<internal::endpoint_id> {
+                    try {
+                        return internal::endpoint_id{de.name};
+                    } catch (...) {
+                        resource_manager_logger.debug("Encountered a hint directory of invalid name: {}, exception: {}. ",
+                                de.name, std::current_exception());
+                        return {};
+                    }
+                });
 
-                if (shard_manager.have_ep_manager(ep)) {
-                    return shard_manager.with_file_update_mutex_for(ep, [this, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)] () mutable {
-                        return scan_one_ep_dir(dir / ep_name, shard_manager, ep_key_type(ep_name));
+                const auto dir_path = std::move(dir) / std::move(de.name);
+
+                if (maybe_ep && shard_manager.have_ep_manager(*maybe_ep)) {
+                    return shard_manager.with_file_update_mutex_for(*maybe_ep,
+                            [this, &shard_manager, dir_path = std::move(dir_path), maybe_ep] () mutable {
+                        return scan_one_ep_dir(dir_path, shard_manager, maybe_ep);
                     });
                 } else {
-                    return scan_one_ep_dir(dir / de.name, shard_manager, ep_key_type(de.name));
+                    return scan_one_ep_dir(dir / de.name, shard_manager, maybe_ep);
                 }
             }).get();
         }
@@ -167,9 +178,11 @@ void space_watchdog::on_timer() {
             adjusted_quota = per_device_limits.max_shard_disk_space_size - delta;
         }
 
-        resource_manager_logger.trace("space_watchdog: consuming {}/{} bytes", _total_size, adjusted_quota);
+        const auto total_size = _total_valid_size + _total_invalid_size;
+        resource_manager_logger.trace("space_watchdog: consuming {}/{} bytes (invalid hint directories occupied {} bytes)",
+                total_size, adjusted_quota, _total_invalid_size);
         for (manager& shard_manager : per_device_limits.managers) {
-            shard_manager.update_backlog(_total_size, adjusted_quota);
+            shard_manager.update_backlog(total_size, adjusted_quota);
         }
     }
 }
