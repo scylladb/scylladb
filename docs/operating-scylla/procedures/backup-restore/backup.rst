@@ -22,57 +22,81 @@ You can choose one of the following:
 Full Backup - Snapshots
 =======================
 
-Snapshots are taken using :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`. First, the command flushes the MemTables from memory to SSTables on disk, and afterward, it creates a hard link for each SSTable in each keyspace.
-With time, SSTables are compacted, but the hard link keeps a copy of each file. This takes up an increasing amount of disk space. It is important to clear space by :doc:`clean unnecessary snapshots </operating-scylla/procedures/backup-restore/delete-snapshot>`.
+Snapshots are taken using :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`.
+First, the command flushes the MemTables from memory to SSTables on disk, and afterward, it creates a hard link for each SSTable in each keyspace and table.
+
+Note that over time, as SSTables are compacted, the original SSTable files may still be hard linked to one or more snapshots subdirectories.
+Therefore, an increasing amount of disk space may be held up by snapshots,
+hence it is important to clear space using the :doc:`clean unnecessary snapshots </operating-scylla/procedures/backup-restore/delete-snapshot>` procedure.
 
 **Procedure**
 
-| 1. Data can only be restored from a snapshot of the table schema, where data exists in a backup. Backup your schema with the following command:
+On each node, run:
 
-| ``$: cqlsh -e "DESC SCHEMA" > <schema_name.cql>``
-
-For example:
-
-| ``$: cqlsh -e "DESC SCHEMA" > db_schema.cql``
-
+| ``$ nodetool snapshot``
 |
-| 2. Take a snapshot, including every keyspace you want to backup.
-
-| ``$ nodetool snapshot <KEYSPACE_NAME>``
-
-| For example:
-
-| ``$ nodetool snapshot mykeyspace``
-
-| The snapshot is created under Scylla data directory ``/var/lib/scylla/data``
-| It will have the following structure:
+| The snapshot is created under the Scylla data directory ``/var/lib/scylla/data``
+| It will have the following structure for each table:
+|
 | ``keyspace_name/table_name-UUID/snapshots/snapshot_name``
-
+|
 | For example:
-| ``/mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/snapshots/1487847672222``
+|
+| ``mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/snapshots/1487847672222``
 
-From one of the nodes, recreate the schema. Repeat these steps for each node in the cluster.
+.. note::
+
+   By default, nodetool automatically names the snapshot using the current time since the system EPOCH, in milliseconds.
+   For advanced options, like setting the snapshot name (a.k.a. tag) or taking a snapshot of a list of keyspaces,
+   see :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`.
+
+.. note::
+
+   To restore data from a given snapshot, the corresponding schema must be used.
+
+   In the common case, when no columns were deleted or altered,
+   Scylla automatically describes the schema for each table in the snapshot,
+   storing the result in a file named ``schema.cql`` in each snapshot subdirectory.
+
+   The full schema can also be backed up using the ``DESCRIBE SCHEMA`` cql query.
+   For example:
+
+     ``$ cqlsh -e "DESCRIBE SCHEMA" > db_schema.cql``
+
+   If the backed up data in a snapshot contain deleted or altered columns,
+   the schema should be restored from the ``system_schema`` keyspace,
+   in the same full-backup snapshot.
+
+   See the :doc:`Restore from Backup </operating-scylla/procedures/backup-restore/restore>` page for more information.
 
 .. _backup-incremental-backup:
 
 Incremental Backup
 ==================
 
-| Enabling the incremental backup (disabled by default) will create a hard-link from each SSTable, right after it is **flushed**, to a backups directory.
-| For a complete point in time backup, the following is required: 
+| Enabling the incremental backup (disabled by default) will create a hard-link from each SSTable, right after it is **flushed**, to a ``backups/`` directory.
+| For a complete point in time backup, the following is required:
 
-  * A snapshot 
-  * All incremental backups and commit logs from the time of the snapshot. 
-  * Make sure to delete unnecessary incremental backups. Scylla does not do this automatically.
+|  * A snapshot
+|  * All incremental backups and commit logs from the time of the snapshot.
+
+.. note::
+
+   | Make sure to delete unnecessary incremental backups files after copying them to external storage.
+   | Scylla does not do this automatically!
 
 **Procedure**
 
-| 1. In the ``/etc/scylla/scylla.yaml`` file set the ``incremental backups`` parameters to ``true`` and restart the Scylla service. Snapshot are created under Scylla data directory ``/var/lib/scylla/data``
-| with the following structure:
-| ``keyspace_name/table_name-UUID/backups/backups_name``
+| In the ``/etc/scylla/scylla.yaml`` file set the ``incremental backups`` parameter to ``true`` and restart the Scylla service.
+
+| Incremental backups are created under the Scylla data directory ``/var/lib/scylla/data``
+| with the following structure for each table:
+| ``keyspace_name/table_name-UUID/backups``
 
 | For example:
-| ``/mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/backups/1437827672721``
+| ``/mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/backups``
+
+| In addition, incremental backup can be enabled or disabled dynamically on each node, without restarting it, using :doc:`nodetool enablebackup </operating-scylla/nodetool-commands/enablebackup>` or :doc:`nodetool disablebackup </operating-scylla/nodetool-commands/disablebackup>`, respectively.
 
 
 Additional Resources
