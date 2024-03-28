@@ -153,9 +153,9 @@ def test_desc_table(cql, test_keyspace, random_seed):
             tbl_row = cql.execute(f"""
                 SELECT keyspace_name, bloom_filter_fp_chance, caching,
                 comment, compaction, compression, crc_check_chance,
-                dclocal_read_repair_chance, default_time_to_live, extensions,
+                default_time_to_live, extensions,
                 flags, gc_grace_seconds, max_index_interval,
-                memtable_flush_period_in_ms, min_index_interval, read_repair_chance,
+                memtable_flush_period_in_ms, min_index_interval,
                 speculative_retry
                 FROM system_schema.tables
                 WHERE keyspace_name='{test_keyspace}' AND table_name='{get_name(tbl)}'
@@ -163,9 +163,9 @@ def test_desc_table(cql, test_keyspace, random_seed):
             new_tbl_row = cql.execute(f"""
                 SELECT keyspace_name, bloom_filter_fp_chance, caching,
                 comment, compaction, compression, crc_check_chance,
-                dclocal_read_repair_chance, default_time_to_live, extensions,
+                default_time_to_live, extensions,
                 flags, gc_grace_seconds, max_index_interval,
-                memtable_flush_period_in_ms, min_index_interval, read_repair_chance,
+                memtable_flush_period_in_ms, min_index_interval,
                 speculative_retry
                 FROM system_schema.tables
                 WHERE keyspace_name='{test_keyspace}' AND table_name='{get_name(new_tbl)}'

@@ -5362,21 +5362,6 @@ public:
     }
 };
 
-db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s) {
-    if (s.dc_local_read_repair_chance() > 0 || s.read_repair_chance() > 0) {
-        double chance = _read_repair_chance(_urandom);
-        if (s.read_repair_chance() > chance) {
-            return db::read_repair_decision::GLOBAL;
-        }
-
-        if (s.dc_local_read_repair_chance() > chance) {
-            return db::read_repair_decision::DC_LOCAL;
-        }
-    }
-
-    return db::read_repair_decision::NONE;
-}
-
 result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd,
         locator::effective_replication_map_ptr erm,
         schema_ptr schema,
@@ -5553,7 +5538,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     auto erm = table.get_effective_replication_map();
 
     db::read_repair_decision repair_decision = query_options.read_repair_decision
-        ? *query_options.read_repair_decision : new_read_repair_decision(*schema);
+        ? *query_options.read_repair_decision : db::read_repair_decision::NONE;
 
     // Update reads_coordinator_outside_replica_set once per request,
     // not once per partition.
