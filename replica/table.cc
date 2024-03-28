@@ -3525,4 +3525,18 @@ future<> table::cleanup_tablet_without_deallocation(database& db, db::system_key
     co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
 }
 
+shard_id table::shard_of(const mutation& m) const {
+    return shard_of(m.token());
+}
+
+shard_id table::shard_for_reads(dht::token t) const {
+    return _erm ? _erm->shard_for_reads(*_schema, t)
+                : dht::static_shard_of(*_schema, t); // for tests.
+}
+
+dht::shard_replica_set table::shard_for_writes(dht::token t) const {
+    return _erm ? _erm->shard_for_writes(*_schema, t)
+                : dht::shard_replica_set{dht::static_shard_of(*_schema, t)}; // for tests.
+}
+
 } // namespace replica

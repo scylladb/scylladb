@@ -849,13 +849,12 @@ public:
     future<> cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
-    shard_id shard_of(const mutation& m) const {
-        return shard_of(m.token());
-    }
-    shard_id shard_of(dht::token t) const {
-        return _erm ? _erm->shard_of(*_schema, t)
-                    : dht::static_shard_of(*_schema, t); // for tests.
-    }
+    [[deprecated("Use shard_for_reads()/shard_for_writes()")]]
+    shard_id shard_of(const mutation& m) const;
+    [[deprecated("Use shard_for_reads()/shard_for_writes()")]]
+    shard_id shard_of(dht::token t) const { return shard_for_reads(t); }
+    shard_id shard_for_reads(dht::token t) const;
+    dht::shard_replica_set shard_for_writes(dht::token t) const;
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
