@@ -539,6 +539,25 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
                 update_topology(host_id, ip, rs);
                 tmptr->add_replacing_endpoint(replaced_host_id, host_id);
                 co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
+
+                // In replace-with-same-ip the new node may not have
+                // advertised itself yet. As soon as we publish the
+                // new token_metadata where this node is marked as pending,
+                // data plane requests may start failing, since the condition
+                // for cl in assure_sufficient_live_nodes may not be fulfilled.
+                // For example, suppose we had a cluster of three nodes and we replace
+                // one of them with a fourth node. For cl=qurum assure_sufficient_live_nodes
+                // throws if live < need + pending, which in this example
+                // becomes 2 < 2 + 1. The end effect is that during replace-with-same-ip
+                // data plane requests may fail with unavailable_exception,
+                // breaking availability.
+                // As soon as a new node is moved to transitioning state and
+                // became pending in terms of token_metadata it should be
+                // atomically marked as alive. We can't rely on mark_alive,
+                // since a new node may not advertised itself yet.
+                if (existing_ip == ip && !_gossiper.is_alive(*existing_ip)) {
+                    co_await _gossiper.real_mark_alive(*existing_ip);
+                }
             }
         }
             break;
