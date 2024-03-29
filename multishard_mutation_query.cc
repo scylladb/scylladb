@@ -428,7 +428,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(fla
     const auto rend = std::reverse_iterator(combined_buffer.begin());
     for (;rit != rend; ++rit) {
         if (rit->is_partition_start()) {
-            const auto shard = sharder.shard_of(rit->as_partition_start().key().token());
+            const auto shard = sharder.shard_for_reads(rit->as_partition_start().key().token());
 
             // It is possible that the reader this partition originates from
             // does not exist anymore. Either because we failed stopping it or
@@ -455,7 +455,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(fla
         }
     }
 
-    const auto shard = sharder.shard_of(pkey.token());
+    const auto shard = sharder.shard_for_reads(pkey.token());
     auto& shard_buffer = _readers[shard].get_dismantled_buffer(_permit);
     for (auto& smf : tmp_buffer) {
         stats.add(smf);
@@ -468,7 +468,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(fla
 read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(detached_compaction_state compaction_state) {
     auto stats = dismantle_buffer_stats();
     auto& sharder = _erm->get_sharder(*_schema);
-    const auto shard = sharder.shard_of(compaction_state.partition_start.key().token());
+    const auto shard = sharder.shard_for_reads(compaction_state.partition_start.key().token());
 
     auto& rtc_opt = compaction_state.current_tombstone;
 
