@@ -217,7 +217,7 @@ SEASTAR_TEST_CASE(frozen_mutation_is_consumed_in_order) {
     random_mutation_generator gen{random_mutation_generator::generate_counters::no};
     mutation m = gen();
     auto& s = m.schema();
-    frozen_mutation fm{m};
+    auto fm = freeze(m);
 
     auto validate_consume = [] (schema_ptr s, const frozen_mutation& fm, const mutation& m) {
         testlog.info("Validating frozen_mutation::consume");

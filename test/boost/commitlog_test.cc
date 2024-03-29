@@ -994,7 +994,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entry) {
 
                 for (auto i = 0; i < n; ++i) {
                     random_mutation_generator gen(random_mutation_generator::generate_counters(false));
-                    mutations.emplace_back(gen(1).front());
+                    mutations.emplace_back(freeze(gen(1).front()));
                     writers.emplace_back(gen.schema(), mutations.back(), fs);
                 }
 
@@ -1057,7 +1057,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
 
                 for (auto i = 0; i < n; ++i) {
                     random_mutation_generator gen(random_mutation_generator::generate_counters(false));
-                    mutations.emplace_back(gen(1).front());
+                    mutations.emplace_back(freeze(gen(1).front()));
                     writers.emplace_back(gen.schema(), mutations.back(), fs);
                 }
 

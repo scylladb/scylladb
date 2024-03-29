@@ -26,7 +26,7 @@ public:
     frozen_mutation()
         : _semaphore(__FILE__)
         , _one_small_row(_schema.schema(), _schema.make_pkey(0))
-        , _frozen_one_small_row(_one_small_row)
+        , _frozen_one_small_row(freeze(_one_small_row))
     {
         _one_small_row.apply(_schema.make_row(_semaphore.make_permit(), _schema.make_ckey(0), "value"));
         _frozen_one_small_row = freeze(_one_small_row);
