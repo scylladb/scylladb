@@ -193,15 +193,15 @@ tablet_replica_set deserialize_replica_set(cql3::untyped_result_set_row::view_ty
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {
   return async([&db, &tm, ts] {
     tablet_logger.trace("Saving tablet metadata: {}", tm);
-    std::vector<mutation> muts;
+    std::vector<frozen_mutation> muts;
     muts.reserve(tm.all_tables().size());
     for (auto&& [id, tablets] : tm.all_tables()) {
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
         auto s = db.find_schema(id);
         muts.emplace_back(
-                tablet_map_to_mutation(tablets, id, s->ks_name(), s->cf_name(), ts).get());
+                freeze(tablet_map_to_mutation(tablets, id, s->ks_name(), s->cf_name(), ts).get()));
     }
-    db.apply(freeze(muts), db::no_timeout).get();
+    db.apply(muts, db::no_timeout).get();
   });
 }
 
