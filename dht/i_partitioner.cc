@@ -39,7 +39,7 @@ sharder::shard_of(const token& t) const {
 }
 
 shard_replica_set
-sharder::shard_for_writes(const token& t) const {
+sharder::shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel) const {
     return {shard_of(t)};
 }
 

@@ -40,7 +40,7 @@ private:
         return std::nullopt;
     };
 
-    dht::shard_replica_set shard_for_writes(tablet_id tid, host_id host) const {
+    dht::shard_replica_set shard_for_writes(tablet_id tid, host_id host, std::optional<write_replica_set_selector> sel = std::nullopt) const {
         auto* trinfo = _tmap->get_tablet_transition_info(tid);
         auto& tinfo = _tmap->get_tablet_info(tid);
         dht::shard_replica_set shards;
@@ -57,7 +57,7 @@ private:
 
         if (trinfo && trinfo->pending_replica && trinfo->pending_replica->host == host) {
             if (trinfo->transition == tablet_transition_kind::intranode_migration) {
-                switch (trinfo->writes) {
+                switch (sel.value_or(trinfo->writes)) {
                     case write_replica_set_selector::both:
                         shards.push_back(trinfo->pending_replica->shard);
                         [[fallthrough]];
@@ -118,10 +118,10 @@ public:
         return shard;
     }
 
-    virtual dht::shard_replica_set shard_for_writes(const token& t) const override {
+    virtual dht::shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel = std::nullopt) const override {
         ensure_tablet_map();
         auto tid = _tmap->get_tablet_id(t);
-        auto shards = shard_for_writes(tid, _host);
+        auto shards = shard_for_writes(tid, _host, sel);
         tablet_logger.trace("[{}] shard_for_writes({}) = {}, tablet={}", _table, t, shards, tid);
         return shards;
     }

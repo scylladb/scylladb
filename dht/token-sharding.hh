@@ -33,6 +33,11 @@ struct shard_and_token {
 /// It can be either of: none, single shard (no tablet migration), or two shards (during intra-node tablet migration).
 using shard_replica_set = boost::container::static_vector<unsigned, 2>;
 
+/// Describes which replica set should be used during tablet migration.
+enum class write_replica_set_selector {
+    previous, both, next
+};
+
 /**
  * Describes mapping between token space of a given table and owning shards on the local node.
  * The mapping reflected by this instance is constant for the lifetime of this sharder object.
@@ -61,7 +66,7 @@ public:
      * You should keep the effective_replication_map_ptr used to obtain this sharder alive around performing
      * the writes so that topology coordinator can wait for all writes using this particular topology version.
      */
-    virtual shard_replica_set shard_for_writes(const token& t) const;
+    virtual shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel = std::nullopt) const;
 
     /**
      * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).

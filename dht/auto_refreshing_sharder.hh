@@ -25,6 +25,7 @@ class auto_refreshing_sharder : public dht::sharder {
     locator::effective_replication_map_ptr _erm;
     const dht::sharder* _sharder;
     optimized_optional<seastar::abort_source::subscription> _callback;
+    std::optional<write_replica_set_selector> _sel;
 private:
     void refresh() {
         _erm = _table->get_effective_replication_map();
@@ -34,8 +35,9 @@ private:
         });
     }
 public:
-    auto_refreshing_sharder(lw_shared_ptr<replica::table> table)
+    auto_refreshing_sharder(lw_shared_ptr<replica::table> table, std::optional<write_replica_set_selector> sel = std::nullopt)
         : _table(std::move(table))
+        , _sel(sel)
     {
         refresh();
     }
@@ -46,8 +48,11 @@ public:
         return _sharder->shard_of(token);
     }
 
-    virtual dht::shard_replica_set shard_for_writes(const token& t) const override {
-        return _sharder->shard_for_writes(t);
+    virtual dht::shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel) const override {
+        if (!sel) {
+            sel = _sel;
+        }
+        return _sharder->shard_for_writes(t, sel);
     }
 
     virtual std::optional<dht::shard_and_token> next_shard(const dht::token& t) const override {

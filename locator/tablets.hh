@@ -13,6 +13,7 @@
 #include "locator/host_id.hh"
 #include "service/session.hh"
 #include "dht/i_partitioner_fwd.hh"
+#include "dht/token-sharding.hh"
 #include "dht/ring_position.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
@@ -191,9 +192,7 @@ tablet_transition_stage tablet_transition_stage_from_string(const sstring&);
 sstring tablet_transition_kind_to_string(tablet_transition_kind);
 tablet_transition_kind tablet_transition_kind_from_string(const sstring&);
 
-enum class write_replica_set_selector {
-    previous, both, next
-};
+using write_replica_set_selector = dht::write_replica_set_selector;
 
 enum class read_replica_set_selector {
     previous, next
