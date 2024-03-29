@@ -5,11 +5,12 @@
 #
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use
-
+import os
+import pathlib
 import ssl
 import platform
 from functools import partial
-from typing import List, Optional
+from typing import List, Optional, Dict
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient, IPAddress
@@ -52,11 +53,18 @@ def pytest_addoption(parser):
                         help='username for authentication')
     parser.addoption('--auth_password', action='store', default=None,
                         help='password for authentication')
+    parser.addoption('--run_id', action='store', default=1,
+                     help='Run id for the test run')
+    parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
+                     help='Provide the URL to artifacts directory to generate the link to failed tests directory '
+                          'with logs')
+    parser.addoption('--tmpdir', action='store', type=str, dest='tmpdir',
+                     help='Temporary directory where logs are stored')
 
 
-# This is a constant used in `pytest_runtest_makereport` below to store a flag
-# indicating test failure in a stash which can then be accessed from fixtures.
-FAILED_KEY = pytest.StashKey[bool]()
+# This is a constant used in `pytest_runtest_makereport` below to store the full report for the test case
+# in a stash which can then be accessed from fixtures to print the stacktrace for the failed test
+PHASE_REPORT_KEY = pytest.StashKey[Dict[str, pytest.CollectReport]]()
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
@@ -70,7 +78,8 @@ def pytest_runtest_makereport(item, call):
     """
     outcome = yield
     report = outcome.get_result()
-    item.stash[FAILED_KEY] = report.when == "call" and report.failed
+
+    item.stash[PHASE_REPORT_KEY] = report
 
 
 conn_logger = logging.getLogger("conn_messages")
@@ -169,17 +178,48 @@ async def manager_internal(event_loop, request):
 
 
 @pytest.fixture(scope="function")
-async def manager(request, manager_internal):
+async def manager(request, manager_internal, record_property, mode):
     """Per test fixture to notify Manager client object when tests begin so it can
     perform checks for cluster state.
     """
     test_case_name = request.node.name
+    run_id = request.config.getoption('run_id')
+    tmp_dir = pathlib.Path(request.config.getoption('tmpdir'))
+    xml_path: pathlib.Path = pathlib.Path(request.config.getoption('xmlpath'))
+    suite_testpy_log = (tmp_dir /
+                        mode /
+                        f"{pathlib.Path(xml_path.stem).stem}.log"
+                        )
+    test_log = suite_testpy_log.parent / f"{suite_testpy_log.stem}.{test_case_name}.log"
+    # this should be consistent with scylla_cluster.py handler name in _before_test method
+    test_py_log_test = suite_testpy_log.parent / f"{test_case_name}.log"
+
     manager_internal = manager_internal()  # set up client object in fixture with scope function
-    await manager_internal.before_test(test_case_name)
+    await manager_internal.before_test(test_case_name, test_log)
     yield manager_internal
-    # `request.node.stash` contains a flag stored in `pytest_runtest_makereport`
-    # that indicates test failure.
-    failed = request.node.stash[FAILED_KEY]
+    # `request.node.stash` contains a report stored in `pytest_runtest_makereport` from where we can retrieve
+    # test failure.
+    report = request.node.stash[PHASE_REPORT_KEY]
+    failed = report.when == "call" and report.failed
+    if failed:
+        # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
+        # all related logs in one dir.
+        # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
+        failed_test_dir_path = tmp_dir / mode / "failed_test" / f"{test_case_name}.{mode}.{run_id}"
+        failed_test_dir_path.mkdir(parents=True, exist_ok=True)
+        await manager_internal.gather_related_logs(
+            failed_test_dir_path,
+            {'pytest.log': test_log, 'test_py.log': test_py_log_test}
+        )
+        with open(failed_test_dir_path / f"stacktrace", 'w') as f:
+            f.write(report.longreprtext)
+        if request.config.getoption('artifacts_dir_url') is not None:
+            # get the relative path to the tmpdir for the failed directory
+            dir_path_relative = f"{failed_test_dir_path.as_posix()[failed_test_dir_path.as_posix().find('testlog'):]}"
+            full_url = f"<a href={request.config.getoption('artifacts_dir_url')}/{dir_path_relative}>failed_test_logs</a>"
+            record_property("TEST_LOGS", full_url)
+
+    test_log.unlink()
     await manager_internal.after_test(test_case_name, not failed)
     await manager_internal.stop()  # Stop client session and close driver after each test
 
@@ -205,7 +245,8 @@ async def random_tables(request, manager):
     # The cluster will be marked as dirty if the test failed, but that happens
     # at the end of `manager` fixture which we depend on (so these steps will be
     # executed after us) - so at this point, we need to check for failure ourselves too.
-    failed = request.node.stash[FAILED_KEY]
+    report = request.node.stash[PHASE_REPORT_KEY]
+    failed = report.when == "call" and report.failed
     if not failed and not await manager.is_dirty():
         tables.drop_all()
 

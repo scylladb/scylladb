@@ -391,6 +391,7 @@ class ScyllaServer:
         the test fails, we can only capture the relevant lines of the log"""
         self.log_savepoint = self.log_file.tell()
 
+
     def read_log(self) -> str:
         """ Return first 3 lines of the log + everything that happened
         since the last savepoint. Used to diagnose CI failures, so
@@ -933,6 +934,10 @@ class ScyllaCluster:
         return [(server.server_id, server.ip_addr, server.rpc_address) for server in self.running.values()
                 if server.server_id not in self.removed]
 
+    def all_servers(self) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
+        """Get a list of tuples of server id and IP address of all servers"""
+        return [(server.server_id, server.ip_addr, server.rpc_address) for server in self.servers.values()]
+
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
         assert self.start_exception is None
@@ -1117,6 +1122,7 @@ class ScyllaClusterManager:
 
     def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
         self.test_uname: str = test_uname
+        self.base_dir: str = base_dir
         logger = logging.getLogger(self.test_uname)
         self.logger = LogPrefixAdapter(logger, {'prefix': self.test_uname})
         # The currently running test case with self.test_uname prepended, e.g.
@@ -1159,6 +1165,14 @@ class ScyllaClusterManager:
 
     async def _before_test(self, test_case_name: str) -> str:
         self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
+        root_logger = logging.getLogger()
+        # file handler file name should be consistent with topology/conftest.py:manager test_py_log_test variable
+        self.test_case_log_fh = logging.FileHandler(f"{self.base_dir}/{test_case_name}.log")
+        self.test_case_log_fh.setLevel(root_logger.getEffectiveLevel())
+        # to have the custom formatter with a timestamp that used in a test.py but for each testcase's log, we need to
+        # extract it from the root logger and apply to the handler
+        self.test_case_log_fh.setFormatter(root_logger.handlers[0].formatter)
+        root_logger.addHandler(self.test_case_log_fh)
         self.logger.info("Setting up %s", self.current_test_case_full_name)
         if self.cluster.is_dirty:
             self.logger.info(f"Current cluster %s is dirty after test %s, replacing with a new one...",
@@ -1231,6 +1245,7 @@ class ScyllaClusterManager:
         add_get('/cluster/is-dirty', self._is_dirty)
         add_get('/cluster/replicas', self._cluster_replicas)
         add_get('/cluster/running-servers', self._cluster_running_servers)
+        add_get('/cluster/all-servers', self._cluster_all_servers)
         add_get('/cluster/host-ip/{server_id}', self._cluster_server_ip_addr)
         add_get('/cluster/host-id/{server_id}', self._cluster_host_id)
         add_put('/cluster/before-test/{test_case_name}', self._before_test_req)
@@ -1278,6 +1293,10 @@ class ScyllaClusterManager:
         """Return a dict of running server ids to IPs"""
         return self.cluster.running_servers()
 
+    async def _cluster_all_servers(self, _request) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
+        """Return a dict of all server ids to IPs"""
+        return self.cluster.all_servers()
+
     async def _cluster_server_ip_addr(self, request) -> IPAddress:
         """IP address of a server"""
         server_id = ServerNum(int(request.match_info["server_id"]))
@@ -1320,6 +1339,7 @@ class ScyllaClusterManager:
         try:
             self.cluster.after_test(self.current_test_case_full_name, success)
         finally:
+            logging.getLogger().removeHandler(self.test_case_log_fh)
             self.current_test_case_full_name = ''
         self.is_after_test_ok = True
         cluster_str = str(self.cluster)

@@ -8,9 +8,11 @@
    Provides helper methods to test cases.
    Manages driver refresh when cluster is cycled.
 """
-
+import pathlib
+import shutil
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Callable, Any, Awaitable
+from pathlib import Path
+from typing import List, Optional, Callable, Any, Awaitable, Dict, Tuple
 from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
@@ -41,6 +43,7 @@ class ManagerClient():
     def __init__(self, sock_path: str, port: int, use_ssl: bool, auth_provider: Any|None,
                  con_gen: Callable[[List[IPAddress], int, bool, Any], CassandraSession]) \
                          -> None:
+        self.test_log_fh: Optional[logging.FileHandler] = None
         self.port = port
         self.use_ssl = use_ssl
         self.auth_provider = auth_provider
@@ -117,8 +120,16 @@ class ManagerClient():
             logger.debug("refresh driver node list")
             self.ccluster.control_connection.refresh_node_list_and_token_map()
 
-    async def before_test(self, test_case_name: str) -> None:
-        """Before a test starts check if cluster needs cycling and update driver connection"""
+    async def before_test(self, test_case_name: str, test_log: Path) -> None:
+        # Add handler to the root logger to intercept all logs produced by pytest process
+        test_logger = logging.getLogger()
+        self.test_log_fh = logging.FileHandler(test_log, mode='w+')
+        # to have the custom formatter with a timestamp that used in a test.py but for each testcase's log, we need to
+        # extract it from the root logger and apply to the handler
+        self.test_log_fh.setFormatter(logging.getLogger().handlers[0].formatter)
+        self.test_log_fh.setLevel(test_logger.getEffectiveLevel())
+        test_logger.addHandler(self.test_log_fh)
+        # Before a test starts check if cluster needs cycling and update driver connection
         logger.debug("before_test for %s", test_case_name)
         dirty = await self.is_dirty()
         if dirty:
@@ -139,10 +150,18 @@ class ManagerClient():
         """Tell harness this test finished"""
         self.test_finished_event.set()
         _client = self.client_for_asyncio_loop.get(asyncio.get_running_loop())
+        logging.getLogger().removeHandler(self.test_log_fh)
         logger.debug("after_test for %s (success: %s)", test_case_name, success)
         cluster_str = await _client.put_json(f"/cluster/after-test/{success}",
                                                  response_type = "json")
         logger.info("Cluster after test %s: %s", test_case_name, cluster_str)
+
+    async def gather_related_logs(self, failed_test_path_dir: Path, logs: Dict[str, Path]) -> None:
+        for server in await self.all_servers():
+            log_file = await self.server_open_log(server_id=server.server_id)
+            shutil.copyfile(log_file.file, failed_test_path_dir / f"{pathlib.Path(log_file.file).name}")
+        for name, log in logs.items():
+            shutil.copyfile(log, failed_test_path_dir / name)
 
     async def is_manager_up(self) -> bool:
         """Check if Manager server is up"""
@@ -167,6 +186,16 @@ class ManagerClient():
         except RuntimeError as exc:
             raise Exception("Failed to get list of running servers") from exc
         assert isinstance(server_info_list, list), "running_servers got unknown data type"
+        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]))
+                for info in server_info_list]
+
+    async def all_servers(self) -> list[ServerInfo]:
+        """Get List of server info (id and IP address) of all servers"""
+        try:
+            server_info_list = await self.client.get_json("/cluster/all-servers")
+        except RuntimeError as exc:
+            raise Exception("Failed to get list of servers") from exc
+        assert isinstance(server_info_list, list), "all_servers got unknown data type"
         return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]))
                 for info in server_info_list]
 

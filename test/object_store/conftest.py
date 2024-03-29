@@ -30,6 +30,13 @@ def pytest_addoption(parser):
                      help='Manager unix socket path')
     parser.addoption('--mode', action='store', required=True,
                      help='Scylla build mode. Tests can use it to adjust their behavior.')
+    parser.addoption('--run_id', action='store', default=None,
+                     help='Run id for the test run')
+    parser.addoption('--tmpdir', action='store', type=str, dest='tmpdir',
+                     help='Temporary directory where logs are stored')
+    parser.addoption("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
+                     help="Provide the URL to artifacts directory to generate the link to failed tests directory "
+                          "with logs")
     parser.addoption('--auth_username', action='store', default=None,
                         help='username for authentication')
     parser.addoption('--auth_password', action='store', default=None,
