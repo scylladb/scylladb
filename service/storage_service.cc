@@ -782,13 +782,13 @@ void storage_service::merge_topology_snapshot_in_thread(raft_snapshot snp) {
 
     // Apply system.topology and system.topology_requests mutations atomically
     // to have a consistent state after restart
-    std::vector<mutation> muts;
+    std::vector<frozen_mutation> muts;
     muts.reserve(std::distance(snp.mutations.begin(), it));
     std::transform(snp.mutations.begin(), it, std::back_inserter(muts), [this] (const canonical_mutation& m) {
         auto s = _db.local().find_schema(m.column_family_id());
-        return m.to_mutation(s);
+        return freeze(m.to_mutation(s));
     });
-    _db.local().apply(freeze(muts), db::no_timeout).get();
+    _db.local().apply(muts, db::no_timeout).get();
 }
 
 // Moves the coroutine lambda onto the heap and extends its
