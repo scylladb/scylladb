@@ -210,6 +210,37 @@ migrate_fn_type::unregister_migrator(uint32_t index) {
     static_migrators().remove(index);
 }
 
+
+namespace {
+
+// for printing extra message in reclaim_timer::report() when stall is detected.
+//
+// this helper struct is deliberately introduced to ensure no dynamic
+// allocations in reclaim_timer::report(), which is involved in handling OOMs.
+struct extra_msg_when_stall_detected {
+    bool stall_detected;
+    saved_backtrace backtrace;
+    extra_msg_when_stall_detected(bool detected, saved_backtrace&& backtrace)
+        : stall_detected{detected}
+        , backtrace{std::move(backtrace)}
+    {}
+};
+
+}
+
+template <>
+struct fmt::formatter<extra_msg_when_stall_detected> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const extra_msg_when_stall_detected& msg, fmt::format_context& ctx) const {
+        if (msg.stall_detected) {
+            return fmt::format_to(ctx.out(), ", at {}", msg.backtrace);
+        } else {
+            return ctx.out();
+        }
+    }
+};
+
+
 namespace logalloc {
 
 #ifdef DEBUG_LSA_SANITIZER
@@ -1505,7 +1536,8 @@ void reclaim_timer::report() const noexcept {
     auto time_level = _stall_detected ? log_level::warn : log_level::debug;
     auto info_level = _stall_detected ? log_level::info : log_level::debug;
     auto MiB = 1024*1024;
-    auto msg_extra = _stall_detected ? fmt::format(", at {}", current_backtrace()) : "";
+    auto msg_extra = extra_msg_when_stall_detected(_stall_detected,
+                                                   _stall_detected ? current_backtrace() : saved_backtrace{});
 
     timing_logger.log(time_level, "{} took {} us, trying to release {:.3f} MiB {}preemptibly, reserve: {{goal: {}, max: {}}}{}",
                         _name, (_duration + 500ns) / 1us, (float)_memory_to_release / MiB, _preemptible ? "" : "non-",
