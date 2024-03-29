@@ -12,6 +12,9 @@ from test.pylib.manager_client import ManagerClient
 from test.topology.util import wait_for_token_ring_and_group0_consistency, wait_for_cql_and_get_hosts, wait_for
 import pytest
 import logging
+import asyncio
+from cassandra.query import SimpleStatement, ConsistencyLevel
+from test.pylib.random_tables import RandomTables, Column, TextType
 
 
 logger = logging.getLogger(__name__)
@@ -73,12 +76,49 @@ async def test_replace_different_ip_using_host_id(manager: ManagerClient) -> Non
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
 @pytest.mark.asyncio
-async def test_replace_reuse_ip(manager: ManagerClient) -> None:
+async def test_replace_reuse_ip(request, manager: ManagerClient) -> None:
     """Replace an existing node with new node using the same IP address"""
     servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': 2000})
-    await manager.server_stop(servers[0].server_id)
+    host2 = (await wait_for_cql_and_get_hosts(manager.get_cql(), [servers[2]], time.time() + 60))[0]
+
+    logger.info(f"creating test table")
+    random_tables = RandomTables(request.node.name, manager, "ks", 3)
+    await random_tables.add_table(name='test_table', pks=1, columns=[
+        Column(name="key", ctype=TextType),
+        Column(name="value", ctype=TextType)
+    ])
+
+    await manager.server_stop_gracefully(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = False)
-    await manager.server_add(replace_cfg)
+    replace_future = asyncio.create_task(manager.server_add(replace_cfg))
+    start_time = time.time()
+    next_id = 0
+    logger.info(f"running write requests in a loop while the replacing node is starting")
+    expected_data = []
+    while not replace_future.done():
+        i = next_id
+        next_id += 1
+        k = f'key_{i}'
+        v = f'value_{i}'
+        expected_data.append((k, v))
+        await manager.get_cql().run_async(SimpleStatement("insert into ks.test_table(key, value) values (%s, %s)",
+                                                          consistency_level=ConsistencyLevel.QUORUM),
+                                          parameters=[k, v],
+                                          host=host2)
+    finish_time = time.time()
+    await replace_future
+    logger.info(f"done, writes count {next_id}, took {finish_time - start_time} seconds")
+
+    result_set = await manager.get_cql().run_async(SimpleStatement("select * from ks.test_table",
+                                                                   consistency_level=ConsistencyLevel.QUORUM),
+                                                   host=host2, all_pages=True)
+    read_data = [(row.key, row.value) for row in result_set]
+    expected_data.sort()
+    read_data.sort()
+    logger.info(f"expected data:\n{expected_data}\nread_data:\n{read_data}")
+    assert read_data == expected_data
+    logger.info("the data is correct")
+
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
     await manager.server_sees_other_server(servers[1].ip_addr, servers[0].ip_addr)
     await manager.server_sees_other_server(servers[2].ip_addr, servers[0].ip_addr)
