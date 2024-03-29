@@ -1010,7 +1010,7 @@ void multishard_combining_reader_v2::on_partition_range_change(const dht::partit
     _shard_selection_min_heap.reserve(_sharder.shard_count());
 
     auto token = pr.start() ? pr.start()->value().token() : dht::minimum_token();
-    _current_shard = _sharder.shard_of(token);
+    _current_shard = _sharder.shard_for_reads(token);
 
     auto sharder = dht::ring_position_range_sharder(_sharder, pr);
 
