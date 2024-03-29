@@ -534,6 +534,11 @@ class TopologyTestSuite(PythonTestSuite):
         """Python pattern"""
         return "test_*.py"
 
+    def junit_tests(self):
+        """Return an empty list, since topology tests are excluded from an aggregated Junit report to prevent double
+        count in the CI report"""
+        return []
+
 
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
@@ -1025,6 +1030,9 @@ class TopologyTest(PythonTest):
 
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
         async with get_cluster_manager(self.mode + '/' + self.uname, self.suite.clusters, test_path) as manager:
+            self.args.insert(0, "--run_id={}".format(self.id))
+            self.args.insert(0, "--artifacts_dir_url={}".format(options.artifacts_dir_url))
+            self.args.insert(0, "--tmpdir={}".format(options.tmpdir))
             self.args.insert(0, "--mode={}".format(self.mode))
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
 
@@ -1321,6 +1329,9 @@ def parse_cmd_line() -> argparse.Namespace:
                         help = "Do not delete llvm indexed profiles when processing coverage reports.")
     parser.add_argument("--coverage-keep-lcovs",action = 'store_true',
                         help = "Do not delete intermediate lcov traces when processing coverage reports.")
+    parser.add_argument("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
+                        help="Provide the URL to artifacts directory to generate the link to failed tests directory "
+                             "with logs")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
                              help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
@@ -1386,6 +1397,8 @@ def parse_cmd_line() -> argparse.Namespace:
         prepare_dir(os.path.join(args.tmpdir, mode), "*.log")
         prepare_dir(os.path.join(args.tmpdir, mode), "*.reject")
         prepare_dir(os.path.join(args.tmpdir, mode, "xml"), "*.xml")
+        shutil.rmtree(os.path.join(args.tmpdir, mode, "failed_test"), ignore_errors=True)
+        prepare_dir(os.path.join(args.tmpdir, mode, "failed_test"), "*")
 
     # Get the list of tests configured by configure.py
     try:
@@ -1534,9 +1547,11 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
             if test.mode != mode:
                 continue
             total += 1
+            test_time = f"{test.time_end - test.time_start:.3f}"
             # add the suite name to disambiguate tests named "run"
             xml_res = ET.SubElement(xml_results, 'testcase',
-                                    name="{}.{}.{}.{}".format(test.suite.name, test.shortname, mode, test.id))
+                                    name="{}.{}.{}.{}".format(test.suite.name, test.shortname, mode, test.id),
+                                    time=test_time)
             if test.success is True:
                 continue
             failed += 1
