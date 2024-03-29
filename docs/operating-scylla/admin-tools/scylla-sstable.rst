@@ -131,7 +131,7 @@ SStable Content
 .. _SStable: /architecture/sstable
 
 All operations target either one specific sstable component or all of them as a whole.
-For more information about the sstable components and the format itself, visit SStable_.
+For more information about the sstable components and the format itself, visit :doc:`SSTable Format </architecture/sstable/index>`.
 
 On a conceptual level, the data in SStables is represented by objects called mutation fragments. There are the following kinds of fragments:
 
