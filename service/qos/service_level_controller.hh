@@ -106,6 +106,12 @@ public:
     void set_distributed_data_accessor(service_level_distributed_data_accessor_ptr sl_data_accessor);
 
     /**
+     * Reloads data accessor, this is used to align it with service level version
+     * stored in scylla_local table.
+     */
+    future<> reload_distributed_data_accessor(cql3::query_processor&, service::raft_group0_client&, db::system_keyspace&, db::system_distributed_keyspace&);
+
+    /**
      *  Adds a service level configuration if it doesn't exists, and updates
      *  an the existing one if it does exist.
      *  Handles both, static and non static service level configurations.
