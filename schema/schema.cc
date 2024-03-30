@@ -1171,7 +1171,7 @@ schema_builder& schema_builder::with_computed_column(bytes name, data_type type,
     return with_column(name, type, kind, 0, column_view_virtual::no, std::move(computation));
 }
 
-schema_builder& schema_builder::remove_column(bytes name)
+schema_builder& schema_builder::remove_column(bytes name, std::optional<api::timestamp_type> timestamp)
 {
     auto it = boost::range::find_if(_raw._columns, [&] (auto& column) {
         return column.name() == name;
@@ -1180,7 +1180,7 @@ schema_builder& schema_builder::remove_column(bytes name)
         throw std::out_of_range(format("Cannot remove: column {} not found.", name));
     }
     auto name_as_text = it->column_specification ? it->name_as_text() : schema::column_name_type(*it, _raw._regular_column_name_type)->get_string(it->name());
-    without_column(name_as_text, it->type, api::new_timestamp());
+    without_column(name_as_text, it->type, timestamp ? *timestamp : api::new_timestamp());
     _raw._columns.erase(it);
     return *this;
 }
