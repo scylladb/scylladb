@@ -9,12 +9,15 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include "cql3/query_options.hh"
 #include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/alter_type_statement.hh"
+#include "exceptions/exceptions.hh"
 #include "index/secondary_index_manager.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "timestamp.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
 #include <boost/range/adaptor/filtered.hpp>
@@ -37,13 +40,15 @@ alter_table_statement::alter_table_statement(uint32_t bound_terms,
                                              type t,
                                              std::vector<column_change> column_changes,
                                              std::optional<cf_prop_defs> properties,
-                                             renames_type renames)
+                                             renames_type renames,
+                                             std::unique_ptr<attributes> attrs)
     : schema_altering_statement(std::move(name))
     , _bound_terms(bound_terms)
     , _type(t)
     , _column_changes(std::move(column_changes))
     , _properties(std::move(properties))
     , _renames(std::move(renames))
+    , _attrs(std::move(attrs))
 {
 }
 
@@ -142,7 +147,7 @@ static void validate_column_rename(data_dictionary::database db, const schema& s
     }
 }
 
-void alter_table_statement::add_column(const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
+void alter_table_statement::add_column(const query_options&, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
     if (is_static) {
         if (!schema.is_compound()) {
             throw exceptions::invalid_request_exception("Static columns are not allowed in COMPACT STORAGE tables");
@@ -212,7 +217,7 @@ void alter_table_statement::add_column(const schema& schema, data_dictionary::ta
     }
 }
 
-void alter_table_statement::alter_column(const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
+void alter_table_statement::alter_column(const query_options&, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
     if (!def) {
         throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
     }
@@ -234,7 +239,7 @@ void alter_table_statement::alter_column(const schema& schema, data_dictionary::
     }
 }
 
-void alter_table_statement::drop_column(const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
+void alter_table_statement::drop_column(const query_options& options, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
     if (!def) {
         throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
     }
@@ -256,16 +261,22 @@ void alter_table_statement::drop_column(const schema& schema, data_dictionary::t
             }
         }
 
+        std::optional<api::timestamp_type> drop_timestamp;
+        if (_attrs->is_timestamp_set()) {
+            auto now = std::chrono::duration_cast<std::chrono::microseconds>(db_clock::now().time_since_epoch()).count();
+            drop_timestamp = _attrs->get_timestamp(now, options);
+        }
+
         for (auto&& column_def : boost::range::join(schema.static_columns(), schema.regular_columns())) { // find
             if (column_def.name() == column_name.name()) {
-                cfm.remove_column(column_name.name());
+                cfm.remove_column(column_name.name(), drop_timestamp);
                 break;
             }
         }
     }
 }
 
-std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(data_dictionary::database db) const {
+std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(data_dictionary::database db, const query_options& options) const {
     auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
@@ -280,14 +291,14 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
     auto cf = db.find_column_family(s);
     std::vector<view_ptr> view_updates;
 
-    using column_change_fn = std::function<void (const alter_table_statement*, const schema&, data_dictionary::table, schema_builder&, std::vector<view_ptr>&, const column_identifier&, const data_type, const column_definition*, bool)>;
+    using column_change_fn = std::function<void (const alter_table_statement*, const query_options&, const schema&, data_dictionary::table, schema_builder&, std::vector<view_ptr>&, const column_identifier&, const data_type, const column_definition*, bool)>;
 
     auto invoke_column_change_fn = [&] (column_change_fn fn) {
          for (auto& [raw_name, raw_validator, is_static] : _column_changes) {
              auto column_name = raw_name->prepare_column_identifier(*s);
              auto validator = raw_validator ? raw_validator->prepare(db, keyspace()).get_type() : nullptr;
              auto* def = get_column_definition(*s, *column_name);
-             fn(this, *s, cf, cfm, view_updates, *column_name, validator, def, is_static);
+             fn(this, options, *s, cf, cfm, view_updates, *column_name, validator, def, is_static);
          }
     };
 
@@ -390,7 +401,7 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 alter_table_statement::prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type ts) const {
   data_dictionary::database db = qp.db();
-  auto [cfm, view_updates] = prepare_schema_update(db);
+  auto [cfm, view_updates] = prepare_schema_update(db, options);
   auto m = co_await service::prepare_column_family_update_announcement(qp.proxy(), cfm.build(), false, std::move(view_updates), ts);
 
   using namespace cql_transport;
@@ -420,12 +431,14 @@ alter_table_statement::raw_statement::raw_statement(cf_name name,
                                                     type t,
                                                     std::vector<column_change> column_changes,
                                                     std::optional<cf_prop_defs> properties,
-                                                    renames_type renames)
+                                                    renames_type renames,
+                                                    std::unique_ptr<attributes::raw> attrs)
     : cf_statement(std::move(name))
     , _type(t)
     , _column_changes(std::move(column_changes))
     , _properties(std::move(properties))
     , _renames(std::move(renames))
+    , _attrs(std::move(attrs))
     {}
 
 std::unique_ptr<cql3::statements::prepared_statement>
@@ -438,15 +451,23 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
     }
 
     auto ctx = get_prepare_context();
+    auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
+    prepared_attrs->fill_prepare_context(ctx);
 
     return std::make_unique<prepared_statement>(::make_shared<alter_table_statement>(
-        ctx.bound_variables_size(),
-        *_cf_name,
-        _type,
-        _column_changes,
-        _properties,
-        _renames
-    ));
+                ctx.bound_variables_size(),
+                *_cf_name,
+                _type,
+                _column_changes,
+                _properties,
+                _renames,
+                std::move(prepared_attrs)
+            ),
+            ctx,
+            // since alter table is `cql_statement_no_metadata` (it doesn't return any metadata when preparing)
+            // and bind markers cannot be a part of partition key,
+            // we can pass empty vector as partition_key_bind_indices
+            std::vector<uint16_t>()); 
 }
 
 }
