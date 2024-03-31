@@ -51,12 +51,6 @@ struct raft_topology_cmd_result {
     service::raft_topology_cmd_result::command_status status;
 };
 
-struct raft_topology_snapshot {
-    std::vector<canonical_mutation> topology_mutations;
-    std::vector<canonical_mutation> cdc_generation_mutations;
-    std::vector<canonical_mutation> topology_requests_mutations;
-};
-
 struct raft_snapshot {
     utils::chunked_vector<canonical_mutation> mutations;
 };
