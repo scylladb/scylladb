@@ -1,0 +1,58 @@
+name: iwyu
+
+on:
+  pull_request:
+    branches:
+      - master
+
+env:
+  CLANG_VERSION: 18
+  BUILD_TYPE: RelWithDebInfo
+  BUILD_DIR: build
+  CLEANER_OUTPUT_PATH: build/clang-include-cleaner.log
+  CLEANER_DIRS: test/unit
+
+permissions: {}
+
+# cancel the in-progress run upon a repush
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-include-cleaner:
+    name: "Analyze #includes in source files"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: ./.github/actions/setup-build
+        with:
+          install_clang_tool: true
+      - name: Generate compilation database
+        run: |
+          cmake                                         \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE              \
+            -DCMAKE_C_COMPILER=clang-$CLANG_VERSION     \
+            -DCMAKE_CXX_COMPILER=clang++-$CLANG_VERSION \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON          \
+            -DCMAKE_CXX_FLAGS=-DFMT_HEADER_ONLY         \
+            -DCMAKE_PREFIX_PATH=$PWD/cooking            \
+            -G Ninja                                    \
+            -B $BUILD_DIR                               \
+            -S .
+      - name: clang-include-cleaner
+        run: |
+          for d in $CLEANER_DIRS; do
+            find $d -name '*.cc' -o -name '*.hh'          \
+              -exec echo {} \;                            \
+              -exec clang-include-cleaner-$CLANG_VERSION  \
+                --print=changes                           \
+                -p $BUILD_DIR                             \
+                {} \; | tee --append $CLEANER_OUTPUT_PATH
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Logs (clang-include-cleaner)
+          path: "./${{ env.CLEANER_OUTPUT_PATH }}"
