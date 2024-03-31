@@ -49,8 +49,9 @@ def get_linked_pr_from_issue_number(repo, number):
 
 def get_linked_issues_based_on_pr_body(repo, number):
     pr = repo.get_pull(number)
-    pattern = fr'Fixes:? (?:#|{repo}#|https://github.com/{repo}/issues/)(\d+)'
-    matches = re.findall(pattern, pr.body)
+    repo_name = repo.full_name
+    pattern = rf"(?:fix(?:|es|ed)|resolve(?:|d|s))\s*:?\s*(?:(?:(?:{repo_name})?#)|https://github\.com/{repo_name}/issues/)(\d+)"
+    matches = re.findall(pattern, pr.body, re.IGNORECASE)
     if not matches:
         raise RuntimeError("No regex matches found in the body!")
     issue_number_from_pr_body = []
