@@ -187,6 +187,12 @@ public:
     size_t memory_usage(const ::schema& s) const;
 };
 
+inline std::vector<mutation> make_mutation_vector(mutation&& m) {
+    std::vector<mutation> ret;
+    ret.emplace_back(std::move(m));
+    return ret;
+}
+
 template<consume_in_reverse reverse, FlattenedConsumerV2 Consumer>
 std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutation_partition& partition, Consumer& consumer, mutation_consume_cookie& cookie, is_preemptible preempt = is_preemptible::no) {
     constexpr bool crs_in_reverse = reverse == consume_in_reverse::yes;
