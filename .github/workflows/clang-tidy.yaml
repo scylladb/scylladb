@@ -1,0 +1,63 @@
+name: clang-tidy
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths-ignore:
+      - '**/*.rst'
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/**'
+  workflow_dispatch:
+  schedule:
+    # only at 5AM Saturday
+    - cron: '0 5 * * SAT'
+
+env:
+  # use the stable branch
+  CLANG_VERSION: 18
+  BUILD_TYPE: RelWithDebInfo
+  BUILD_DIR: build
+  CLANG_TIDY_CHECKS: '-*,bugprone-use-after-move'
+
+permissions: {}
+
+# cancel the in-progress run upon a repush
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-tidy:
+    name: Run clang-tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: ./.github/actions/setup-build
+        with:
+          install_clang_tidy: true
+      - name: Generate the building system
+        run: |
+          cmake                                         \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE              \
+            -DCMAKE_C_COMPILER=clang-$CLANG_VERSION     \
+            -DScylla_USE_LINKER=ld.lld-$CLANG_VERSION   \
+            -DCMAKE_CXX_COMPILER=clang++-$CLANG_VERSION \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON          \
+            -DCMAKE_CXX_CLANG_TIDY="clang-tidy-$CLANG_VERSION;--checks=$CLANG_TIDY_CHECKS" \
+            -DCMAKE_CXX_FLAGS=-DFMT_HEADER_ONLY         \
+            -DCMAKE_PREFIX_PATH=$PWD/cooking            \
+            -G Ninja                                    \
+            -B $BUILD_DIR                               \
+            -S .
+      # see https://github.com/actions/toolkit/blob/main/docs/problem-matchers.md
+      - run: |
+          echo "::add-matcher::.github/clang-tidy-matcher.json"
+      - name: Build with clang-tidy enabled
+        run: |
+          cmake --build $BUILD_DIR --target scylla
+      - run: |
+          echo "::remove-matcher owner=clang-tidy::"
