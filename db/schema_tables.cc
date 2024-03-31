@@ -2406,7 +2406,7 @@ std::vector<mutation> make_create_function_mutations(shared_ptr<cql3::functions:
     m.set_clustered_cell(ckey, "language", func->language(), timestamp);
     m.set_clustered_cell(ckey, "return_type", func->return_type()->as_cql3_type().to_string(), timestamp);
     m.set_clustered_cell(ckey, "called_on_null_input", func->called_on_null_input(), timestamp);
-    return {m};
+    return make_mutation_vector(std::move(m));
 }
 
 std::vector<mutation> make_drop_function_mutations(schema_ptr s, const cql3::functions::function& func, api::timestamp_type timestamp) {
@@ -2414,7 +2414,7 @@ std::vector<mutation> make_drop_function_mutations(schema_ptr s, const cql3::fun
     mutation& m = p.first;
     clustering_key& ckey = p.second;
     m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
-    return {std::move(m)};
+    return make_mutation_vector(std::move(m));
 }
 
 std::vector<mutation> make_drop_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp) {
@@ -2446,6 +2446,7 @@ std::vector<mutation> make_create_aggregate_mutations(schema_features features, 
     auto p = get_mutation(s, *aggregate);
     mutation& m = p.first;
     clustering_key& ckey = p.second;
+    std::vector<mutation> muts;
 
     data_type state_type = aggregate->sfunc()->arg_types()[0];
     if (aggregate->has_finalfunc()) {
@@ -2457,7 +2458,7 @@ std::vector<mutation> make_create_aggregate_mutations(schema_features features, 
     m.set_clustered_cell(ckey, "return_type", aggregate->return_type()->as_cql3_type().to_string(), timestamp);
     m.set_clustered_cell(ckey, "state_func", aggregate->sfunc()->name().name, timestamp);
     m.set_clustered_cell(ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
-    std::vector<mutation> muts = {m};
+    muts.emplace_back(std::move(m));
 
     if (features.contains<schema_feature::SCYLLA_AGGREGATES>() && aggregate->is_reducible()) {
         schema_ptr sa_schema = scylla_aggregates();
@@ -2467,7 +2468,7 @@ std::vector<mutation> make_create_aggregate_mutations(schema_features features, 
         sa_mut.set_clustered_cell(sa_ckey, "reduce_func", aggregate->reducefunc()->name().name, timestamp);
         sa_mut.set_clustered_cell(sa_ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
 
-        muts.emplace_back(sa_mut);
+        muts.emplace_back(std::move(sa_mut));
     }
 
     return muts;
@@ -2477,7 +2478,7 @@ std::vector<mutation> make_drop_aggregate_mutations(schema_features features, sh
     auto muts = make_drop_function_mutations(aggregates(), *aggregate, timestamp);
     if (features.contains<schema_feature::SCYLLA_AGGREGATES>() && aggregate->is_reducible()) {
         auto scylla_muts = make_drop_function_mutations(scylla_aggregates(), *aggregate, timestamp);
-        muts.insert(muts.end(), scylla_muts.begin(), scylla_muts.end());
+        std::move(scylla_muts.begin(), scylla_muts.end(), std::back_inserter(muts));
     }
 
     return muts;
