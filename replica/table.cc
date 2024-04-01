@@ -587,9 +587,6 @@ public:
     size_t log2_storage_groups() const override {
         return 0;
     }
-    size_t storage_group_id_for_token(dht::token) const noexcept override {
-        return 0;
-    }
     storage_group* storage_group_for_token(dht::token token) const noexcept override {
         return storage_groups().begin()->get();
     }
@@ -681,7 +678,7 @@ public:
     size_t log2_storage_groups() const override {
         return log2ceil(tablet_map().tablet_count());
     }
-    size_t storage_group_id_for_token(dht::token t) const noexcept override {
+    size_t storage_group_id_for_token(dht::token t) const noexcept {
         return storage_group_of(t).first;
     }
     storage_group* storage_group_for_token(dht::token token) const noexcept override {
@@ -870,10 +867,6 @@ compaction_group* table::get_compaction_group(size_t id) const noexcept {
 std::pair<size_t, locator::tablet_range_side>
 table::storage_group_of(dht::token token) const noexcept {
     return _sg_manager->storage_group_of(token);
-}
-
-size_t table::storage_group_id_for_token(dht::token token) const noexcept {
-    return _sg_manager->storage_group_id_for_token(token);
 }
 
 storage_group* table::storage_group_for_token(dht::token token) const noexcept {
