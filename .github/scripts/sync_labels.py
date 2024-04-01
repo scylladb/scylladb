@@ -51,8 +51,10 @@ def get_linked_issues_based_on_pr_body(repo, number):
     pr = repo.get_pull(number)
     repo_name = repo.full_name
     pattern = rf"(?:fix(?:|es|ed)|resolve(?:|d|s))\s*:?\s*(?:(?:(?:{repo_name})?#)|https://github\.com/{repo_name}/issues/)(\d+)"
-    matches = re.findall(pattern, pr.body, re.IGNORECASE)
     issue_number_from_pr_body = []
+    if pr.body is None:
+        return issue_number_from_pr_body
+    matches = re.findall(pattern, pr.body, re.IGNORECASE)
     if matches:
         for match in matches:
             issue_number_from_pr_body.append(match)
