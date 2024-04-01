@@ -1038,8 +1038,11 @@ future<> initialize_virtual_tables(
     auto& ss = dist_ss.local();
 
     auto add_table = [&] (std::unique_ptr<virtual_table>&& tbl) -> future<> {
-        virtual_tables[tbl->schema()->id()] = std::move(tbl);
-        co_return;
+        auto schema = tbl->schema();
+        virtual_tables[schema->id()] = std::move(tbl);
+        co_await db.create_local_system_table(schema, false, ss.get_erm_factory());
+        auto& cf = db.find_column_family(schema);
+        cf.mark_ready_for_writes(nullptr);
     };
 
     // Add built-in virtual tables here.
@@ -1052,11 +1055,6 @@ future<> initialize_virtual_tables(
     co_await add_table(std::make_unique<db_config_table>(cfg));
     co_await add_table(std::make_unique<clients_table>(ss));
     co_await add_table(std::make_unique<raft_state_table>(dist_raft_gr));
-
-    for (auto&& [id, vt] : virtual_tables) {
-        co_await db.create_local_system_table(vt->schema(), false, dist_ss.local().get_erm_factory());
-        db.find_column_family(vt->schema()).mark_ready_for_writes(nullptr);
-    }
 
     install_virtual_readers_and_writers(sys_ks.local(), db);
 }
