@@ -18,7 +18,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history for all tags and branches
+          sparse-checkout: |
+            .github/scripts/sync_labels.py
+          sparse-checkout-cone-mode: false
 
       - name: Install dependencies
         run: sudo apt-get install -y python3-github
