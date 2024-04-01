@@ -26,7 +26,7 @@ jobs:
         run: sudo apt-get install -y python3-github
 
       - name: Pull request opened event
-        if: github.event.action == 'opened'
+        if: ${{ github.event.action == 'opened' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python .github/scripts/sync_labels.py --repo ${{ github.repository }} --number ${{ github.event.number }} --action ${{ github.event.action }}
