@@ -265,7 +265,6 @@ public:
 
     virtual std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const = 0;
     virtual size_t log2_storage_groups() const = 0;
-    virtual size_t storage_group_id_for_token(dht::token) const noexcept = 0;
     virtual storage_group* storage_group_for_token(dht::token) const noexcept = 0;
 
     virtual locator::resize_decision::seq_number_t split_ready_seq_number() const noexcept = 0;
