@@ -1037,20 +1037,21 @@ future<> initialize_virtual_tables(
     auto& db = dist_db.local();
     auto& ss = dist_ss.local();
 
-    auto add_table = [&] (std::unique_ptr<virtual_table>&& tbl) {
+    auto add_table = [&] (std::unique_ptr<virtual_table>&& tbl) -> future<> {
         virtual_tables[tbl->schema()->id()] = std::move(tbl);
+        co_return;
     };
 
     // Add built-in virtual tables here.
-    add_table(std::make_unique<cluster_status_table>(dist_ss, dist_gossiper));
-    add_table(std::make_unique<token_ring_table>(db, ss));
-    add_table(std::make_unique<snapshots_table>(dist_db));
-    add_table(std::make_unique<protocol_servers_table>(ss));
-    add_table(std::make_unique<runtime_info_table>(dist_db, ss));
-    add_table(std::make_unique<versions_table>());
-    add_table(std::make_unique<db_config_table>(cfg));
-    add_table(std::make_unique<clients_table>(ss));
-    add_table(std::make_unique<raft_state_table>(dist_raft_gr));
+    co_await add_table(std::make_unique<cluster_status_table>(dist_ss, dist_gossiper));
+    co_await add_table(std::make_unique<token_ring_table>(db, ss));
+    co_await add_table(std::make_unique<snapshots_table>(dist_db));
+    co_await add_table(std::make_unique<protocol_servers_table>(ss));
+    co_await add_table(std::make_unique<runtime_info_table>(dist_db, ss));
+    co_await add_table(std::make_unique<versions_table>());
+    co_await add_table(std::make_unique<db_config_table>(cfg));
+    co_await add_table(std::make_unique<clients_table>(ss));
+    co_await add_table(std::make_unique<raft_state_table>(dist_raft_gr));
 
     for (auto&& [id, vt] : virtual_tables) {
         co_await db.create_local_system_table(vt->schema(), false, dist_ss.local().get_erm_factory());
