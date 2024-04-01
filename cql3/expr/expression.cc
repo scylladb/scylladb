@@ -1723,11 +1723,7 @@ cql3::raw_value do_evaluate(const field_selection& field_select, const evaluatio
             // std::optional<FragmentedView> read_field
             auto read_field = read_nth_user_type_field(udt_serialized_bytes, field_select.field_idx);
 
-            if (read_field.has_value()) {
-                return cql3::raw_value::make_value(managed_bytes(*read_field));
-            } else {
-                return cql3::raw_value::make_null();
-            }
+            return cql3::raw_value::make_value(managed_bytes_opt(read_field));
     });
 
     return field_value;
