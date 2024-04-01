@@ -27,6 +27,10 @@ this tool is again expected to be in the user's path, or be overridden with
 the `NODETOOL` environment variable. Nodetool is **not** needed to test
 Scylla.
 
+Modern Linux distributions usually do not carry a Cassandra package, so if
+you want to install Cassandra to run tests against it, please refer to the
+appendix below on _Installing Cassandra_.
+
 Additional options can be passed to "pytest" or to "run" / "run-cassandra"
 to control which tests to run:
 
@@ -202,3 +206,72 @@ and practices be followed when writing new tests:
    changing those tests without good reason, and don't add new tests to
    any file in it. Put new tests in the `cql-pytest` directory, in any
    place except the `cassandra_tests` subdirectory.
+
+# Installing Cassandra
+
+As explained above, the ability to run cql-pytest tests against Cassandra
+makes it easier to write correct tests, to ensure compatibility with
+Cassandra, and sometimes to write tests for new Cassandra-inspired features
+before developing the feature in Scylla (this is so-called "test-driven
+development"). Unfortunately, in recent years modern Linux distributions
+dropped their "cassandra" package, so to run Cassandra you'll need to
+install it manually, and this section explains how. It's very easy, and
+don't worry - you don't even need to learn how to run Cassandra, as the
+"test/cql-pytest/run-cassandra" tool will do it for you.
+
+To be able to run Cassandra, you'll need either Java 8 or 11 installed on
+your system - Cassandra does not support more recent versions of Java.
+However, this old Java only needs to be installed *alongside* your favorite
+version of Java - it does not need to be the default Java on your system.
+The "run-cassandra" script will automatically pick the right version of
+Java from multiple versions installed on your system. On modern Fedora,
+installing Java 11 as a secondary Java is as simple as
+`sudo dnf install java-11`.
+
+## Precompiled Cassandra
+The easiest way to get Cassandra is to get a pre-compiled tar.
+Go to [Cassandra's download page](https://cassandra.apache.org/_/download.html)
+and pick the specific version you want to run, and download the `bin.tar.gz`
+file. For example, [4.1.4](https://dlcdn.apache.org/cassandra/4.1.4/apache-cassandra-4.1.4-bin.tar.gz).
+
+Open this tar in any directory you choose (you don't need to install it in
+any specific place), using `tar zxvf apache-cassandra-4.1.4-bin.tar.gz`.
+
+That's it! In the newly opened directory, you have bin/cassandra (as well
+as bin/nodetool and other things), which you will ask run-cassandra to use:
+
+```
+export CASSANDRA=/tmp/apache-cassandra-4.1.4/bin/cassandra
+test/cql-pytest/run-cassandra testfile.py::testfunc
+```
+
+## Building Cassandra from source code
+Usually, installing a pre-compiled Cassandra is enough. But in some cases
+you might want to test some unofficial or modified version of Cassandra,
+built from source. This is also not difficult:
+
+First, download the Cassandra source code, e.g. from github:
+```
+git clone https://github.com/apache/cassandra.git
+```
+In the newly downloaded `cassandra` directory, build Cassandra. As before,
+an older version of Java, usually Java 11, is needed to build Cassandra.
+The following command can be used to build Cassandra assuming that Java 11
+is installed in the following directories (this is the case on Fedora):
+```
+JAVA_HOME=/usr/lib/jvm/java-11 JRE_HOME=/usr/lib/jvm/java-11/jre \
+PATH=$JAVA_HOME:$JRE_HOME/bin:$PATH CASSANDRA_USE_JDK11=true \
+ant -Duse.jdk11=true
+```
+This will take a few minutes, and may begin by downloading dozens of JAR
+dependecies into your maven cache (`$HOME/.m2`), if this hasn't happened
+last time you built Cassandra.
+
+That's it! In the Cassandra source directory, you now have bin/cassandra,
+bin/nodetool, and everything they need. You can now use this bin/cassandra
+with run-cassandra:
+
+```
+export CASSANDRA=/tmp/cassandra/bin/cassandra
+test/cql-pytest/run-cassandra testfile.py::testfunc
+```
