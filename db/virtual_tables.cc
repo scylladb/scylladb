@@ -1015,16 +1015,9 @@ private:
 }
 
 static void install_virtual_readers_and_writers(db::system_keyspace& sys_ks, replica::database& db) {
-    auto& virtual_tables = *sys_ks.get_virtual_tables_registry();
     db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db, sys_ks)));
     db.find_column_family(system_keyspace::v3::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
     db.find_column_family(system_keyspace::built_indexes()).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
-
-    for (auto&& [id, vt] : virtual_tables) {
-        auto&& cf = db.find_column_family(vt->schema());
-        cf.set_virtual_reader(vt->as_mutation_source());
-        cf.set_virtual_writer([&vt = *vt] (const frozen_mutation& m) { return vt.apply(m); });
-    }
 }
 
 future<> initialize_virtual_tables(
@@ -1043,6 +1036,9 @@ future<> initialize_virtual_tables(
         co_await db.create_local_system_table(schema, false, ss.get_erm_factory());
         auto& cf = db.find_column_family(schema);
         cf.mark_ready_for_writes(nullptr);
+        auto& vt = virtual_tables[schema->id()];
+        cf.set_virtual_reader(vt->as_mutation_source());
+        cf.set_virtual_writer([&vt = *vt] (const frozen_mutation& m) { return vt.apply(m); });
     };
 
     // Add built-in virtual tables here.
