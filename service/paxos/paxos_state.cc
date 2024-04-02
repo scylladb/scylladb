@@ -49,6 +49,8 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
         dht::token token = dht::get_token(*schema, key);
         utils::latency_counter lc;
         lc.start();
+        // FIXME: Handle tablet intra-node migration: #16594.
+        // The shard can change concurrently, so we cannot rely on locking on this shard.
         return with_locked_key(token, timeout, [&sp, &sys_ks, &cmd, token, &key, ballot, tr_state, schema, only_digest, da, timeout] () mutable {
             // When preparing, we need to use the same time as "now" (that's the time we use to decide if something
             // is expired or not) across nodes, otherwise we may have a window where a Most Recent Decision shows up
@@ -146,6 +148,8 @@ future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks,
             [&sp, &sys_ks, token = std::move(token), &proposal, schema, tr_state, timeout] {
         utils::latency_counter lc;
         lc.start();
+        // FIXME: Handle tablet intra-node migration: #16594.
+        // The shard can change concurrently, so we cannot rely on locking on this shard.
         return with_locked_key(token, timeout, [&sys_ks, &proposal, schema, tr_state, timeout] () mutable {
             auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
             auto f = sys_ks.load_paxos_state(proposal.update.key(), schema, gc_clock::time_point(now_in_sec), timeout);
