@@ -116,6 +116,13 @@ data_value repair_scheduler_config_to_data_value(const locator::repair_scheduler
     return result;
 };
 
+// Based on calibration run measuring 6ms time to freeze
+// mutation with 16K tablets (with 9 replicas each) on a
+// 3.4GHz amd64 cpu, and twice as much for unfreeze.
+// 1K tablets would take around 0.4 ms to freeze and 0.8 ms
+// to unfreeze.
+constexpr size_t min_tablets_in_mutation = 1024;
+
 future<>
 tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
                        api::timestamp_type ts, const gms::feature_service& features, std::function<future<>(mutation)> process_mutation) {
@@ -123,10 +130,17 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
     auto gc_now = gc_clock::now();
     auto tombstone_ts = ts - 1;
 
-    mutation m(s, partition_key::from_single_value(*s,
+    auto key = partition_key::from_single_value(*s,
         data_value(id.uuid()).serialize_nonnull()
-    ));
-    m.partition().apply(tombstone(tombstone_ts, gc_now));
+    );
+
+    auto make_mutation = [&] () {
+        mutation m(s, key);
+        m.partition().apply(tombstone(tombstone_ts, gc_now));
+        return m;
+    };
+
+    auto m = make_mutation();
     m.set_static_cell("tablet_count", data_value(int(tablets.tablet_count())), ts);
     m.set_static_cell("keyspace_name", data_value(keyspace_name), ts);
     m.set_static_cell("table_name", data_value(table_name), ts);
@@ -140,7 +154,13 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
     }
 
     tablet_id tid = tablets.first_tablet();
+    size_t tablets_in_mutation = 0;
     for (auto&& tablet : tablets.tablets()) {
+        if (++tablets_in_mutation >= min_tablets_in_mutation && seastar::need_preempt()) {
+            tablets_in_mutation = 0;
+            co_await coroutine::maybe_yield();
+            co_await process_mutation(std::exchange(m, make_mutation()));
+        }
         auto last_token = tablets.get_last_token(tid);
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
         m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
@@ -169,7 +189,6 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             }
         }
         tid = *tablets.next_tablet(tid);
-        co_await coroutine::maybe_yield();
     }
     co_await process_mutation(std::move(m));
 }
