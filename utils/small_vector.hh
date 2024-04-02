@@ -20,8 +20,8 @@
 #include <stdexcept>
 #include <malloc.h>
 #include <iostream>
-
-#include "utils/to_string.hh"
+#include <fmt/ostream.h>
+#include <fmt/ranges.h>
 
 namespace utils {
 
@@ -466,7 +466,8 @@ public:
 
 template <typename T, size_t N>
 std::ostream& operator<<(std::ostream& os, const utils::small_vector<T, N>& v) {
-    return utils::format_range(os, v);
+    fmt::print(os, v);
+    return os;
 }
 
 }

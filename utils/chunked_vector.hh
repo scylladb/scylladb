@@ -52,8 +52,8 @@
 #include <algorithm>
 #include <stdexcept>
 #include <malloc.h>
-
-#include "utils/to_string.hh"
+#include <fmt/ostream.h>
+#include <fmt/ranges.h>
 
 namespace utils {
 
@@ -496,7 +496,8 @@ chunked_vector<T, max_contiguous_allocation>::clear() {
 
 template <typename T, size_t max_contiguous_allocation>
 std::ostream& operator<<(std::ostream& os, const chunked_vector<T, max_contiguous_allocation>& v) {
-    return utils::format_range(os, v);
+    fmt::print(os, v);
+    return os;
 }
 
 }
