@@ -527,6 +527,7 @@ future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this
 class tablet_effective_replication_map : public effective_replication_map {
     table_id _table;
     tablet_sharder _sharder;
+    mutable const tablet_map* _tmap = nullptr;
 private:
     inet_address_vector_replica_set to_replica_set(const tablet_replica_set& replicas) const {
         inet_address_vector_replica_set result;
@@ -551,7 +552,10 @@ private:
     }
 
     const tablet_map& get_tablet_map() const {
-        return _tmptr->tablets().get_tablet_map(_table);
+        if (!_tmap) {
+            _tmap = &_tmptr->tablets().get_tablet_map(_table);
+        }
+        return *_tmap;
     }
 
     const tablet_replica_set& get_replicas_for_write(dht::token search_token) const {
