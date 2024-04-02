@@ -15,8 +15,9 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.parametrize("action", ['move', 'add_replica'])
 @pytest.mark.asyncio
-async def test_tablet_transition_sanity(manager: ManagerClient):
+async def test_tablet_transition_sanity(manager: ManagerClient, action):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets', 'consistent-topology-changes']}
     host_ids = []
@@ -50,15 +51,24 @@ async def test_tablet_transition_sanity(manager: ManagerClient):
     else:
         assert False, "Cannot find tablet on none of the servers"
 
-    logger.info(f"Move tablet {old_replica[0]} -> {new_replica[0]}")
-    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+    if action == 'move':
+        logger.info(f"Move tablet {old_replica[0]} -> {new_replica[0]}")
+        await manager.api.move_tablet(servers[0].ip_addr, "test", "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+    if action == 'add_replica':
+        logger.info(f"Adding replica to tablet, host {new_replica[0]}")
+        await manager.api.add_tablet_replica(servers[0].ip_addr, "test", "test", new_replica[0], new_replica[1], 0)
 
     replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
     logger.info(f"Tablet is now on [{replicas}]")
     assert len(replicas) == 1
     replicas = [ r[0] for r in replicas[0].replicas ]
-    assert len(replicas) == 1
-    assert new_replica[0] in replicas
+    if action == 'move':
+        assert len(replicas) == 1
+        assert new_replica[0] in replicas
+    if action == 'add_replica':
+        assert len(replicas) == 2
+        assert old_replica[0] in replicas
+        assert new_replica[0] in replicas
 
 
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
