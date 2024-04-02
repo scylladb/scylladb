@@ -3119,6 +3119,7 @@ Prints a table with the name and current logging level for each logger in Scylla
                 "getsstables",
                 "Get the sstables that contain the given key",
 R"(
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/getsstables.html
 )",
                 {
                     typed_option<>("hex-format", "The key is given in hex dump format"),
@@ -3438,6 +3439,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "sstableinfo",
                 "Information about sstables per keyspace/table",
 R"(
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/sstableinfo.html
 )",
                 { },
                 {
