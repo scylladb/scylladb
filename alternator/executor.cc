@@ -4559,23 +4559,25 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
 
-    // If the "tablets" experimental feature is available, we enable tablets
-    // by default on all Alternator tables. However, some Alternator features
-    // are not yet available with tablets (Streams #16313 and TTL #16567) so
-    // we allow disabling tablets at table-creation by supplying the following
-    // tags with any non-numeric value (e.g., empty string or the word "none").
-    // Supplying it with an integer value allows overriding the default choice
-    // of initial_tablets (setting the value to 0 asks for the default choice).
+    // Even if the "tablets" experimental feature is available, we currently
+    // do not enable tablets by default on Alternator tables because LWT is
+    // not yet fully supported with tablets.
+    // The user can override the choice of whether or not to use tablets at
+    // table-creation time by supplying the following tag with a numeric value
+    // (setting the value to 0 means enabling tablets with automatic selection
+    // of the best number of tablets).
+    // Setting this tag to any non-numeric value (e.g., an empty string or the
+    // word "none") will ask to disable tablets.
     // If we make this tag a permanent feature, it will get a "system:" prefix -
     // until then we give it the "experimental:" prefix to not commit to it.
     static constexpr auto INITIAL_TABLETS_TAG_KEY = "experimental:initial_tablets";
+    // initial_tablets currently defaults to unset, so tablets will not be
+    // used by default on new Alternator tables. Change this initialization
+    // to 0 enable tablets by default, with automatic number of tablets.
     std::optional<unsigned> initial_tablets;
     if (sp.get_db().local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
         auto it = tags_map.find(INITIAL_TABLETS_TAG_KEY);
-        if (it == tags_map.end()) {
-            // No tag - ask to choose a reasonable default number of tablets
-            initial_tablets = 0;
-        } else {
+        if (it != tags_map.end()) {
             // Tag set. If it's a valid number, use it. If not - e.g., it's
             // empty or a word like "none", disable tablets by setting
             // initial_tablets to a disengaged optional.
