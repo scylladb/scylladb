@@ -221,7 +221,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
         if (rp < min_pos(shard_id)) {
             rlogger.trace("entry {} is less than global min position. skipping", rp);
             s->skipped_mutations++;
-            return make_ready_future<>();
+            co_return;
         }
 
         auto uuid = fm.column_family_id();
@@ -233,7 +233,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
         if (rp <= cf_rp) {
             rlogger.trace("entry {} at {} is younger than recorded replay position {}. skipping", fm.column_family_id(), rp, cf_rp);
             s->skipped_mutations++;
-            return make_ready_future<>();
+            co_return;
         }
 
         auto token_range_rp = token_min_pos(uuid, shard_id, token);
@@ -241,12 +241,11 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
             rlogger.trace("entry {}, token {} in table {}, is younger than recorded replay position {} for its token range. skipping",
                           rp, token, fm.column_family_id(), token_range_rp);
             s->skipped_mutations++;
-            return make_ready_future<>();
+            co_return;
         }
 
-        auto shard = table.get_effective_replication_map()->shard_of(schema, token);
-        return _db.invoke_on(shard, [this, cer = std::move(cer), &src_cm, rp] (replica::database& db) mutable -> future<> {
-            auto& fm = cer.mutation();
+      auto apply = [&] (seastar::shard_id shard) {
+        return _db.invoke_on(shard, [this, &fm, &src_cm, rp] (replica::database& db) mutable -> future<> {
             // TODO: might need better verification that the deserialized mutation
             // is schema compatible. My guess is that just applying the mutation
             // will not do this.
@@ -276,9 +275,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
                     return db.apply_in_memory(m, cf, db::rp_handle(), db::no_timeout);
                 });
             } else {
-                return do_with(std::move(cer).mutation(), [&](const frozen_mutation& m) {
-                    return db.apply_in_memory(m, cf.schema(), db::rp_handle(), db::no_timeout);
-                });
+                return db.apply_in_memory(fm, cf.schema(), db::rp_handle(), db::no_timeout);
             }
         }).then_wrapped([s] (future<> f) {
             try {
@@ -290,6 +287,14 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
                 rlogger.warn("error replaying: {}", std::current_exception());
             }
         });
+      };
+        auto shards = table.get_effective_replication_map()->shard_for_writes(schema, token);
+        if (shards.empty()) {
+            rlogger.debug("no shard for token {} in table {}", token, uuid);
+            s->skipped_mutations++;
+        } else {
+            co_await seastar::parallel_for_each(shards, apply);
+        }
     } catch (replica::no_such_column_family&) {
         // No such CF now? Origin just ignores this.
     } catch (...) {
@@ -297,8 +302,6 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
         // TODO: write mutation to file like origin.
         rlogger.warn("error replaying: {}", std::current_exception());
     }
-
-    return make_ready_future<>();
 }
 
 db::commitlog_replayer::commitlog_replayer(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks)
