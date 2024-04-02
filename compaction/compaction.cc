@@ -427,38 +427,6 @@ uint64_t compaction_progress_monitor::get_progress() const {
     return _progress;
 }
 
-class formatted_sstables_list {
-    bool _include_origin = true;
-    std::vector<std::string> _ssts;
-public:
-    formatted_sstables_list() = default;
-    void reserve(size_t n) {
-        _ssts.reserve(n);
-    }
-    explicit formatted_sstables_list(const std::vector<shared_sstable>& ssts, bool include_origin) : _include_origin(include_origin) {
-        _ssts.reserve(ssts.size());
-        for (const auto& sst : ssts) {
-            *this += sst;
-        }
-    }
-    formatted_sstables_list& operator+=(const shared_sstable& sst) {
-        _ssts.emplace_back(to_string(sst, _include_origin));
-        return *this;
-    }
-    friend fmt::formatter<formatted_sstables_list>;
-};
-
-}
-
-template <>
-struct fmt::formatter<sstables::formatted_sstables_list> : fmt::formatter<std::string_view> {
-    auto format(const sstables::formatted_sstables_list& lst, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "[{}]", fmt::join(lst._ssts, ","));
-    }
-};
-
-namespace sstables {
-
 class compaction {
 protected:
     compaction_data& _cdata;
@@ -756,8 +724,6 @@ private:
 
     future<> setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(make_sstable_set_for_input());
-        formatted_sstables_list formatted_msg;
-        formatted_msg.reserve(_sstables.size());
         auto fully_expired = _table_s.fully_expired_sstables(_sstables, gc_clock::now());
         min_max_tracker<api::timestamp_type> timestamp_tracker;
 
@@ -772,7 +738,6 @@ private:
             _input_sstable_generations.push_back(sst->generation());
             _start_size += sst->bytes_on_disk();
             _cdata.total_partitions += sst->get_estimated_key_count();
-            formatted_msg += sst;
 
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without resurrecting old data.
@@ -794,7 +759,7 @@ private:
                 _rp = std::max(_rp, sst_stats.position);
             }
         }
-        log_info("{} {}", report_start_desc(), formatted_msg);
+        log_info("{} [{}]", report_start_desc(), fmt::join(_sstables | boost::adaptors::transformed([] (auto sst) { return to_string(sst, true); }), ","));
         if (ssts->size() < _sstables.size()) {
             log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
                       _sstables.size() - ssts->size(), _sstables.size());
@@ -882,16 +847,15 @@ protected:
 
         on_end_of_compaction();
 
-        formatted_sstables_list new_sstables_msg(ret.new_sstables, false);
-
         // FIXME: there is some missing information in the log message below.
         // look at CompactionTask::runMayThrow() in origin for reference.
         // - add support to merge summary (message: Partition merge counts were {%s}.).
         // - there is no easy way, currently, to know the exact number of total partitions.
         // By the time being, using estimated key count.
-        log_info("{} {} sstables to {}. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
-                report_finish_desc(),
-                _input_sstable_generations.size(), new_sstables_msg, utils::pretty_printed_data_size(_start_size), utils::pretty_printed_data_size(_end_size), int(ratio * 100),
+        log_info("{} {} sstables to [{}]. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
+                report_finish_desc(), _input_sstable_generations.size(),
+                fmt::join(ret.new_sstables | boost::adaptors::transformed([] (auto sst) { return to_string(sst, false); }), ","),
+                utils::pretty_printed_data_size(_start_size), utils::pretty_printed_data_size(_end_size), int(ratio * 100),
                 std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), utils::pretty_printed_throughput(_start_size, duration),
                 _cdata.total_partitions, _cdata.total_keys_written);
 
@@ -1203,7 +1167,9 @@ private:
             _new_unused_sstables.insert(_new_unused_sstables.end(), unused_gc_sstables.begin(), unused_gc_sstables.end());
 
             auto exhausted_ssts = std::vector<shared_sstable>(exhausted, _sstables.end());
-            log_debug("Replacing earlier exhausted sstable(s) {} by new sstable(s) {}", formatted_sstables_list(exhausted_ssts, false), formatted_sstables_list(_new_unused_sstables, true));
+            log_debug("Replacing earlier exhausted sstable(s) [{}] by new sstable(s) [{}]",
+                fmt::join(exhausted_ssts | boost::adaptors::transformed([] (auto sst) { return to_string(sst, false); }), ","),
+                fmt::join(_new_unused_sstables | boost::adaptors::transformed([] (auto sst) { return to_string(sst, true); }), ","));
             _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
             dynamic_cast<compaction_read_monitor_generator&>(unwrap_monitor_generator()).remove_exhausted_sstables(exhausted_ssts);
