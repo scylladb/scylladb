@@ -28,12 +28,8 @@ async def test_different_group0_ids(manager: ManagerClient):
     """
 
     # Consistent topology changes are disabled to use repair based node operations.
-    scylla_a = await manager.server_add(config={
-        'experimental_features': ["udf"] # disable consistent topology changes
-    })
-    scylla_b = await manager.server_add(start=False, config={
-        'experimental_features': ["udf"] # disable consistent topology changes
-    })
+    scylla_a = await manager.server_add(config={'force_gossip_topology_changes': True})
+    scylla_b = await manager.server_add(start=False, config={'force_gossip_topology_changes': True})
     await manager.server_update_config(scylla_b.server_id, key='seed_provider', value=[{
             'class_name': 'org.apache.cassandra.locator.SimpleSeedProvider',
             'parameters': [{

@@ -32,7 +32,6 @@ class feature_service;
 class i_endpoint_state_change_subscriber;
 
 struct feature_config {
-    bool use_raft_cluster_features = false;
 private:
     std::set<sstring> _disabled_features;
     feature_config();

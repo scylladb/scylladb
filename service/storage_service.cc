@@ -176,8 +176,7 @@ storage_service::storage_service(abort_source& abort_source,
         _listeners.emplace_back(make_lw_shared(_snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
 
-    auto& cfg = _db.local().get_config();
-    init_messaging_service(cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES));
+    init_messaging_service();
 }
 
 enum class node_external_status {
@@ -608,10 +607,6 @@ future<> storage_service::topology_state_load() {
     });
     running = true;
 #endif
-
-    if (!_raft_experimental_topology) {
-        co_return;
-    }
 
     rtlogger.debug("reload raft topology state");
     std::unordered_set<raft::server_id> prev_normal = boost::copy_range<std::unordered_set<raft::server_id>>(_topology_state_machine._topology.normal_nodes | boost::adaptors::map_keys);
@@ -1936,7 +1931,6 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), false);
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 
-    if (_raft_experimental_topology) {
         // Waited on during stop()
         (void)([] (storage_service& me, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) -> future<> {
             try {
@@ -1946,7 +1940,6 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             }
             // Other errors are handled internally by track_upgrade_progress_to_topology_coordinator
         })(*this, sys_dist_ks, proxy);
-    }
 }
 
 future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
@@ -2752,9 +2745,8 @@ future<> storage_service::drain_on_shutdown() {
         _drain_finished.get_future() : do_drain();
 }
 
-void storage_service::set_group0(raft_group0& group0, bool raft_experimental_topology) {
+void storage_service::set_group0(raft_group0& group0) {
     _group0 = &group0;
-    _raft_experimental_topology = raft_experimental_topology;
 }
 
 future<> storage_service::init_address_map(raft_address_map& address_map, gms::generation_type new_generation) {
@@ -2841,10 +2833,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         slogger.info("peer={}, supported_features={}", x.first, x.second);
     }
 
-    if (!_raft_experimental_topology) {
-        slogger.info("Booting in legacy operations mode because experimental raft topology is not enabled");
-        set_topology_change_kind(topology_change_kind::legacy);
-    } else if (_group0->client().in_recovery()) {
+    if (_group0->client().in_recovery()) {
         slogger.info("Raft recovery - starting in legacy topology operations mode");
         set_topology_change_kind(topology_change_kind::legacy);
     } else if (_group0->joined_group0()) {
@@ -6437,7 +6426,7 @@ node_state storage_service::get_node_state(locator::host_id id) {
     return p->second.state;
 }
 
-void storage_service::init_messaging_service(bool raft_topology_change_enabled) {
+void storage_service::init_messaging_service() {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         std::optional<locator::host_id> coordinator_host_id;
@@ -6448,7 +6437,6 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
             return ss.node_ops_cmd_handler(coordinator, coordinator_host_id, std::move(req));
         });
     });
-    if (raft_topology_change_enabled) {
         auto handle_raft_rpc = [this] (raft::server_id dst_id, auto handler) {
             return container().invoke_on(0, [dst_id, handler = std::move(handler)] (auto& ss) mutable {
                 if (!ss._group0 || !ss._group0->joined_group0()) {
@@ -6557,7 +6545,6 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
                 return make_ready_future<join_node_query_result>(std::move(result));
             });
         });
-    }
 }
 
 future<> storage_service::uninit_messaging_service() {

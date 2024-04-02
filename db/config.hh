@@ -110,7 +110,6 @@ struct experimental_features_t {
         UNUSED,
         UDF,
         ALTERNATOR_STREAMS,
-        CONSISTENT_TOPOLOGY_CHANGES,
         BROADCAST_TABLES,
         KEYSPACE_STORAGE_OPTIONS,
         TABLETS,

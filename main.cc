@@ -777,11 +777,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     throw bad_configuration_error();
                 }
             }
-            const bool raft_topology_change_enabled =
-                cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
 
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
-            fcfg.use_raft_cluster_features = raft_topology_change_enabled;
 
             debug::the_feature_service = &feature_service;
             feature_service.start(fcfg).get();
@@ -1388,11 +1385,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             service::tablet_allocator::config tacfg;
             tacfg.initial_tablets_scale = cfg->tablets_initial_scale_factor();
             distributed<service::tablet_allocator> tablet_allocator;
-            if (cfg->check_experimental(db::experimental_features_t::feature::TABLETS) &&
-                !cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
-                    startlog.error("Bad configuration: The consistent-topology-changes feature has to be enabled if tablets feature is enabled");
-                    throw bad_configuration_error();
-            }
             tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
                 tablet_allocator.stop().get();
@@ -1636,7 +1628,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
             cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
             cdc_config.dont_rewrite_streams = cfg->cdc_dont_rewrite_streams();
-            cdc_config.raft_experimental_topology = raft_topology_change_enabled;
             cdc_generation_service.start(std::move(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(sys_ks),
                     std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db),
                     [&ss] () -> bool { return ss.local().raft_topology_change_enabled(); }).get();
@@ -1808,7 +1799,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             // Set up group0 service earlier since it is needed by group0 setup just below
-            ss.local().set_group0(group0_service, raft_topology_change_enabled);
+            ss.local().set_group0(group0_service);
 
             const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
 

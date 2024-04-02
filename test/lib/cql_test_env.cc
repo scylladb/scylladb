@@ -861,9 +861,6 @@ private:
                 return service.set_distributed_data_accessor(std::move(service_level_data_accessor));
             }).get();
 
-            const bool raft_topology_change_enabled =
-                    cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
-
             cdc::generation_service::config cdc_config;
             cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
             /*
@@ -873,8 +870,7 @@ private:
              * and would only slow down tests (by having them wait).
              */
             cdc_config.ring_delay = std::chrono::milliseconds(0);
-            cdc_config.raft_experimental_topology = raft_topology_change_enabled;
-            _cdc_generation_service.start(std::ref(cdc_config), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_sys_ks), std::ref(abort_sources), std::ref(_token_metadata), std::ref(_feature_service), std::ref(_db), [raft_topology_change_enabled] { return raft_topology_change_enabled; }).get();
+            _cdc_generation_service.start(std::ref(cdc_config), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_sys_ks), std::ref(abort_sources), std::ref(_token_metadata), std::ref(_feature_service), std::ref(_db), [&] { return !cfg->force_gossip_topology_changes(); }).get();
             auto stop_cdc_generation_service = defer([this] {
                 _cdc_generation_service.stop().get();
             });
@@ -890,7 +886,7 @@ private:
                 group0_service.abort().get();
             });
 
-            _ss.local().set_group0(group0_service, raft_topology_change_enabled);
+            _ss.local().set_group0(group0_service);
 
             const auto generation_number = gms::generation_type(_sys_ks.local().increment_and_get_generation().get());
 

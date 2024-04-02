@@ -312,7 +312,6 @@ def run_scylla_cmd(pid, dir):
         # test/alternator/run.
         '--experimental-features=udf',
         '--experimental-features=keyspace-storage-options',
-        '--experimental-features=consistent-topology-changes',
         '--experimental-features=tablets',
         '--enable-user-defined-functions', '1',
         # Set up authentication in order to allow testing this module

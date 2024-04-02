@@ -1339,7 +1339,7 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"cdc", feature::UNUSED},
         {"alternator-streams", feature::ALTERNATOR_STREAMS},
         {"alternator-ttl", feature::UNUSED },
-        {"consistent-topology-changes", feature::CONSISTENT_TOPOLOGY_CHANGES},
+        {"consistent-topology-changes", feature::UNUSED},
         {"broadcast-tables", feature::BROADCAST_TABLES},
         {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
         {"tablets", feature::TABLETS},

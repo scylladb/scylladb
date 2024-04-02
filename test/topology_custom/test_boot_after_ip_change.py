@@ -22,7 +22,7 @@ async def test_boot_after_ip_change(manager: ManagerClient) -> None:
        Regression test for #14468. Does not apply to Raft-topology mode.
     """
     cfg = {'enable_user_defined_functions': False,
-           'experimental_features': list[str]()}
+           'force_gossip_topology_changes': True}
     logger.info(f"Booting initial cluster")
     servers = [await manager.server_add(config=cfg) for _ in range(2)]
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)

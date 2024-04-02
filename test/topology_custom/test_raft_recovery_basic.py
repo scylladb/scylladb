@@ -20,7 +20,7 @@ from test.topology.util import reconnect_driver, restart, enter_recovery_state, 
 @log_run_time
 async def test_raft_recovery_basic(request, manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False,
-           'experimental_features': list[str]()}
+           'force_gossip_topology_changes': True}
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
     cql = manager.cql
     assert(cql)

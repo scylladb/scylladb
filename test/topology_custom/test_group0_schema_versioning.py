@@ -124,7 +124,7 @@ async def test_schema_versioning_with_recovery(manager: ManagerClient):
     Verify that schema versions are in sync after each schema change.
     """
     cfg = {'enable_user_defined_functions': False,
-           'experimental_features': list[str]()}
+           'force_gossip_topology_changes': True}
     logger.info("Booting cluster")
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
     cql = manager.get_cql()
@@ -292,7 +292,7 @@ async def test_upgrade(manager: ManagerClient):
     # So we do the same here: start a cluster in Raft mode, then enter recovery
     # to simulate a non-Raft cluster.
     cfg = {'enable_user_defined_functions': False,
-           'experimental_features': list[str]()}
+           'force_gossip_topology_changes': True}
     logger.info("Booting cluster")
     servers = [await manager.server_add(config=cfg) for _ in range(2)]
     cql = manager.get_cql()

@@ -584,7 +584,7 @@ async def test_tablet_cleanup(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_tablet_resharding(manager: ManagerClient):
     cmdline = ['--smp=3']
-    config = {'experimental_features': ['consistent-topology-changes', 'tablets']}
+    config = {'experimental_features': ['tablets']}
     servers = await manager.servers_add(1, cmdline=cmdline)
     server = servers[0]
 

@@ -39,9 +39,6 @@ cql_test_config auth_on(bool with_authorizer = true) {
         cfg.db_config->authorizer("CassandraAuthorizer");
     }
     cfg.db_config->authenticator("PasswordAuthenticator");
-    cfg.db_config->experimental_features({
-        db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES,
-    });
     return cfg;
 }
 
