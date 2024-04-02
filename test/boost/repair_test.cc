@@ -167,7 +167,7 @@ SEASTAR_TEST_CASE(test_reader_with_different_strategies) {
             co_await storage_proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
         }
 
-        auto do_check = [&](const dht::sharder& remote_sharder,
+        auto do_check = [&](const dht::static_sharder& remote_sharder,
             repair_reader::read_strategy strategy1, repair_reader::read_strategy strategy2) -> future<>
         {
             const auto& s = *cf.schema();
@@ -225,7 +225,7 @@ SEASTAR_TEST_CASE(test_reader_with_different_strategies) {
             }
         };
 
-        co_await do_check(dht::sharder(local_sharder.shard_count() + 1, local_sharder.sharding_ignore_msb()),
+        co_await do_check(dht::static_sharder(local_sharder.shard_count() + 1, local_sharder.sharding_ignore_msb()),
             repair_reader::read_strategy::multishard_split,
             repair_reader::read_strategy::multishard_filter);
         co_await do_check(local_sharder,

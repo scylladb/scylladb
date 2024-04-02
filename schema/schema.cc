@@ -135,7 +135,7 @@ auto fmt::formatter<column_mapping>::format(const column_mapping& cm, fmt::forma
 }
 
 thread_local std::map<sstring, std::unique_ptr<dht::i_partitioner>> partitioners;
-thread_local std::map<std::pair<unsigned, unsigned>, std::unique_ptr<dht::sharder>> sharders;
+thread_local std::map<std::pair<unsigned, unsigned>, std::unique_ptr<dht::static_sharder>> sharders;
 sstring default_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
 unsigned default_partitioner_ignore_msb = 12;
 
@@ -153,10 +153,10 @@ void schema::set_default_partitioner(const sstring& class_name, unsigned ignore_
     default_partitioner_ignore_msb = ignore_msb;
 }
 
-static const dht::sharder& get_sharder(unsigned shard_count, unsigned ignore_msb) {
+static const dht::static_sharder& get_sharder(unsigned shard_count, unsigned ignore_msb) {
     auto it = sharders.find({shard_count, ignore_msb});
     if (it == sharders.end()) {
-        auto sharder = std::make_unique<dht::sharder>(shard_count, ignore_msb);
+        auto sharder = std::make_unique<dht::static_sharder>(shard_count, ignore_msb);
         it = sharders.emplace(std::make_pair(shard_count, ignore_msb), std::move(sharder)).first;
     }
     return *it->second;
@@ -166,7 +166,7 @@ const dht::i_partitioner& schema::get_partitioner() const {
     return _raw._partitioner.get();
 }
 
-const dht::sharder* schema::try_get_static_sharder() const {
+const dht::static_sharder* schema::try_get_static_sharder() const {
     auto t = maybe_table();
     if (t && !t->uses_static_sharding()) {
         // Use table()->get_effective_replication_map()->get_sharder() instead.
@@ -175,7 +175,7 @@ const dht::sharder* schema::try_get_static_sharder() const {
     return &_raw._sharder.get();
 }
 
-const dht::sharder& schema::get_sharder() const {
+const dht::static_sharder& schema::get_sharder() const {
     auto* s = try_get_static_sharder();
     if (!s) {
         // Use table()->get_effective_replication_map()->get_sharder() instead.

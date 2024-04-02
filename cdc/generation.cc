@@ -184,7 +184,7 @@ static std::vector<stream_id> create_stream_ids(
         size_t index, dht::token start, dht::token end, size_t shard_count, uint8_t ignore_msb) {
     std::vector<stream_id> result;
     result.reserve(shard_count);
-    dht::sharder sharder(shard_count, ignore_msb);
+    dht::static_sharder sharder(shard_count, ignore_msb);
     for (size_t shard_idx = 0; shard_idx < shard_count; ++shard_idx) {
         auto t = dht::find_first_token_for_shard(sharder, start, end, shard_idx);
         // compose the id from token and the "index" of the range end owning vnode

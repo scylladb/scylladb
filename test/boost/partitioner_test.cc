@@ -245,19 +245,19 @@ SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding) {
         return boost::copy_range<std::vector<dht::token>>(
                 v | boost::adaptors::transformed(token_from_long));
     };
-    dht::sharder mm3p7s(7);
+    dht::static_sharder mm3p7s(7);
     auto mm3p7s_shard_limits = make_token_vector({
         -9223372036854775807, -6588122883467697006+1, -3952873730080618204+1,
         -1317624576693539402+1, 1317624576693539401+1, 3952873730080618203+1,
         6588122883467697005+1,
     });
     test_sharding(mm3p7s, 7, mm3p7s_shard_limits);
-    dht::sharder mm3p2s(2);
+    dht::static_sharder mm3p2s(2);
     auto mm3p2s_shard_limits = make_token_vector({
         -9223372036854775807, 0,
     });
     test_sharding(mm3p2s, 2, mm3p2s_shard_limits);
-    dht::sharder mm3p1s(1);
+    dht::static_sharder mm3p1s(1);
     auto mm3p1s_shard_limits = make_token_vector({
         -9223372036854775807,
     });
@@ -269,7 +269,7 @@ SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
         return boost::copy_range<std::vector<dht::token>>(
                 v | boost::adaptors::transformed(token_from_long));
     };
-    dht::sharder mm3p7s2i(7, 2);
+    dht::static_sharder mm3p7s2i(7, 2);
     auto mm3p7s2i_shard_limits = make_token_vector({
         -9223372036854775807,
         -8564559748508006107, -7905747460161236406, -7246935171814466706, -6588122883467697005,
@@ -281,7 +281,7 @@ SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
         7905747460161236407, 8564559748508006108,
     });
     test_sharding(mm3p7s2i, 7, mm3p7s2i_shard_limits, 2);
-    dht::sharder mm3p2s4i(2, 4);
+    dht::static_sharder mm3p2s4i(2, 4);
     auto mm3p2s_shard_limits = make_token_vector({
         -9223372036854775807,
         -8646911284551352320, -8070450532247928832, -7493989779944505344, -6917529027641081856,
@@ -310,7 +310,7 @@ normalize(dht::partition_range pr) {
     return dht::partition_range(start, end);
 };
 
-class map_sharder : public dht::sharder {
+class map_sharder : public dht::static_sharder {
     // Defines mapping of tokens to shards.
     //
     // For example, {t1:s1, t2:s2, t3:s3} defines the following mapping on token ranges:
@@ -322,7 +322,7 @@ class map_sharder : public dht::sharder {
     //
     std::map<dht::token, unsigned> _shards;
 public:
-    map_sharder(unsigned num_shards) : dht::sharder(num_shards) {}
+    map_sharder(unsigned num_shards) : dht::static_sharder(num_shards) {}
 
     const std::map<dht::token, unsigned>& get_map() const {
         return _shards;
@@ -399,10 +399,10 @@ test_something_with_some_interesting_ranges_and_sharder(std::function<void (cons
         .with_column("v", int32_type)
         .build();
     auto some_sharders = {
-            dht::sharder(1, 0),
-            dht::sharder(7, 4),
-            dht::sharder(4, 0),
-            dht::sharder(32, 8),  // More, and we OOM since memory isn't configured
+            dht::static_sharder(1, 0),
+            dht::static_sharder(7, 4),
+            dht::static_sharder(4, 0),
+            dht::static_sharder(32, 8),  // More, and we OOM since memory isn't configured
     };
     auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
     auto t2 = token_from_long(int64_t(-1));
@@ -483,10 +483,10 @@ test_something_with_some_interesting_ranges_and_sharder_with_token_range(std::fu
         .with_column("v", int32_type)
         .build();
     auto some_sharder = {
-            dht::sharder(1, 0),
-            dht::sharder(7, 4),
-            dht::sharder(4, 0),
-            dht::sharder(32, 8),  // More, and we OOM since memory isn't configured
+            dht::static_sharder(1, 0),
+            dht::static_sharder(7, 4),
+            dht::static_sharder(4, 0),
+            dht::static_sharder(32, 8),  // More, and we OOM since memory isn't configured
     };
     auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
     auto t2 = token_from_long(int64_t(-1));
@@ -561,7 +561,7 @@ SEASTAR_THREAD_TEST_CASE(test_selective_token_range_sharder) {
 SEASTAR_THREAD_TEST_CASE(test_find_first_token_for_shard) {
     const unsigned cpu_count = 3;
     const unsigned ignore_msb_bits = 10;
-    dht::sharder sharder(cpu_count, ignore_msb_bits);
+    dht::static_sharder sharder(cpu_count, ignore_msb_bits);
     auto first_boundary = sharder.token_for_next_shard(dht::minimum_token(), 1);
     auto second_boundary = sharder.token_for_next_shard(dht::minimum_token(), 2);
     auto third_boundary = sharder.token_for_next_shard(dht::minimum_token(), 0);

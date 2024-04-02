@@ -30,26 +30,40 @@ sharder::sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits)
     // if one shard, ignore sharding_ignore_msb_bits as they will just cause needless
     // range breaks
     , _sharding_ignore_msb_bits(shard_count > 1 ? sharding_ignore_msb_bits : 0)
+{}
+
+static_sharder::static_sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits)
+    : sharder(shard_count, sharding_ignore_msb_bits)
     , _shard_start(init_zero_based_shard_start(_shard_count, _sharding_ignore_msb_bits))
 {}
 
 unsigned
-sharder::shard_for_reads(const token& t) const {
+static_sharder::shard_of(const token& t) const {
     return dht::shard_of(_shard_count, _sharding_ignore_msb_bits, t);
 }
 
+unsigned
+static_sharder::shard_for_reads(const token& t) const {
+    return shard_of(t);
+}
+
 shard_replica_set
-sharder::shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel) const {
-    return {shard_for_reads(t)};
+static_sharder::shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel) const {
+    return {shard_of(t)};
 }
 
 token
-sharder::token_for_next_shard_for_reads(const token& t, shard_id shard, unsigned spans) const {
+static_sharder::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
     return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
 }
 
+token
+static_sharder::token_for_next_shard_for_reads(const token& t, shard_id shard, unsigned spans) const {
+    return token_for_next_shard(t, shard, spans);
+}
+
 std::optional<shard_and_token>
-sharder::next_shard_for_reads(const token& t) const {
+static_sharder::next_shard(const token& t) const {
     auto shard = shard_for_reads(t);
     auto next_shard = shard + 1 == _shard_count ? 0 : shard + 1;
     auto next_token = token_for_next_shard_for_reads(t, next_shard);
@@ -57,6 +71,11 @@ sharder::next_shard_for_reads(const token& t) const {
         return std::nullopt;
     }
     return shard_and_token{next_shard, next_token};
+}
+
+std::optional<shard_and_token>
+static_sharder::next_shard_for_reads(const token& t) const {
+    return next_shard(t);
 }
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {

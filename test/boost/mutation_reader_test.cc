@@ -1942,7 +1942,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
         std::vector<std::atomic<bool>> shards_touched(smp::count);
         simple_schema s;
-        auto sharder = std::make_unique<dht::sharder>(no_shards, 0);
+        auto sharder = std::make_unique<dht::static_sharder>(no_shards, 0);
         auto factory = [&shards_touched] (
                 schema_ptr s,
                 reader_permit permit,
@@ -2305,7 +2305,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         auto partition_range = dht::to_partition_range(token_range);
 
         auto& local_partitioner = schema->get_sharder();
-        auto remote_partitioner = dht::sharder(local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
+        auto remote_partitioner = dht::static_sharder(local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
 
         auto tested_reader = make_multishard_streaming_reader(env.db(), schema, make_reader_permit(env),
                 [sharder = dht::selective_token_range_sharder(remote_partitioner, token_range, 0)] () mutable -> std::optional<dht::partition_range> {

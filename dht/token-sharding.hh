@@ -50,7 +50,6 @@ class sharder {
 protected:
     unsigned _shard_count;
     unsigned _sharding_ignore_msb_bits;
-    std::vector<uint64_t> _shard_start;
 public:
     sharder(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
     virtual ~sharder() = default;
@@ -76,7 +75,7 @@ public:
      *   }
      *
      */
-    virtual unsigned shard_for_reads(const token& t) const;
+    virtual unsigned shard_for_reads(const token& t) const = 0;
 
     /**
      * Returns the set of shards which should receive a write to token t.
@@ -86,7 +85,7 @@ public:
      *
      * Unlike shard_for_reads(), returns an empty vector (instead of 0) if the token is not owned by this node.
      */
-    virtual shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel = std::nullopt) const;
+    virtual shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel = std::nullopt) const = 0;
 
     /**
      * Gets the first token greater than `t` that is in shard `shard` for reads, and is a shard boundary (its first token).
@@ -103,7 +102,7 @@ public:
      *
      * On overflow, maximum_token() is returned.
      */
-    virtual token token_for_next_shard_for_reads(const token& t, shard_id shard, unsigned spans = 1) const;
+    virtual token token_for_next_shard_for_reads(const token& t, shard_id shard, unsigned spans = 1) const = 0;
 
     [[deprecated("Use token_for_next_shard_for_reads() instead")]]
     virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const {
@@ -120,7 +119,7 @@ public:
      *
      *     shard_for_reads(next_shard(t)->token) == next_shard(t)->shard
      */
-    virtual std::optional<shard_and_token> next_shard_for_reads(const token& t) const;
+    virtual std::optional<shard_and_token> next_shard_for_reads(const token& t) const = 0;
 
     [[deprecated("Use next_shard_for_reads() instead")]]
     virtual std::optional<shard_and_token> next_shard(const token& t) const {
@@ -137,8 +136,28 @@ public:
     unsigned sharding_ignore_msb() const {
         return _sharding_ignore_msb_bits;
     }
+};
 
-    bool operator==(const sharder& o) const {
+/**
+ * A sharder for vnode-based tables.
+ * Shard assignment for a given token is constant for a given sharder configuration (shard count and ignore MSB bits).
+ * Doesn't change on topology changes.
+ */
+class static_sharder : public sharder {
+    std::vector<uint64_t> _shard_start;
+public:
+    static_sharder(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
+
+    virtual unsigned shard_of(const token& t) const;
+    virtual std::optional<shard_and_token> next_shard(const token& t) const;
+    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
+
+    virtual unsigned shard_for_reads(const token& t) const override;
+    virtual shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel) const override;
+    virtual token token_for_next_shard_for_reads(const token& t, shard_id shard, unsigned spans = 1) const override;
+    virtual std::optional<shard_and_token> next_shard_for_reads(const token& t) const override;
+
+    bool operator==(const static_sharder& o) const {
         return _shard_count == o._shard_count && _sharding_ignore_msb_bits == o._sharding_ignore_msb_bits;
     }
 };
@@ -162,9 +181,9 @@ dht::token find_first_token_for_shard(
 } //namespace dht
 
 template<>
-struct fmt::formatter<dht::sharder> {
+struct fmt::formatter<dht::static_sharder> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    auto format(const dht::sharder& sharder, fmt::format_context& ctx) const {
+    auto format(const dht::static_sharder& sharder, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "sharder[shard_count={}, ignore_msb_bits={}]",
                               sharder.shard_count(), sharder.sharding_ignore_msb());
     }
