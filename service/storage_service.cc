@@ -615,7 +615,7 @@ future<> storage_service::topology_state_load() {
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
 
     if (_manage_topology_change_kind_from_group0) {
-        _topology_change_kind_enabled = upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state);
+        set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
     }
 
     if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::done) {
@@ -1743,7 +1743,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // If we were the first node in the cluster, at this point `upgrade_state` will be
         // initialized properly. Yield control to group 0
         _manage_topology_change_kind_from_group0 = true;
-        _topology_change_kind_enabled = upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state);
+        set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
 
         co_await update_topology_with_local_metadata(*raft_server);
 
@@ -1767,7 +1767,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     _manage_topology_change_kind_from_group0 = true;
-    _topology_change_kind_enabled = upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state);
+    set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
 
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
@@ -2833,22 +2833,22 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
 
     if (!_raft_experimental_topology) {
         slogger.info("Booting in legacy operations mode because experimental raft topology is not enabled");
-        _topology_change_kind_enabled = topology_change_kind::legacy;
+        set_topology_change_kind(topology_change_kind::legacy);
     } else if (utils::get_local_injector().is_enabled("force_gossip_based_join") && !_sys_ks.local().bootstrap_complete()) {
         slogger.info("Booting in legacy topology operations mode because it was requested by an error injection");
-        _topology_change_kind_enabled = topology_change_kind::legacy;
+        set_topology_change_kind(topology_change_kind::legacy);
     } else if (_group0->client().in_recovery()) {
         slogger.info("Raft recovery - starting in legacy topology operations mode");
-        _topology_change_kind_enabled = topology_change_kind::legacy;
+        set_topology_change_kind(topology_change_kind::legacy);
     } else if (_group0->joined_group0()) {
         // We are a part of group 0. The _topology_change_kind_enabled flag is maintained from there.
         _manage_topology_change_kind_from_group0 = true;
-        _topology_change_kind_enabled = upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state);
+        set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
         slogger.info("The node is already in group 0 and will restart in {} mode", raft_topology_change_enabled() ? "raft" : "legacy");
     } else if (_sys_ks.local().bootstrap_complete()) {
         // We already bootstrapped but we are not a part of group 0. This means that we are restarting after recovery.
         slogger.info("Restarting in legacy mode. The node was either upgraded from a non-raft-topology version or is restarting after recovery.");
-        _topology_change_kind_enabled = topology_change_kind::legacy;
+        set_topology_change_kind(topology_change_kind::legacy);
     } else {
         // We are not in group 0 and we are just bootstrapping. We need to discover group 0.
         const std::vector<gms::inet_address> contact_nodes{initial_contact_nodes.begin(), initial_contact_nodes.end()};
@@ -2859,7 +2859,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         if (_group0->load_my_id() == g0_info.id) {
             // We're creating the group 0.
             slogger.info("We are creating the group 0. Start in raft topology operations mode");
-            _topology_change_kind_enabled = topology_change_kind::raft;
+            set_topology_change_kind(topology_change_kind::raft);
         } else {
             // Ask the current member of the raft group about which mode to use
             auto params = join_node_query_params {};
@@ -2868,11 +2868,11 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
             switch (result.topo_mode) {
             case join_node_query_result::topology_mode::raft:
                 slogger.info("Will join existing cluster in raft topology operations mode");
-                _topology_change_kind_enabled = topology_change_kind::raft;
+                set_topology_change_kind(topology_change_kind::raft);
                 break;
             case join_node_query_result::topology_mode::legacy:
                 slogger.info("Will join existing cluster in legacy topology operations mode because the cluster still doesn't use raft-based topology operations");
-                _topology_change_kind_enabled = topology_change_kind::legacy;
+                set_topology_change_kind(topology_change_kind::legacy);
             }
         }
     }
