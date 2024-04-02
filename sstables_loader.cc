@@ -280,16 +280,15 @@ future<> sstable_streamer::stream_sstable_mutations(const dht::partition_range& 
         // FIXME: indentation
         auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
         auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
-        std::vector<sstring> sst_names;
         size_t estimated_partitions = 0;
         for (auto& sst : sstables) {
             estimated_partitions += sst->estimated_keys_for_range(token_range);
-            sst_names.push_back(sst->get_filename());
             sst_set->insert(sst);
         }
 
-        llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables={}",
-                ops_uuid, nr_sst_current, nr_sst_current + sstables.size(), nr_sst_total, sst_names);
+        llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables=[{}]",
+                ops_uuid, nr_sst_current, nr_sst_current + sstables.size(), nr_sst_total,
+                fmt::join(sstables | boost::adaptors::transformed([] (auto sst) { return sst->get_filename(); }), ", "));
 
         auto start_time = std::chrono::steady_clock::now();
         inet_address_vector_replica_set current_targets;
