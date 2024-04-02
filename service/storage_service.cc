@@ -6390,10 +6390,10 @@ future<std::vector<canonical_mutation>> storage_service::get_system_mutations(sc
     std::vector<canonical_mutation> result;
     auto rs = co_await db::system_keyspace::query_mutations(_db, schema);
     result.reserve(rs->partitions().size());
-    boost::range::transform(
-            rs->partitions(), std::back_inserter(result), [schema] (const partition& p) {
-        return canonical_mutation{p.mut().unfreeze(schema)};
-    });
+    for (const auto& p : rs->partitions()) {
+        result.emplace_back(canonical_mutation{p.mut().unfreeze(schema)});
+        co_await coroutine::maybe_yield();
+    }
     co_return result;
 }
 
