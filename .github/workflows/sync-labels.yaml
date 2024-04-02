@@ -9,6 +9,7 @@ on:
 
 jobs:
   label-sync:
+    if: ${{ github.repository == 'scylladb/scylladb' }}
     name:  Synchronize labels between PR and the issue(s) fixed by it
     runs-on: ubuntu-latest
     permissions:

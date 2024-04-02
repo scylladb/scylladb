@@ -590,7 +590,6 @@ private:
 
     // Select a compaction group from a given token.
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token token) const noexcept;
-    size_t storage_group_id_for_token(dht::token token) const noexcept;
     storage_group* storage_group_for_token(dht::token token) const noexcept;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
