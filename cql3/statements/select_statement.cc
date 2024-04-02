@@ -27,6 +27,7 @@
 #include "validation.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include <optional>
+#include <ranges>
 #include <seastar/core/shared_ptr.hh>
 #include "query-result-reader.hh"
 #include "query_ranges_to_vnodes.hh"
