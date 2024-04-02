@@ -2916,6 +2916,26 @@ public:
                     });
                 }).get();
 
+                if (!master.all_nodes().empty()) {
+                    // Use the average number of partitions, instead of the sum
+                    // of the partitions, as the estimated partitions in a
+                    // given range. The bigger the estimated partitions, the
+                    // more memory bloom filter for the sstable would consume.
+                    _estimated_partitions /= master.all_nodes().size();
+
+                    // In addition, estimate the difference between nodes is
+                    // less than 10% for regular repair. Underestimation will
+                    // not be a big problem since those sstables produced by
+                    // repair will go through off-strategy later anyway. The
+                    // worst case is that we have a worse false positive ratio
+                    // than expected temporarily when the sstable is still in
+                    // maintenance set.
+                    //
+                    // To save memory and have less different conditions, we
+                    // use the 10% estimation for RBNO repair as well.
+                    _estimated_partitions /= 10;
+                }
+
                 parallel_for_each(master.all_nodes(), [&, this] (repair_node_state& ns) {
                     const auto& node = ns.node;
                     rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
