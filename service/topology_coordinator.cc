@@ -1832,13 +1832,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         for (auto& table_id : plan.resize_plan().finalize_resize) {
             auto s = _db.find_schema(table_id);
             auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
-            updates.emplace_back(co_await replica::tablet_map_to_mutation(
+            co_await replica::tablet_map_to_mutations(
                 new_tablet_map,
                 table_id,
                 s->ks_name(),
                 s->cf_name(),
                 guard.write_timestamp(),
-                _feature_service));
+                _feature_service,
+                [&] (mutation m) -> future<> {
+                    updates.emplace_back(co_await make_canonical_mutation_gently(m));
+                });
 
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});
