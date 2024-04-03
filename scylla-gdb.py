@@ -3684,14 +3684,34 @@ class scylla_io_queues(gdb.Command):
             gdb.write("\n")
 
             group = std_shared_ptr(ioq['_group']).get().dereference()
-            try:
-                f_groups = [ std_unique_ptr(x) for x in std_vector(group['_fgs']) ]
-                f_queues = boost_small_vector(ioq['_streams'])
-                fq_pclass = lambda x : x.dereference()
-            except gdb.error:
-                f_groups = [ group['_fg'] ]
-                f_queues = [ ioq['_fq'] ]
-                fq_pclass = lambda x : seastar_lw_shared_ptr(x).get().dereference()
+            while True:
+                # in order to avoid nested try-catch block, use a single while block
+                try:
+                    f_groups = static_vector(group['_fgs'])
+                    _ = len(f_groups)
+                    f_queues = static_vector(ioq['_streams'])
+                    _ = len(f_queues)
+                    fq_pclass = lambda x: x.dereference()
+                    break
+                except gdb.error:
+                    # try harder
+                    pass
+                try:
+                    f_groups = [std_unique_ptr(x) for x in std_vector(group['_fgs'])]
+                    f_queues = boost_small_vector(ioq['_streams'])
+                    fq_pclass = lambda x: x.dereference()
+                    break
+                except gdb.error:
+                    # try harder
+                    pass
+                try:
+                    f_groups = [group['_fg']]
+                    f_queues = [ioq['_fq']]
+                    fq_pclass = lambda x: seastar_lw_shared_ptr(x).get().dereference()
+                    break
+                except gdb.error:
+                    # give up
+                    raise
 
             gdb.write("\t{} streams\n".format(len(f_groups)))
             gdb.write("\n")
