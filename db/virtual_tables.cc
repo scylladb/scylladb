@@ -1014,39 +1014,6 @@ private:
 
 }
 
-static void register_virtual_tables(virtual_tables_registry_impl& virtual_tables, distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, sharded<service::raft_group_registry>& dist_raft_gr, db::config& cfg) {
-    auto add_table = [&] (std::unique_ptr<virtual_table>&& tbl) {
-        virtual_tables[tbl->schema()->id()] = std::move(tbl);
-    };
-
-    auto& db = dist_db.local();
-    auto& ss = dist_ss.local();
-
-    // Add built-in virtual tables here.
-    add_table(std::make_unique<cluster_status_table>(dist_ss, dist_gossiper));
-    add_table(std::make_unique<token_ring_table>(db, ss));
-    add_table(std::make_unique<snapshots_table>(dist_db));
-    add_table(std::make_unique<protocol_servers_table>(ss));
-    add_table(std::make_unique<runtime_info_table>(dist_db, ss));
-    add_table(std::make_unique<versions_table>());
-    add_table(std::make_unique<db_config_table>(cfg));
-    add_table(std::make_unique<clients_table>(ss));
-    add_table(std::make_unique<raft_state_table>(dist_raft_gr));
-}
-
-static void install_virtual_readers_and_writers(db::system_keyspace& sys_ks, replica::database& db) {
-    auto& virtual_tables = *sys_ks.get_virtual_tables_registry();
-    db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db, sys_ks)));
-    db.find_column_family(system_keyspace::v3::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
-    db.find_column_family(system_keyspace::built_indexes()).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
-
-    for (auto&& [id, vt] : virtual_tables) {
-        auto&& cf = db.find_column_family(vt->schema());
-        cf.set_virtual_reader(vt->as_mutation_source());
-        cf.set_virtual_writer([&vt = *vt] (const frozen_mutation& m) { return vt.apply(m); });
-    }
-}
-
 future<> initialize_virtual_tables(
         distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss,
         sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr,
@@ -1054,15 +1021,34 @@ future<> initialize_virtual_tables(
         db::config& cfg) {
     auto& virtual_tables_registry = sys_ks.local().get_virtual_tables_registry();
     auto& virtual_tables = *virtual_tables_registry;
-    register_virtual_tables(virtual_tables, dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
-
     auto& db = dist_db.local();
-    for (auto&& [id, vt] : virtual_tables) {
-        co_await db.create_local_system_table(vt->schema(), false, dist_ss.local().get_erm_factory());
-        db.find_column_family(vt->schema()).mark_ready_for_writes(nullptr);
-    }
+    auto& ss = dist_ss.local();
 
-    install_virtual_readers_and_writers(sys_ks.local(), db);
+    auto add_table = [&] (std::unique_ptr<virtual_table>&& tbl) -> future<> {
+        auto schema = tbl->schema();
+        virtual_tables[schema->id()] = std::move(tbl);
+        co_await db.create_local_system_table(schema, false, ss.get_erm_factory());
+        auto& cf = db.find_column_family(schema);
+        cf.mark_ready_for_writes(nullptr);
+        auto& vt = virtual_tables[schema->id()];
+        cf.set_virtual_reader(vt->as_mutation_source());
+        cf.set_virtual_writer([&vt = *vt] (const frozen_mutation& m) { return vt.apply(m); });
+    };
+
+    // Add built-in virtual tables here.
+    co_await add_table(std::make_unique<cluster_status_table>(dist_ss, dist_gossiper));
+    co_await add_table(std::make_unique<token_ring_table>(db, ss));
+    co_await add_table(std::make_unique<snapshots_table>(dist_db));
+    co_await add_table(std::make_unique<protocol_servers_table>(ss));
+    co_await add_table(std::make_unique<runtime_info_table>(dist_db, ss));
+    co_await add_table(std::make_unique<versions_table>());
+    co_await add_table(std::make_unique<db_config_table>(cfg));
+    co_await add_table(std::make_unique<clients_table>(ss));
+    co_await add_table(std::make_unique<raft_state_table>(dist_raft_gr));
+
+    db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db, sys_ks.local())));
+    db.find_column_family(system_keyspace::v3::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
+    db.find_column_family(system_keyspace::built_indexes()).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
 }
 
 virtual_tables_registry::virtual_tables_registry() : unique_ptr(std::make_unique<virtual_tables_registry_impl>()) {

@@ -59,6 +59,7 @@ future<> create_table_statement::check_access(query_processor& qp, const service
 std::vector<column_definition> create_table_statement::get_columns() const
 {
     std::vector<column_definition> column_defs;
+    column_defs.reserve(_columns.size());
     for (auto&& col : _columns) {
         column_kind kind = column_kind::regular_column;
         if (_static_columns.contains(col.first)) {
