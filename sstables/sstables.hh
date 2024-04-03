@@ -182,6 +182,7 @@ public:
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
     using manager_list_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
+    using manager_set_link_type = bi::set_member_hook<bi::link_mode<bi::auto_unlink>>;
 public:
     sstable(schema_ptr schema,
             sstring table_dir,
@@ -574,6 +575,9 @@ private:
     sstables_stats _stats;
     // link used by the _active list of sstables manager
     manager_list_link_type _manager_list_link;
+    // link used by the _reclaimed set of sstables manager
+    manager_set_link_type _manager_set_link;
+
 
     // The _large_data_stats map stores e.g. largest partitions, rows, cells sizes,
     // and max number of rows in a partition.
@@ -932,6 +936,19 @@ public:
     // Drops all evictable in-memory caches of on-disk content.
     future<> drop_caches();
 
+<<<<<<< HEAD
+=======
+    // Returns a read-only file for all existing components of the sstable
+    future<std::unordered_map<component_type, file>> readable_file_for_all_components() const;
+
+    struct lesser_reclaimed_memory {
+        // comparator class to be used by the _reclaimed set in sstables manager
+        bool operator()(const sstable& sst1, const sstable& sst2) const {
+            return sst1.total_memory_reclaimed() < sst2.total_memory_reclaimed();
+        }
+    };
+
+>>>>>>> 140d8871e1 (sstable: add link and comparator class to support new instrusive set)
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
