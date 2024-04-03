@@ -38,6 +38,8 @@ public:
         shared_ptr<cql3_type::raw> validator = nullptr;
         bool is_static = false;
     };
+
+    class raw_statement;
 private:
     const type _type;
     const std::vector<column_change> _column_changes;
@@ -60,6 +62,22 @@ private:
     void alter_column(const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
     void drop_column(const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
     std::pair<schema_builder, std::vector<view_ptr>> prepare_schema_update(data_dictionary::database db) const;
+};
+
+class alter_table_statement::raw_statement : public raw::cf_statement {
+    const alter_table_statement::type _type;
+    const std::vector<column_change> _column_changes;
+    const std::optional<cf_prop_defs> _properties;
+    const alter_table_statement::renames_type _renames;
+
+public:
+    raw_statement(cf_name name,
+                  type t,
+                  std::vector<column_change> column_changes,
+                  std::optional<cf_prop_defs> properties,
+                  renames_type renames);
+    
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 };
 
 }

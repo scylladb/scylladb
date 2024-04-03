@@ -988,7 +988,7 @@ alterKeyspaceStatement returns [std::unique_ptr<cql3::statements::alter_keyspace
  * ALTER COLUMN FAMILY <CF> WITH <property> = <value>;
  * ALTER COLUMN FAMILY <CF> RENAME <column> TO <column>;
  */
-alterTableStatement returns [std::unique_ptr<alter_table_statement> expr]
+alterTableStatement returns [std::unique_ptr<alter_table_statement::raw_statement> expr]
     @init {
         alter_table_statement::type type;
         auto props = cql3::statements::cf_prop_defs();
@@ -1013,7 +1013,7 @@ alterTableStatement returns [std::unique_ptr<alter_table_statement> expr]
                ( K_AND idn=cident K_TO toIdn=cident { renames.emplace_back(idn, toIdn); } )*
           )
     {
-        $expr = std::make_unique<alter_table_statement>(std::move(cf), type, std::move(column_changes), std::move(props), std::move(renames));
+        $expr = std::make_unique<alter_table_statement::raw_statement>(std::move(cf), type, std::move(column_changes), std::move(props), std::move(renames));
     }
     ;
 

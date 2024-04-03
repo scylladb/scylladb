@@ -10,6 +10,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/alter_table_statement.hh"
+#include "cql3/statements/alter_type_statement.hh"
 #include "index/secondary_index_manager.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
@@ -398,19 +399,45 @@ alter_table_statement::prepare_schema_mutations(query_processor& qp, api::timest
 
 std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::alter_table_statement::prepare(data_dictionary::database db, cql_stats& stats) {
-    auto t = db.try_find_table(keyspace(), column_family());
-    std::optional<schema_ptr> s = t ? std::make_optional(t->schema()) : std::nullopt;
-    std::optional<sstring> warning = check_restricted_table_properties(db, s, keyspace(), column_family(), *_properties);
-    if (warning) {
-        mylogger.warn("{}", *warning);
-    }
-    return std::make_unique<prepared_statement>(make_shared<alter_table_statement>(*this));
+    // Cannot happen; alter_table_statement is never instantiated as a raw statement
+    // (instead we instantiate alter_table_statement::raw_statement)
+    utils::on_internal_error("alter_table_statement cannot be prepared. Use alter_table_statement::raw_statement instead");
 }
 
 future<::shared_ptr<messages::result_message>>
 alter_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     validation::validate_column_family(qp.db(), keyspace(), column_family());
     return schema_altering_statement::execute(qp, state, options, std::move(guard));
+}
+
+alter_table_statement::raw_statement::raw_statement(cf_name name,
+                                                    type t,
+                                                    std::vector<column_change> column_changes,
+                                                    std::optional<cf_prop_defs> properties,
+                                                    renames_type renames)
+    : cf_statement(std::move(name))
+    , _type(t)
+    , _column_changes(std::move(column_changes))
+    , _properties(std::move(properties))
+    , _renames(std::move(renames))
+    {}
+
+std::unique_ptr<cql3::statements::prepared_statement>
+alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_stats& stats) {
+    auto t = db.try_find_table(keyspace(), column_family());
+    std::optional<schema_ptr> s = t ? std::make_optional(t->schema()) : std::nullopt;
+    std::optional<sstring> warning = check_restricted_table_properties(db, s, keyspace(), column_family(), *_properties);
+    if (warning) {
+        mylogger.warn("{}", *warning);
+    }
+
+    return std::make_unique<prepared_statement>(::make_shared<alter_table_statement>(
+        *_cf_name,
+        _type,
+        _column_changes,
+        _properties,
+        _renames
+    ));
 }
 
 }
