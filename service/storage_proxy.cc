@@ -2488,7 +2488,7 @@ storage_proxy_stats::split_stats::split_stats(const sstring& category, const sst
         , _long_description_prefix(long_description_prefix)
         , _category(category)
         , _op_type(op_type)
-        , _auto_register_metrics(auto_register_metrics) 
+        , _auto_register_metrics(auto_register_metrics)
         , _sg(current_scheduling_group()) { }
 
 storage_proxy_stats::write_stats::write_stats()
@@ -2996,7 +2996,7 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_st
     });
 }
 
-future<> 
+future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
         return mutate_locally(std::move(mutation), tr_state, timeout, _write_smp_service_group, rate_limit_info);
 }

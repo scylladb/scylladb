@@ -1709,7 +1709,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             return local_proxy.start_hints_manager(gossiper.local().shared_from_this());
         });
     }
-    
+
     if (!raft_topology_change_enabled()) {
         co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local(), *this);
     }

@@ -58,7 +58,7 @@ class one_or_two_partition_ranges;
 }
 
 namespace cdc {
-    class cdc_service;    
+    class cdc_service;
 }
 
 namespace gms {
