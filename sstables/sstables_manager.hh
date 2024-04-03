@@ -45,7 +45,7 @@ static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 
 class sstables_manager {
     using list_type = boost::intrusive::list<sstable,
-            boost::intrusive::member_hook<sstable, sstable::manager_link_type, &sstable::_manager_link>,
+            boost::intrusive::member_hook<sstable, sstable::manager_list_link_type, &sstable::_manager_list_link>,
             boost::intrusive::constant_time_size<false>>;
 private:
     size_t _available_memory;
