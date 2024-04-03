@@ -19,11 +19,12 @@ Launching ScyllaDB on GCP
 
    Other instance types will work, but with lesser performance. If you choose an instance type other than the recommended ones, make sure to run the :ref:`scylla_setup <system-configuration-scripts>` script.
 
-#. Go to `ScyllaDB for GCP <https://www.scylladb.com/download/?platform=gcp#open-source>`_ in ScyllaDB's download center to obtain the image information:
+#. See the following table to obtain image information for the latest patch release. 
+   For earlier releases, see :doc:`GCP Images </reference/gcp-images/>`
 
-   * image name
-   * image id
-   * project name
+   .. scylladb_gcp_images_template::
+      :exclude: rc,dev
+      :only_latest:
 
 #. Launch a ScyllaDB instance on GCP with ``gcloud`` using the information from the previous step. Use the following syntax:
 
