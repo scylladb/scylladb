@@ -568,7 +568,7 @@ public:
         auto token = pos.token();
         if (!_cur_set || pos.token() >= _lowest_next_token) {
             auto idx = _tset.group_of(token);
-            if (!token.is_maximum()) {
+            if (!token.is_maximum() && _tset._sstable_set_ids.contains(idx)) {
                 _cur_set = _tset.find_sstable_set(idx);
             }
             // Set the next token to point to the next engaged storage group.
