@@ -38,6 +38,7 @@ sstables_manager::sstables_manager(
     , _dir_semaphore(dir_sem)
     , _resolve_host_id(std::move(resolve_host_id))
 {
+    _components_reloader_status = components_reloader_fiber();
 }
 
 sstables_manager::~sstables_manager() {
@@ -169,6 +170,17 @@ void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(ssta
     smlogger.info("Reclaimed {} bytes of memory from SSTable components. Total memory reclaimed so far is {} bytes", memory_reclaimed, _total_memory_reclaimed);
 }
 
+future<> sstables_manager::components_reloader_fiber() {
+    sstlog.trace("components_reloader_fiber start");
+    while (true) {
+        co_await _sstable_deleted_event.when();
+
+        if (_closing) {
+            co_return;
+        }
+    }
+}
+
 void sstables_manager::add(sstable* sst) {
     _active.push_back(*sst);
 }
@@ -194,6 +206,7 @@ void sstables_manager::deactivate(sstable* sst) {
 void sstables_manager::remove(sstable* sst) {
     _undergoing_close.erase(_undergoing_close.iterator_to(*sst));
     delete sst;
+    _sstable_deleted_event.signal();
     maybe_done();
 }
 
@@ -227,6 +240,9 @@ future<> sstables_manager::close() {
     maybe_done();
     co_await _done.get_future();
     co_await _sstable_metadata_concurrency_sem.stop();
+    // stop the components reload fiber
+    _sstable_deleted_event.signal();
+    co_await std::move(_components_reloader_status);
 }
 
 void sstables_manager::plug_sstables_registry(std::unique_ptr<sstables::sstables_registry> sr) noexcept {

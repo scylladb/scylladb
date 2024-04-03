@@ -107,6 +107,9 @@ private:
     size_t _total_memory_reclaimed{0};
     // Set of sstables from which memory has been reclaimed
     set_type _reclaimed;
+    // Condition variable that gets notified when an sstable is deleted
+    seastar::condition_variable _sstable_deleted_event;
+    future<> _components_reloader_status = make_ready_future<>();
 
     bool _closing = false;
     promise<> _done;
@@ -200,6 +203,8 @@ private:
     // memory and if the total memory usage exceeds the pre-defined threshold,
     // reclaim it from the SSTable that has the most reclaimable memory.
     void increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst);
+    // Fiber to reload reclaimed components back into memory when memory becomes available.
+    future<> components_reloader_fiber();
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;
