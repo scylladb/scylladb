@@ -73,6 +73,10 @@ public:
     static constexpr size_t max_chunk_capacity() {
         return std::max(max_contiguous_allocation / sizeof(T), size_t(1));
     }
+    // Minimum number of T elements allocated in the first chunk.
+    static constexpr size_t min_chunk_capacity() {
+        return std::clamp(512 / sizeof(T), size_t(1), max_chunk_capacity());
+    }
 private:
     void reserve_for_push_back() {
         if (_size == _capacity) {
@@ -438,7 +442,7 @@ void
 chunked_vector<T, max_contiguous_allocation>::do_reserve_for_push_back() {
     if (_capacity == 0) {
         // allocate a bit of room in case utilization will be low
-        reserve(std::clamp(512 / sizeof(T), size_t(1), max_chunk_capacity()));
+        reserve(min_chunk_capacity());
     } else if (_capacity < max_chunk_capacity() / 2) {
         // exponential increase when only one chunk to reduce copying
         reserve(_capacity * 2);
