@@ -898,7 +898,11 @@ class RunTest(Test):
         super().__init__(test_no, shortname, suite)
         self.path = suite.suite_path / shortname
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
-        self.args = ["--junit-xml={}".format(self.xmlout)]
+        self.args = [
+            "--junit-xml={}".format(self.xmlout),
+            "-o",
+            "junit_suite_name={}".format(self.suite.name)
+        ]
         RunTest._reset(self)
 
     def _reset(self):
@@ -934,6 +938,8 @@ class PythonTest(Test):
             "--log-level=DEBUG",   # Capture logs
             "-o",
             "junit_family=xunit2",
+            "-o",
+            "junit_suite_name={}".format(self.suite.name),
             "--junit-xml={}".format(self.xmlout),
             "-rs"]
         if options.markers:
