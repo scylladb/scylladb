@@ -11,7 +11,7 @@ Glossary
       When a new node is added to a cluster, the bootstrap process ensures that the data in the cluster is automatically redistributed to the new node. A new node in this case is an empty node without system tables or data. See :ref:`bootstrap <temporary-fallback-to-stcs>`.
 
     Anti-entropy
-      A state where data is in order and organized. Scylla has processes in place to make sure that data is antientropic where all replicas contain the most recent data and that data is consistent between replicas. See :doc:`Scylla Anti-Entropy </architecture/anti-entropy/index>`.
+      A state where data is in order and organized. ScyllaDB has processes in place to make sure that data is antientropic where all replicas contain the most recent data and that data is consistent between replicas. See :doc:`Scylla Anti-Entropy </architecture/anti-entropy/index>`.
     
     CAP Theorem
       The CAP Theorem is the notion that **C** (Consistency), **A** (Availability) and **P** (Partition Tolerance) of data are mutually dependent in a distributed system. Increasing any 2 of these factors will reduce the third. Scylla chooses availability and partition tolerance over consistency. See :doc:`Fault Tolerance </architecture/architecture-fault-tolerance>`.
