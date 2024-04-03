@@ -4266,7 +4266,7 @@ def find_sstables():
         system_sstables_manager = std_unique_ptr(db["_system_sstables_manager"]).get()
         for manager in (user_sstables_manager, system_sstables_manager):
             for sst_list_name in ("_active", "_undergoing_close"):
-                for sst in intrusive_list(manager[sst_list_name], link="_manager_link"):
+                for sst in intrusive_list(manager[sst_list_name], link="_manager_list_link"):
                     yield sst.address
     except gdb.error:
         # Scylla Enterprise 2020.1 compatibility
