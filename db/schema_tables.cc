@@ -791,40 +791,35 @@ redact_columns_for_missing_features(mutation&& m, schema_features features) {
  */
 future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features, noncopyable_function<bool(std::string_view)> accept_keyspace)
 {
-    auto map = [&proxy, features, accept_keyspace = std::move(accept_keyspace)] (sstring table) mutable -> future<std::vector<mutation>> {
+    using mutations_generator = coroutine::experimental::generator<mutation>;
+
+    auto map = [&proxy, features, accept_keyspace = std::move(accept_keyspace)] (sstring table) mutable -> mutations_generator {
         auto& db = proxy.local().get_db();
         auto rs = co_await db::system_keyspace::query_mutations(db, NAME, table);
         auto s = db.local().find_schema(NAME, table);
-        std::vector<mutation> mutations;
         for (auto&& p : rs->partitions()) {
             auto mut = co_await unfreeze_gently(p.mut(), s);
             auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
             if (!accept_keyspace(partition_key)) {
                 continue;
             }
-            mut = redact_columns_for_missing_features(std::move(mut), features);
-            mutations.emplace_back(std::move(mut));
-        }
-        co_return mutations;
-    };
-    auto reduce = [features] (auto& hash, auto&& mutations) {
-        for (const mutation& m : mutations) {
-            feed_hash_for_schema_digest(hash, m, features);
+            co_yield redact_columns_for_missing_features(std::move(mut), features);
         }
     };
     auto hash = md5_hasher();
     auto tables = all_table_names(features);
     {
         for (auto& table: tables) {
-            auto mutations = co_await map(table);
-            if (diff_logger.is_enabled(logging::log_level::trace)) {
-                for (const mutation& m : mutations) {
+            auto gen_mutations = map(table);
+            while (auto mut_opt = co_await gen_mutations()) {
+                auto& m = *mut_opt;
+                feed_hash_for_schema_digest(hash, m, features);
+                if (diff_logger.is_enabled(logging::log_level::trace)) {
                     md5_hasher h;
                     feed_hash_for_schema_digest(h, m, features);
                     diff_logger.trace("Digest {} for {}, compacted={}", h.finalize(), m, compact_for_schema_digest(m));
                 }
             }
-            reduce(hash, mutations);
         }
         co_return utils::UUID_gen::get_name_UUID(hash.finalize());
     }
