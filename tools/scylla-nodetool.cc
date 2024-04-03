@@ -2818,7 +2818,7 @@ R"(
 Warning: DO NOT use this while performing other administrative tasks, like
 bootstrapping or decommissioning a node.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/checkandrepaircdcstreams.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/checkandrepaircdcstreams.html
 )",
             },
             checkandrepaircdcstreams_operation
@@ -2835,7 +2835,7 @@ tokens that they are no longer responsible for (taking up disk space). This data
 continues to consume diskspace until you run nodetool cleanup. The cleanup
 operation deletes these replicas and frees up disk space.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/cleanup.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/cleanup.html
 )",
                 {
                     typed_option<int64_t>("jobs,j", "The number of compaction jobs to be used for the cleanup (unused)"),
@@ -2853,7 +2853,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 R"(
 By default all snapshots are removed for all keyspaces.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/clearsnapshot.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/clearsnapshot.html
 )",
                 {
                     typed_option<sstring>("tag,t", "The snapshot to remove"),
@@ -2878,7 +2878,7 @@ single SSTable per shard. If a keyspace is provided, the compaction will run on
 all of the tables within that keyspace. If one or more tables are provided as
 command-line arguments, the compaction will run on these tables.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/compact.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/compact.html
 )",
                 {
                     typed_option<bool>("flush-memtables", "Control flushing of tables before major compaction (true by default)"),
@@ -2899,7 +2899,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "compactionhistory",
                 "Provides the history of compaction operations",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/compactionhistory.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/compactionhistory.html
 )",
                 {
                     typed_option<sstring>("format,F", "text", "Output format, one of: (json, yaml or text); defaults to text"),
@@ -2912,7 +2912,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "compactionstats",
                 "Print statistics on compactions",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/compactionstats.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/compactionstats.html
 )",
                 {
                     typed_option<bool>("human-readable,H", false, "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
@@ -2925,7 +2925,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "decommission",
                 "Deactivate a selected node by streaming its data to the next node in the ring",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/decommission.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/decommission.html
 )",
             },
             decommission_operation
@@ -2938,7 +2938,7 @@ R"(
 For vnode (legacy) keyspaces, describering describes all tables in the keyspace.
 For tablet keyspaces, describering needs the table to describe.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/describering.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/describering.html
 )",
                 { },
                 {
@@ -2953,7 +2953,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "describecluster",
                 "Print the name, snitch, partitioner and schema version of a cluster",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/describecluster.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/describecluster.html
 )",
             },
             describecluster_operation
@@ -2963,7 +2963,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "disableautocompaction",
                 "Disables automatic compaction for the given keyspace and table(s)",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disableautocompaction.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disableautocompaction.html
 )",
                 { },
                 {
@@ -2978,7 +2978,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "disablebackup",
                 "Disables incremental backup",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablebackup.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablebackup.html
 )",
             },
             disablebackup_operation
@@ -2988,7 +2988,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "disablebinary",
                 "Disable the CQL native protocol",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablebinary.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablebinary.html
 )",
             },
             disablebinary_operation
@@ -2998,7 +2998,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "disablegossip",
                 "Disable the gossip protocol",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablegossip.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablegossip.html
 )",
             },
             disablegossip_operation
@@ -3015,7 +3015,7 @@ before upgrading a node to a new version or before any maintenance action is
 performed. When you want to simply flush memtables to disk, use the nodetool
 flush command.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/drain.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/drain.html
 )",
             },
             drain_operation
@@ -3025,7 +3025,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "enableautocompaction",
                 "Enables automatic compaction for the given keyspace and table(s)",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enableautocompaction.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enableautocompaction.html
 )",
                 { },
                 {
@@ -3040,7 +3040,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "enablebackup",
                 "Enables incremental backup",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablebackup.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablebackup.html
 )",
             },
             enablebackup_operation
@@ -3052,7 +3052,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 R"(
 The native protocol is enabled by default.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablebinary.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablebinary.html
 )",
             },
             enablebinary_operation
@@ -3064,7 +3064,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 R"(
 The gossip protocol is enabled by default.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablegossip.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablegossip.html
 )",
             },
             enablegossip_operation
@@ -3078,7 +3078,7 @@ Flush memtables to on-disk SSTables in the specified keyspace and table(s).
 If no keyspace is specified, all keyspaces are flushed.
 If no table(s) are specified, all tables in the specified keyspace are flushed.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/flush.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/flush.html
 )",
                 { },
                 {
@@ -3093,7 +3093,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "getendpoints",
                 "Print the end points that owns the key",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/getendpoints.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/getendpoints.html
 )",
                 { },
                 {
@@ -3139,7 +3139,7 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
 R"(
 This value is the probability for tracing a request. To change this value see settraceprobability.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/gettraceprobability.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/gettraceprobability.html
 )",
             },
             gettraceprobability_operation
@@ -3149,7 +3149,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "gossipinfo",
                 "Shows the gossip information for the cluster",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/gossipinfo.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/gossipinfo.html
 )",
             },
             gossipinfo_operation
@@ -3171,7 +3171,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "info",
                 "Print node information (uptime, load, ...)",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/info.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/info.html
 )",
                 {
                     typed_option<>("tokens,T", "Display all tokens"),
@@ -3186,7 +3186,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 R"(
 Dropped tables (column family) will not be part of the listsnapshots.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/listsnapshots.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/listsnapshots.html
 )",
                 { },
                 { },
@@ -3229,7 +3229,7 @@ R"(
 Provide the latency request that is recorded by the coordinator.
 This command is helpful if you encounter slow node operations.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/proxyhistograms.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/proxyhistograms.html
 )",
                 { },
                 {
@@ -3249,7 +3249,7 @@ Scylla first figures out which ranges the local node (the one we want to rebuild
 is responsible for. Then which node in the cluster contains the same ranges.
 Finally, Scylla streams the data to the local node.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/rebuild.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/rebuild.html
 )",
                 { },
                 {
@@ -3269,7 +3269,7 @@ Materialized Views (MV) and Secondary Indexes (SI) of the upload table, and if
 they exist, they are automatically updated. Uploading MV or SI SSTables is not
 required and will fail.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/refresh.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/refresh.html
 )",
                 {
                     typed_option<>("load-and-stream", "Allows loading sstables that do not belong to this node, in which case they are automatically streamed to the owning nodes"),
@@ -3292,7 +3292,7 @@ Provide the Host ID of the node to specify which node you want to remove.
 Important: use this command *only* on nodes that are not reachable by other nodes
 by any means!
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/removenode.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/removenode.html
 )",
                 {
                     typed_option<sstring>("ignore-dead-nodes", "Comma-separated list of dead nodes to ignore during removenode"),
@@ -3317,7 +3317,7 @@ replicas until the master data subset is in-sync.
 To repair all of the data in the cluster, you need to run a repair on
 all of the nodes in the cluster, or let ScyllaDB Manager do it for you.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/repair.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/repair.html
 )",
                 {
                     typed_option<>("dc-parallel", "Repair datacenters in parallel"),
@@ -3346,7 +3346,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "ring",
                 "Print information about the token ring",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/ring.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/ring.html
 )",
                 {
                     typed_option<>("resolve-ip,r", "Show node domain names instead of IPs")
@@ -3362,7 +3362,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "scrub",
                 "Scrub the SSTable files in the specified keyspace or table(s)",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/scrub.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/scrub.html
 )",
                 {
                     typed_option<>("no-snapshot", "Do not take a snapshot of scrubbed tables before starting scrub (default false)"),
@@ -3387,7 +3387,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 R"(
 Resetting the log level of one or all loggers is not supported yet.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/setlogginglevel.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/setlogginglevel.html
 )",
                 { },
                 {
@@ -3406,7 +3406,7 @@ Value is trace probability between 0 and 1. 0 the trace will never happen and 1
 the trace will always happen. Anything in between is a percentage of the time,
 converted into a decimal. For example, 60% would be 0.6.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/settraceprobability.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/settraceprobability.html
 )",
                 { },
                 {
@@ -3420,7 +3420,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "snapshot",
                 "Take a snapshot of specified keyspaces or a snapshot of the specified table",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/snapshot.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/snapshot.html
 )",
                 {
                     typed_option<sstring>("table", "The table(s) to snapshot, multiple ones can be joined with ','"),
@@ -3454,7 +3454,7 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
                 "status",
                 "Displays cluster information for a table in a keyspace, a single keyspace or all keyspaces",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/status.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/status.html
 )",
                 {
                     typed_option<>("resolve-ip,r", "Show node domain names instead of IPs"),
@@ -3475,7 +3475,7 @@ Results can be one of the following: `running` or `not running`.
 
 By default, the incremental backup status is `not running`.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusbackup.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusbackup.html
 )",
             },
             statusbackup_operation
@@ -3492,7 +3492,7 @@ Results can be one of the following: `running` or `not running`.
 
 By default, the native transport is `running`.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusbinary.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusbinary.html
 )",
             },
             statusbinary_operation
@@ -3507,7 +3507,7 @@ Results can be one of the following: `running` or `not running`.
 
 By default, the gossip protocol is `running`.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusgossip.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusgossip.html
 )",
             },
             statusgossip_operation
@@ -3519,7 +3519,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 R"(
 This command is usually used to stop compaction that has a negative impact on the performance of a node.
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/stop.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/stop.html
 )",
                 {
                     typed_option<int>("id", "The id of the compaction operation to stop (not implemented)"),
@@ -3542,7 +3542,7 @@ since the last time you ran the nodetool cfhistograms command.
 
 Also invokable as "cfhistograms".
 
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/cfhistograms.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/cfhistograms.html
 )",
                 { },
                 {
@@ -3557,7 +3557,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 {"cfstats"},
                 "Print statistics on tables",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/tablestats.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/tablestats.html
 )",
                 {
                     typed_option<bool>("ignore,i", false, "Ignore the list of tables and display the remaining tables"),
@@ -3575,7 +3575,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "toppartitions",
                 "Sample and print the most active partitions for a given column family",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/toppartitions.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/toppartitions.html
 )",
                 {
                     typed_option<int>("duration,d", 5000, "Duration in milliseconds"),
@@ -3622,7 +3622,7 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
                 "viewbuildstatus",
                 "Show progress of a materialized view build",
 R"(
-Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/viewbuildstatus.html
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/viewbuildstatus.html
 )",
                 {},
                 {
