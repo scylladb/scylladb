@@ -2669,10 +2669,25 @@ future<std::optional<mutation>> system_keyspace::get_group0_schema_version() {
     return get_scylla_local_mutation(_db, "group0_schema_version");
 }
 
-static constexpr auto SERVICE_LEVELS_VERSION_KEY = "service_level_version";
+static constexpr auto AUTH_VERSION_KEY = "auth_version";
 
-future<std::optional<mutation>> system_keyspace::get_service_levels_version_mutation() {
-    return get_scylla_local_mutation(_db, SERVICE_LEVELS_VERSION_KEY);
+future<system_auth_keyspace::version_t> system_keyspace::get_auth_version() {
+    auto str_opt = co_await get_scylla_local_param(AUTH_VERSION_KEY);
+    if (!str_opt) {
+        co_return db::system_auth_keyspace::version_t::v1;
+    }
+    auto& str = *str_opt;
+    if (str == "" || str == "1") {
+        co_return db::system_auth_keyspace::version_t::v1;
+    }
+    if (str == "2") {
+        co_return db::system_auth_keyspace::version_t::v2;
+    }
+    on_internal_error(slogger, fmt::format("unexpected auth_version in scylla_local got {}", str));
+}
+
+future<std::optional<mutation>> system_keyspace::get_auth_version_mutation() {
+    return get_scylla_local_mutation(_db, AUTH_VERSION_KEY);
 }
 
 static service::query_state& internal_system_query_state() {
@@ -2683,6 +2698,21 @@ static service::query_state& internal_system_query_state() {
     static thread_local service::query_state qs(cs, empty_service_permit());
     return qs;
 };
+
+future<mutation> system_keyspace::make_auth_version_mutation(api::timestamp_type ts, db::system_auth_keyspace::version_t version) {
+    static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {AUTH_VERSION_KEY, std::to_string(int64_t(version))});
+    if (muts.size() != 1) {
+         on_internal_error(slogger, fmt::format("expected 1 auth_version mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+static constexpr auto SERVICE_LEVELS_VERSION_KEY = "service_level_version";
+
+future<std::optional<mutation>> system_keyspace::get_service_levels_version_mutation() {
+    return get_scylla_local_mutation(_db, SERVICE_LEVELS_VERSION_KEY);
+}
 
 future<mutation> system_keyspace::make_service_levels_version_mutation(int8_t version, const service::group0_guard& guard) {
     static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);

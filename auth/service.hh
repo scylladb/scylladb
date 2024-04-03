@@ -123,7 +123,7 @@ public:
             const service_config&,
             maintenance_socket_enabled);
 
-    future<> start(::service::migration_manager&);
+    future<> start(::service::migration_manager&, db::system_keyspace&);
 
     future<> stop();
 
@@ -316,6 +316,6 @@ future<std::vector<permission_details>> list_filtered_permissions(
         const std::optional<std::pair<resource, recursive_permissions>>& resource_filter);
 
 // Migrates data from old keyspace to new one which supports linearizable writes via raft.
-future<> migrate_to_auth_v2(cql3::query_processor& qp, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as);
+future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as);
 
 }

@@ -199,24 +199,21 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
     }
 }
 
-future<> service::start(::service::migration_manager& mm) {
-    auto create_keyspace_if_missing_or_noop = _used_by_maintenance_socket
-        ? make_ready_future<>()
-        : once_among_shards([this, &mm] {
+future<> service::start(::service::migration_manager& mm, db::system_keyspace& sys_ks) {
+    auto auth_version = co_await sys_ks.get_auth_version();
+    // version is set in query processor to be easily available in various places we call auth::legacy_mode check.
+    _qp.auth_version = auth_version;
+    if (!_used_by_maintenance_socket) {
+        co_await once_among_shards([this, &mm] {
             return create_keyspace_if_missing(mm);
         });
-
-    return create_keyspace_if_missing_or_noop.then([this] {
-        return _role_manager->start().then([this] {
-            return when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
-        });
-    }).then([this] {
-        _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
-    }).then([this] {
-        return once_among_shards([this] {
-            _mnotifier.register_listener(_migration_listener.get());
-            return make_ready_future<>();
-        });
+    }
+    co_await _role_manager->start();
+    co_await when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
+    _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
+    co_await once_among_shards([this] {
+        _mnotifier.register_listener(_migration_listener.get());
+        return make_ready_future<>();
     });
 }
 
@@ -637,10 +634,11 @@ future<std::vector<permission_details>> list_filtered_permissions(
     });
 }
 
-future<> migrate_to_auth_v2(cql3::query_processor& qp, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {
+future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {
     // FIXME: if this function fails it may leave partial data in the new tables
     // that should be cleared
-    auto gen = [&qp] (api::timestamp_type& ts) -> mutations_generator {
+    auto gen = [&sys_ks] (api::timestamp_type& ts) -> mutations_generator {
+        auto& qp = sys_ks.query_processor();
         for (const auto& cf_name : std::vector<sstring>{
                 "roles", "role_members", "role_attributes", "role_permissions"}) {
             schema_ptr schema;
@@ -701,6 +699,8 @@ future<> migrate_to_auth_v2(cql3::query_processor& qp, ::service::raft_group0_cl
                 co_yield std::move(muts[0]);
             }
         }
+        co_yield co_await sys_ks.make_auth_version_mutation(ts,
+                db::system_auth_keyspace::version_t::v2);
     };
     co_await announce_mutations_with_batching(g0,
             start_operation_func,
