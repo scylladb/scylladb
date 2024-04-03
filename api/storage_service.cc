@@ -1540,9 +1540,16 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::upgrade_to_raft_topology.set(r,
             [&ss] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        co_await ss.invoke_on(0, [] (auto& ss) {
-            return ss.start_upgrade_to_raft_topology();
-        });
+        apilog.info("Requested to schedule upgrade to raft topology");
+        try {
+            co_await ss.invoke_on(0, [] (auto& ss) {
+                return ss.start_upgrade_to_raft_topology();
+            });
+        } catch (...) {
+            auto ex = std::current_exception();
+            apilog.error("Failed to schedule upgrade to raft topology: {}", ex);
+            std::rethrow_exception(std::move(ex));
+        }
         co_return json_void();
     });
 
