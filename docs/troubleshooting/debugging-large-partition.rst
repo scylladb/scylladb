@@ -21,7 +21,7 @@ Any of the following:
 
   .. code-block:: none
 
-     WARN  2022-09-22 17:33:11,075 [shard 1]large_data - Writing large partition Some_KS/Some_table: PK[/CK[/COL]] (SIZE bytes) to SSTABLE_NAME
+     WARN  2022-09-22 17:33:11,075 [shard 1]large_data - Writing large partition Some_KS/Some_table: [COL] (SIZE bytes) to SSTABLE_NAME
 
   In this case, refer to :ref:`Troubleshooting Large Partition Tables <large-partition-table-configure>` for more information.
 
