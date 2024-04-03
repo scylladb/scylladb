@@ -78,6 +78,10 @@ class sstables_manager {
     using list_type = boost::intrusive::list<sstable,
             boost::intrusive::member_hook<sstable, sstable::manager_list_link_type, &sstable::_manager_list_link>,
             boost::intrusive::constant_time_size<false>>;
+    using set_type = boost::intrusive::set<sstable,
+            boost::intrusive::member_hook<sstable, sstable::manager_set_link_type, &sstable::_manager_set_link>,
+            boost::intrusive::constant_time_size<false>,
+            boost::intrusive::compare<sstable::lesser_reclaimed_memory>>;
 private:
     storage_manager* _storage;
     size_t _available_memory;
@@ -102,6 +106,8 @@ private:
     size_t _total_reclaimable_memory{0};
     // Total memory reclaimed so far across all sstables
     size_t _total_memory_reclaimed{0};
+    // Set of sstables from which memory has been reclaimed
+    set_type _reclaimed;
 
     bool _closing = false;
     promise<> _done;

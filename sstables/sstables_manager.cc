@@ -158,6 +158,7 @@ void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(ssta
     auto memory_reclaimed = sst_with_max_memory->reclaim_memory_from_components();
     _total_memory_reclaimed += memory_reclaimed;
     _total_reclaimable_memory -= memory_reclaimed;
+    _reclaimed.insert(*sst_with_max_memory);
     smlogger.info("Reclaimed {} bytes of memory from SSTable components. Total memory reclaimed so far is {} bytes", memory_reclaimed, _total_memory_reclaimed);
 }
 
@@ -169,6 +170,7 @@ void sstables_manager::deactivate(sstable* sst) {
     // Remove SSTable from the reclaimable memory tracking
     _total_reclaimable_memory -= sst->total_reclaimable_memory_size();
     _total_memory_reclaimed -= sst->total_memory_reclaimed();
+    _reclaimed.erase(*sst);
 
     // At this point, sst has a reference count of zero, since we got here from
     // lw_shared_ptr_deleter<sstables::sstable>::dispose().
