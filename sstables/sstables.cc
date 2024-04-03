@@ -1531,6 +1531,18 @@ size_t sstable::total_memory_reclaimed() const {
     return _total_memory_reclaimed;
 }
 
+future<> sstable::reload_reclaimed_components() {
+    if (_total_memory_reclaimed == 0) {
+        // nothing to reload
+        co_return;
+    }
+
+    co_await read_filter();
+    _total_reclaimable_memory.reset();
+    _total_memory_reclaimed -= _components->filter->memory_size();
+    sstlog.info("Reloaded bloom filter of {}", get_filename());
+}
+
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
 future<> sstable::load(const io_priority_class& pc, sstable_open_config cfg) noexcept {
