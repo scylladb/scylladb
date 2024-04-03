@@ -187,7 +187,7 @@ class sstable : public enable_lw_shared_from_this<sstable> {
 public:
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
-    using manager_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
+    using manager_list_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
 public:
     sstable(schema_ptr schema,
             sstring table_dir,
@@ -579,7 +579,8 @@ private:
     sstables_manager& _manager;
 
     sstables_stats _stats;
-    manager_link_type _manager_link;
+    // link used by the _active list of sstables manager
+    manager_list_link_type _manager_list_link;
 
     // The _large_data_stats map stores e.g. largest partitions, rows, cells sizes,
     // and max number of rows in a partition.
