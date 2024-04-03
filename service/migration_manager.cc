@@ -1262,6 +1262,13 @@ future<> migration_manager::sync_schema(const replica::database& db, const std::
             schema_map[remote_version].emplace_back(node);
         }
     });
+    if (schema_map.empty()) {
+        co_return;
+    }
+    if (!_enable_schema_pulls) {
+        co_await _group0_barrier.trigger(_as);
+        co_return;
+    }
     co_await coroutine::parallel_for_each(schema_map, [this] (auto& x) -> future<> {
         auto& [schema, hosts] = x;
         const auto& src = hosts.front();
