@@ -140,6 +140,7 @@ declare -A pip_packages=(
     [traceback-with-variables]=
     [scylla-api-client]=
     [treelib]=
+    [allure-pytest]=
 )
 
 pip_symlinks=(
