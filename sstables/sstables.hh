@@ -691,13 +691,15 @@ private:
 
     future<> create_data() noexcept;
 
+    // Note that only bloom filters are reclaimable by the following methods.
     // Return the total reclaimable memory in this SSTable
     size_t total_reclaimable_memory_size() const;
     // Reclaim memory from the components back to the system.
-    // Note that only bloom filters are reclaimable.
     size_t reclaim_memory_from_components();
     // Return memory reclaimed so far from this sstable
     size_t total_memory_reclaimed() const;
+    // Reload components from which memory was previously reclaimed
+    future<> reload_reclaimed_components();
 
 public:
     // Finds first position_in_partition in a given partition.
