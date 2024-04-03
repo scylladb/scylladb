@@ -126,13 +126,13 @@ private:
 public:
     manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter,
             int64_t max_hint_window_ms, resource_manager& res_manager, sharded<replica::database>& db);
-    
+
     manager(const manager&) = delete;
     manager& operator=(const manager&) = delete;
 
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;
-    
+
     ~manager() noexcept {
         assert(_ep_managers.empty());
     }

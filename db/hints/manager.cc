@@ -72,13 +72,13 @@ public:
         }
 
         const auto units = co_await seastar::get_units(_lock, 1);
-        
+
         utils::directories::set dir_set;
         dir_set.add_sharded(_hints_directory);
-        
+
         manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
         co_await _dirs.create_and_verify(std::move(dir_set));
-        
+
         _state = state::created_and_validated;
     }
 
@@ -92,7 +92,7 @@ public:
         }
 
         const auto units = co_await seastar::get_units(_lock, 1);
-        
+
         manager_logger.debug("Rebalancing hints in {}", _hints_directory);
         co_await rebalance_hints(fs::path{_hints_directory});
 
@@ -171,7 +171,7 @@ void manager::register_metrics(const sstring& group_name) {
         sm::make_counter("corrupted_files", _stats.corrupted_files,
                         sm::description("Number of hints files that were discarded during sending because the file was corrupted.")),
 
-        sm::make_gauge("pending_drains", 
+        sm::make_gauge("pending_drains",
                         sm::description("Number of tasks waiting in the queue for draining hints"),
                         [this] { return _drain_lock.waiters(); }),
 
@@ -195,7 +195,7 @@ future<> manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
 
         return get_ep_manager(ep).populate_segments_to_replay();
     });
-    
+
     co_await compute_hints_dir_device_id();
     set_started();
 }
@@ -239,7 +239,7 @@ void manager::forbid_hints() {
 
 void manager::forbid_hints_for_eps_with_pending_hints() {
     manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
-    
+
     for (auto& [_, ep_man] : _ep_managers) {
         if (has_ep_with_pending_hints(ep_man.end_point_key())) {
             ep_man.forbid_hints();
@@ -296,7 +296,7 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
             }
             return it->second;
         } ();
-        
+
         try {
             co_await ep_man.wait_until_hints_are_replayed_up_to(local_as, rp);
         } catch (abort_requested_exception&) {
@@ -318,7 +318,7 @@ hint_endpoint_manager& manager::get_ep_manager(endpoint_id ep) {
 
     if (emplaced) {
         manager_logger.trace("Created an endpoint manager for {}", ep);
-        ep_man.start();    
+        ep_man.start();
     }
 
     return ep_man;
@@ -439,7 +439,7 @@ future<> manager::change_host_filter(host_filter filter) {
         _host_filter = std::move(filter);
         eptr = std::current_exception();
     }
-    
+
     try {
         // Remove endpoint managers which are rejected by the filter.
         co_await coroutine::parallel_for_each(_ep_managers, [this] (auto& pair) {
@@ -448,7 +448,7 @@ future<> manager::change_host_filter(host_filter filter) {
             if (_host_filter.can_hint_for(_proxy.get_token_metadata_ptr()->get_topology(), ep)) {
                 return make_ready_future<>();
             }
-            
+
             return ep_man.stop(drain::no).finally([this, ep] {
                 _ep_managers.erase(ep);
             });
@@ -496,7 +496,7 @@ future<> manager::drain_for(endpoint_id endpoint) noexcept {
 
     if (_proxy.local_db().get_token_metadata().get_topology().is_me(endpoint)) {
         set_draining_all();
-        
+
         try {
             co_await coroutine::parallel_for_each(_ep_managers | boost::adaptors::map_values,
                     [&drain_ep_manager] (hint_endpoint_manager& ep_man) {
@@ -509,7 +509,7 @@ future<> manager::drain_for(endpoint_id endpoint) noexcept {
         _ep_managers.clear();
     } else {
         auto it = _ep_managers.find(endpoint);
-        
+
         if (it != _ep_managers.end()) {
             try {
                 co_await drain_ep_manager(it->second);

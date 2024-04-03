@@ -90,7 +90,7 @@ future<hints_segments_map> get_current_hints_segments(const fs::path& hint_direc
         return lister::scan_dir(dir / de.name, lister::dir_entry_types::of<directory_entry_type::directory>(),
                 [&current_hint_segments, shard_id] (fs::path dir, directory_entry de) {
             manager_logger.trace("\tIP: {}", de.name);
-            
+
             // Hint files.
             return lister::scan_dir(dir / de.name, lister::dir_entry_types::of<directory_entry_type::regular>(),
                     [&current_hint_segments, shard_id, ep = de.name] (fs::path dir, directory_entry de) {
@@ -255,7 +255,7 @@ future<> remove_irrelevant_shards_directories(const fs::path& hint_directory) {
                     lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {
                 return io_check(remove_file, (dir / de.name).native());
             });
-            
+
             co_await io_check(remove_file, (dir / de.name).native());
         }
     });
