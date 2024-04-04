@@ -88,7 +88,7 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
 #endif
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> create_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> create_keyspace_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     using namespace cql_transport;
     const auto& tm = *qp.proxy().get_token_metadata_ptr();
     const auto& feat = qp.proxy().features();
