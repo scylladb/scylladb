@@ -1693,40 +1693,35 @@ void unset_storage_service(http_context& ctx, routes& r) {
 }
 
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
-    ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) {
-        return snap_ctl.local().get_snapshot_details().then([] (std::unordered_map<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& result) {
-            std::function<future<>(output_stream<char>&&)> f = [result = std::move(result)](output_stream<char>&& s) {
-                return do_with(output_stream<char>(std::move(s)), true, [&result] (output_stream<char>& s, bool& first){
-                    return s.write("[").then([&s, &first, &result] {
-                        return do_for_each(result, [&s, &first](std::tuple<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& map){
-                            return do_with(ss::snapshots(), [&s, &first, &map](ss::snapshots& all_snapshots) {
-                                all_snapshots.key = std::get<0>(map);
-                                future<> f = first ? make_ready_future<>() : s.write(", ");
-                                first = false;
-                                std::vector<ss::snapshot> snapshot;
-                                for (auto& cf: std::get<1>(map)) {
-                                    ss::snapshot snp;
-                                    snp.ks = cf.ks;
-                                    snp.cf = cf.cf;
-                                    snp.live = cf.live;
-                                    snp.total = cf.total;
-                                    snapshot.push_back(std::move(snp));
-                                }
-                                all_snapshots.value = std::move(snapshot);
-                                return f.then([&s, &all_snapshots] {
-                                    return all_snapshots.write(s);
-                                });
-                            });
-                        });
-                    }).then([&s] {
-                        return s.write("]").then([&s] {
-                            return s.close();
-                        });
-                    });
-                });
-            };
+    ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto result = co_await snap_ctl.local().get_snapshot_details();
+        co_return std::function([res = std::move(result)] (output_stream<char>&& o) -> future<> {
+            auto result = std::move(res);
+            output_stream<char> out = std::move(o);
+            bool first = true;
 
-            return make_ready_future<json::json_return_type>(std::move(f));
+            co_await out.write("[");
+            for (auto&& map : result) {
+                if (!first) {
+                    co_await out.write(", ");
+                }
+                std::vector<ss::snapshot> snapshot;
+                for (auto& cf : std::get<1>(map)) {
+                    ss::snapshot snp;
+                    snp.ks = cf.ks;
+                    snp.cf = cf.cf;
+                    snp.live = cf.live;
+                    snp.total = cf.total;
+                    snapshot.push_back(std::move(snp));
+                }
+                ss::snapshots all_snapshots;
+                all_snapshots.key = std::get<0>(map);
+                all_snapshots.value = std::move(snapshot);
+                co_await all_snapshots.write(out);
+                first = false;
+            }
+            co_await out.write("]");
+            co_await out.close();
         });
     });
 
