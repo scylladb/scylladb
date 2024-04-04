@@ -101,7 +101,7 @@ future<std::unordered_set<locator::host_id>> read_required_hosts(cql3::query_pro
 future<> update_tablet_metadata(replica::database& db, cql3::query_processor&, locator::tablet_metadata&, const locator::tablet_metadata_change_hint&);
 
 /// Reads tablet metadata from system.tablets in the form of mutations.
-future<utils::chunked_vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<database>&);
+future<> read_tablet_mutations(seastar::sharded<database>&, std::function<void(canonical_mutation)> process_mutation);
 
 /// Reads tablet transition stage (if any)
 future<std::optional<locator::tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token);
