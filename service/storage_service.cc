@@ -868,11 +868,9 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
                 if (m.representation().size() <= max_size) {
                     frozen_muts_to_apply.push_back(co_await freeze_gently(mut));
                 } else {
-                    utils::chunked_vector<mutation> split_muts;
-                    co_await split_mutation(std::move(mut), split_muts, max_size);
-                    for (auto& mut : split_muts) {
+                    co_await for_each_split_mutation(std::move(mut), max_size, [&] (mutation m) -> future<> {
                         frozen_muts_to_apply.push_back(co_await freeze_gently(mut));
-                    }
+                    });
                 }
             }
         }
