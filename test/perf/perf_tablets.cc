@@ -199,8 +199,8 @@ int scylla_tablets_main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
-            ("tables", bpo::value<int>()->default_value(100), "Number of tables to create.")
-            ("tablets-per-table", bpo::value<int>()->default_value(2048), "Number of tablets per table.")
+            ("tables", bpo::value<int>()->default_value(8), "Number of tables to create.")
+            ("tablets-per-table", bpo::value<int>()->default_value(16384), "Number of tablets per table.")
             ("rf", bpo::value<int>()->default_value(3), "Number of replicas per tablet.")
             ("verbose", "Enables standard logging")
             ;
