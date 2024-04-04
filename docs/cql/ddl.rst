@@ -352,8 +352,7 @@ For instance::
         common_name text,
         population varint,
         average_size int
-    ) WITH comment='Important biological records'
-       AND read_repair_chance = 1.0;
+    ) WITH comment='Important biological records';
 
     CREATE TABLE timeline (
         userid uuid,
@@ -658,14 +657,6 @@ A table supports the following options:
      - simple
      - none
      - A free-form, human-readable comment.
-   * - ``read_repair_chance``
-     - simple
-     - 0
-     - The probability that extra nodes are queried (e.g. more nodes than required by the consistency level) for the purpose of read repairs.
-   * - ``dclocal_read_repair_chance``
-     - simple
-     - 0
-     - The probability that extra nodes are queried (e.g. more nodes than required by the consistency level) belonging to the same data center as the read coordinator for the purpose of read repairs.
    * - ``speculative_retry``
      - simple
      - 99PERCENTILE
@@ -934,8 +925,7 @@ For instance:
     ALTER TABLE addamsFamily ADD gravesite varchar;
 
     ALTER TABLE addamsFamily
-           WITH comment = 'A most excellent and useful table'
-           AND read_repair_chance = 0.2;
+           WITH comment = 'A most excellent and useful table';
 
 
     ALTER TABLE data_atrest (
