@@ -3420,6 +3420,8 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
                                             tid, _schema->ks_name(), _schema->cf_name()));
         }
 
+        co_await db.clear_inactive_reads_for_tablet(_schema->id(), cg_ptr->token_range());
+
         // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
         // FIXME: to be able to stop group and provide guarantee above, we must first be able to reallocate a new group if tablet is migrated back.
         //co_await _cg.stop();
