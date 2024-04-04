@@ -28,15 +28,18 @@ logger rcslog("reader_concurrency_semaphore");
 
 struct reader_concurrency_semaphore::inactive_read {
     flat_mutation_reader_v2 reader;
+    const dht::partition_range* range = nullptr;
     eviction_notify_handler notify_handler;
     timer<lowres_clock> ttl_timer;
     inactive_read_handle* handle = nullptr;
 
-    explicit inactive_read(flat_mutation_reader_v2 reader_) noexcept
+    explicit inactive_read(flat_mutation_reader_v2 reader_, const dht::partition_range* range_) noexcept
         : reader(std::move(reader_))
+        , range(range_)
     { }
     inactive_read(inactive_read&& o)
         : reader(std::move(o.reader))
+        , range(o.range)
         , notify_handler(std::move(o.notify_handler))
         , ttl_timer(std::move(o.ttl_timer))
         , handle(o.handle)
@@ -1069,7 +1072,8 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
     }
 }
 
-reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader_v2 reader) noexcept {
+reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader_v2 reader,
+        const dht::partition_range* range) noexcept {
     auto& permit = reader.permit();
     if (permit->get_state() == reader_permit::state::waiting_for_memory) {
         // Kill all outstanding memory requests, the read is going to be evicted.
@@ -1083,7 +1087,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
     }
     if (!should_evict_inactive_read()) {
       try {
-        permit->aux_data().ir.emplace(std::move(reader));
+        permit->aux_data().ir.emplace(std::move(reader), range);
         permit->unlink();
         _inactive_reads.push_back(*permit);
         ++_stats.inactive_reads;
