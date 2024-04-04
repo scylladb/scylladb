@@ -475,3 +475,5 @@ template <> struct fmt::formatter<mutation> : fmt::formatter<string_view> {
 // to pass half of the required value as max_size; such a margin should ensure
 // that the condition is met.
 future<> split_mutation(mutation source, utils::chunked_vector<mutation>& target, size_t max_size);
+
+future<> for_each_split_mutation(mutation source, size_t max_size, std::function<void(mutation)> process_mutation);
