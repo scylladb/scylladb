@@ -1059,11 +1059,15 @@ void gossiper::run() {
             //wait on messaging service to start listening
             // MessagingService.instance().waitUntilListening();
 
-            /* Update the local heartbeat counter. */
-            heart_beat_state& hbs = my_endpoint_state().get_heart_beat_state();
-            hbs.update_heart_beat();
+            {
+                auto permit = lock_endpoint(get_broadcast_address(), null_permit_id).get();
+                /* Update the local heartbeat counter. */
+                heart_beat_state& hbs = my_endpoint_state().get_heart_beat_state();
+                hbs.update_heart_beat();
 
-            logger.trace("My heartbeat is now {}", hbs.get_heart_beat_version());
+                logger.trace("My heartbeat is now {}", hbs.get_heart_beat_version());
+            }
+
             utils::chunked_vector<gossip_digest> g_digests;
             this->make_random_gossip_digest(g_digests);
 
