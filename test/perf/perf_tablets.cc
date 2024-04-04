@@ -219,6 +219,8 @@ int scylla_tablets_main(int argc, char** argv) {
                 test_basic_operations(app).get();
             } catch (seastar::abort_requested_exception&) {
                 // Ignore
+            } catch (...) {
+                on_fatal_internal_error(testlog, format("Aborting on unhandled exception: {}", std::current_exception()));
             }
         });
     });
