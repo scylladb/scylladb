@@ -1161,14 +1161,21 @@ void reader_concurrency_semaphore::clear_inactive_reads() {
     }
 }
 
-future<> reader_concurrency_semaphore::evict_inactive_reads_for_table(table_id id) noexcept {
+future<> reader_concurrency_semaphore::evict_inactive_reads_for_table(table_id id, const dht::partition_range* range) noexcept {
+    auto overlaps_with_range = [range] (const reader_concurrency_semaphore::inactive_read& ir) {
+        if (!range || !ir.range) {
+            return true;
+        }
+        return ir.range->overlaps(*range, dht::ring_position_comparator(*ir.reader.schema()));
+    };
+
     permit_list_type evicted_readers;
     auto it = _inactive_reads.begin();
     while (it != _inactive_reads.end()) {
         auto& permit = *it;
         auto& ir = *permit.aux_data().ir;
         ++it;
-        if (ir.reader.schema()->id() == id) {
+        if (ir.reader.schema()->id() == id && overlaps_with_range(ir)) {
             do_detach_inactive_reader(permit, evict_reason::manual);
             permit.unlink();
             evicted_readers.push_back(permit);

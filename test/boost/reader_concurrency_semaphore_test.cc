@@ -953,11 +953,32 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     auto spec = tests::make_random_schema_specification(get_name());
 
     std::list<tests::random_schema> schemas;
-    std::unordered_map<tests::random_schema*, std::vector<reader_concurrency_semaphore::inactive_read_handle>> schema_handles;
+    struct inactive_read {
+        reader_concurrency_semaphore::inactive_read_handle handle;
+        std::optional<dht::partition_range> range;
+        explicit inactive_read(std::optional<dht::partition_range> range = {})
+            : range(std::move(range))
+        { }
+        inactive_read(reader_concurrency_semaphore::inactive_read_handle handle, std::optional<dht::partition_range> range = {})
+            : handle(std::move(handle))
+            , range(std::move(range))
+        { }
+        operator bool() const {
+            return bool(handle);
+        }
+    };
+    std::unordered_map<tests::random_schema*, std::list<inactive_read>> schema_handles;
     for (unsigned i = 0; i < 4; ++i) {
         auto& s = schemas.emplace_back(tests::random_schema(i, *spec));
-        schema_handles.emplace(&s, std::vector<reader_concurrency_semaphore::inactive_read_handle>{});
+        schema_handles.emplace(&s, std::list<inactive_read>{});
     }
+
+    auto make_random_range = [] (tests::random_schema& s) {
+        auto keys = s.make_pkeys(2);
+        return interval<tests::data_model::mutation_description::key>::make({keys[0]}, {keys[1]}).transform([&s] (const tests::data_model::mutation_description::key& k) -> dht::ring_position {
+            return dht::decorate_key(*s.schema(), partition_key::from_exploded(*s.schema(), k));
+        });
+    };
 
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
@@ -965,24 +986,42 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     for (auto& s : schemas) {
         auto& handles = schema_handles[&s];
         for (int i = 0; i < 10; ++i) {
+            auto& handle = handles.emplace_back(make_random_range(s));
+            handle.handle = semaphore.register_inactive_read(
+                    make_empty_flat_reader_v2(s.schema(), semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {})),
+                    &*handle.range);
+        }
+        for (int i = 0; i < 4; ++i) {
             handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {}))));
         }
     }
 
     for (auto& s : schemas) {
         auto& handles = schema_handles[&s];
-        BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
+        BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const inactive_read& ir) { return bool(ir); }));
     }
 
     for (auto& s : schemas) {
         auto& handles = schema_handles[&s];
-        BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
-        semaphore.evict_inactive_reads_for_table(s.schema()->id()).get();
+        BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const inactive_read& ir) { return bool(ir); }));
+
+        std::optional<dht::partition_range> evict_range;
+        if (tests::random::get_bool()) {
+            evict_range.emplace(make_random_range(s));
+        }
+
+        semaphore.evict_inactive_reads_for_table(s.schema()->id(), evict_range ? &*evict_range : nullptr).get();
         for (const auto& [k, v] : schema_handles) {
             if (k == &s) {
-                BOOST_REQUIRE(std::all_of(v.begin(), v.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return !bool(handle); }));
+                for (const auto& ir : v) {
+                    if (ir) {
+                        BOOST_REQUIRE(ir.range);
+                        BOOST_REQUIRE(evict_range);
+                        BOOST_REQUIRE(!ir.range->overlaps(*evict_range, dht::ring_position_comparator(*s.schema())));
+                    }
+                }
             } else if (!v.empty()) {
-                BOOST_REQUIRE(std::all_of(v.begin(), v.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
+                BOOST_REQUIRE(std::all_of(v.begin(), v.end(), [] (const inactive_read& ir) { return bool(ir); }));
             }
         }
         handles.clear();

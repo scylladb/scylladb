@@ -359,7 +359,12 @@ public:
     void clear_inactive_reads();
 
     /// Evict all inactive reads the belong to the table designated by the id.
-    future<> evict_inactive_reads_for_table(table_id id) noexcept;
+    /// If a range is provided, only inactive reads whose range overlaps with the
+    /// range are evicted.
+    /// The range of the inactive read is provided in register_inactive_read().
+    /// If the range for an inactive read was not provided, all reads for the
+    /// table are evicted.
+    future<> evict_inactive_reads_for_table(table_id id, const dht::partition_range* range = nullptr) noexcept;
 private:
     // The following two functions are extension points for
     // future inheriting classes that needs to run some stop
