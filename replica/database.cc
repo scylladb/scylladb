@@ -1696,6 +1696,13 @@ bool database::is_user_semaphore(const reader_concurrency_semaphore& semaphore) 
         && &semaphore != &_system_read_concurrency_sem;
 }
 
+future<> database::clear_inactive_reads_for_tablet(table_id table, dht::token_range tablet_range) {
+    const auto partition_range = dht::to_partition_range(tablet_range);
+    co_await foreach_reader_concurrency_semaphore([table, &partition_range] (reader_concurrency_semaphore& sem) -> future<> {
+        co_await sem.evict_inactive_reads_for_table(table, &partition_range);
+    });
+}
+
 future<> database::foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func) {
     for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
         co_await func(*sem);

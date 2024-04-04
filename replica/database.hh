@@ -1872,6 +1872,8 @@ public:
     db::timeout_semaphore& view_update_sem() {
         return _view_update_concurrency_sem;
     }
+
+    future<> clear_inactive_reads_for_tablet(table_id table, dht::token_range tablet_range);
 };
 
 } // namespace replica
