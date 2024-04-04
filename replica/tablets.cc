@@ -250,20 +250,20 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             for (auto&& r : tablet_replicas) {
                 pending.erase(r);
             }
-            if (pending.size() == 0) {
-                throw std::runtime_error(format("Stage set but no pending replica for table {} tablet {}",
-                                                table, current->tid));
-            }
+            std::optional<tablet_replica> pending_replica;
             if (pending.size() > 1) {
                 throw std::runtime_error(format("Too many pending replicas for table {} tablet {}: {}",
                                                 table, current->tid, pending));
+            }
+            if (pending.size() != 0) {
+                pending_replica = *pending.begin();
             }
             service::session_id session_id;
             if (row.has("session")) {
                 session_id = service::session_id(row.get_as<utils::UUID>("session"));
             }
             current->map.set_tablet_transition_info(current->tid, tablet_transition_info{stage, transition,
-                    std::move(new_tablet_replicas), *pending.begin(), session_id});
+                    std::move(new_tablet_replicas), pending_replica, session_id});
         }
 
         current->map.set_tablet(current->tid, tablet_info{std::move(tablet_replicas)});
