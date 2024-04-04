@@ -32,17 +32,23 @@ namespace statements {
 
 static logging::logger mylogger("alter_table");
 
-alter_table_statement::alter_table_statement(cf_name name,
+alter_table_statement::alter_table_statement(uint32_t bound_terms,
+                                             cf_name name,
                                              type t,
                                              std::vector<column_change> column_changes,
                                              std::optional<cf_prop_defs> properties,
                                              renames_type renames)
     : schema_altering_statement(std::move(name))
+    , _bound_terms(bound_terms)
     , _type(t)
     , _column_changes(std::move(column_changes))
     , _properties(std::move(properties))
     , _renames(std::move(renames))
 {
+}
+
+uint32_t alter_table_statement::get_bound_terms() const {
+    return _bound_terms;
 }
 
 future<> alter_table_statement::check_access(query_processor& qp, const service::client_state& state) const {
@@ -431,7 +437,10 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
         mylogger.warn("{}", *warning);
     }
 
+    auto ctx = get_prepare_context();
+
     return std::make_unique<prepared_statement>(::make_shared<alter_table_statement>(
+        ctx.bound_variables_size(),
         *_cf_name,
         _type,
         _column_changes,
