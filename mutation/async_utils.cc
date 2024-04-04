@@ -152,3 +152,15 @@ future<utils::chunked_vector<mutation>> unfreeze_gently(const utils::chunked_vec
     }
     co_return result;
 }
+
+future<>
+unfreeze_and_split_gently(const frozen_mutation& fm, schema_ptr schema, size_t max_rows, std::function<void(mutation)> process_mutation) {
+    check_schema_version(fm.schema_version(), *schema);
+    partition_split_builder b(schema, fm.key(), max_rows, std::move(process_mutation));
+    try {
+        co_await fm.partition().accept_gently(*schema, b);
+    } catch (...) {
+        std::throw_with_nested(std::runtime_error(format(
+                "frozen_mutation::unfreeze_gently(): failed unfreezing mutation {} of {}.{}", fm.key(), schema->ks_name(), schema->cf_name())));
+    }
+}

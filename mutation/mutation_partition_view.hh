@@ -91,7 +91,7 @@ public:
     }
     static mutation_partition_view from_view(ser::mutation_partition_view v);
     void accept(const schema& schema, partition_builder& visitor) const;
-    future<> accept_gently(const schema& schema, partition_builder& visitor) const;
+    future<> accept_gently(const schema& schema, mutation_partition_visitor& visitor) const;
     void accept(const column_mapping&, converting_mutation_partition_applier& visitor) const;
     future<> accept_gently(const column_mapping&, converting_mutation_partition_applier& visitor) const;
     void accept(const column_mapping&, mutation_partition_view_virtual_visitor& mpvvv) const;
