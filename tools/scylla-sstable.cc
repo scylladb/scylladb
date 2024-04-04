@@ -921,8 +921,58 @@ class operation {
     operation_func _func;
 
 public:
+<<<<<<< HEAD
     operation(std::string name, std::string summary, std::string description, operation_func func)
         : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
+=======
+    scylla_sstable_table_state(schema_ptr schema, reader_permit permit, sstables::sstables_manager& sst_man, std::string output_dir)
+        : _schema(std::move(schema))
+        , _permit(std::move(permit))
+        , _sst_man(sst_man)
+        , _output_dir(std::move(output_dir))
+        , _main_set(sstables::make_partitioned_sstable_set(_schema, false))
+        , _maintenance_set(sstables::make_partitioned_sstable_set(_schema, false))
+        , _compaction_strategy(sstables::make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
+        , _compaction_strategy_state(compaction::compaction_strategy_state::make(_compaction_strategy))
+        , _tombstone_gc_state(nullptr)
+        , _backlog_tracker(std::make_unique<dummy_compaction_backlog_tracker>())
+        , _group_id("dummy-group")
+        , _generation_generator(0)
+    { }
+    virtual const schema_ptr& schema() const noexcept override { return _schema; }
+    virtual unsigned min_compaction_threshold() const noexcept override { return _schema->min_compaction_threshold(); }
+    virtual bool compaction_enforce_min_threshold() const noexcept override { return false; }
+    virtual const sstables::sstable_set& main_sstable_set() const override { return _main_set; }
+    virtual const sstables::sstable_set& maintenance_sstable_set() const override { return _maintenance_set; }
+    virtual std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point compaction_time) const override { return {}; }
+    virtual const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override { return _compacted_undeleted_sstables; }
+    virtual sstables::compaction_strategy& get_compaction_strategy() const noexcept override { return _compaction_strategy; }
+    virtual compaction_strategy_state& get_compaction_strategy_state() noexcept override { return _compaction_strategy_state; }
+    virtual reader_permit make_compaction_reader_permit() const override { return _permit; }
+    virtual sstables::sstables_manager& get_sstables_manager() noexcept override { return _sst_man; }
+    virtual sstables::shared_sstable make_sstable() const override { return do_make_sstable(); }
+    virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return do_configure_writer(std::move(origin)); }
+    virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
+    virtual bool memtable_has_key(const dht::decorated_key& key) const override { return false; }
+    virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override { return make_ready_future<>(); }
+    virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
+    virtual bool tombstone_gc_enabled() const noexcept override { return false; }
+    virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
+    virtual compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
+    virtual const std::string get_group_id() const noexcept override { return _group_id; }
+    virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
+};
+
+void validate_output_dir(std::filesystem::path output_dir, bool accept_nonempty_output_dir) {
+    auto fd = open_file_dma(output_dir.native(), open_flags::ro).get();
+    unsigned entries = 0;
+    fd.list_directory([&entries] (directory_entry) {
+        ++entries;
+        return make_ready_future<>();
+    }).done().get();
+    if (entries && !accept_nonempty_output_dir) {
+        throw std::invalid_argument("output-directory is not empty, pass --unsafe-accept-nonempty-output-dir if you are sure you want to write into this directory");
+>>>>>>> 38699f6c3d (compaction: Check for key presence in memtable when calculating max purgeable timestamp)
     }
     operation(std::string name, std::string summary, std::string description, std::vector<std::string> available_options, operation_func func)
         : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _available_options(std::move(available_options)), _func(func) {

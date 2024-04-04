@@ -106,6 +106,7 @@ public:
     api::timestamp_type min_memtable_timestamp() const override {
         return table().min_memtable_timestamp();
     }
+    bool memtable_has_key(const dht::decorated_key& key) const override { return false; }
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         return table().as_table_state().on_compaction_completion(std::move(desc), offstrategy);
     }
