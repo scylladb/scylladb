@@ -250,6 +250,15 @@ class ScyllaRESTAPIClient():
             "token": str(token)
         })
 
+    async def del_tablet_replica(self, node_ip: str, ks: str, table: str, host: HostID, shard: int, token: int) -> None:
+        await self.client.post(f"/storage_service/tablets/del_replica", host=node_ip, params={
+            "ks": ks,
+            "table": table,
+            "host": str(host),
+            "shard": str(shard),
+            "token": str(token)
+        })
+
     async def enable_tablet_balancing(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params={"enabled": "true"})
 
