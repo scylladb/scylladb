@@ -3179,7 +3179,7 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
     });
 }
 
-SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components) {
+SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components_and_reload_reclaimed_components) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
         auto schema_ptr = ss.schema();
@@ -3188,12 +3188,21 @@ SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components) {
         // create a bloom filter
         auto sst_test = sstables::test(sst);
         sst_test.create_bloom_filter(100);
+        sst_test.write_filter();
         auto total_reclaimable_memory = sst_test.total_reclaimable_memory_size();
 
         // Test sstable::reclaim_memory_from_components() :
         BOOST_REQUIRE_EQUAL(sst_test.reclaim_memory_from_components(), total_reclaimable_memory);
+        // No more memory to reclaim in the sstable
         BOOST_REQUIRE_EQUAL(sst_test.total_reclaimable_memory_size(), 0);
         BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), 0);
+
+        // Test sstable::reload_reclaimed_components() :
+        // Reloading should load the bloom filter back into memory
+        sst_test.reload_reclaimed_components();
+        // SSTable should have reclaimable memory from the bloom filter
+        BOOST_REQUIRE_EQUAL(sst_test.total_reclaimable_memory_size(), total_reclaimable_memory);
+        BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), total_reclaimable_memory);
     });
 }
 

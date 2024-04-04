@@ -217,12 +217,21 @@ public:
         _sst->_total_reclaimable_memory.reset();
     }
 
+    void write_filter() {
+        _sst->_recognized_components.insert(component_type::Filter);
+        _sst->write_filter();
+    }
+
     size_t total_reclaimable_memory_size() const {
         return _sst->total_reclaimable_memory_size();
     }
 
     size_t reclaim_memory_from_components() {
         return _sst->reclaim_memory_from_components();
+    }
+
+    void reload_reclaimed_components() {
+        _sst->reload_reclaimed_components().get();
     }
 };
 
