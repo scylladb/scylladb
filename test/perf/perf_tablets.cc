@@ -127,10 +127,12 @@ static future<> test_basic_operations(app_template& app) {
 
         utils::chunked_vector<canonical_mutation> muts;
         auto time_to_read_muts = duration_in_seconds([&] {
-            muts = replica::read_tablet_mutations(e.local_qp().proxy().get_db()).get();
+            replica::read_tablet_mutations(e.local_qp().proxy().get_db(), [&] (canonical_mutation m) {
+                muts.emplace_back(m);
+            }).get();
         });
 
-        testlog.info("Read mutations in {:.6f} [ms]", time_to_read_muts.count() * 1000);
+        testlog.info("Read mutations in {:.6f} [ms] {} mutations", time_to_read_muts.count() * 1000, muts.size());
 
         auto time_to_read_hosts = duration_in_seconds([&] {
             replica::read_required_hosts(e.local_qp()).get();
