@@ -11,6 +11,7 @@
 #include <seastar/core/sstring.hh>
 #include <ostream>
 #include <map>
+#include <fmt/ostream.h>
 #include "seastarx.hh"
 
 namespace gms {
