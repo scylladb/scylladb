@@ -5578,12 +5578,12 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
         auto& tinfo = tmap.get_tablet_info(tablet.tablet);
         auto range = tmap.get_token_range(tablet.tablet);
-        locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-        if (leaving_replica.host == tm->get_my_id()) {
+        std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
+        if (leaving_replica && leaving_replica->host == tm->get_my_id()) {
             // The algorithm doesn't work with tablet migration within the same node because
             // it assumes there is only one tablet replica, picked by the sharder, on local node.
             throw std::runtime_error(fmt::format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
-                                            tablet, leaving_replica.shard, trinfo->pending_replica.shard));
+                                            tablet, leaving_replica->shard, trinfo->pending_replica.shard));
         }
 
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
@@ -5660,8 +5660,11 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
 
             if (trinfo->stage == locator::tablet_transition_stage::cleanup) {
                 auto& tinfo = tmap.get_tablet_info(tablet.tablet);
-                locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-                if (leaving_replica.host != tm->get_my_id()) {
+                std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
+                if (!leaving_replica) {
+                    throw std::runtime_error(fmt::format("Tablet {} has no leaving replica", tablet));
+                }
+                if (leaving_replica->host != tm->get_my_id()) {
                     throw std::runtime_error(fmt::format("Tablet {} has leaving replica different than this one", tablet));
                 }
             } else if (trinfo->stage == locator::tablet_transition_stage::cleanup_target) {
@@ -5791,6 +5794,86 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
     }
 
     // Wait for migration to finish.
+    co_await _topology_state_machine.event.wait([&] {
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
+    });
+}
+
+future<> storage_service::add_tablet_replica(table_id table, dht::token token, locator::tablet_replica dst, loosen_constraints force) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.add_tablet_replica(table, token, dst, force);
+        });
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+
+        while (_topology_state_machine._topology.is_busy()) {
+            const auto tstate = *_topology_state_machine._topology.tstate;
+            if (tstate == topology::transition_state::tablet_draining ||
+                tstate == topology::transition_state::tablet_migration) {
+                break;
+            }
+            rtlogger.debug("add_tablet_replica(): topology state machine is busy: {}", tstate);
+            release_guard(std::move(guard));
+            co_await _topology_state_machine.event.wait();
+            guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+        }
+
+        std::vector<canonical_mutation> updates;
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        auto tid = tmap.get_tablet_id(token);
+        auto& tinfo = tmap.get_tablet_info(tid);
+        auto last_token = tmap.get_last_token(tid);
+        auto gid = locator::global_tablet_id{table, tid};
+
+        if (tmap.get_tablet_transition_info(tid)) {
+            throw std::runtime_error(fmt::format("Tablet {} is in transition", gid));
+        }
+        auto* node = get_token_metadata().get_topology().find_node(dst.host);
+        if (!node) {
+            throw std::runtime_error(format("Unknown host: {}", dst.host));
+        }
+        if (dst.shard >= node->get_shard_count()) {
+            throw std::runtime_error(format("Host {} does not have shard {}", *node, dst.shard));
+        }
+
+        if (locator::contains(tinfo.replicas, dst.host)) {
+            throw std::runtime_error(fmt::format("Tablet {} has replica on {}", gid, dst.host));
+        }
+
+        locator::tablet_replica_set new_replicas(tinfo.replicas);
+        new_replicas.push_back(dst);
+
+        updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table)
+            .set_new_replicas(last_token, new_replicas)
+            .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+            .set_transition(last_token, locator::tablet_transition_kind::rebuild)
+            .build());
+        updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+            .set_transition_state(topology::transition_state::tablet_migration)
+            .set_version(_topology_state_machine._topology.version + 1)
+            .build());
+
+        sstring reason = format("Adding replica to tablet {}, node {}", gid, dst);
+        rtlogger.info("{}", reason);
+        rtlogger.trace("do update {} reason {}", updates, reason);
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
+            break;
+        } catch (group0_concurrent_modification&) {
+            rtlogger.debug("add_tablet_replica(): concurrent modification, retrying");
+        }
+    }
+
+    // Wait for transition to finish.
     co_await _topology_state_machine.event.wait([&] {
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));

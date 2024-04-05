@@ -1140,7 +1140,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 case locator::tablet_transition_stage::cleanup:
                     if (advance_in_background(gid, tablet_state.cleanup, "cleanup", [&] {
-                        locator::tablet_replica dst = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                        auto maybe_dst = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                        if (!maybe_dst) {
+                            rtlogger.info("Tablet cleanup of {} skipped because no replicas leaving", gid);
+                            return make_ready_future<>();
+                        }
+                        locator::tablet_replica& dst = *maybe_dst;
                         if (is_excluded(raft::server_id(dst.host.uuid()))) {
                             rtlogger.info("Tablet cleanup of {} on {} skipped because node is excluded", gid, dst);
                             return make_ready_future<>();

@@ -1582,6 +1582,23 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
+    ss::add_tablet_replica.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+        auto dst_host_id = validate_host_id(req->get_query_param("dst_host"));
+        shard_id dst_shard_id = validate_int(req->get_query_param("dst_shard"));
+        auto token = dht::token::from_int64(validate_int(req->get_query_param("token")));
+        auto ks = req->get_query_param("ks");
+        auto table = req->get_query_param("table");
+        auto table_id = ctx.db.local().find_column_family(ks, table).schema()->id();
+        auto force_str = req->get_query_param("force");
+        auto force = service::loosen_constraints(force_str == "" ? false : validate_bool(force_str));
+
+        co_await ss.local().add_tablet_replica(table_id, token,
+            locator::tablet_replica{dst_host_id, dst_shard_id},
+            force);
+
+        co_return json_void();
+    });
+
     ss::tablet_balancing_enable.set(r, [&ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
         auto enabled = validate_bool(req->get_query_param("enabled"));
         co_await ss.local().set_tablet_balancing_enabled(enabled);
@@ -1688,6 +1705,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::upgrade_to_raft_topology.unset(r);
     ss::raft_topology_upgrade_status.unset(r);
     ss::move_tablet.unset(r);
+    ss::add_tablet_replica.unset(r);
     ss::tablet_balancing_enable.unset(r);
     sp::get_schema_versions.unset(r);
 }
