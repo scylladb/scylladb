@@ -2300,7 +2300,6 @@ future<table::snapshot_file_set> table::take_snapshot(database& db, sstring json
     tlogger.trace("take_snapshot {}", jsondir);
 
     auto sstable_deletion_guard = co_await get_units(_sstable_deletion_sem, 1);
-    std::exception_ptr ex;
 
     auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
     auto table_names = std::make_unique<std::unordered_set<sstring>>();
