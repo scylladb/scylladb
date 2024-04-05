@@ -21,6 +21,7 @@
 #include <deque>
 
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 
 #include "seastarx.hh"
 
