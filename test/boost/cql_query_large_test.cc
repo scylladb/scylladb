@@ -140,6 +140,28 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
     }, cfg).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_large_row_count_warning) {
+    auto cfg = make_shared<db::config>();
+    cfg->compaction_rows_count_warning_threshold(10);
+    do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table tbl (a int, b text, primary key (a, b))").get();
+        for (int i = 0; i < 11; ++i) {
+            e.execute_cql(format("insert into tbl (a, b) values (42, 'foo{}');", i)).get();
+        }
+        flush(e);
+
+        // Check that the warning was added to system.large_partitions
+        assert_that(e.execute_cql("select partition_key, rows from system.large_partitions where table_name = 'tbl' allow filtering;").get())
+            .is_rows()
+            .with_size(1)
+            .with_row({ { utf8_type->decompose("42") },
+                        { long_type->decompose(11L) },
+                        { utf8_type->decompose("tbl") } });
+
+        return make_ready_future<>();
+    }, cfg).get();
+}
+
 SEASTAR_TEST_CASE(test_insert_large_collection_values) {
     return do_with_cql_env([] (cql_test_env& e) {
         return seastar::async([&e] {
