@@ -6483,17 +6483,12 @@ future<db::hints::sync_point> storage_proxy::create_hint_sync_point(std::vector<
         const auto members_set = remote().gossiper().get_live_members();
         std::copy(members_set.begin(), members_set.end(), std::back_inserter(target_hosts));
     }
-    co_await coroutine::parallel_for_each(boost::irange<unsigned>(0, smp::count), [this, &target_hosts, &spoint] (unsigned shard) -> future<> {
-        const auto& sharded_sp = container();
-        // sharded::invoke_on does not have a const-method version, so we cannot use it here
-        auto p = co_await smp::submit_to(shard, [&sharded_sp, &target_hosts] {
-            const storage_proxy& sp = sharded_sp.local();
-            auto regular_rp = sp._hints_manager.calculate_current_sync_point(target_hosts);
-            auto mv_rp = sp._hints_for_views_manager.calculate_current_sync_point(target_hosts);
-            return std::make_pair(std::move(regular_rp), std::move(mv_rp));
-        });
-        spoint.regular_per_shard_rps[shard] = std::move(p.first);
-        spoint.mv_per_shard_rps[shard] = std::move(p.second);
+    // sharded::invoke_on does not have a const-method version, so we cannot use it here
+    co_await smp::invoke_on_all([&sharded_sp = container(), &target_hosts, &spoint] {
+        const storage_proxy& sp = sharded_sp.local();
+        auto shard = this_shard_id();
+        spoint.regular_per_shard_rps[shard] = sp._hints_manager.calculate_current_sync_point(target_hosts);
+        spoint.mv_per_shard_rps[shard] = sp._hints_for_views_manager.calculate_current_sync_point(target_hosts);
     });
     co_return spoint;
 }
