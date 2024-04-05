@@ -72,6 +72,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
     auto cfg = make_shared<db::config>();
     cfg->compaction_large_row_warning_threshold_mb(1);
     cfg->compaction_large_cell_warning_threshold_mb(1);
+    cfg->compaction_large_partition_warning_threshold_mb(1);
     do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create table tbl (a int, b text, primary key (a))").get();
         sstring blob(1024*1024, 'x');
@@ -104,9 +105,17 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
             .with_size(1)
             .with_row({"44", "b", "tbl"});
 
+        // Check that it was added to system.large_partitions too
+        assert_that(e.execute_cql("select partition_key, rows from system.large_partitions where table_name = 'tbl' allow filtering;").get())
+            .is_rows()
+            .with_size(1)
+            .with_row({ { utf8_type->decompose("44") },
+                        { long_type->decompose(1L) },
+                        { utf8_type->decompose("tbl") } });
+
         e.execute_cql("delete from tbl where a = 44;").get();
 
-        // In order to guarantee that system.large_rows has been updated, we have to
+        // In order to guarantee that system.large_rows, system.large_cells and system.large_partitions have been updated, we have to
         // * flush, so that a tombstone for the above delete is created.
         // * do a major compaction, so that the tombstone is combined with the old entry,
         //   and the old sstable is deleted.
@@ -123,6 +132,31 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
         assert_that(e.execute_cql("select partition_key from system.large_cells where table_name = 'tbl' allow filtering;").get())
             .is_rows()
             .is_empty();
+        assert_that(e.execute_cql("select partition_key from system.large_partitions where table_name = 'tbl' allow filtering;").get())
+            .is_rows()
+            .is_empty();
+
+        return make_ready_future<>();
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_large_row_count_warning) {
+    auto cfg = make_shared<db::config>();
+    cfg->compaction_rows_count_warning_threshold(10);
+    do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table tbl (a int, b text, primary key (a, b))").get();
+        for (int i = 0; i < 11; ++i) {
+            e.execute_cql(format("insert into tbl (a, b) values (42, 'foo{}');", i)).get();
+        }
+        flush(e);
+
+        // Check that the warning was added to system.large_partitions
+        assert_that(e.execute_cql("select partition_key, rows from system.large_partitions where table_name = 'tbl' allow filtering;").get())
+            .is_rows()
+            .with_size(1)
+            .with_row({ { utf8_type->decompose("42") },
+                        { long_type->decompose(11L) },
+                        { utf8_type->decompose("tbl") } });
 
         return make_ready_future<>();
     }, cfg).get();
