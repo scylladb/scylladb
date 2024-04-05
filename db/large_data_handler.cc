@@ -38,9 +38,8 @@ large_data_handler::large_data_handler(uint64_t partition_threshold_bytes, uint6
 future<large_data_handler::partition_above_threshold> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size, uint64_t rows) {
     assert(running());
     partition_above_threshold above_threshold{partition_size > _partition_threshold_bytes, rows > _rows_count_threshold};
-    if (above_threshold.size) [[unlikely]] {
-        ++_stats.partitions_bigger_than_threshold;
-    }
+    static_assert(std::is_same_v<decltype(above_threshold.size), bool>);
+    _stats.partitions_bigger_than_threshold += above_threshold.size; // increment if true
     if (above_threshold.size || above_threshold.rows) [[unlikely]] {
         return with_sem([&sst, &key, partition_size, rows, this] {
             return record_large_partitions(sst, key, partition_size, rows);
