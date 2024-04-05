@@ -236,3 +236,34 @@ SEASTAR_TEST_CASE(test_reader_with_different_strategies) {
             repair_reader::read_strategy::multishard_split);
     });
 }
+
+SEASTAR_TEST_CASE(repair_rows_size_considers_external_memory) {
+    return seastar::async([&] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        reader_permit permit = semaphore.make_permit();
+        random_mutation_generator gen{random_mutation_generator::generate_counters::no};
+        schema_ptr s = gen.schema();
+        auto m = make_lw_shared<replica::memtable>(s);
+        auto r = *make_random_repair_rows_on_wire(gen, s, permit, m).begin();
+        uint64_t seed = tests::random::get_int<uint64_t>();
+
+        auto& frozen_mf = *r.get_mutation_fragments().begin();
+        auto mf = make_lw_shared<mutation_fragment>(frozen_mf.unfreeze(*s, permit));
+        auto dk_ptr = make_lw_shared<const decorated_key_with_hash>(*s, dht::decorate_key(*s, r.get_key()), seed);
+        position_in_partition pos(mf->position());
+        repair_sync_boundary boundary{dk_ptr->dk, pos};
+        auto fmf_size = frozen_mf.representation().size();
+
+        // Test that frozen mutation fragment memory is counted.
+        repair_row row{frozen_mf, std::nullopt, nullptr, std::nullopt, is_dirty_on_master::no, nullptr};
+        BOOST_REQUIRE_EQUAL(row.size(), fmf_size + sizeof(repair_row));
+
+        // Test that mutation fragment memory is counted.
+        repair_row row_with_mf{frozen_mf, std::nullopt, nullptr, std::nullopt, is_dirty_on_master::no, mf};
+        BOOST_REQUIRE_EQUAL(row_with_mf.size(), fmf_size + mf->memory_usage() + sizeof(repair_row));
+
+        // Test that boundary memory is counted.
+        repair_row row_with_boundary{frozen_mf, pos, dk_ptr, std::nullopt, is_dirty_on_master::no, nullptr};
+        BOOST_REQUIRE_EQUAL(row_with_boundary.size(), fmf_size + boundary.pk.external_memory_usage() + boundary.position.external_memory_usage() + sizeof(repair_row));
+    });
+}
