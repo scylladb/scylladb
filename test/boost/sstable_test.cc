@@ -107,14 +107,7 @@ future<> summary_query(schema_ptr schema, sstring path, sstables::generation_typ
 
 template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
 future<> summary_query_fail(schema_ptr schema, sstring path, sstables::generation_type::int_t generation) {
-    return summary_query<Position, EntryPosition, EntryKeySize>(std::move(schema), path, generation).then_wrapped([] (auto fut) {
-        try {
-            fut.get();
-        } catch (std::out_of_range& ok) {
-            return make_ready_future<>();
-        }
-        return make_ready_future<>();
-    });
+    return summary_query<Position, EntryPosition, EntryKeySize>(std::move(schema), path, generation).handle_exception_type([] (const std::out_of_range&) {});
 }
 
 SEASTAR_TEST_CASE(small_summary_query_ok) {
