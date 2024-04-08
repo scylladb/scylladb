@@ -252,6 +252,8 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
             // will not do this.
             auto& cf = db.find_column_family(fm.column_family_id());
 
+            rlogger.info("mutation partition printer {}", fm.pretty_printer(cf.schema()));
+
             if (rlogger.is_enabled(logging::log_level::debug)) {
                 rlogger.debug("replaying at {} v={} {}:{} at {}", fm.column_family_id(), fm.schema_version(),
                         cf.schema()->ks_name(), cf.schema()->cf_name(), rp);
