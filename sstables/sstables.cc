@@ -1424,7 +1424,12 @@ size_t sstable::reclaim_memory_from_components() {
     }
 
     _total_reclaimable_memory.reset();
+    _total_memory_reclaimed += memory_reclaimed_this_iteration;
     return memory_reclaimed_this_iteration;
+}
+
+size_t sstable::total_memory_reclaimed() const {
+    return _total_memory_reclaimed;
 }
 
 // This interface is only used during tests, snapshot loading and early initialization.
