@@ -586,6 +586,8 @@ private:
     // It is initialized to 0 to prevent the sstables manager from reclaiming memory
     // from the components before the SSTable has been fully loaded.
     mutable std::optional<size_t> _total_reclaimable_memory{0};
+    // Total memory reclaimed so far from this sstable
+    size_t _total_memory_reclaimed{0};
 public:
     const bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
@@ -681,6 +683,8 @@ private:
     // Reclaim memory from the components back to the system.
     // Note that only bloom filters are reclaimable.
     size_t reclaim_memory_from_components();
+    // Return memory reclaimed so far from this sstable
+    size_t total_memory_reclaimed() const;
 
 public:
     // Finds first position_in_partition in a given partition.
