@@ -175,6 +175,7 @@ void sstables_manager::add(sstable* sst) {
 void sstables_manager::deactivate(sstable* sst) {
     // Remove SSTable from the reclaimable memory tracking
     _total_reclaimable_memory -= sst->total_reclaimable_memory_size();
+    _total_memory_reclaimed -= sst->total_memory_reclaimed();
 
     // At this point, sst has a reference count of zero, since we got here from
     // lw_shared_ptr_deleter<sstables::sstable>::dispose().
