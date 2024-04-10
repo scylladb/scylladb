@@ -14,7 +14,7 @@ Scylla Drivers
 You can use Scylla with:
 
 * :doc:`Apache Cassandra CQL Compatible Drivers <cql-drivers/index>`
-* :doc:`AWS DynamoDB Compatible API Drivers <dynamo-drivers/index>`
+* :doc:`Amazon DynamoDB Compatible API Drivers <dynamo-drivers/index>`
 
 Additional drivers coming soon!
 
