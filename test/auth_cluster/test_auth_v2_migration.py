@@ -129,13 +129,13 @@ async def check_auth_v2_works(manager: ManagerClient, hosts):
 
 @pytest.mark.asyncio
 async def test_auth_v2_migration(request, manager: ManagerClient):
-    # First, force the first node to start in legacy mode due to the error injection
-    cfg = {'error_injections_at_startup': ['force_gossip_based_join']}
+    # First, force the first node to start in legacy mode
+    cfg = {'force_gossip_topology_changes': True}
 
     servers = [await manager.server_add(config=cfg)]
-    # Disable injections for the subsequent nodes - they should fall back to
+    # Enable raft-based node operations for subsequent nodes - they should fall back to
     # using gossiper-based node operations
-    del cfg['error_injections_at_startup']
+    del cfg['force_gossip_topology_changes']
 
     servers += [await manager.server_add(config=cfg) for _ in range(2)]
     cql = manager.cql

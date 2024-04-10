@@ -2844,9 +2844,6 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
     if (!_raft_experimental_topology) {
         slogger.info("Booting in legacy operations mode because experimental raft topology is not enabled");
         set_topology_change_kind(topology_change_kind::legacy);
-    } else if (utils::get_local_injector().is_enabled("force_gossip_based_join") && !_sys_ks.local().bootstrap_complete()) {
-        slogger.info("Booting in legacy topology operations mode because it was requested by an error injection");
-        set_topology_change_kind(topology_change_kind::legacy);
     } else if (_group0->client().in_recovery()) {
         slogger.info("Raft recovery - starting in legacy topology operations mode");
         set_topology_change_kind(topology_change_kind::legacy);
@@ -2854,6 +2851,9 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         // We are a part of group 0. The _topology_change_kind_enabled flag is maintained from there.
         _manage_topology_change_kind_from_group0 = true;
         set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
+        if (_db.local().get_config().force_gossip_topology_changes() && raft_topology_change_enabled()) {
+            throw std::runtime_error("Cannot force gossip topology changes - the cluster is using raft-based topology");
+        }
         slogger.info("The node is already in group 0 and will restart in {} mode", raft_topology_change_enabled() ? "raft" : "legacy");
     } else if (_sys_ks.local().bootstrap_complete()) {
         // We already bootstrapped but we are not a part of group 0. This means that we are restarting after recovery.
@@ -2868,8 +2868,13 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
 
         if (_group0->load_my_id() == g0_info.id) {
             // We're creating the group 0.
-            slogger.info("We are creating the group 0. Start in raft topology operations mode");
-            set_topology_change_kind(topology_change_kind::raft);
+            if (_db.local().get_config().force_gossip_topology_changes()) {
+                slogger.info("We are creating the group 0. Start in legacy topology operations mode by force");
+                set_topology_change_kind(topology_change_kind::legacy);
+            } else {
+                slogger.info("We are creating the group 0. Start in raft topology operations mode");
+                set_topology_change_kind(topology_change_kind::raft);
+            }
         } else {
             // Ask the current member of the raft group about which mode to use
             auto params = join_node_query_params {};
@@ -2877,6 +2882,9 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
                     &_messaging.local(), netw::msg_addr(g0_info.ip_addr), g0_info.id, std::move(params));
             switch (result.topo_mode) {
             case join_node_query_result::topology_mode::raft:
+                if (_db.local().get_config().force_gossip_topology_changes()) {
+                    throw std::runtime_error("Cannot force gossip topology changes - joining the cluster that is using raft-based topology");
+                }
                 slogger.info("Will join existing cluster in raft topology operations mode");
                 set_topology_change_kind(topology_change_kind::raft);
                 break;

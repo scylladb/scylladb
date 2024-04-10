@@ -11,7 +11,8 @@ async def test_gossip_boot(manager: ManagerClient):
     Regression test for scylladb/scylladb#17493.
     """
 
-    cfg = {'error_injections_at_startup': ['force_gossip_based_join', 'gossiper_replicate_sleep']}
+    cfg = {'error_injections_at_startup': ['gossiper_replicate_sleep'],
+           'force_gossip_topology_changes': True}
 
     servers = [await manager.server_add(config=cfg, timeout=60) for _ in range(3)]
     logs = [await manager.server_open_log(s.server_id) for s in servers]
