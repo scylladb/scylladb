@@ -1768,7 +1768,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             throw std::runtime_error(err);
         }
 
-        co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), _raft_experimental_topology);
+        co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), true);
 
         // Initializes monitor only after updating local topology.
         start_tablet_split_monitor();
@@ -1933,7 +1933,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     assert(_group0);
-    co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), _raft_experimental_topology);
+    co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), false);
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 
     if (_raft_experimental_topology) {
