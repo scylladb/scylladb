@@ -632,6 +632,8 @@ private:
             _db.local().init_schema_commitlog();
             _sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
 
+            _sys_ks.local().build_bootstrap_info().get();
+
             auto host_id = cfg_in.host_id;
             if (!host_id) {
                 auto linfo = _sys_ks.local().load_local_info().get();
@@ -901,6 +903,8 @@ private:
             auto stop_group0_usage_in_storage_service = defer([this] {
                 _ss.local().wait_for_group0_stop().get();
             });
+
+            group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
 
             try {
                 _ss.local().join_cluster(_sys_dist_ks, _proxy, _gossiper, service::start_hint_manager::no, generation_number).get();
