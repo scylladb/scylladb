@@ -447,6 +447,7 @@ public:
     named_value<double> index_cache_fraction;
 
     named_value<bool> consistent_cluster_management;
+    named_value<bool> force_gossip_topology_changes;
 
     named_value<double> wasm_cache_memory_fraction;
     named_value<uint32_t> wasm_cache_timeout_in_ms;
