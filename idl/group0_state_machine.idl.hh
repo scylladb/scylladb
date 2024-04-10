@@ -12,6 +12,8 @@
 #include "idl/frozen_schema.idl.hh"
 #include "idl/uuid.idl.hh"
 #include "idl/raft_storage.idl.hh"
+#include "idl/range.idl.hh"
+#include "idl/token.idl.hh"
 
 namespace service {
 
@@ -31,8 +33,15 @@ struct write_mutations {
     std::vector<canonical_mutation> mutations;
 };
 
+struct repair_history_update {
+    std::vector<canonical_mutation> mutations;
+    table_id table_uuid;
+    dht::token_range range;
+    gc_clock::time_point repair_time;
+};
+
 struct group0_command {
-    std::variant<service::schema_change, service::broadcast_table_query, service::topology_change, service::write_mutations> change;
+    std::variant<service::schema_change, service::broadcast_table_query, service::topology_change, service::write_mutations, service::repair_history_update> change;
     canonical_mutation history_append;
 
     std::optional<utils::UUID> prev_state_id;

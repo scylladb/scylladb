@@ -142,6 +142,8 @@ public:
     // This feature MUST NOT be advertised in release mode!
     gms::feature test_only_feature { *this, "TEST_ONLY_FEATURE"sv };
 
+    gms::feature repair_history_over_raft { *this, "REPAIR_HISTORY_OVER_RAFT"sv };
+
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

@@ -37,6 +37,7 @@
 #include <boost/intrusive/list.hpp>
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"
+#include "gms/feature_service.hh"
 #include "repair/row_level.hh"
 #include "utils/stall_free.hh"
 #include "utils/to_string.hh"
@@ -61,6 +62,7 @@
 #include "repair/reader.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/xx_hasher.hh"
+#include "service/raft/raft_group_registry.hh"
 
 extern logging::logger rlogger;
 
@@ -2263,9 +2265,7 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
     });
 }
 
-future<repair_update_system_table_response> repair_service::repair_update_system_table_handler(gms::inet_address from, repair_update_system_table_request req) {
-    rlogger.debug("repair[{}]: Got repair_update_system_table_request from node={}, range={}, repair_time={}", req.repair_uuid, from, req.range, req.repair_time);
-    auto& db = this->get_db();
+static db::system_keyspace::repair_history_entry get_repair_history_entry(repair_update_system_table_request req) {
     bool is_valid_range = true;
     if (req.range.start()) {
         if (req.range.start()->is_inclusive()) {
@@ -2280,10 +2280,6 @@ future<repair_update_system_table_response> repair_service::repair_update_system
     if (!is_valid_range) {
         throw std::runtime_error(format("repair[{}]: range {} is not in the format of (start, end]", req.repair_uuid, req.range));
     }
-    co_await db.invoke_on_all([&req] (replica::database& local_db) {
-        auto& gc_state = local_db.get_compaction_manager().get_tombstone_gc_state();
-        return gc_state.update_repair_time(req.table_uuid, req.range, req.repair_time);
-    });
     db::system_keyspace::repair_history_entry ent;
     ent.id = req.repair_uuid;
     ent.table_uuid = req.table_uuid;
@@ -2294,6 +2290,17 @@ future<repair_update_system_table_response> repair_service::repair_update_system
     ent.range_start = dht::token::to_int64(range_start);
     auto range_end = req.range.end() ? req.range.end()->value() : dht::maximum_token();
     ent.range_end = dht::token::to_int64(range_end);
+    return ent;
+}
+
+future<repair_update_system_table_response> repair_service::repair_update_system_table_handler(gms::inet_address from, repair_update_system_table_request req) {
+    rlogger.debug("repair[{}]: Got repair_update_system_table_request from node={}, range={}, repair_time={}", req.repair_uuid, from, req.range, req.repair_time);
+    auto ent = get_repair_history_entry(req);
+    auto& db = this->get_db();
+    co_await db.invoke_on_all([&req] (replica::database& local_db) {
+        auto& gc_state = local_db.get_compaction_manager().get_tombstone_gc_state();
+        return gc_state.update_repair_time(req.table_uuid, req.range, req.repair_time);
+    });
     co_await _sys_ks.local().update_repair_history(std::move(ent));
     co_return repair_update_system_table_response();
 }
@@ -2945,6 +2952,12 @@ private:
         }
         auto repair_time = repair_time_opt.value();
         repair_update_system_table_request req{_shard_task.global_repair_id.uuid(), _table_id, _shard_task.get_keyspace(), _cf_name, _range, repair_time};
+
+        if (rs._feature_service.repair_history_over_raft) {
+            co_await rs.update_repair_history_over_raft(req);
+            co_return;
+        }
+
         auto all_nodes = _all_live_peer_nodes;
         all_nodes.push_back(my_address);
         co_await coroutine::parallel_for_each(all_nodes, [this, req] (gms::inet_address node) -> future<> {
@@ -3189,6 +3202,9 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
         sharded<db::view::view_update_generator>& vug,
         tasks::task_manager& tm,
         service::migration_manager& mm,
+        service::raft_group0_client& group0_client,
+        cql3::query_processor& qp,
+        gms::feature_service& feature_service,
         size_t max_repair_memory)
     : _gossiper(gossiper)
     , _messaging(ms)
@@ -3201,6 +3217,9 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _view_update_generator(vug)
     , _repair_module(seastar::make_shared<repair::task_manager_module>(tm, *this, max_repair_memory))
     , _mm(mm)
+    , _group0_client(group0_client)
+    , _qp(qp)
+    , _feature_service(feature_service)
     , _node_ops_metrics(_repair_module)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)
@@ -3235,6 +3254,28 @@ static shard_id repair_id_to_shard(tasks::task_id& repair_id) {
     return shard_id(repair_id.uuid().get_most_significant_bits()) % smp::count;
 }
 
+future<> repair_service::do_raft_command(service::group0_guard guard,
+        abort_source& as, std::vector<mutation> mutations,
+        std::string_view description, repair_update_system_table_request req) const {
+    service::repair_history_update change{
+        .mutations{mutations.begin(), mutations.end()},
+        .table_uuid{req.table_uuid},
+        .range{req.range},
+        .repair_time{req.repair_time},
+    };
+    auto group0_cmd = _group0_client.prepare_command(change, guard, description);
+    co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &as);
+}
+
+static service::query_state& get_query_state() {
+    using namespace std::chrono_literals;
+    const auto t = 10s;
+    static timeout_config tc{ t, t, t, t, t, t, t };
+    static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
+    static thread_local service::query_state qs(cs, empty_service_permit());
+    return qs;
+};
+
 future<std::optional<gc_clock::time_point>>
 repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time, bool is_tablet) {
     auto shard = repair_id_to_shard(repair_id);
@@ -3254,6 +3295,29 @@ repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht:
             rlogger.debug("repair[{}]: Finished range {} for table {} on all shards, updating system.repair_historytable, finished_shards={}",
                     repair_id, range, table_id, finished_shards);
             co_return std::nullopt;
+        }
+    });
+}
+
+future<> repair_service::update_repair_history_over_raft(repair_update_system_table_request req) {
+    return container().invoke_on(0, [req] (repair_service& rs) -> future<> {
+        for (;;) {
+            auto guard = co_await rs._group0_client.start_operation(&rs._as, service::raft_timeout{});
+            static sstring insert_query = format("INSERT INTO {}.{} (table_uuid, repair_time, repair_uuid, keyspace_name, table_name, range_start, range_end) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    db::system_keyspace::NAME, db::system_keyspace::REPAIR_HISTORY);
+            auto timestamp = guard.write_timestamp();
+            auto entry = get_repair_history_entry(req);
+            auto muts = co_await rs._qp.get_mutations_internal(insert_query, get_query_state(), timestamp,
+                    {entry.table_uuid.uuid(), entry.ts, entry.id.uuid(), entry.ks, entry.cf, entry.range_start, entry.range_end});
+            rlogger.debug("Write repair hostory for table {}.{} range={}:{}", entry.ks, entry.cf, entry.range_start, entry.range_end);
+            try {
+                co_await rs.do_raft_command(std::move(guard), rs._as, std::move(muts), "update repair history", req);
+                co_return;
+            } catch (service::group0_concurrent_modification& e) {
+                rlogger.debug("repair_service::update_repair_history_over_raft: got error {}, try again ...", e);
+            }
+            // FIXME: we need a better way to retry the raft command
+            co_await sleep_abortable(std::chrono::milliseconds(10), rs._as);
         }
     });
 }

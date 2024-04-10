@@ -17,6 +17,8 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
 #include "service/raft/raft_address_map.hh"
+#include "service/raft/raft_group0_client.hh"
+#include "cql3/query_processor.hh"
 
 using namespace seastar;
 
@@ -37,6 +39,7 @@ class batchlog_manager;
 
 namespace gms {
     class gossiper;
+    class feature_service;
 }
 
 class repair_meta;
@@ -97,6 +100,9 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<db::view::view_update_generator>& _view_update_generator;
     shared_ptr<repair::task_manager_module> _repair_module;
     service::migration_manager& _mm;
+    service::raft_group0_client& _group0_client;
+    cql3::query_processor& _qp;
+    gms::feature_service& _feature_service;
     node_ops_metrics _node_ops_metrics;
     std::unordered_map<node_repair_meta_id, repair_meta_ptr> _repair_metas;
     uint32_t _next_repair_meta_id = 0;  // used only on shard 0
@@ -112,6 +118,8 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 
     future<> _load_history_done = make_ready_future<>();
 
+    abort_source _as;
+
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
 
@@ -126,7 +134,11 @@ public:
             sharded<db::system_keyspace>& sys_ks,
             sharded<db::view::view_update_generator>& vug,
             tasks::task_manager& tm,
-            service::migration_manager& mm, size_t max_repair_memory);
+            service::migration_manager& mm,
+            service::raft_group0_client& group0_client,
+            cql3::query_processor& qp,
+            gms::feature_service& feature_service,
+            size_t max_repair_memory);
     ~repair_service();
     future<> start();
     future<> stop();
@@ -246,6 +258,14 @@ public:
     friend class repair::user_requested_repair_task_impl;
     friend class repair::data_sync_repair_task_impl;
     friend class repair::tablet_repair_task_impl;
+    friend class row_level_repair;
+
+private:
+    future<> do_raft_command(service::group0_guard guard, abort_source& as,
+            std::vector<mutation> mutations, std::string_view description,
+            repair_update_system_table_request) const;
+public:
+    future<> update_repair_history_over_raft(repair_update_system_table_request req);
 };
 
 class repair_info;

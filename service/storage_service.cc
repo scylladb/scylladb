@@ -7071,6 +7071,14 @@ future<> storage_service::node_ops_abort_thread() {
     __builtin_unreachable();
 }
 
+future<> storage_service::update_repair_history(table_id table_uuid, dht::token_range range, gc_clock::time_point repair_time) {
+    return _db.invoke_on_all([table_uuid, range, repair_time] (replica::database& local_db) {
+        auto& gc_state = local_db.get_compaction_manager().get_tombstone_gc_state();
+        slogger.debug("Update repair history for table={} range={} time={}", table_uuid, range, repair_time);
+        return gc_state.update_repair_time(table_uuid, range, repair_time);
+    });
+}
+
 void storage_service::set_topology_change_kind(topology_change_kind kind) {
     _topology_change_kind_enabled = kind;
     _gossiper.set_topology_state_machine(kind == topology_change_kind::raft ? & _topology_state_machine : nullptr);

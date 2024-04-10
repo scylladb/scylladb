@@ -171,6 +171,10 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     },
     [&] (write_mutations& muts) -> future<> {
         return write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
+    },
+    [&] (repair_history_update& update) -> future<> {
+        co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(update.mutations));
+        co_await _ss.update_repair_history(update.table_uuid, update.range, update.repair_time);
     }
     ), cmd.change);
 

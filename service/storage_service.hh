@@ -871,6 +871,8 @@ public:
     // It is incompatible with the `join_cluster` method.
     future<> start_maintenance_mode();
 
+    future<> update_repair_history(table_id id, dht::token_range range, gc_clock::time_point repair_time);
+
 private:
     future<std::vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<std::vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);

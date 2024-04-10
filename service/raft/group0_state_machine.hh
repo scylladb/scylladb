@@ -17,6 +17,8 @@
 #include "mutation/canonical_mutation.hh"
 #include "service/raft/raft_state_machine.hh"
 #include "gms/feature.hh"
+#include "dht/token.hh"
+#include "dht/i_partitioner_fwd.hh"
 
 namespace gms {
 class feature_service;
@@ -52,8 +54,15 @@ struct write_mutations {
     std::vector<canonical_mutation> mutations;
 };
 
+struct repair_history_update {
+    std::vector<canonical_mutation> mutations;
+    table_id table_uuid;
+    dht::token_range range;
+    gc_clock::time_point repair_time;
+};
+
 struct group0_command {
-    std::variant<schema_change, broadcast_table_query, topology_change, write_mutations> change;
+    std::variant<schema_change, broadcast_table_query, topology_change, write_mutations, repair_history_update> change;
 
     // Mutation of group0 history table, appending a new state ID and optionally a description.
     canonical_mutation history_append;

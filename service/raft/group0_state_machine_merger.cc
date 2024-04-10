@@ -34,7 +34,7 @@ size_t group0_state_machine_merger::cmd_size(group0_command& cmd) {
 bool group0_state_machine_merger::can_merge(group0_command& cmd, size_t s) const {
     if (!_cmd_to_merge.empty()) {
         // broadcast table commands or different type of commands cannot be merged
-        if (_cmd_to_merge[0].change.index() != cmd.change.index() || holds_alternative<broadcast_table_query>(cmd.change)) {
+        if (_cmd_to_merge[0].change.index() != cmd.change.index() || holds_alternative<broadcast_table_query>(cmd.change) || holds_alternative<repair_history_update>(cmd.change)) {
             return false;
         }
     }
@@ -79,6 +79,9 @@ std::vector<canonical_mutation>& group0_state_machine_merger::get_command_mutati
             return chng.mutations;
         },
         [] (write_mutations& muts) -> std::vector<canonical_mutation>& {
+            return muts.mutations;
+        },
+        [] (repair_history_update& muts) -> std::vector<canonical_mutation>& {
             return muts.mutations;
         }
     ), cmd.change);

@@ -50,9 +50,13 @@ async def repair_on_node(manager: ManagerClient, server: ServerInfo, servers: li
 async def load_repair_history(cql, hosts):
     all_rows = []
     for host in hosts:
-        logging.info(f'Query hosts={host}');
+        # read_barrier is needed to ensure that local repair_history on the
+        # queried node reflects the latest version
+        await read_barrier(cql, host)
         rows = await cql.run_async("SELECT * from system.repair_history", host=host)
         all_rows += rows
+        nr = len(rows)
+        logging.info(f'Query host={host} rows_nr={nr} rows={rows}');
     for row in all_rows:
         logging.info(f"Got repair_history_entry={row}")
     return all_rows
