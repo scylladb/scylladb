@@ -255,11 +255,27 @@ future<> sstable_directory::filesystem_components_lister::prepare(sstable_direct
     // as there could be a race with scylla-manager that might
     // delete snapshots concurrently
     co_await utils::directories::verify_owner_and_mode(_directory, utils::directories::recursive::no);
-    co_await lister::scan_dir(_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [] (fs::path dir, directory_entry de) -> future<> {
-        if (de.name != sstables::snapshots_dir) {
-            co_await utils::directories::verify_owner_and_mode(dir / de.name, utils::directories::recursive::yes);
+    auto d = co_await open_checked_directory(general_disk_error_handler, _directory.native());
+    auto lister = d.experimental_list_directory();
+
+    std::exception_ptr ex;
+    try {
+        while (auto de = co_await lister()) {
+            if (de->type != directory_entry_type::directory || de->name[0] == '.') {
+                continue;
+            }
+
+            if (de->name != sstables::snapshots_dir) {
+                co_await utils::directories::verify_owner_and_mode(_directory / de->name, utils::directories::recursive::yes);
+            }
         }
-    });
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await d.close();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
 
     if (flags.garbage_collect) {
         co_await garbage_collect(st);
