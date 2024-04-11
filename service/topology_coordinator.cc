@@ -300,7 +300,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // Leaving the scope destroys the object and releases the guard.
     }
 
-    node_to_work_on retake_node(group0_guard guard, raft::server_id id) {
+    node_to_work_on retake_node(group0_guard guard, raft::server_id id) const {
         auto& topo = _topo_sm._topology;
 
         auto it = topo.find(id);
