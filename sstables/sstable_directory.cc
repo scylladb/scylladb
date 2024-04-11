@@ -703,11 +703,20 @@ future<> sstable_directory::filesystem_components_lister::handle_sstables_pendin
 
     std::vector<future<>> futures;
 
-    co_await lister::scan_dir(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [this, &futures] (fs::path dir, directory_entry de) {
+    auto dir = co_await open_checked_directory(general_disk_error_handler, pending_delete_dir.native());
+    auto lister = dir.experimental_list_directory();
+
+    std::exception_ptr ex;
+    try {
+      while (auto de = co_await lister()) {
+        if (de->type != directory_entry_type::regular || de->name[0] == '.') {
+            continue;
+        }
+
         // push nested futures that remove files/directories into an array of futures,
-        // so that the supplied callback will not block scan_dir() from
+        // so that the supplied callback will not block lister from
         // reading the next entry in the directory.
-        fs::path file_path = dir / de.name;
+        fs::path file_path = pending_delete_dir / de->name;
         if (file_path.extension() == ".tmp") {
             sstlog.info("Found temporary pending_delete log file: {}, deleting", file_path);
             futures.push_back(remove_file(file_path.string()));
@@ -718,10 +727,17 @@ future<> sstable_directory::filesystem_components_lister::handle_sstables_pendin
         } else {
             sstlog.debug("Found unknown file in pending_delete directory: {}, ignoring", file_path);
         }
-        return make_ready_future<>();
-    });
+      }
+    } catch (...) {
+        ex = std::current_exception();
+    }
 
+    co_await dir.close();
     co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
+
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
 }
 
 future<sstables::generation_type>
