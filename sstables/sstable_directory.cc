@@ -23,6 +23,7 @@
 #include "utils/directories.hh"
 #include "replica/database.hh"
 #include "dht/auto_refreshing_sharder.hh"
+#include "checked-file-impl.hh"
 
 static logging::logger dirlog("sstable_directory");
 
@@ -295,14 +296,16 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
 
-    directory_lister lister(_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter);
+    auto dir = co_await open_checked_directory(general_disk_error_handler, _directory.native());
+    auto lister = dir.experimental_list_directory();
+
     std::exception_ptr ex;
     try {
-        while (true) {
-            auto de = co_await lister.get();
-            if (!de) {
-                break;
+        while (auto de = co_await lister()) {
+            if (de->type != directory_entry_type::regular || !manifest_json_filter(_directory.native(), *de)) {
+                continue;
             }
+
             auto component_path = _directory / de->name;
             auto [ comps, ks, cf ] = sstables::parse_path(component_path);
             handle(std::move(comps), component_path);
@@ -310,7 +313,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     } catch (...) {
         ex = std::current_exception();
     }
-    co_await lister.close();
+    co_await dir.close();
     if (ex) {
         dirlog.debug("Could not process sstable directory {}: {}", _directory, ex);
         // FIXME: waiting for https://github.com/scylladb/seastar/pull/1090
