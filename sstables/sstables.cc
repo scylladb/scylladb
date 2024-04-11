@@ -1364,9 +1364,8 @@ future<> sstable::create_data() noexcept {
 }
 
 future<> sstable::drop_caches() {
-    return _cached_index_file->evict_gently().then([this] {
-        return _index_cache->evict_gently();
-    });
+    co_await _cached_index_file->evict_gently();
+    co_await _index_cache->evict_gently();
 }
 
 future<> sstable::read_filter(sstable_open_config cfg) {
