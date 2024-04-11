@@ -684,20 +684,20 @@ future<> sstable_directory::filesystem_components_lister::cleanup_column_family_
 
     std::exception_ptr ex;
     try {
-     while (auto de = co_await lister()) {
-        if (de->type != directory_entry_type::directory || de->name[0] == '.') {
-            continue;
-        }
+        while (auto de = co_await lister()) {
+            if (de->type != directory_entry_type::directory || de->name[0] == '.') {
+                continue;
+            }
 
-        // push futures that remove files/directories into an array of futures,
-        // so that the supplied callback will not block lister from
-        // reading the next entry in the directory.
-        fs::path dirpath = _directory / de->name;
-        if (dirpath.extension().string() == tempdir_extension) {
-            sstlog.info("Found temporary sstable directory: {}, removing", dirpath);
-            futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
+            // push futures that remove files/directories into an array of futures,
+            // so that the supplied callback will not block lister from
+            // reading the next entry in the directory.
+            fs::path dirpath = _directory / de->name;
+            if (dirpath.extension().string() == tempdir_extension) {
+                sstlog.info("Found temporary sstable directory: {}, removing", dirpath);
+                futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
+            }
         }
-     }
     } catch (...) {
         ex = std::current_exception();
     }
@@ -724,26 +724,26 @@ future<> sstable_directory::filesystem_components_lister::handle_sstables_pendin
 
     std::exception_ptr ex;
     try {
-      while (auto de = co_await lister()) {
-        if (de->type != directory_entry_type::regular || de->name[0] == '.') {
-            continue;
-        }
+        while (auto de = co_await lister()) {
+            if (de->type != directory_entry_type::regular || de->name[0] == '.') {
+                continue;
+            }
 
-        // push nested futures that remove files/directories into an array of futures,
-        // so that the supplied callback will not block lister from
-        // reading the next entry in the directory.
-        fs::path file_path = pending_delete_dir / de->name;
-        if (file_path.extension() == ".tmp") {
-            sstlog.info("Found temporary pending_delete log file: {}, deleting", file_path);
-            futures.push_back(remove_file(file_path.string()));
-        } else if (file_path.extension() == ".log") {
-            sstlog.info("Found pending_delete log file: {}, replaying", file_path);
-            auto f = replay_pending_delete_log(std::move(file_path));
-            futures.push_back(std::move(f));
-        } else {
-            sstlog.debug("Found unknown file in pending_delete directory: {}, ignoring", file_path);
+            // push nested futures that remove files/directories into an array of futures,
+            // so that the supplied callback will not block lister from
+            // reading the next entry in the directory.
+            fs::path file_path = pending_delete_dir / de->name;
+            if (file_path.extension() == ".tmp") {
+                sstlog.info("Found temporary pending_delete log file: {}, deleting", file_path);
+                futures.push_back(remove_file(file_path.string()));
+            } else if (file_path.extension() == ".log") {
+                sstlog.info("Found pending_delete log file: {}, replaying", file_path);
+                auto f = replay_pending_delete_log(std::move(file_path));
+                futures.push_back(std::move(f));
+            } else {
+                sstlog.debug("Found unknown file in pending_delete directory: {}, ignoring", file_path);
+            }
         }
-      }
     } catch (...) {
         ex = std::current_exception();
     }
