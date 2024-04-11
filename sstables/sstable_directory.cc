@@ -663,19 +663,35 @@ future<> sstable_directory::filesystem_components_lister::garbage_collect(storag
 future<> sstable_directory::filesystem_components_lister::cleanup_column_family_temp_sst_dirs() {
     std::vector<future<>> futures;
 
-    co_await lister::scan_dir(_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [&] (fs::path sstdir, directory_entry de) {
+    auto dir = co_await open_checked_directory(general_disk_error_handler, _directory.native());
+    auto lister = dir.experimental_list_directory();
+
+    std::exception_ptr ex;
+    try {
+     while (auto de = co_await lister()) {
+        if (de->type != directory_entry_type::directory || de->name[0] == '.') {
+            continue;
+        }
+
         // push futures that remove files/directories into an array of futures,
-        // so that the supplied callback will not block scan_dir() from
+        // so that the supplied callback will not block lister from
         // reading the next entry in the directory.
-        fs::path dirpath = sstdir / de.name;
+        fs::path dirpath = _directory / de->name;
         if (dirpath.extension().string() == tempdir_extension) {
             sstlog.info("Found temporary sstable directory: {}, removing", dirpath);
             futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
         }
-        return make_ready_future<>();
-    });
+     }
+    } catch (...) {
+        ex = std::current_exception();
+    }
 
+    co_await dir.close();
     co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
+
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
 }
 
 future<> sstable_directory::filesystem_components_lister::handle_sstables_pending_delete() {
