@@ -18,7 +18,6 @@
 #include "compaction/compaction_manager.hh"
 #include "log.hh"
 #include "sstable_directory.hh"
-#include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/directories.hh"
 #include "replica/database.hh"
@@ -26,6 +25,14 @@
 #include "checked-file-impl.hh"
 
 static logging::logger dirlog("sstable_directory");
+
+static inline fs::path operator/(const fs::path& lhs, const char* rhs) {
+    return lhs / fs::path(rhs);
+}
+
+static inline fs::path operator/(const fs::path& lhs, std::string_view rhs) {
+    return lhs / fs::path(rhs);
+}
 
 namespace sstables {
 
@@ -695,7 +702,7 @@ future<> sstable_directory::filesystem_components_lister::cleanup_column_family_
             fs::path dirpath = _directory / de->name;
             if (dirpath.extension().string() == tempdir_extension) {
                 sstlog.info("Found temporary sstable directory: {}, removing", dirpath);
-                futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
+                futures.push_back(io_check([dirpath = std::move(dirpath)] () { return recursive_remove_directory(dirpath.native()); }));
             }
         }
     } catch (...) {
