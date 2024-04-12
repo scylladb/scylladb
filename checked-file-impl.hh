@@ -104,6 +104,12 @@ public:
             return get_file_impl(_file)->dma_read_bulk(offset, range_size, intent);
         });
     }
+
+    virtual coroutine::experimental::generator<directory_entry> experimental_list_directory() override {
+        return do_io_check(_error_handler, [&] {
+            return get_file_impl(_file)->experimental_list_directory();
+        });
+    }
 private:
     const io_error_handler& _error_handler;
     file _file;
