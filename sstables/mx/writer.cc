@@ -535,6 +535,7 @@ private:
     std::unique_ptr<file_writer> _index_writer;
     bool _tombstone_written = false;
     bool _static_row_written = false;
+    bool _clustering_row_written = false;
     // The length of partition header (partition key, partition deletion and static row, if present)
     // as written to the data file
     // Used for writing promoted index
@@ -943,6 +944,7 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
 
     _tombstone_written = false;
     _static_row_written = false;
+    _clustering_row_written = false;
 }
 
 void writer::consume(tombstone t) {
@@ -1093,6 +1095,7 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
 
 void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker) {
     if (marker.is_missing()) {
+        _c_stats.tombstone_count++;
         return;
     }
 
@@ -1287,6 +1290,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
 }
 
 stop_iteration writer::consume(clustering_row&& cr) {
+    _clustering_row_written = true;
     if (_write_regular_as_static) {
         ensure_tombstone_is_written();
         write_static_row(cr.cells(), column_kind::regular_column);
@@ -1413,6 +1417,10 @@ stop_iteration writer::consume(range_tombstone_change&& rtc) {
 stop_iteration writer::consume_end_of_partition() {
     ensure_tombstone_is_written();
     ensure_static_row_is_written_if_needed();
+
+    if (!_clustering_row_written){
+        _c_stats.tombstone_count++;
+    }
 
     write(_sst.get_version(), *_data_writer, row_flags::end_of_partition);
 

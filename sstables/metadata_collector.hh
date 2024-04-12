@@ -34,6 +34,8 @@ struct column_stats {
     /** how many rows are there in the partition */
     uint64_t rows_count;
 
+    uint64_t tombstone_count;
+
     uint64_t start_offset;
     uint64_t partition_size;
 
@@ -51,6 +53,7 @@ struct column_stats {
         cells_count(0),
         column_count(0),
         rows_count(0),
+        tombstone_count(0),
         start_offset(0),
         partition_size(0),
         tombstone_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE),
@@ -121,6 +124,7 @@ private:
     bool _has_legacy_counter_shards = false;
     uint64_t _columns_count = 0;
     uint64_t _rows_count = 0;
+    uint64_t _tombstone_count = 0;
 
     /**
      * Default cardinality estimation method is to use HyperLogLog++.
@@ -197,6 +201,7 @@ public:
         update_has_legacy_counter_shards(stats.has_legacy_counter_shards);
         _columns_count += stats.column_count;
         _rows_count += stats.rows_count;
+        _tombstone_count += stats.tombstone_count;
     }
 
     void construct_compaction(compaction_metadata& m) {
@@ -223,6 +228,7 @@ public:
         m.columns_count = _columns_count;
         m.rows_count = _rows_count;
         m.originating_host_id = _host_id;
+        m.tombstone_count = _tombstone_count;
     }
 };
 

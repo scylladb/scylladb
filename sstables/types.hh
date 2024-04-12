@@ -319,6 +319,7 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     db::replay_position commitlog_lower_bound; // 3_x only
     disk_array<uint32_t, commitlog_interval> commitlog_intervals; // 3_x only
     std::optional<locator::host_id> originating_host_id; // 3_11_11 and later (me format)
+    uint64_t tombstone_count;
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
@@ -345,7 +346,8 @@ struct stats_metadata : public metadata_base<stats_metadata> {
                 rows_count,
                 commitlog_lower_bound,
                 commitlog_intervals,
-                originating_host_id
+                originating_host_id,
+                tombstone_count
             );
         case sstable_version_types::mc:
         case sstable_version_types::md:

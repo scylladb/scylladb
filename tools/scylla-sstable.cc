@@ -1320,6 +1320,7 @@ void dump_stats_metadata(json_writer& writer, sstables::sstable_version_types ve
         else if (field == &metadata.commitlog_lower_bound) { return "commitlog_lower_bound"; }
         else if (field == &metadata.commitlog_intervals) { return "commitlog_intervals"; }
         else if (field == &metadata.originating_host_id) { return "originating_host_id"; }
+        else if (field == &metadata.tombstone_count) { return "tombstone_count"; }
         else { throw std::invalid_argument("invalid field offset"); }
     });
 }
