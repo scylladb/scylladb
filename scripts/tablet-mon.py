@@ -18,6 +18,10 @@
 #
 #   ssh -L *:9042:127.0.0.1:9042 -N <remote-host>
 #
+# Key bindings:
+#
+#  t - toggle display of table tags. Each table has a unique color which is displayed in the bottom part of the tablet.
+#
 
 import math
 import threading
@@ -39,6 +43,7 @@ tablet_w = tablet_size
 tablet_h = tablet_w // 2
 tablet_radius = tablet_size // 7
 tablet_frame_size = max(2, min(6, tablet_size // 14))
+show_table_tag = False
 
 # Animation settings
 streaming_trace_duration_ms = 300
@@ -84,6 +89,11 @@ class Tablet(object):
         self.state = state
         self.insert_time = pygame.time.get_ticks()
         self.streaming = False
+
+        table_id = id[0]
+        if table_id not in table_tag_colors:
+            table_tag_colors[table_id] = table_tag_palette[len(table_tag_colors) % len(table_tag_palette)]
+        self.table_tag_color = table_tag_colors[table_id]
 
         # Updated by animate()
         self.h = 0 # Height including tablet_frame_size
@@ -359,6 +369,28 @@ tablet_colors = {
     (Tablet.STATE_LEAVING, 'end_migration'): light_gray,
 }
 
+table_tag_palette = [
+    (238, 187, 187),  # Light Red
+    (238, 221, 187),  # Orange
+    (187, 238, 187),  # Lime Green
+    (187, 238, 238),  # Aqua
+    (187, 221, 238),  # Light Blue
+    (221, 187, 238),  # Lavender
+    (238, 187, 238),  # Pink
+    (238, 238, 187),  # Yellow
+    (238, 153, 153),  # Lighter Red
+    (238, 187, 153),  # Lighter Orange
+    (238, 238, 153),  # Lighter Yellow
+    (153, 238, 153),  # Lighter Green
+    (153, 221, 238),  # Lighter Blue
+    (187, 153, 238),  # Lighter Purple
+    (238, 153, 238),  # Lighter Pink
+    (204, 204, 204)   # Gray
+]
+
+# Map between table id and color
+table_tag_colors = {}
+
 # Avoid redrawing if nothing changed
 changed = False
 
@@ -516,10 +548,24 @@ def draw_tablet(tablet, x, y):
     h = tablet.size_frac * (tablet_h + 2 * tablet_frame_size)
     if h > 2 * tablet_frame_size:
         color = tablet_colors[tablet.state]
-        pygame.draw.rect(window, color, (x + tablet_frame_size + (tablet_w - w) / 2,
+        if show_table_tag:
+            table_tag_color = tablet.table_tag_color
+        else:
+            table_tag_color = color
+
+        pygame.draw.rect(window, table_tag_color, (x + tablet_frame_size + (tablet_w - w) / 2,
                                          y + tablet_frame_size,
                                          w,
                                          h - 2 * tablet_frame_size), border_radius=tablet_radius)
+
+        if show_table_tag:
+            table_tag_h = tablet_radius
+            pygame.draw.rect(window, color, (x + tablet_frame_size + (tablet_w - w) / 2,
+                                             y + tablet_frame_size,
+                                             w,
+                                             table_tag_h),
+                             border_top_left_radius=tablet_radius,
+                             border_top_right_radius=tablet_radius)
 
 def draw_node_frame(x, y, x2, y2, color):
     pygame.draw.rect(window, color, (x, y, x2 - x, y2 - y), node_frame_thickness,
@@ -614,6 +660,10 @@ while running:
         elif event.type == pygame.VIDEORESIZE:
             window_width, window_height = event.w, event.h
             changed = True
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_t:
+                show_table_tag = not show_table_tag
+                changed = True
 
     now = float(pygame.time.get_ticks())
 
