@@ -4,6 +4,7 @@ target_sources(tools
     scylla-types.cc
     scylla-sstable.cc
     scylla-nodetool.cc
+    scylla_commitlog.cc
     schema_loader.cc
     utils.cc
     lua_sstable_consumer.cc)
