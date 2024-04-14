@@ -887,13 +887,18 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
 
     // Apply system.topology and system.topology_requests mutations atomically
     // to have a consistent state after restart
-    utils::chunked_vector<mutation> muts;
+    utils::chunked_vector<frozen_mutation> muts;
     muts.reserve(std::distance(snp.mutations.begin(), it));
-    std::transform(snp.mutations.begin(), it, std::back_inserter(muts), [this] (const canonical_mutation& m) {
+    for (auto cur = snp.mutations.begin(); cur != it; ++cur) {
+        const auto& m = *cur;
         auto s = _db.local().find_schema(m.column_family_id());
-        return m.to_mutation(s);
-    });
-    co_await _db.local().apply(freeze(muts), db::no_timeout);
+        // FIXME: in theory, we can generate a frozen_mutation
+        // directly from canonical_mutation rather than building
+        // a mutation and then freezing it.
+        muts.emplace_back(freeze(m.to_mutation(s)));
+        co_await coroutine::maybe_yield();
+    }
+    co_await _db.local().apply(muts, db::no_timeout);
 }
 
 future<> storage_service::update_service_levels_cache(qos::update_both_cache_levels update_only_effective_cache, qos::query_context ctx) {
