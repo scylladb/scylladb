@@ -367,15 +367,13 @@ public:
         : _schema(std::move(s))
         , _tablet_map(tmap.tablet_count())
     {
-        for (const auto& [id, sg] : sgm.storage_groups()) {
-            if (sg) {
-                auto set = sg->make_sstable_set();
-                _size += set->size();
-                _bytes_on_disk += set->bytes_on_disk();
-                _sstable_sets[id] = std::move(set);
-                _sstable_set_ids.insert(id);
-            }
-        }
+        sgm.for_each_storage_group([this] (size_t id, storage_group& sg) {
+            auto set = sg.make_sstable_set();
+            _size += set->size();
+            _bytes_on_disk += set->bytes_on_disk();
+            _sstable_sets[id] = std::move(set);
+            _sstable_set_ids.insert(id);
+        });
     }
 
     tablet_sstable_set(const tablet_sstable_set& o)

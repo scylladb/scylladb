@@ -548,9 +548,22 @@ void table::enable_off_strategy_trigger() {
 
 storage_group_manager::~storage_group_manager() = default;
 
+future<> storage_group_manager::for_each_storage_group_gently(std::function<future<>(size_t, storage_group&)> f) {
+    rwlock::holder shared_lock = co_await get_rwlock().hold_read_lock();
+    for (auto& [id, sg]: _storage_groups) {
+        co_await f(id, *sg);
+    }
+}
+
+void storage_group_manager::for_each_storage_group(std::function<void(size_t, storage_group&)> f) const {
+    for (auto& [id, sg]: _storage_groups) {
+        f(id, *sg);
+    }
+}
+
 storage_group* storage_group_manager::storage_group_for_id(const schema_ptr& s, size_t i) const {
-    auto it = storage_groups().find(i);
-    if (it == storage_groups().end()) [[unlikely]] {
+    auto it = _storage_groups.find(i);
+    if (it == _storage_groups.end()) [[unlikely]] {
         on_internal_error(tlogger, format("Storage wasn't found for tablet {} of table {}.{}", i, s->ks_name(), s->cf_name()));
     }
     return it->second.get();
@@ -805,7 +818,7 @@ bool tablet_storage_group_manager::all_storage_groups_split() {
         return true;
     }
 
-    auto split_ready = std::ranges::all_of(storage_groups() | boost::adaptors::map_values,
+    auto split_ready = std::ranges::all_of(_storage_groups | boost::adaptors::map_values,
         std::bind(&storage_group::set_split_mode, std::placeholders::_1, std::ref(compaction_groups())));
 
     // The table replica will say to coordinator that its split status is ready by
@@ -834,9 +847,9 @@ sstables::compaction_type_options::split tablet_storage_group_manager::split_com
 future<> tablet_storage_group_manager::split_all_storage_groups() {
     sstables::compaction_type_options::split opt = split_compaction_options();
 
-    for (auto& storage_group : storage_groups() | boost::adaptors::map_values) {
-        co_await storage_group->split(compaction_groups(), opt);
-    }
+    co_await for_each_storage_group_gently([this, opt] (size_t i, storage_group& storage_group) {
+        return storage_group.split(compaction_groups(), opt);
+    });
 }
 
 future<> table::split_all_storage_groups() {
@@ -849,7 +862,7 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
         return make_ready_future<>();
     }
 
-    auto& sg = storage_groups()[idx];
+    auto& sg = _storage_groups[idx];
     if (!sg) {
         on_internal_error(tlogger, format("Tablet {} of table {}.{} is not allocated in this shard",
                                           idx, schema()->ks_name(), schema()->cf_name()));
@@ -908,8 +921,8 @@ utils::chunked_vector<compaction_group*> tablet_storage_group_manager::compactio
     size_t candidate_end = tr.end() ? storage_group_id_for_token(tr.end()->value()) : (tablet_count() - 1);
 
     while (candidate_start <= candidate_end) {
-        auto it = storage_groups().find(candidate_start++);
-        if (it == storage_groups().end()) {
+        auto it = _storage_groups.find(candidate_start++);
+        if (it == _storage_groups.end()) {
             continue;
         }
         auto& sg = it->second;
@@ -961,12 +974,8 @@ compaction_group_list& table::compaction_groups() const noexcept {
     return _sg_manager->compaction_groups();
 }
 
-const storage_group_map& table::storage_groups() const noexcept {
-    return _sg_manager->storage_groups();
-}
-
 future<> table::parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) {
-    // TODO: place a barrier here when we allow dynamic groups.
+    rwlock::holder shared_lock = co_await _sg_manager->get_rwlock().hold_read_lock();
     co_await coroutine::parallel_for_each(compaction_groups(), [&] (compaction_group& cg) {
         return action(cg);
     });
@@ -2020,13 +2029,13 @@ locator::table_load_stats table::table_load_stats(std::function<bool(locator::gl
     locator::table_load_stats stats;
     stats.split_ready_seq_number = _sg_manager->split_ready_seq_number();
 
-    for (auto& [id, sg] : storage_groups()) {
+    _sg_manager->for_each_storage_group([&] (size_t id, storage_group& sg) {
         locator::global_tablet_id gid { _schema->id(), locator::tablet_id(id) };
         if (!tablet_filter(gid)) {
-            continue;
+            return;
         }
-        stats.size_in_bytes += sg->live_disk_space_used();
-    }
+        stats.size_in_bytes += sg.live_disk_space_used();
+    });
     return stats;
 }
 
@@ -2054,7 +2063,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
 
     // Stop the released main compaction groups asynchronously
     future<> stop_fut = make_ready_future<>();
-    for (auto& [id, sg] : storage_groups()) {
+    for (auto& [id, sg] : _storage_groups) {
         if (!sg->main_compaction_group()->empty()) {
             on_internal_error(tlogger, format("Found that storage of group {} for table {} wasn't split correctly, " \
                                               "therefore groups cannot be remapped with the new tablet count.",
@@ -2099,12 +2108,16 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
     if (new_tablet_count > old_tablet_count) {
         tlogger.info0("Detected tablet split for table {}.{}, increasing from {} to {} tablets",
                         schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
-        return handle_tablet_split_completion(*old_tablet_map, *new_tablet_map);
+        co_await handle_tablet_split_completion(*old_tablet_map, *new_tablet_map);
     }
-    return make_ready_future();
+    co_return;
 }
 
 future<> table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
+    // Exclusive lock is meant to protect storage groups, but we hold it here to prevent preemption
+    // between erm and storage groups updates as they need to be consistent.
+    rwlock::holder exclusive_lock = co_await _sg_manager->get_rwlock().hold_write_lock();
+
     auto old_erm = std::exchange(_erm, std::move(erm));
 
     if (uses_tablets()) {

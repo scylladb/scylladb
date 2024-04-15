@@ -606,8 +606,6 @@ private:
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept;
     // Returns a list of all compaction groups.
     compaction_group_list& compaction_groups() const noexcept;
-    // Returns a list of all storage groups.
-    const storage_group_map& storage_groups() const noexcept;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
 
