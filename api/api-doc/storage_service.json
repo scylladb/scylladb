@@ -2639,6 +2639,70 @@
          ]
       },
       {
+         "path":"/storage_service/tablets/del_replica",
+         "operations":[
+            {
+               "nickname":"del_tablet_replica",
+               "method":"POST",
+               "summary":"Deletes replica from tablet",
+               "type":"void",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ks",
+                     "description":"Keyspace name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"Table name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"token",
+                     "description":"Token owned by the tablet to delete replica from",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"integer",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"host",
+                     "description":"Host id to remove replica from",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"shard",
+                     "description":"Shard number to remove replica from",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"integer",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"force",
+                     "description":"When set to true, replication strategy constraints can be broken (false by default)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/tablets/balancing",
          "operations":[
             {

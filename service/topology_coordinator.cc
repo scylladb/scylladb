@@ -1099,8 +1099,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
 
                     if (advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
-                        rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, trinfo.pending_replica);
-                        auto dst = trinfo.pending_replica.host;
+                        if (!trinfo.pending_replica) {
+                            rtlogger.info("Skipped tablet streaming ({}) of {} as no pending replica found", trinfo.transition, gid);
+                            return make_ready_future<>();
+                        }
+                        rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
+                        auto dst = trinfo.pending_replica->host;
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
                                    netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
                     })) {
@@ -1159,7 +1163,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 case locator::tablet_transition_stage::cleanup_target:
                     if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target", [&] {
-                        locator::tablet_replica dst = trinfo.pending_replica;
+                        if (!trinfo.pending_replica) {
+                            rtlogger.info("Tablet cleanup of {} skipped because no replicas pending", gid);
+                            return make_ready_future<>();
+                        }
+                        locator::tablet_replica dst = *trinfo.pending_replica;
                         if (is_excluded(raft::server_id(dst.host.uuid()))) {
                             rtlogger.info("Tablet cleanup of {} on {} skipped because node is excluded and doesn't need to revert migration", gid, dst);
                             return make_ready_future<>();

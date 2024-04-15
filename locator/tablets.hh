@@ -202,7 +202,7 @@ struct tablet_transition_info {
     tablet_transition_stage stage;
     tablet_transition_kind transition;
     tablet_replica_set next;
-    tablet_replica pending_replica; // Optimization (next - tablet_info::replicas)
+    std::optional<tablet_replica> pending_replica; // Optimization (next - tablet_info::replicas)
     service::session_id session_id;
     write_replica_set_selector writes;
     read_replica_set_selector reads;
@@ -210,7 +210,7 @@ struct tablet_transition_info {
     tablet_transition_info(tablet_transition_stage stage,
                            tablet_transition_kind kind,
                            tablet_replica_set next,
-                           tablet_replica pending_replica,
+                           std::optional<tablet_replica> pending_replica,
                            service::session_id session_id = {});
 
     bool operator==(const tablet_transition_info&) const = default;
