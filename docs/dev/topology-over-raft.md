@@ -447,6 +447,19 @@ cause discrepancy between coordinator-side decisions and replica-side decisions.
 Also, due to fencing and barriers, coordinator-side version may be behind the replica-side version by at most one
 stage transition. It may also be ahead of the replica-side version by at most one stage transition.
 
+## Tablet replica placement vs sharding
+
+There is a distinction between tablet replica placement on given shard and the shard used for routing requests.
+A shard may be a replica of a tablet, but dht::sharder may not consider this shard for reads or writes yet.
+
+For example, in allow_write_both_read_old stage, the pending replica is not used by the sharder for reads or writes yet.
+The purpose of the stage is to ensure that tablet replica is prepared for receiving requests before any coordinator
+routes requests to it. Similarly, when migration ends, requests stop being routed to the leaving replica before
+tablet replica is cleaned up. So sharder may not return that shard for reads or writes but it still may be a replica of a tablet.
+
+In general, dht::sharder is used for routing requests, so it should not be used to determine whether local shard
+is a replica of a tablet. This is determined by tablet_map::has_replica().
+
 # Topology guards
 
 In addition to synchronizing with data access operations (e.g. CQL requests), we need to synchronize with
