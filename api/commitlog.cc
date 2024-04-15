@@ -17,7 +17,7 @@ namespace api {
 using namespace seastar::httpd;
 
 template<typename T>
-static auto acquire_cl_metric(http_context& ctx, std::function<T (db::commitlog*)> func) {
+static auto acquire_cl_metric(http_context& ctx, std::function<T (const db::commitlog*)> func) {
     typedef T ret_type;
 
     return ctx.db.map_reduce0([func = std::move(func)](replica::database& db) {
