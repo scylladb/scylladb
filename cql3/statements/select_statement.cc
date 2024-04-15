@@ -1388,7 +1388,9 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
             std::vector<bytes> pk_columns;
-            for (const auto& column : row.get_columns()) {
+            const auto& columns = row.get_columns();
+            pk_columns.reserve(columns.size());
+            for (const auto& column : columns) {
                 pk_columns.push_back(row.get_blob(column->name->to_string()));
             }
             auto pk = partition_key::from_exploded(*_schema, pk_columns);
