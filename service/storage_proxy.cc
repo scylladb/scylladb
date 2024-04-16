@@ -3126,7 +3126,9 @@ future<>
 storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout,
                                                       tracing::trace_state_ptr trace_state, service_permit permit) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
-    auto shard = erm->get_sharder(*s).shard_of(fm.token(*s));
+    // FIXME: This does not handle intra-node tablet migration properly.
+    // Refs https://github.com/scylladb/scylladb/issues/18180
+    auto shard = erm->get_sharder(*s).shard_for_reads(fm.token(*s));
     bool local = shard == this_shard_id();
     get_stats().replica_cross_shard_ops += !local;
     return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [&proxy = container(), gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (replica::database& db) {
