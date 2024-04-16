@@ -5708,21 +5708,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         });
     }
 
-    while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-
-        while (_topology_state_machine._topology.is_busy()) {
-            const auto tstate = *_topology_state_machine._topology.tstate;
-            if (tstate == topology::transition_state::tablet_draining ||
-                tstate == topology::transition_state::tablet_migration) {
-                break;
-            }
-            rtlogger.debug("move_tablet(): topology state machine is busy: {}", tstate);
-            release_guard(std::move(guard));
-            co_await _topology_state_machine.event.wait();
-            guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-        }
-
+    co_await transit_tablet(table, token, [=] (api::timestamp_type write_timestamp) {
         std::vector<canonical_mutation> updates;
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         auto tid = tmap.get_tablet_id(token);
@@ -5767,33 +5753,19 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             }
         }
 
-        updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table)
+        updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::tablet_transition_kind::migration)
             .build());
-        updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+        updates.emplace_back(topology_mutation_builder(write_timestamp)
             .set_transition_state(topology::transition_state::tablet_migration)
             .set_version(_topology_state_machine._topology.version + 1)
             .build());
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
-        rtlogger.info("{}", reason);
-        rtlogger.trace("do update {} reason {}", updates, reason);
-        topology_change change{std::move(updates)};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
-            break;
-        } catch (group0_concurrent_modification&) {
-            rtlogger.debug("move_tablet(): concurrent modification, retrying");
-        }
-    }
 
-    // Wait for migration to finish.
-    co_await _topology_state_machine.event.wait([&] {
-        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
+        return std::make_tuple(std::move(updates), std::move(reason));
     });
 }
 
@@ -5807,21 +5779,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         });
     }
 
-    while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-
-        while (_topology_state_machine._topology.is_busy()) {
-            const auto tstate = *_topology_state_machine._topology.tstate;
-            if (tstate == topology::transition_state::tablet_draining ||
-                tstate == topology::transition_state::tablet_migration) {
-                break;
-            }
-            rtlogger.debug("add_tablet_replica(): topology state machine is busy: {}", tstate);
-            release_guard(std::move(guard));
-            co_await _topology_state_machine.event.wait();
-            guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-        }
-
+    co_await transit_tablet(table, token, [=] (api::timestamp_type write_timestamp) {
         std::vector<canonical_mutation> updates;
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         auto tid = tmap.get_tablet_id(token);
@@ -5847,33 +5805,19 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         locator::tablet_replica_set new_replicas(tinfo.replicas);
         new_replicas.push_back(dst);
 
-        updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table)
+        updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::tablet_transition_kind::rebuild)
             .build());
-        updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+        updates.emplace_back(topology_mutation_builder(write_timestamp)
             .set_transition_state(topology::transition_state::tablet_migration)
             .set_version(_topology_state_machine._topology.version + 1)
             .build());
 
         sstring reason = format("Adding replica to tablet {}, node {}", gid, dst);
-        rtlogger.info("{}", reason);
-        rtlogger.trace("do update {} reason {}", updates, reason);
-        topology_change change{std::move(updates)};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
-            break;
-        } catch (group0_concurrent_modification&) {
-            rtlogger.debug("add_tablet_replica(): concurrent modification, retrying");
-        }
-    }
 
-    // Wait for transition to finish.
-    co_await _topology_state_machine.event.wait([&] {
-        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
+        return std::make_tuple(std::move(updates), std::move(reason));
     });
 }
 
@@ -5887,21 +5831,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         });
     }
 
-    while (true) {
-        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-
-        while (_topology_state_machine._topology.is_busy()) {
-            const auto tstate = *_topology_state_machine._topology.tstate;
-            if (tstate == topology::transition_state::tablet_draining ||
-                tstate == topology::transition_state::tablet_migration) {
-                break;
-            }
-            rtlogger.debug("del_tablet_replica(): topology state machine is busy: {}", tstate);
-            release_guard(std::move(guard));
-            co_await _topology_state_machine.event.wait();
-            guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-        }
-
+    co_await transit_tablet(table, token, [=] (api::timestamp_type write_timestamp) {
         std::vector<canonical_mutation> updates;
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         auto tid = tmap.get_tablet_id(token);
@@ -5928,33 +5858,19 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         new_replicas.reserve(tinfo.replicas.size() - 1);
         std::copy_if(tinfo.replicas.begin(), tinfo.replicas.end(), std::back_inserter(new_replicas), [&dst] (auto r) { return r != dst; });
 
-        updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table)
+        updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::tablet_transition_kind::rebuild)
             .build());
-        updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+        updates.emplace_back(topology_mutation_builder(write_timestamp)
             .set_transition_state(topology::transition_state::tablet_migration)
             .set_version(_topology_state_machine._topology.version + 1)
             .build());
 
         sstring reason = format("Removing replica from tablet {}, node {}", gid, dst);
-        rtlogger.info("{}", reason);
-        rtlogger.trace("do update {} reason {}", updates, reason);
-        topology_change change{std::move(updates)};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
-            break;
-        } catch (group0_concurrent_modification&) {
-            rtlogger.debug("del_tablet_replica(): concurrent modification, retrying");
-        }
-    }
 
-    // Wait for transition to finish.
-    co_await _topology_state_machine.event.wait([&] {
-        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
+        return std::make_tuple(std::move(updates), std::move(reason));
     });
 }
 
@@ -6029,6 +5945,44 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     }, locator::load_stats{}, std::plus<locator::load_stats>());
 
     co_return std::move(load_stats);
+}
+
+future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<std::vector<canonical_mutation>, sstring>(api::timestamp_type)> prepare_mutations) {
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+
+        while (_topology_state_machine._topology.is_busy()) {
+            const auto tstate = *_topology_state_machine._topology.tstate;
+            if (tstate == topology::transition_state::tablet_draining ||
+                tstate == topology::transition_state::tablet_migration) {
+                break;
+            }
+            rtlogger.debug("transit_tablet(): topology state machine is busy: {}", tstate);
+            release_guard(std::move(guard));
+            co_await _topology_state_machine.event.wait();
+            guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+        }
+
+        auto [ updates, reason ] = prepare_mutations(guard.write_timestamp());
+
+        rtlogger.info("{}", reason);
+        rtlogger.trace("do update {} reason {}", updates, reason);
+
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
+            break;
+        } catch (group0_concurrent_modification&) {
+            rtlogger.debug("transit_tablet(): concurrent modification, retrying");
+        }
+    }
+
+    // Wait for transition to finish.
+    co_await _topology_state_machine.event.wait([&] {
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
+    });
 }
 
 future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
