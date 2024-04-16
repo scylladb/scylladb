@@ -40,6 +40,7 @@
 #include "replica/tablet_mutation_builder.hh"
 #include <seastar/core/smp.hh>
 #include "mutation/canonical_mutation.hh"
+#include "mutation/async_utils.hh"
 #include "seastar/core/on_internal_error.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -786,7 +787,7 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
             const auto max_size = _db.local().schema_commitlog()->max_record_size() / 2;
             for (auto i = it; i != snp.mutations.end(); i++) {
                 const auto& m = *i;
-                auto mut = m.to_mutation(s);
+                auto mut = co_await to_mutation_gently(m, s);
                 if (m.representation().size() <= max_size) {
                     muts_to_apply.push_back(std::move(mut));
                 } else {
