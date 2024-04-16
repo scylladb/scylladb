@@ -74,6 +74,8 @@ Summary:        The Scylla database server
 Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
 AutoReqProv:    no
+Provides:       %{product}-tools:%{_bindir}/nodetool
+Provides:       %{product}-tools:%{_sysconfigdir}/bash_completion.d/nodetool-completion
 
 %description server
 This package contains ScyllaDB server.
@@ -122,6 +124,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
+%{_bindir}/nodetool
 %{_sbindir}/scylla*
 %{_sbindir}/node_health_check
 %{_sbindir}/seastar-cpu-map.sh
@@ -148,6 +151,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %ghost %config /etc/systemd/system/var-lib-systemd-coredump.mount
 %ghost /etc/systemd/system/scylla-cpupower.service
 %ghost %config /etc/systemd/system/var-lib-scylla.mount
+%{_sysconfdir}/bash_completion.d/nodetool-completion
 
 %package conf
 Group:          Applications/Databases

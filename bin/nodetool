@@ -1,0 +1,14 @@
+#!/bin/bash
+#
+# Copyright (C) 2024-present ScyllaDB
+#
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+
+SCRIPT_PATH=$(dirname $(realpath "$0"))
+
+INSTALLED_SCYLLA_PATH="${SCRIPT_PATH}/scylla"
+
+# Allow plugging scylla path for local testing
+exec ${SCYLLA:-${INSTALLED_SCYLLA_PATH}} nodetool $@
