@@ -805,22 +805,6 @@ BOOST_AUTO_TEST_CASE(test_empty_key_view_comparison) {
     BOOST_CHECK(lf.begin() == lf.end());
 }
 
-template <typename T> concept Formattable = fmt::is_formattable<T>::value;
-
-namespace sstables {
-
-template <Formattable T>
-std::ostream& boost_test_print_type(std::ostream& os, const T& v) {
-    fmt::print(os, "{}", v);
-    return os;
-}
-
-std::ostream& boost_test_print_type(std::ostream& os, sstable_format_types format_type) {
-    return os << static_cast<int>(format_type);
-}
-
-}
-
 // Test that sstables::parse_path is able to parse the paths of sstables
 BOOST_AUTO_TEST_CASE(test_parse_path_good) {
     struct sstable_case {
