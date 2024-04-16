@@ -974,7 +974,11 @@ static result<db::per_partition_rate_limit::info> choose_rate_limit_info(
     db::per_partition_rate_limit::account_and_enforce enforce_info{
         .random_variable = random_variable_for_rate_limit(),
     };
-    if (coordinator_in_replica_set && erm->get_sharder(*s).shard_of(token) == this_shard_id()) {
+    // It's fine to use shard_for_reads() because in case of no migration this is the
+    // shard used by all requests. During migration, it is the shard used for request routing
+    // by drivers during most of the migration. It changes after streaming, in which case we'll
+    // fall back to throttling on replica side, which is suboptimal but acceptable.
+    if (coordinator_in_replica_set && erm->shard_for_reads(*s, token) == this_shard_id()) {
         auto& cf = db.find_column_family(s);
         auto decision = db.account_coordinator_operation_to_rate_limit(cf, token, enforce_info, op_type);
         if (decision) {
@@ -1596,7 +1600,7 @@ public:
     future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
         auto op = _proxy->start_write();
         return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
-            adjust_rate_limit_for_local_operation(_rate_limit_info),
+            _rate_limit_info,
             storage_proxy::get_fence(*_effective_replication_map_ptr));
     }
     future<> apply_remotely(gms::inet_address ep, const inet_address_vector_replica_set& forward,
@@ -2989,6 +2993,10 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
     }
     auto apply = [this, erm, &m, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        auto shard_rate_limit = rate_limit_info;
+        if (shard == this_shard_id()) {
+            shard_rate_limit = adjust_rate_limit_for_local_operation(shard_rate_limit);
+        }
         return _db.invoke_on(shard, {smp_grp, timeout},
                 [s = global_schema_ptr(m.schema()),
                  m = freeze(m),
@@ -2996,8 +3004,8 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
                  erm,
                  timeout,
                  sync,
-                 rate_limit_info] (replica::database& db) mutable -> future<> {
-            return db.apply(s, m, gtr.get(), sync, timeout, rate_limit_info);
+                 shard_rate_limit] (replica::database& db) mutable -> future<> {
+            return db.apply(s, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
     if (shards.size() == 1) [[likely]] {
@@ -3016,9 +3024,13 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
     }
     auto apply = [this, erm, s, &m, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        auto shard_rate_limit = rate_limit_info;
+        if (shard == this_shard_id()) {
+            shard_rate_limit = adjust_rate_limit_for_local_operation(shard_rate_limit);
+        }
         return _db.invoke_on(shard, {smp_grp, timeout},
-                [&m, erm, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, rate_limit_info] (replica::database& db) mutable -> future<> {
-            return db.apply(gs, m, gtr.get(), sync, timeout, rate_limit_info);
+                [&m, erm, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, shard_rate_limit] (replica::database& db) mutable -> future<> {
+            return db.apply(gs, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
     if (shards.size() == 1) [[likely]] {
