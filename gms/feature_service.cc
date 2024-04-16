@@ -254,11 +254,11 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
     std::set<sstring> persisted_features;
     std::set<sstring> persisted_unsafe_to_disable_features;
 
-        auto topo_features = co_await sys_ks.load_topology_features_state();
-        if (topo_features) {
-            persisted_unsafe_to_disable_features = topo_features->calculate_not_yet_enabled_features();
-            persisted_features = std::move(topo_features->enabled_features);
-        } else {
+    auto topo_features = co_await sys_ks.load_topology_features_state();
+    if (topo_features) {
+        persisted_unsafe_to_disable_features = topo_features->calculate_not_yet_enabled_features();
+        persisted_features = std::move(topo_features->enabled_features);
+    } else {
         persisted_features = co_await sys_ks.load_local_enabled_features();
     }
 

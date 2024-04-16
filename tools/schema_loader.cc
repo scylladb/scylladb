@@ -682,7 +682,7 @@ schema_ptr load_system_schema(const db::config& cfg, std::string_view keyspace, 
         {db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::all_distributed_tables()},
         {db::system_distributed_keyspace::NAME_EVERYWHERE, db::system_distributed_keyspace::all_everywhere_tables()},
     };
-        schemas[db::system_auth_keyspace::NAME] = db::system_auth_keyspace::all_tables();
+    schemas[db::system_auth_keyspace::NAME] = db::system_auth_keyspace::all_tables();
     auto ks_it = schemas.find(keyspace);
     if (ks_it == schemas.end()) {
         throw std::invalid_argument(fmt::format("unknown system keyspace: {}", keyspace));

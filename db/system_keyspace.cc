@@ -2149,8 +2149,8 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(),
     });
 
-        auto auth_tables = db::system_auth_keyspace::all_tables();
-        std::copy(auth_tables.begin(), auth_tables.end(), std::back_inserter(r));
+    auto auth_tables = db::system_auth_keyspace::all_tables();
+    std::copy(auth_tables.begin(), auth_tables.end(), std::back_inserter(r));
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
         r.insert(r.end(), {broadcast_kv_store()});
