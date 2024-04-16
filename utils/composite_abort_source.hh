@@ -1,5 +1,6 @@
 #include "seastar/core/abort_source.hh"
 #include "utils/small_vector.hh"
+#include "seastarx.hh"
 
 namespace utils {
 // A facility to combine several abort_source-s and expose them as a single abort_source.
