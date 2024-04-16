@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 #include "db/system_auth_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
 #include "query-result-set.hh"
@@ -352,9 +353,9 @@ public:
 
 
     /**
-     * Return a map of IP addresses containing a map of dc and rack info
+     * Return a map of nodes and their loaded_endpoint_state
      */
-    future<std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>> load_dc_rack_info();
+    future<std::unordered_map<locator::host_id, gms::loaded_endpoint_state>> load_endpoint_state();
 
     enum class bootstrap_state {
         NEEDS_BOOTSTRAP,

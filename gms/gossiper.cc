@@ -2020,11 +2020,9 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
         local_state.add_application_state(entry.first, entry.second);
     }
 
-    auto generation = local_state.get_heart_beat_state().get_generation();
+    co_await replicate(get_broadcast_address(), local_state, permit.id());
 
-    co_await replicate(get_broadcast_address(), std::move(local_state), permit.id());
-
-    logger.trace("gossip started with generation {}", generation);
+    logger.info("Gossip started with local state: {}", local_state);
     _enabled = true;
     _nr_run = 0;
     _scheduled_gossip_task.arm(INTERVAL);
@@ -2130,10 +2128,20 @@ void gossiper::build_seeds_list() {
     }
 }
 
-future<> gossiper::add_saved_endpoint(inet_address ep, permit_id pid) {
-    if (ep == get_broadcast_address()) {
+future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endpoint_state st, permit_id pid) {
+    if (host_id == my_host_id()) {
         logger.debug("Attempt to add self as saved endpoint");
         co_return;
+    }
+    const auto& ep = st.endpoint;
+    if (!host_id) {
+        on_internal_error(logger, format("Attempt to add {} with null host_id as saved endpoint", ep));
+    }
+    if (ep == inet_address{}) {
+        on_internal_error(logger, format("Attempt to add {} with null inet_address as saved endpoint", host_id));
+    }
+    if (ep == get_broadcast_address()) {
+        on_internal_error(logger, format("Attempt to add {} with broadcast_address {} as saved endpoint", host_id, ep));
     }
 
     auto permit = co_await lock_endpoint(ep, pid);
@@ -2155,14 +2163,18 @@ future<> gossiper::add_saved_endpoint(inet_address ep, permit_id pid) {
     // It will get updated as a whole by handle_major_state_change
     // via do_apply_state_locally when (remote_generation > local_generation)
     const auto tmptr = get_token_metadata_ptr();
-    auto host_id = tmptr->get_host_id_if_known(ep);
-    if (host_id) {
-        ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id.value()));
-        auto tokens = tmptr->get_tokens(*host_id);
-        if (!tokens.empty()) {
-            std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
-            ep_state.add_application_state(gms::application_state::TOKENS, versioned_value::tokens(tokens_set));
-        }
+    ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id));
+    auto tokens = tmptr->get_tokens(host_id);
+    if (!tokens.empty()) {
+        std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
+        ep_state.add_application_state(gms::application_state::TOKENS, versioned_value::tokens(tokens_set));
+    }
+    if (st.opt_dc_rack) {
+        ep_state.add_application_state(gms::application_state::DC, gms::versioned_value::datacenter(st.opt_dc_rack->dc));
+        ep_state.add_application_state(gms::application_state::RACK, gms::versioned_value::datacenter(st.opt_dc_rack->rack));
+    }
+    if (st.opt_status) {
+        ep_state.add_application_state(gms::application_state::STATUS, std::move(*st.opt_status));
     }
     auto generation = ep_state.get_heart_beat_state().get_generation();
     co_await replicate(ep, std::move(ep_state), permit.id());
@@ -2683,4 +2695,16 @@ locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
 }
 
+std::ostream& operator<<(std::ostream& os, const loaded_endpoint_state& st) {
+    fmt::print(os, "{}", st);
+    return os;
+}
+
 } // namespace gms
+
+auto fmt::formatter<gms::loaded_endpoint_state>::format(const gms::loaded_endpoint_state& st, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{{ endpoint={} dc={} rack={} tokens={} }}", st.endpoint,
+            st.opt_dc_rack ? st.opt_dc_rack->dc : "",
+            st.opt_dc_rack ? st.opt_dc_rack->rack : "",
+            st.tokens);
+}

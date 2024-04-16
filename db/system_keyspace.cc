@@ -1511,25 +1511,6 @@ future<> system_keyspace::peers_table_read_fixup() {
     }
 }
 
-future<std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>> system_keyspace::load_dc_rack_info() {
-    co_await peers_table_read_fixup();
-
-    const auto msg = co_await execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS));
-
-    std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> ret;
-    for (const auto& row : *msg) {
-        if (!row.has("data_center") || !row.has("rack")) {
-            continue;
-        }
-        ret.emplace(row.get_as<net::inet_address>("peer"), locator::endpoint_dc_rack {
-            row.get_as<sstring>("data_center"),
-            row.get_as<sstring>("rack")
-        });
-    }
-
-    co_return ret;
-}
-
 future<> system_keyspace::build_bootstrap_info() {
     sstring req = format("SELECT bootstrapped FROM system.{} WHERE key = ? ", LOCAL);
     return execute_cql(req, sstring(LOCAL)).then([this] (auto msg) {
@@ -1807,6 +1788,50 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
         ret.emplace(gms::inet_address(row.get_as<net::inet_address>("peer")),
             locator::host_id(row.get_as<utils::UUID>("host_id")));
     }
+    co_return ret;
+}
+
+future<std::unordered_map<locator::host_id, gms::loaded_endpoint_state>> system_keyspace::load_endpoint_state() {
+    co_await peers_table_read_fixup();
+
+    const auto msg = co_await execute_cql(format("SELECT peer, host_id, tokens, data_center, rack from system.{}", PEERS));
+
+    std::unordered_map<locator::host_id, gms::loaded_endpoint_state> ret;
+    for (const auto& row : *msg) {
+        gms::loaded_endpoint_state st;
+        auto ep = row.get_as<net::inet_address>("peer");
+        if (!row.has("host_id")) {
+            // Must never happen after `peers_table_read_fixup` call above
+            on_internal_error_noexcept(slogger, format("load_endpoint_state: node {} has no host_id in system.{}", ep, PEERS));
+        }
+        auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+        if (row.has("tokens")) {
+            st.tokens = decode_tokens(deserialize_set_column(*peers(), row, "tokens"));
+            if (st.tokens.empty()) {
+                slogger.error("load_endpoint_state: node {}/{} has tokens column present but tokens are empty", host_id, ep);
+                continue;
+            }
+        } else {
+            slogger.warn("Endpoint {} has no tokens in system.{}", ep, PEERS);
+        }
+        if (row.has("data_center") && row.has("rack")) {
+            st.opt_dc_rack.emplace(locator::endpoint_dc_rack {
+                row.get_as<sstring>("data_center"),
+                row.get_as<sstring>("rack")
+            });
+            if (st.opt_dc_rack->dc.empty() || st.opt_dc_rack->rack.empty()) {
+                slogger.error("load_endpoint_state: node {}/{} has empty dc={} or rack={}", host_id, ep, st.opt_dc_rack->dc, st.opt_dc_rack->rack);
+                continue;
+            }
+        } else {
+            slogger.warn("Endpoint {} has no {} in system.{}", ep,
+                    !row.has("data_center") && !row.has("rack") ? "data_center nor rack" : !row.has("data_center") ? "data_center" : "rack",
+                    PEERS);
+        }
+        st.endpoint = ep;
+        ret.emplace(host_id, std::move(st));
+    }
+
     co_return ret;
 }
 

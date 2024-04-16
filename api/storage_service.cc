@@ -103,7 +103,7 @@ static bool any_of_keyspaces_use_tablets(const http_context& ctx) {
 
 locator::host_id validate_host_id(const sstring& param) {
     auto hoep = locator::host_id_or_endpoint(param, locator::host_id_or_endpoint::param_type::host_id);
-    return hoep.id;
+    return hoep.id();
 }
 
 bool validate_bool(const sstring& param) {
