@@ -2253,6 +2253,45 @@ future<> repair::tablet_repair_task_impl::run() {
         auto start_time = std::chrono::steady_clock::now();
         auto parent_data = get_repair_uniq_id().task_info;
         std::atomic<int> idx{1};
+
+        // Start the off strategy updater
+        std::unordered_set<gms::inet_address> participants;
+        std::unordered_set<table_id> table_ids;
+        for (auto& meta : _metas) {
+            thread::maybe_yield();
+            participants.insert(meta.neighbors.all.begin(), meta.neighbors.all.end());
+            table_ids.insert(meta.tid);
+        }
+        abort_source as;
+        auto off_strategy_updater = seastar::async([&rs, uuid = id.uuid().uuid(), &table_ids, &participants, &as] {
+            auto tables = std::list<table_id>(table_ids.begin(), table_ids.end());
+            auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, node_ops_id{uuid}, {}, {}, {}, {}, std::move(tables));
+            auto update_interval = std::chrono::seconds(30);
+            while (!as.abort_requested()) {
+                sleep_abortable(update_interval, as).get();
+                parallel_for_each(participants, [&rs, uuid, &req] (gms::inet_address node) {
+                    return rs._messaging.send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                        rlogger.debug("repair[{}]: Got node_ops_cmd::repair_updater response from node={}", uuid, node);
+                    }).handle_exception([uuid, node] (std::exception_ptr ep) {
+                        rlogger.warn("repair[{}]: Failed to send node_ops_cmd::repair_updater to node={}", uuid, node);
+                    });
+                }).get();
+            }
+        });
+        auto stop_off_strategy_updater = defer([uuid = id.uuid() , &off_strategy_updater, &as] () mutable noexcept {
+            try {
+                rlogger.info("repair[{}]: Started to shutdown off-strategy compaction updater", uuid);
+                if (!as.abort_requested()) {
+                    as.request_abort();
+                }
+                off_strategy_updater.get();
+            } catch (const seastar::sleep_aborted& ignored) {
+            } catch (...) {
+                rlogger.warn("repair[{}]: Found error in off-strategy compaction updater: {}", uuid, std::current_exception());
+            }
+            rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
+        });
+
         rs.container().invoke_on_all([&idx, id, metas = _metas, parent_data, reason = _reason, tables = _tables] (repair_service& rs) -> future<> {
             for (auto& m : metas) {
                 if (m.master_shard_id != this_shard_id()) {
