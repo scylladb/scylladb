@@ -18,6 +18,8 @@ Conflicts: %{product}-server (<< 1.1)
 Package: %{product}-server
 Architecture: any
 Depends: ${misc:Depends}, %{product}-conf (= ${binary:Version}), %{product}-python3 (= ${binary:Version})
+Replaces: %{product}-tools (<<5.5)
+Breaks: %{product}-tools (<<5.5)
 Description: Scylla database server binaries 
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.

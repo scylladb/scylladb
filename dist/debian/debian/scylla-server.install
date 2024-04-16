@@ -1,6 +1,7 @@
 etc/default/scylla-server
 etc/default/scylla-housekeeping
 etc/scylla.d/*.conf
+etc/bash_completion.d/nodetool-completion
 opt/scylladb/share/doc/scylla/*
 opt/scylladb/share/doc/scylla/licenses/
 usr/lib/systemd/system/*.timer
@@ -8,6 +9,7 @@ usr/lib/systemd/system/*.slice
 usr/bin/scylla
 usr/bin/iotune
 usr/bin/scyllatop
+usr/bin/nodetool
 usr/sbin/scylla*
 usr/sbin/node_health_check
 usr/sbin/seastar-cpu-map.sh

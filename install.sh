@@ -450,6 +450,11 @@ if $supervisor; then
     install -m755 dist/common/supervisor/* -Dt "$rprefix"/supervisor
 fi
 
+# scylla tools
+install -d -m755 "$retc"/bash_completion.d
+install -m644 dist/common/nodetool-completion "$retc"/bash_completion.d
+install -m755 bin/nodetool "$rprefix/bin"
+
 SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_health_check scylla_kernel_check)
 SBINFILES+=" $(cd seastar/scripts; ls seastar-cpu-map.sh)"
 
@@ -524,6 +529,7 @@ EOS
     ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
     ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
     ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
+    ln -srf "$rprefix/bin/nodetool" "$rusr/bin/nodetool"
     install -d "$rusr"/sbin
     for i in $SBINFILES; do
         ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
