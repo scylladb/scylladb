@@ -118,4 +118,11 @@ std::ostream& boost_test_print_type(std::ostream& os, const std::strong_ordering
 std::ostream& boost_test_print_type(std::ostream& os, const std::weak_ordering& order);
 std::ostream& boost_test_print_type(std::ostream& os, const std::partial_ordering& order);
 
+template <typename T>
+requires fmt::is_formattable<T>::value
+std::ostream& boost_test_print_type(std::ostream& os, const T& p) {
+    fmt::print(os, "{}", p);
+    return os;
+}
+
 }
