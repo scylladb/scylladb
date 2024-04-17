@@ -465,29 +465,6 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
     return stop_iteration::yes;
 }
 
-stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
-        mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res) {
-    if (s.version() == p_schema.version()) {
-        return apply_monotonically(s, std::move(p), no_cache_tracker, app_stats, preemptible, res);
-    } else {
-        mutation_partition p2(p_schema, p);
-        p2.upgrade(p_schema, s);
-        return apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::no, res); // FIXME: make preemptible
-    }
-}
-
-stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker *tracker,
-                                                       mutation_application_stats& app_stats) {
-    apply_resume res;
-    return apply_monotonically(s, std::move(p), tracker, app_stats, is_preemptible::no, res);
-}
-
-stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
-                                                       mutation_application_stats& app_stats) {
-    apply_resume res;
-    return apply_monotonically(s, std::move(p), p_schema, app_stats, is_preemptible::no, res);
-}
-
 void
 mutation_partition::apply(const schema& s, mutation_partition_view p,
         const schema& p_schema, mutation_application_stats& app_stats) {
@@ -495,17 +472,27 @@ mutation_partition::apply(const schema& s, mutation_partition_view p,
     mutation_partition p2(*this, copy_comparators_only{});
     partition_builder b(p_schema, p2);
     p.accept(p_schema, b);
-    apply_monotonically(s, std::move(p2), p_schema, app_stats);
+    if (s.version() != p_schema.version()) {
+        p2.upgrade(p_schema, s);
+    }
+    apply_resume res;
+    apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::no, res);
 }
 
 void mutation_partition::apply(const schema& s, const mutation_partition& p,
         const schema& p_schema, mutation_application_stats& app_stats) {
     // FIXME: Optimize
-    apply_monotonically(s, mutation_partition(p_schema, p), p_schema, app_stats);
+    mutation_partition p2(p_schema, p);
+    if (s.version() != p_schema.version()) {
+        p2.upgrade(p_schema, s);
+    }
+    apply_resume res;
+    apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::no, res);
 }
 
 void mutation_partition::apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
-    apply_monotonically(s, std::move(p), no_cache_tracker, app_stats);
+    apply_resume res;
+    apply_monotonically(s, std::move(p), no_cache_tracker, app_stats, is_preemptible::no, res);
 }
 
 tombstone

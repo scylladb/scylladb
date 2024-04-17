@@ -14,6 +14,7 @@
 #include <boost/range/combine.hpp>
 #include "mutation_query.hh"
 #include "utils/hashers.hh"
+#include "utils/preempt.hh"
 #include "utils/xx_hasher.hh"
 
 #include <seastar/core/sstring.hh>
@@ -1044,13 +1045,15 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                             expected_cont, target.partition().get_continuity(s), second.partition().get_continuity(s),
                             actual, c1, c2));
                     }
-                    m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker, app_stats);
+                    apply_resume res;
+                    m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker, app_stats, is_preemptible::no, res);
                     assert_that(m).is_equal_to(expected);
 
                     m = target;
                     m2 = mutation_partition(*m.schema(), second.partition());
                 });
-                m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker, app_stats);
+                apply_resume res;
+                m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker, app_stats, is_preemptible::no, res);
                 d.cancel();
             });
             assert_that(m).is_equal_to(expected).has_same_continuity(expected);
