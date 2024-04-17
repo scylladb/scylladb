@@ -49,7 +49,12 @@ public:
 
     template <std::ranges::range Container, typename Func>
     requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
-    future<> parallel_for_each(Container& C, Func func);
+    future<> parallel_for_each(Container& c, Func func) {
+        co_await max_concurrent_for_each(c, _concurrency, [&] (auto& el) -> future<>{
+            auto units = co_await get_units(_sem, 1);
+            co_await func(el);
+        });
+    }
 };
 
 // Handles a directory containing SSTables. It could be an auxiliary directory (like upload),

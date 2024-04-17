@@ -534,16 +534,6 @@ sstable_directory::filter_sstables(std::function<future<bool>(sstables::shared_s
     _unshared_local_sstables = std::move(filtered);
 }
 
-template <std::ranges::range Container, typename Func>
-requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
-future<>
-directory_semaphore::parallel_for_each(Container& c, Func func) {
-    co_await max_concurrent_for_each(c, _concurrency, [&] (auto& el) -> future<>{
-        auto units = co_await get_units(_sem, 1);
-        co_await func(el);
-    });
-}
-
 void
 sstable_directory::store_phaser(utils::phased_barrier::operation op) {
     _operation_barrier.emplace(std::move(op));
