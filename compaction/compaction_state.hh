@@ -15,6 +15,7 @@
 
 #include "compaction/compaction_fwd.hh"
 #include "compaction/compaction_backlog_manager.hh"
+#include "gc_clock.hh"
 
 namespace compaction {
 
@@ -36,6 +37,8 @@ struct compaction_state {
 
     std::unordered_set<sstables::shared_sstable> sstables_requiring_cleanup;
     compaction::owned_ranges_ptr owned_ranges_ptr;
+
+    gc_clock::time_point last_regular_compaction;
 
     explicit compaction_state(table_state& t);
     compaction_state(compaction_state&&) = delete;
