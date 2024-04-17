@@ -1324,6 +1324,9 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
     }
     _open_mode.emplace(open_flags::ro);
     _stats.on_open_for_reading();
+
+    _total_reclaimable_memory.reset();
+    _manager.increment_total_reclaimable_memory_and_maybe_reclaim(this);
 }
 
 future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
@@ -1399,6 +1402,31 @@ void sstable::write_filter() {
     write_simple<component_type::Filter>(filter_ref);
 }
 
+size_t sstable::total_reclaimable_memory_size() const {
+    if (!_total_reclaimable_memory) {
+        _total_reclaimable_memory = _components->filter ? _components->filter->memory_size() : 0;
+    }
+
+    return _total_reclaimable_memory.value();
+}
+
+size_t sstable::reclaim_memory_from_components() {
+    size_t total_memory_reclaimed = 0;
+
+    if (_components->filter) {
+        auto filter_memory_size = _components->filter->memory_size();
+        if (filter_memory_size > 0) {
+            // discard it from memory by replacing it with an always present variant
+            _components->filter = std::make_unique<utils::filter::always_present_filter>();
+            _recognized_components.erase(component_type::Filter);
+            total_memory_reclaimed += filter_memory_size;
+        }
+    }
+
+    _total_reclaimable_memory.reset();
+    return total_memory_reclaimed;
+}
+
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
 future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noexcept {
@@ -1434,7 +1462,10 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
         validate_min_max_metadata();
         validate_max_local_deletion_time();
         validate_partitioner();
-        return update_info_for_opened_data();
+        return update_info_for_opened_data().then([this]() {
+            _total_reclaimable_memory.reset();
+            _manager.increment_total_reclaimable_memory_and_maybe_reclaim(this);
+        });
     });
 }
 
