@@ -90,6 +90,23 @@ future<mutation> to_mutation_gently(const canonical_mutation& cm, schema_ptr s) 
     co_return m;
 }
 
+future<canonical_mutation> make_canonical_mutation_gently(const mutation& m)
+{
+    mutation_partition_serializer part_ser(*m.schema(), m.partition());
+
+    canonical_mutation res;
+    ser::writer_of_canonical_mutation<bytes_ostream> wr(res.representation());
+    auto w = co_await std::move(wr).write_table_id(m.schema()->id())
+                 .write_schema_version(m.schema()->version())
+                 .write_key(m.key())
+                 .write_mapping(m.schema()->get_column_mapping())
+                 .partition_gently([&] (auto wr) {
+                     return part_ser.write_gently(std::move(wr));
+                 });
+    w.end_canonical_mutation();
+    co_return res;
+}
+
 future<frozen_mutation>
 freeze_gently(const mutation& m) {
     auto fm = frozen_mutation(m.key());
