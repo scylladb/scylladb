@@ -122,9 +122,9 @@ void set_system(http_context& ctx, routes& r) {
 
     hs::get_logger_level.set(r, [](const_req req) {
         try {
-            return logging::level_name(logging::logger_registry().get_logger_level(req.param["name"]));
+            return logging::level_name(logging::logger_registry().get_logger_level(req.get_path_param("name")));
         } catch (std::out_of_range& e) {
-            throw bad_param_exception("Unknown logger name " + req.param["name"]);
+            throw bad_param_exception("Unknown logger name " + req.get_path_param("name"));
         }
         // just to keep the compiler happy
         return sstring();
@@ -133,9 +133,9 @@ void set_system(http_context& ctx, routes& r) {
     hs::set_logger_level.set(r, [](const_req req) {
         try {
             logging::log_level level = boost::lexical_cast<logging::log_level>(std::string(req.get_query_param("level")));
-            logging::logger_registry().set_logger_level(req.param["name"], level);
+            logging::logger_registry().set_logger_level(req.get_path_param("name"), level);
         } catch (std::out_of_range& e) {
-            throw bad_param_exception("Unknown logger name " + req.param["name"]);
+            throw bad_param_exception("Unknown logger name " + req.get_path_param("name"));
         } catch (boost::bad_lexical_cast& e) {
             throw bad_param_exception("Unknown logging level " + req.get_query_param("level"));
         }

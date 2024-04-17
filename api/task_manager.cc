@@ -123,7 +123,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
             chunked_stats local_res;
             tasks::task_manager::module_ptr module;
             try {
-                module = tm.find_module(req->param["module"]);
+                module = tm.find_module(req->get_path_param("module"));
             } catch (...) {
                 throw bad_param_exception(fmt::format("{}", std::current_exception()));
             }
@@ -156,7 +156,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     });
 
     tm::get_task_status.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
+        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         tasks::task_manager::foreign_task_ptr task;
         try {
             task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
@@ -173,7 +173,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     });
 
     tm::abort_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
+        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         try {
             co_await tasks::task_manager::invoke_on_task(tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
                 if (!task->is_abortable()) {
@@ -188,7 +188,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     });
 
     tm::wait_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
+        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         tasks::task_manager::foreign_task_ptr task;
         try {
             task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) {
@@ -209,7 +209,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
 
     tm::get_task_status_recursively.set(r, [&_tm = tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& tm = _tm;
-        auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
+        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         std::queue<tasks::task_manager::foreign_task_ptr> q;
         utils::chunked_vector<full_task_status> res;
 

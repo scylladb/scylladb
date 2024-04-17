@@ -92,7 +92,7 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
     });
 
     cs::find_config_id.set(r, [&cfg] (const_req r) {
-        auto id = r.param["id"];
+        auto id = r.get_path_param("id");
         for (auto&& cfg_ref : cfg.values()) {
             auto&& cfg = cfg_ref.get();
             if (id == cfg.name()) {

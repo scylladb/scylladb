@@ -83,7 +83,7 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
     });
 
     tmt::finish_test_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
+        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         auto it = req->query_parameters.find("error");
         bool fail = it != req->query_parameters.end();
         std::string error = fail ? it->second : "";
