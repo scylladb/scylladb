@@ -677,7 +677,9 @@ async def test_tablet_split(manager: ManagerClient):
         '--logger-log-level', 'table=debug',
         '--target-tablet-size-in-bytes', '1024',
     ]
-    servers = [await manager.server_add(cmdline=cmdline)]
+    servers = [await manager.server_add(config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    }, cmdline=cmdline)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 

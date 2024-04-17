@@ -273,7 +273,7 @@ public:
     virtual size_t log2_storage_groups() const = 0;
     virtual storage_group* storage_group_for_token(dht::token) const noexcept = 0;
 
-    virtual locator::resize_decision::seq_number_t split_ready_seq_number() const noexcept = 0;
+    virtual locator::table_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept = 0;
     virtual bool all_storage_groups_split() = 0;
     virtual future<> split_all_storage_groups() = 0;
     virtual future<> maybe_split_compaction_group_of(size_t idx) = 0;
