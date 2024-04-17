@@ -176,7 +176,7 @@ public:
  * when going from 100 to 10 on the ring.
  */
 dht::token find_first_token_for_shard(
-        const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx);
+        const dht::static_sharder& sharder, dht::token start, dht::token end, size_t shard_idx);
 
 } //namespace dht
 
