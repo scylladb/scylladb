@@ -53,14 +53,6 @@ protected:
 public:
     sharder(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
     virtual ~sharder() = default;
-    /**
-     * Calculates the shard that handles a particular token for reads.
-     * Use shard_for_writes() to determine the set of shards that should receive writes.
-     */
-    [[deprecated("Use shard_for_reads()/shard_for_writes() instead")]]
-    virtual unsigned shard_of(const token& t) const {
-        return shard_for_reads(t);
-    }
 
     /**
      * Returns the shard that handles a particular token for reads.
@@ -104,11 +96,6 @@ public:
      */
     virtual token token_for_next_shard_for_reads(const token& t, shard_id shard, unsigned spans = 1) const = 0;
 
-    [[deprecated("Use token_for_next_shard_for_reads() instead")]]
-    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const {
-        return token_for_next_shard_for_reads(t, shard, spans);
-    }
-
     /**
      * Finds the next token greater than t which is owned by a different shard than the owner of t
      * and returns that token and its owning shard. If no such token exists, returns nullopt.
@@ -120,11 +107,6 @@ public:
      *     shard_for_reads(next_shard(t)->token) == next_shard(t)->shard
      */
     virtual std::optional<shard_and_token> next_shard_for_reads(const token& t) const = 0;
-
-    [[deprecated("Use next_shard_for_reads() instead")]]
-    virtual std::optional<shard_and_token> next_shard(const token& t) const {
-        return next_shard_for_reads(t);
-    }
 
     /**
      * @return number of shards configured for this partitioner
