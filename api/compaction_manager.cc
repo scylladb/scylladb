@@ -107,8 +107,13 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         });
     });
 
+<<<<<<< HEAD
     cm::stop_keyspace_compaction.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto ks_name = validate_keyspace(ctx, req->param);
+=======
+    cm::stop_keyspace_compaction.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto ks_name = validate_keyspace(ctx, req);
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
         auto table_names = parse_tables(ks_name, ctx, req->query_parameters, "tables");
         if (table_names.empty()) {
             table_names = map_keys(ctx.db.local().find_keyspace(ks_name).metadata().get()->cf_meta_data());

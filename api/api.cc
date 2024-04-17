@@ -297,7 +297,7 @@ void req_params::process(const request& req) {
             continue;
         }
         try {
-            ent.value = req.param[name];
+            ent.value = req.get_path_param(name);
         } catch (std::out_of_range&) {
             throw httpd::bad_param_exception(fmt::format("Mandatory parameter '{}' was not provided", name));
         }

@@ -118,7 +118,16 @@ void set_task_manager(http_context& ctx, routes& r) {
         auto internal = tasks::is_internal{req_param<bool>(*req, "internal", false)};
         std::vector<chunked_stats> res = co_await ctx.tm.map([&req, internal] (tasks::task_manager& tm) {
             chunked_stats local_res;
+<<<<<<< HEAD
             auto module = tm.find_module(req->param["module"]);
+=======
+            tasks::task_manager::module_ptr module;
+            try {
+                module = tm.find_module(req->get_path_param("module"));
+            } catch (...) {
+                throw bad_param_exception(fmt::format("{}", std::current_exception()));
+            }
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
             const auto& filtered_tasks = module->get_tasks() | boost::adaptors::filtered([&params = req->query_parameters, internal] (const auto& task) {
                 return (internal || !task.second->is_internal()) && filter_tasks(task.second, params);
             });
@@ -147,6 +156,7 @@ void set_task_manager(http_context& ctx, routes& r) {
         co_return std::move(f);
     });
 
+<<<<<<< HEAD
     tm::get_task_status.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         auto task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
@@ -156,10 +166,26 @@ void set_task_manager(http_context& ctx, routes& r) {
             }
             co_return std::move(task);
         }));
+=======
+    tm::get_task_status.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
+        tasks::task_manager::foreign_task_ptr task;
+        try {
+            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+                if (task->is_complete()) {
+                    task->unregister_task();
+                }
+                co_return std::move(task);
+            }));
+        } catch (tasks::task_manager::task_not_found& e) {
+            throw bad_param_exception(e.what());
+        }
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
         auto s = co_await retrieve_status(task);
         co_return make_status(s);
     });
 
+<<<<<<< HEAD
     tm::abort_task.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         co_await tasks::task_manager::invoke_on_task(ctx.tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
@@ -182,13 +208,52 @@ void set_task_manager(http_context& ctx, routes& r) {
                 return make_foreign(task);
             });
         }));
+=======
+    tm::abort_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
+        try {
+            co_await tasks::task_manager::invoke_on_task(tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
+                if (!task->is_abortable()) {
+                    co_await coroutine::return_exception(std::runtime_error("Requested task cannot be aborted"));
+                }
+                co_await task->abort();
+            });
+        } catch (tasks::task_manager::task_not_found& e) {
+            throw bad_param_exception(e.what());
+        }
+        co_return json_void();
+    });
+
+    tm::wait_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
+        tasks::task_manager::foreign_task_ptr task;
+        try {
+            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) {
+                return task->done().then_wrapped([task] (auto f) {
+                    task->unregister_task();
+                    // done() is called only because we want the task to be complete before getting its status.
+                    // The future should be ignored here as the result does not matter.
+                    f.ignore_ready_future();
+                    return make_foreign(task);
+                });
+            }));
+        } catch (tasks::task_manager::task_not_found& e) {
+            throw bad_param_exception(e.what());
+        }
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
         auto s = co_await retrieve_status(task);
         co_return make_status(s);
     });
 
+<<<<<<< HEAD
     tm::get_task_status_recursively.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto& _ctx = ctx;
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
+=======
+    tm::get_task_status_recursively.set(r, [&_tm = tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto& tm = _tm;
+        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
         std::queue<tasks::task_manager::foreign_task_ptr> q;
         utils::chunked_vector<full_task_status> res;
 

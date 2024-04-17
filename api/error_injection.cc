@@ -21,7 +21,7 @@ namespace hf = httpd::error_injection_json;
 void set_error_injection(http_context& ctx, routes& r) {
 
     hf::enable_injection.set(r, [](std::unique_ptr<request> req) {
-        sstring injection = req->param["injection"];
+        sstring injection = req->get_path_param("injection");
         bool one_shot = req->get_query_param("one_shot") == "True";
         auto& errinj = utils::get_local_injector();
         return errinj.enable_on_all(injection, one_shot).then([] {
@@ -36,7 +36,7 @@ void set_error_injection(http_context& ctx, routes& r) {
     });
 
     hf::disable_injection.set(r, [](std::unique_ptr<request> req) {
-        sstring injection = req->param["injection"];
+        sstring injection = req->get_path_param("injection");
 
         auto& errinj = utils::get_local_injector();
         return errinj.disable_on_all(injection).then([] {
@@ -51,6 +51,16 @@ void set_error_injection(http_context& ctx, routes& r) {
         });
     });
 
+<<<<<<< HEAD
+=======
+    hf::message_injection.set(r, [](std::unique_ptr<request> req) {
+        sstring injection = req->get_path_param("injection");
+        auto& errinj = utils::get_local_injector();
+        return errinj.receive_message_on_all(injection).then([] {
+            return make_ready_future<json::json_return_type>(json::json_void());
+        });
+    });
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
 }
 
 } // namespace api

@@ -141,6 +141,17 @@ void set_messaging_service(http_context& ctx, routes& r, sharded<netw::messaging
             return make_ready_future<json::json_return_type>(res);
         });
     });
+<<<<<<< HEAD
+=======
+
+    hf::inject_disconnect.set(r, [&ms] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto ip = msg_addr(req->get_path_param("ip"));
+        co_await ms.invoke_on_all([ip] (netw::messaging_service& ms) {
+            ms.remove_rpc_client(ip);
+        });
+        co_return json::json_void();
+    });
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
 }
 
 void unset_messaging_service(http_context& ctx, routes& r) {
