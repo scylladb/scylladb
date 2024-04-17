@@ -10,6 +10,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include "mutation/canonical_mutation.hh"
+#include "mutation/async_utils.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 
@@ -17,13 +18,17 @@
 
 #include <seastar/core/thread.hh>
 
-SEASTAR_TEST_CASE(test_conversion_back_and_forth) {
-    return seastar::async([] {
-        for_each_mutation([] (const mutation& m) {
-            canonical_mutation cm(m);
-            assert_that(cm.to_mutation(m.schema())).is_equal_to(m);
-        });
-    });
+SEASTAR_THREAD_TEST_CASE(test_conversion_back_and_forth) {
+    // FIXME: for (auto do_make_canonical_mutation_gently : {false, true}) {
+        for (auto do_make_mutation_gently : {false, true}) {
+            for_each_mutation([&] (const mutation& m) {
+                // FIXME: for now
+                canonical_mutation cm(m);
+                auto m2 = do_make_mutation_gently ? to_mutation_gently(cm, m.schema()).get() : cm.to_mutation(m.schema());
+                assert_that(m2).is_equal_to(m);
+            });
+        }
+    // FIXME }
 }
 
 SEASTAR_TEST_CASE(test_reading_with_different_schemas) {

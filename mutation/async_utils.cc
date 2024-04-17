@@ -60,3 +60,31 @@ future<> apply_gently(mutation& target, const mutation& m) {
     mutation_application_stats app_stats;
     co_await apply_gently(target.partition(), *target.schema(), std::move(m2.partition()), *m.schema(), app_stats);
 }
+
+future<mutation> to_mutation_gently(const canonical_mutation& cm, schema_ptr s) {
+    auto in = ser::as_input_stream(cm.representation());
+    auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
+
+    auto cf_id = mv.table_id();
+    if (s->id() != cf_id) {
+        throw std::runtime_error(format("Attempted to deserialize canonical_mutation of table {} with schema of table {} ({}.{})",
+                                        cf_id, s->id(), s->ks_name(), s->cf_name()));
+    }
+
+    auto version = mv.schema_version();
+    auto pk = mv.key();
+
+    mutation m(std::move(s), std::move(pk));
+
+    if (version == m.schema()->version()) {
+        auto partition_view = mutation_partition_view::from_view(mv.partition());
+        mutation_application_stats app_stats;
+        co_await apply_gently(m.partition(), *m.schema(), partition_view, *m.schema(), app_stats);
+    } else {
+        column_mapping cm = mv.mapping();
+        converting_mutation_partition_applier v(cm, *m.schema(), m.partition());
+        auto partition_view = mutation_partition_view::from_view(mv.partition());
+        co_await partition_view.accept_gently(cm, v);
+    }
+    co_return m;
+}

@@ -10,6 +10,7 @@
 
 #include "mutation_partition.hh"
 #include "mutation.hh"
+#include "canonical_mutation.hh"
 
 //
 // Applies p to the `target` mutation_partition.
@@ -33,3 +34,5 @@ future<> apply_gently(mutation_partition& target, const schema& target_schema, m
 // applying changes to memtable, which is done synchronously.
 future<> apply_gently(mutation& target, mutation&& m);
 future<> apply_gently(mutation& target, const mutation& m);
+
+future<mutation> to_mutation_gently(const canonical_mutation& cm, schema_ptr s);
