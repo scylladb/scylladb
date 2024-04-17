@@ -2307,9 +2307,9 @@ future<table::snapshot_file_set> table::take_snapshot(database& db, sstring json
     co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
     co_await db.get_sharded_sst_dir_semaphore().local().parallel_for_each(tables, [&jsondir, &table_names] (sstables::shared_sstable sstable) {
         table_names->insert(sstable->component_basename(sstables::component_type::Data));
-            return io_check([sstable, &dir = jsondir] {
-                return sstable->snapshot(dir);
-            });
+        return io_check([sstable, &dir = jsondir] {
+            return sstable->snapshot(dir);
+        });
     });
     co_await io_check(sync_directory, jsondir);
     co_return make_foreign(std::move(table_names));
