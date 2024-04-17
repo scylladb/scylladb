@@ -44,6 +44,7 @@
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
 #include "utils/exceptions.hh"
+#include "utils/error_injection.hh"
 
 namespace gms {
 
@@ -1023,11 +1024,15 @@ void gossiper::run() {
             //wait on messaging service to start listening
             // MessagingService.instance().waitUntilListening();
 
-            /* Update the local heartbeat counter. */
-            heart_beat_state& hbs = my_endpoint_state().get_heart_beat_state();
-            hbs.update_heart_beat();
+            {
+                auto permit = lock_endpoint(get_broadcast_address(), null_permit_id).get();
+                /* Update the local heartbeat counter. */
+                heart_beat_state& hbs = my_endpoint_state().get_heart_beat_state();
+                hbs.update_heart_beat();
 
-            logger.trace("My heartbeat is now {}", hbs.get_heart_beat_version());
+                logger.trace("My heartbeat is now {}", hbs.get_heart_beat_version());
+            }
+
             utils::chunked_vector<gossip_digest> g_digests;
             this->make_random_gossip_digest(g_digests);
 
@@ -1262,6 +1267,9 @@ future<> gossiper::replicate(inet_address ep, endpoint_state es, permit_id pid) 
             });
         }
      });
+
+    co_await utils::get_local_injector().inject("gossiper_replicate_sleep", std::chrono::seconds{1});
+
     // Second pass: set replicated endpoint_state on all shards
     // Must not throw
     try {

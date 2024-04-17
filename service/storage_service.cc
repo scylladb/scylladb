@@ -3593,6 +3593,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         }
     }
     _normal_state_handled_on_boot.insert(endpoint);
+    slogger.info("handle_state_normal for {}/{} finished", endpoint, host_id);
 }
 
 future<> storage_service::handle_state_leaving(inet_address endpoint, gms::permit_id pid) {
