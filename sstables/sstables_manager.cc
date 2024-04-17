@@ -20,7 +20,7 @@ logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
     db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem)
-    : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
+    : _available_memory(available_memory), _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
     , _sstable_metadata_concurrency_sem(
         max_count_sstable_metadata_concurrent_reads,
         max_memory_sstable_metadata_concurrent_reads(available_memory),
@@ -69,11 +69,35 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     return cfg;
 }
 
+void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst) {
+    _total_reclaimable_memory += sst->total_reclaimable_memory_size();
+
+    size_t memory_reclaim_threshold = _available_memory * _db_config.components_memory_reclaim_threshold();
+    if (_total_reclaimable_memory <= memory_reclaim_threshold) {
+        // total memory used is within limit; no need to reclaim.
+        return;
+    }
+
+    // Memory consumption has crossed threshold. Reclaim from the SSTable that
+    // has the most reclaimable memory to get the total consumption under limit.
+    auto sst_with_max_memory = std::max_element(_active.begin(), _active.end(), [](const sstable& sst1, const sstable& sst2) {
+        return sst1.total_reclaimable_memory_size() < sst2.total_reclaimable_memory_size();
+    });
+
+    auto memory_reclaimed = sst_with_max_memory->reclaim_memory_from_components();
+    _total_memory_reclaimed += memory_reclaimed;
+    _total_reclaimable_memory -= memory_reclaimed;
+    smlogger.info("Reclaimed {} bytes of memory from SSTable components. Total memory reclaimed so far is {} bytes", memory_reclaimed, _total_memory_reclaimed);
+}
+
 void sstables_manager::add(sstable* sst) {
     _active.push_back(*sst);
 }
 
 void sstables_manager::deactivate(sstable* sst) {
+    // Remove SSTable from the reclaimable memory tracking
+    _total_reclaimable_memory -= sst->total_reclaimable_memory_size();
+
     // At this point, sst has a reference count of zero, since we got here from
     // lw_shared_ptr_deleter<sstables::sstable>::dispose().
     _active.erase(_active.iterator_to(*sst));
