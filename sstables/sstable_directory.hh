@@ -45,8 +45,6 @@ public:
     {
     }
 
-    friend class ::replica::table; // FIXME table snapshots should switch to sstable_directory
-
     template <std::ranges::range Container, typename Func>
     requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
     future<> parallel_for_each(Container& c, Func func) {
