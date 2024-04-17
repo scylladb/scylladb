@@ -237,7 +237,7 @@ In summary, Raft makes schema changes safe, but it requires that a quorum of nod
 
 .. only:: opensource
 
-    Consistent Topology with Raft :label-caution:`Experimental`
+    Consistent Topology with Raft
     -----------------------------------------------------------------
 
     ScyllaDB can use Raft to manage cluster topology. With Raft-managed topology 
@@ -250,19 +250,11 @@ In summary, Raft makes schema changes safe, but it requires that a quorum of nod
     be bootstrapped concurrently, which couldn't be done with the old 
     gossip-based topology.
 
-    Support for Raft-managed topology is experimental and must be explicitly 
-    enabled in the ``scylla.yaml`` configuration file by specifying 
-    the ``consistent-topology-changes`` option:
-
-    .. code:: 
-    
-        experimental_features:
-        - consistent-topology-changes
-
-    As with other experimental features in ScyllaDB, you should not enable this 
-    feature in production clusters due to insufficient stability. The feature 
-    is undergoing backward-incompatible changes that may prevent upgrading 
-    the cluster. 
+    Raft-managed topology is enabled by default in new cluster installations
+    starting from 6.0. After upgrading from 5.4 to 6.0, the cluster will
+    continue using the old gossip-based topology. You must perform manual action
+    to enable the Raft-based topology. See :doc:`the guide for enabling consistent topology changes</upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology>`
+    for more details.
 
 .. _raft-handling-failures:
 
