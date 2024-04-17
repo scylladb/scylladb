@@ -5747,10 +5747,6 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             throw std::runtime_error("Migrating within the same node is not supported");
         }
 
-        if (src == dst) {
-            co_return;
-        }
-
         if (locator::contains(tinfo.replicas, dst.host)) {
             throw std::runtime_error(fmt::format("Tablet {} has replica on {}", gid, dst.host));
         }
