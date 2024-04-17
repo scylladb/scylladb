@@ -65,8 +65,17 @@ sstring validate_keyspace(http_context& ctx, sstring ks_name) {
     throw bad_param_exception(replica::no_such_keyspace(ks_name).what());
 }
 
+<<<<<<< HEAD
 sstring validate_keyspace(http_context& ctx, const parameters& param) {
     return validate_keyspace(ctx, param["keyspace"]);
+=======
+sstring validate_keyspace(const http_context& ctx, const std::unique_ptr<http::request>& req) {
+    return validate_keyspace(ctx, req->get_path_param("keyspace"));
+}
+
+sstring validate_keyspace(const http_context& ctx, const http::request& req) {
+    return validate_keyspace(ctx, req.get_path_param("keyspace"));
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
 }
 
 locator::host_id validate_host_id(const sstring& param) {
@@ -171,7 +180,7 @@ using ks_cf_func = std::function<future<json::json_return_type>(http_context&, s
 
 static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     return [&ctx, f = std::move(f)](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         return f(ctx, std::move(req), std::move(keyspace), std::move(table_infos));
     };
@@ -338,10 +347,21 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         // returns immediately, not waiting for the repair to finish. The user
         // then has other mechanisms to track the ongoing repair's progress,
         // or stop it.
+<<<<<<< HEAD
         return repair_start(repair, validate_keyspace(ctx, req->param),
                 options_map).then([] (int i) {
                     return make_ready_future<json::json_return_type>(i);
                 });
+=======
+        try {
+            int res = co_await repair_start(repair, validate_keyspace(ctx, req), options_map);
+            co_return json::json_return_type(res);
+        } catch (const std::invalid_argument& e) {
+            // if the option is not sane, repair_start() throws immediately, so
+            // convert the exception to an HTTP error
+            throw httpd::bad_param_exception(e.what());
+        }
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
     });
 
     ss::get_active_repair_async.set(r, [&repair] (std::unique_ptr<http::request> req) {
@@ -421,7 +441,7 @@ void unset_repair(http_context& ctx, routes& r) {
 
 void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader) {
     ss::load_new_ss_tables.set(r, [&ctx, &sst_loader](std::unique_ptr<http::request> req) {
-        auto ks = validate_keyspace(ctx, req->param);
+        auto ks = validate_keyspace(ctx, req);
         auto cf = req->get_query_param("cf");
         auto stream = req->get_query_param("load_and_stream");
         auto primary_replica = req->get_query_param("primary_replica_only");
@@ -452,8 +472,8 @@ void unset_sstables_loader(http_context& ctx, routes& r) {
 
 void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb) {
     ss::view_build_statuses.set(r, [&ctx, &vb] (std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto view = req->param["view"];
+        auto keyspace = validate_keyspace(ctx, req);
+        auto view = req->get_path_param("view");
         return vb.local().view_build_statuses(std::move(keyspace), std::move(view)).then([] (std::unordered_map<sstring, sstring> status) {
             std::vector<storage_service_json::mapper> res;
             return make_ready_future<json::json_return_type>(map_to_key_value(std::move(status), res));
@@ -590,7 +610,26 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+<<<<<<< HEAD
         auto keyspace = validate_keyspace(ctx, req->param);
+=======
+        auto keyspace = validate_keyspace(ctx, req);
+        auto table = req->get_query_param("cf");
+
+        auto erm = std::invoke([&]() -> locator::effective_replication_map_ptr {
+            auto& ks = ctx.db.local().find_keyspace(keyspace);
+            if (table.empty()) {
+                ensure_tablets_disabled(ctx, keyspace, "storage_service/range_to_endpoint_map");
+                return ks.get_vnode_effective_replication_map();
+            } else {
+                validate_table(ctx, keyspace, table);
+
+                auto& cf = ctx.db.local().find_column_family(keyspace, table);
+                return cf.get_effective_replication_map();
+            }
+        });
+
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
         std::vector<ss::maplist_mapper> res;
         co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace),
                 [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
@@ -615,7 +654,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_pending_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         std::vector<ss::maplist_mapper> res;
         return make_ready_future<json::json_return_type>(res);
     });
@@ -631,7 +670,20 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::describe_ring.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) {
+<<<<<<< HEAD
         return describe_ring_as_json(ss, validate_keyspace(ctx, req->param));
+=======
+        if (!req->param.exists("keyspace")) {
+            throw bad_param_exception("The keyspace param is not provided");
+        }
+        auto keyspace = req->get_path_param("keyspace");
+        auto table = req->get_query_param("table");
+        if (!table.empty()) {
+            validate_table(ctx, keyspace, table);
+            return describe_ring_as_json_for_table(ss, keyspace, table);
+        }
+        return describe_ring_as_json(ss, validate_keyspace(ctx, req));
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
     });
 
     ss::get_host_id_map.set(r, [&ss](const_req req) {
@@ -664,7 +716,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::get_natural_endpoints.set(r, [&ctx, &ss](const_req req) {
-        auto keyspace = validate_keyspace(ctx, req.param);
+        auto keyspace = validate_keyspace(ctx, req);
         return container_to_vec(ss.local().get_natural_endpoints(keyspace, req.get_query_param("cf"),
                 req.get_query_param("key")));
     });
@@ -733,7 +785,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
         if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
@@ -796,7 +848,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
         apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, column_families);
         auto& db = ctx.db;
@@ -905,7 +957,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::truncate.set(r, [&ctx](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
     });
@@ -1039,14 +1091,14 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::bulk_load.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        auto path = req->param["path"];
+        auto path = req->get_path_param("path");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::bulk_load_async.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        auto path = req->param["path"];
+        auto path = req->get_path_param("path");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
@@ -1134,7 +1186,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
@@ -1142,7 +1194,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
@@ -1150,7 +1202,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("enable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
@@ -1158,7 +1210,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("disable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
@@ -1254,8 +1306,23 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::get_effective_ownership.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) {
+<<<<<<< HEAD
         auto keyspace_name = req->param["keyspace"] == "null" ? "" : validate_keyspace(ctx, req->param);
         return ss.local().effective_ownership(keyspace_name).then([] (auto&& ownership) {
+=======
+        auto keyspace_name = req->get_path_param("keyspace") == "null" ? "" : validate_keyspace(ctx, req);
+        auto table_name = req->get_query_param("cf");
+
+        if (!keyspace_name.empty()) {
+            if (table_name.empty()) {
+                ensure_tablets_disabled(ctx, keyspace_name, "storage_service/ownership");
+            } else {
+                validate_table(ctx, keyspace_name, table_name);
+            }
+        }
+
+        return ss.local().effective_ownership(keyspace_name, table_name).then([] (auto&& ownership) {
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
             std::vector<storage_service_json::mapper> res;
             return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
         });
@@ -1684,6 +1751,23 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 
         co_return json::json_return_type(static_cast<int>(scrub_status::successful));
     });
+<<<<<<< HEAD
+=======
+
+    cf::get_true_snapshots_size.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) {
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
+        return snap_ctl.local().true_snapshots_size(std::move(ks), std::move(cf)).then([] (int64_t res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
+    });
+
+    cf::get_all_true_snapshots_size.set(r, [] (std::unique_ptr<http::request> req) {
+        //TBD
+        unimplemented();
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
 }
 
 void unset_snapshot(http_context& ctx, routes& r) {

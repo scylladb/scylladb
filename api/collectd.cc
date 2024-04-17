@@ -54,7 +54,7 @@ static const char* str_to_regex(const sstring& v) {
 void set_collectd(http_context& ctx, routes& r) {
     cd::get_collectd.set(r, [](std::unique_ptr<request> req) {
 
-        auto id = ::make_shared<scollectd::type_instance_id>(req->param["pluginid"],
+        auto id = ::make_shared<scollectd::type_instance_id>(req->get_path_param("pluginid"),
                 req->get_query_param("instance"), req->get_query_param("type"),
                 req->get_query_param("type_instance"));
 
@@ -91,7 +91,7 @@ void set_collectd(http_context& ctx, routes& r) {
     });
 
     cd::enable_collectd.set(r, [](std::unique_ptr<request> req) -> future<json::json_return_type> {
-        std::regex plugin(req->param["pluginid"].c_str());
+        std::regex plugin(req->get_path_param("pluginid").c_str());
         std::regex instance(str_to_regex(req->get_query_param("instance")));
         std::regex type(str_to_regex(req->get_query_param("type")));
         std::regex type_instance(str_to_regex(req->get_query_param("type_instance")));

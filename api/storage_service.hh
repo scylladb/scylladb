@@ -41,7 +41,11 @@ sstring validate_keyspace(http_context& ctx, sstring ks_name);
 
 // verify that the keyspace parameter is found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective keyspace error.
+<<<<<<< HEAD
 sstring validate_keyspace(http_context& ctx, const httpd::parameters& param);
+=======
+sstring validate_keyspace(const http_context& ctx, const std::unique_ptr<http::request>& req);
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
 
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown

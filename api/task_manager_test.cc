@@ -82,8 +82,13 @@ void set_task_manager_test(http_context& ctx, routes& r) {
         co_return json_void();
     });
 
+<<<<<<< HEAD
     tmt::finish_test_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
+=======
+    tmt::finish_test_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
+>>>>>>> 1aacfdf460 (REST API: stop using deprecated, buggy, path parameter)
         auto it = req->query_parameters.find("error");
         bool fail = it != req->query_parameters.end();
         std::string error = fail ? it->second : "";
