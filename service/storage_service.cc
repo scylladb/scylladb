@@ -5754,10 +5754,6 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::tablet_transition_kind::migration)
             .build());
-        updates.emplace_back(topology_mutation_builder(write_timestamp)
-            .set_transition_state(topology::transition_state::tablet_migration)
-            .set_version(_topology_state_machine._topology.version + 1)
-            .build());
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
 
@@ -5801,10 +5797,6 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::tablet_transition_kind::rebuild)
-            .build());
-        updates.emplace_back(topology_mutation_builder(write_timestamp)
-            .set_transition_state(topology::transition_state::tablet_migration)
-            .set_version(_topology_state_machine._topology.version + 1)
             .build());
 
         sstring reason = format("Adding replica to tablet {}, node {}", gid, dst);
@@ -5850,10 +5842,6 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::tablet_transition_kind::rebuild)
-            .build());
-        updates.emplace_back(topology_mutation_builder(write_timestamp)
-            .set_transition_state(topology::transition_state::tablet_migration)
-            .set_version(_topology_state_machine._topology.version + 1)
             .build());
 
         sstring reason = format("Removing replica from tablet {}, node {}", gid, dst);
@@ -5961,6 +5949,11 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
 
         rtlogger.info("{}", reason);
         rtlogger.trace("do update {} reason {}", updates, reason);
+
+        updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+            .set_transition_state(topology::transition_state::tablet_migration)
+            .set_version(_topology_state_machine._topology.version + 1)
+            .build());
 
         topology_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
