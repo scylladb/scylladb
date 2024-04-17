@@ -10,6 +10,8 @@ from nodetool import flush
 import pytest
 import time
 
+
+
 # Waits until at least one CDC generation is published to system_distributed.cdc_generation_timestamps
 # and system_distributed.cdc_streams_descriptions_v2. It may happen after the first node bootstraps.
 def wait_for_first_cdc_generation(cql, timeout):
