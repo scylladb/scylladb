@@ -976,8 +976,11 @@ void compaction_manager::enable() {
 
 std::function<void()> compaction_manager::compaction_submission_callback() {
     return [this] () mutable {
-        for (auto& e: _compaction_state) {
-            postpone_compaction_for_table(e.first);
+        auto now = gc_clock::now();
+        for (auto& [table, state] : _compaction_state) {
+            if (now - state.last_regular_compaction > periodic_compaction_submission_interval()) {
+                postpone_compaction_for_table(table);
+            }
         }
         reevaluate_postponed_compactions();
     };
@@ -1227,6 +1230,7 @@ protected:
                 fmt::ptr(this), descriptor.sstables.size(), weight, t);
 
             setup_new_compaction(descriptor.run_identifier);
+            _compaction_state.last_regular_compaction = gc_clock::now();
             std::exception_ptr ex;
 
             try {
