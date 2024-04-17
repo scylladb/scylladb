@@ -106,6 +106,7 @@ auto fmt::formatter<collection_mutation_view::printer>::format(const collection_
         [&] (const collection_type_impl& ctype) {
             auto&& key_type = ctype.name_comparator();
             auto&& value_type = ctype.value_comparator();
+            out = fmt::format_to(out, " collection cells {{");
             for (auto&& [key, value] : cmvd.cells) {
                 if (!first) {
                     out = fmt::format_to(out, ", ");
@@ -113,20 +114,25 @@ auto fmt::formatter<collection_mutation_view::printer>::format(const collection_
                 fmt::format_to(out, "{}: {}", key_type->to_string(key), atomic_cell_view::printer(*value_type, value));
                 first = false;
             }
+            out = fmt::format_to(out, "}}");
         },
         [&] (const user_type_impl& utype) {
+            out = fmt::format_to(out, " user-type cells {{");
             for (auto&& [raw_idx, value] : cmvd.cells) {
-                if (!first) {
+                if (first) {
+                    out = fmt::format_to(out, " ");
+                } else {
                     out = fmt::format_to(out, ", ");
                 }
                 auto idx = deserialize_field_index(raw_idx);
                 out = fmt::format_to(out, "{}: {}", utype.field_name_as_string(idx), atomic_cell_view::printer(*utype.type(idx), value));
                 first = false;
             }
+            out = fmt::format_to(out, "}}");
         },
         [&] (const abstract_type& o) {
             // Not throwing exception in this likely-to-be debug context
-            out = fmt::format_to(out, "attempted to pretty-print collection_mutation_view_description with type {}", o.name());
+            out = fmt::format_to(out, " attempted to pretty-print collection_mutation_view_description with type {}", o.name());
         }
         ));
     });
