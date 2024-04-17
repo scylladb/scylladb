@@ -117,6 +117,7 @@ public:
 
 // Incrementally divides a `partition_range` into sub-ranges wholly owned by a single shard.
 // Unlike ring_position_range_sharder, it only returns result for a shard number provided by the caller.
+// During topology changes, reflects shard assignment for reads.
 class selective_token_range_sharder {
     const sharder& _sharder;
     dht::token_range _range;
@@ -133,8 +134,8 @@ public:
             , _shard(shard)
             , _next_shard(_shard + 1 == _sharder.shard_count() ? 0 : _shard + 1)
             , _start_token(_range.start() ? _range.start()->value() : minimum_token())
-            , _start_boundary(_sharder.shard_of(_start_token) == shard ?
-                _range.start() : interval_bound<dht::token>(_sharder.token_for_next_shard(_start_token, shard))) {
+            , _start_boundary(_sharder.shard_for_reads(_start_token) == shard ?
+                _range.start() : interval_bound<dht::token>(_sharder.token_for_next_shard_for_reads(_start_token, shard))) {
     }
     // Returns the next token_range that is both wholly contained within the input range and also
     // wholly owned by the input shard_id. When the input range is exhausted, std::nullopt is returned.

@@ -383,6 +383,9 @@ static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary
 // the chances of covering all ranges during a scan when restarts occur.
 // A more deterministic way would be to regularly persist the scanning state,
 // but that incurs overhead that we want to avoid if not needed.
+//
+// FIXME: Check if this algorithm is safe with tablet migration.
+// https://github.com/scylladb/scylladb/issues/16567
 enum primary_or_secondary_t {primary, secondary};
 template<primary_or_secondary_t primary_or_secondary>
 class token_ranges_owned_by_this_shard {

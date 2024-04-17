@@ -165,10 +165,10 @@ selective_token_range_sharder::next() {
     }
     while (_range.overlaps(dht::token_range(_start_boundary, {}), dht::token_comparator())
             && !(_start_boundary && _start_boundary->value() == maximum_token())) {
-        auto end_token = _sharder.token_for_next_shard(_start_token, _next_shard);
+        auto end_token = _sharder.token_for_next_shard_for_reads(_start_token, _next_shard);
         auto candidate = dht::token_range(std::move(_start_boundary), interval_bound<dht::token>(end_token, false));
         auto intersection = _range.intersection(std::move(candidate), dht::token_comparator());
-        _start_token = _sharder.token_for_next_shard(end_token, _shard);
+        _start_token = _sharder.token_for_next_shard_for_reads(end_token, _shard);
         _start_boundary = interval_bound<dht::token>(_start_token);
         if (intersection) {
             return *intersection;
