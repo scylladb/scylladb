@@ -323,7 +323,7 @@ flat_mutation_reader_v2 repair_reader::make_reader(
             _permit.release_base_resources();
             return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range, compaction_time),
                 [&remote_sharder, remote_shard](const dht::decorated_key& k) {
-                    return remote_sharder.shard_of(k.token()) == remote_shard;
+                    return remote_sharder.shard_for_reads(k.token()) == remote_shard;
                 });
         }
         default:
