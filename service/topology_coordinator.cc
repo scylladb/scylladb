@@ -1113,6 +1113,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_new: {
+                    utils::get_local_injector().inject("crash-in-tablet-write-both-read-new", [] {
+                        rtlogger.info("crash-in-tablet-write-both-read-new hit, killing the node");
+                        _exit(1);
+                    });
+
                     auto next_stage = locator::tablet_transition_stage::use_new;
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
