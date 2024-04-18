@@ -106,11 +106,6 @@ table::make_sstable_reader(schema_ptr s,
     // consequence, fast_forward_to() will *NOT* work on the result,
     // regardless of what the fwd_mr parameter says.
     if (pr.is_singular() && pr.start()->value().has_key()) {
-        const dht::ring_position& pos = pr.start()->value();
-        if (_erm->shard_of(*s, pos.token()) != this_shard_id()) {
-            return make_empty_flat_reader_v2(s, std::move(permit)); // range doesn't belong to this shard
-        }
-
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
                 _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate);
     } else {
