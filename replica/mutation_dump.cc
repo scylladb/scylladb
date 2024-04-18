@@ -404,7 +404,7 @@ future<flat_mutation_reader_v2> make_partition_mutation_dump_reader(
         tracing::trace_state_ptr ts,
         db::timeout_clock::time_point timeout) {
     const auto& tbl = db.local().find_column_family(underlying_schema);
-    const auto shard = tbl.shard_of(dk.token());
+    const auto shard = tbl.shard_for_reads(dk.token());
     if (shard == this_shard_id()) {
         co_return make_flat_mutation_reader_v2<mutation_dump_reader>(std::move(output_schema), std::move(underlying_schema), std::move(permit),
                 db.local(), dk, ps, std::move(ts));
