@@ -110,13 +110,16 @@ struct description {
 future<std::vector<description>> generate_descriptions(
     replica::database& db, 
     std::vector<shared_ptr<const keyspace_element>> elements,
-    std::optional<bool> with_internals = std::nullopt) 
+    std::optional<bool> with_internals = std::nullopt,
+    bool sort_by_name = true) 
 {
     std::vector<description> descs;
     descs.reserve(elements.size());
-    boost::sort(elements, [] (const auto& a, const auto& b) {
-        return a->element_name() < b->element_name();
-    });
+    if (sort_by_name) {
+        boost::sort(elements, [] (const auto& a, const auto& b) {
+            return a->element_name() < b->element_name();
+        });
+    }
 
     for (auto& e: elements) {
         auto desc = (with_internals.has_value()) 
