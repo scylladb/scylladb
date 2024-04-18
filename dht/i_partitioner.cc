@@ -232,7 +232,7 @@ ring_position_range_vector_sharder::next(const schema& s) {
 }
 
 future<utils::chunked_vector<partition_range>>
-split_range_to_single_shard(const schema& s, const sharder& sharder, const partition_range& pr, shard_id shard) {
+split_range_to_single_shard(const schema& s, const static_sharder& sharder, const partition_range& pr, shard_id shard) {
     auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
     auto start_shard = sharder.shard_of(start_token);
     auto start_boundary = start_shard == shard ? pr.start() : interval_bound<ring_position>(ring_position::starting_at(sharder.token_for_next_shard(start_token, shard)));

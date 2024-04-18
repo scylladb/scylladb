@@ -1622,7 +1622,7 @@ create_sharding_metadata(utils::chunked_vector<dht::partition_range> ranges) {
 
 static
 sharding_metadata
-create_sharding_metadata(schema_ptr schema, const dht::sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
+create_sharding_metadata(schema_ptr schema, const dht::static_sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
     auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto ranges = dht::split_range_to_single_shard(*schema, sharder, prange, shard).get();
     if (ranges.empty()) {

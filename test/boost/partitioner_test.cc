@@ -392,7 +392,7 @@ public:
 
 static
 void
-test_something_with_some_interesting_ranges_and_sharder(std::function<void (const schema&, const dht::sharder&, const dht::partition_range&)> func_to_test) {
+test_something_with_some_interesting_ranges_and_sharder(std::function<void (const schema&, const dht::static_sharder&, const dht::partition_range&)> func_to_test) {
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
@@ -447,7 +447,7 @@ test_something_with_some_interesting_ranges_and_sharder(std::function<void (cons
 
 static
 void
-do_test_split_range_to_single_shard(const schema& s, const dht::sharder& sharder_, const dht::partition_range& pr) {
+do_test_split_range_to_single_shard(const schema& s, const dht::static_sharder& sharder_, const dht::partition_range& pr) {
     for (auto shard : boost::irange(0u, sharder_.shard_count())) {
         auto ranges = dht::split_range_to_single_shard(s, sharder_, pr, shard).get();
         auto sharder = dht::ring_position_range_sharder(sharder_, pr);
