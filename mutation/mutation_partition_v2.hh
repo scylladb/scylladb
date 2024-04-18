@@ -282,6 +282,6 @@ mutation_partition_v2& mutation_partition_v2::container_of(rows_type& rows) {
 // meaning that they can be removed without affecting the set of writes represented by the mutation.
 bool has_redundant_dummies(const mutation_partition_v2&);
 
-template <> struct fmt::formatter<mutation_partition_v2::printer> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<mutation_partition_v2::printer> : fmt::formatter<string_view> {
     auto format(const mutation_partition_v2::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

@@ -76,7 +76,7 @@ struct file_size_printer {
 };
 
 template <>
-struct fmt::formatter<file_size_printer> : fmt::formatter<std::string_view> {
+struct fmt::formatter<file_size_printer> : fmt::formatter<string_view> {
     auto format(file_size_printer size, auto& ctx) const {
         if (!size.human_readable) {
             return fmt::format_to(ctx.out(), "{}", size.value);

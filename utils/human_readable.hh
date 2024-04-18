@@ -37,6 +37,6 @@ human_readable_value to_hr_size(uint64_t size);
 
 } // namespace utils
 
-template <> struct fmt::formatter<utils::human_readable_value> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<utils::human_readable_value> : fmt::formatter<string_view> {
     auto format(const utils::human_readable_value&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

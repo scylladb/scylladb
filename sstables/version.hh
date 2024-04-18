@@ -73,7 +73,7 @@ inline int operator<=>(sstable_version_types a, sstable_version_types b) {
 }
 
 template <>
-struct fmt::formatter<sstables::sstable_version_types> : fmt::formatter<std::string_view> {
+struct fmt::formatter<sstables::sstable_version_types> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const sstables::sstable_version_types& version, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", sstables::version_string.at(version));
@@ -81,7 +81,7 @@ struct fmt::formatter<sstables::sstable_version_types> : fmt::formatter<std::str
 };
 
 template <>
-struct fmt::formatter<sstables::sstable_format_types> : fmt::formatter<std::string_view> {
+struct fmt::formatter<sstables::sstable_format_types> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const sstables::sstable_format_types& format, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", sstables::format_string.at(format));

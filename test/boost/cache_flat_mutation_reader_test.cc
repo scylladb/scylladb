@@ -133,7 +133,7 @@ struct expected_row {
     }
 };
 
-template <> struct fmt::formatter<expected_row> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<expected_row> : fmt::formatter<string_view> {
     auto format(const expected_row& e, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{pos={}, cont={}, dummy={}}}", e.key(), bool(e.continuous), bool(e.dummy));
     }

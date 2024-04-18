@@ -63,7 +63,7 @@ public:
 namespace fmt {
 
 template <>
-struct formatter<compaction::table_state> : formatter<std::string_view> {
+struct formatter<compaction::table_state> : formatter<string_view> {
     template <typename FormatContext>
     auto format(const compaction::table_state& t, FormatContext& ctx) const {
         auto s = t.schema();

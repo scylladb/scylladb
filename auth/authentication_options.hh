@@ -48,15 +48,15 @@ public:
 }
 
 template <>
-struct fmt::formatter<auth::authentication_option> : fmt::formatter<std::string_view> {
+struct fmt::formatter<auth::authentication_option> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const auth::authentication_option a, FormatContext& ctx) const {
         using enum auth::authentication_option;
         switch (a) {
         case password:
-            return formatter<std::string_view>::format("PASSWORD", ctx);
+            return formatter<string_view>::format("PASSWORD", ctx);
         case options:
-            return formatter<std::string_view>::format("OPTIONS", ctx);
+            return formatter<string_view>::format("OPTIONS", ctx);
         }
         std::abort();
     }

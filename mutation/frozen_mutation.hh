@@ -327,7 +327,7 @@ auto frozen_mutation::consume_gently(schema_ptr s, Consumer& consumer) const -> 
     co_return co_await consume_gently(s, adaptor);
 }
 
-template <> struct fmt::formatter<frozen_mutation::printer> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<frozen_mutation::printer> : fmt::formatter<string_view> {
     auto format(const frozen_mutation::printer& pr, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", pr.self.unfreeze(pr.schema));
     }

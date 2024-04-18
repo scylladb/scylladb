@@ -700,7 +700,7 @@ public:
 };
 
 template <>
-struct fmt::formatter<shadowable_tombstone> : fmt::formatter<std::string_view> {
+struct fmt::formatter<shadowable_tombstone> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const shadowable_tombstone& t, FormatContext& ctx) const {
         if (t) {

@@ -124,7 +124,7 @@ public:
     position_range_iterator end() const { return {_set.end()}; }
 };
 
-template <> struct fmt::formatter<clustering_interval_set> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<clustering_interval_set> : fmt::formatter<string_view> {
     auto format(const clustering_interval_set& set, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{{}}}", fmt::join(set, ",\n  "));
     }

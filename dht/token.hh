@@ -247,7 +247,7 @@ struct token_comparator {
 } // namespace dht
 
 template <>
-struct fmt::formatter<dht::token> : fmt::formatter<std::string_view> {
+struct fmt::formatter<dht::token> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const dht::token& t, FormatContext& ctx) const {
         if (t.is_maximum()) {

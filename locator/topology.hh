@@ -444,7 +444,7 @@ std::ostream& operator<<(std::ostream& out, const locator::node::state& state);
 
 // Accepts :v format option for verbose printing
 template <>
-struct fmt::formatter<locator::node> : fmt::formatter<std::string_view> {
+struct fmt::formatter<locator::node> : fmt::formatter<string_view> {
     bool verbose = false;
     constexpr auto parse(fmt::format_parse_context& ctx) {
         auto it = ctx.begin(), end = ctx.end();
@@ -478,7 +478,7 @@ struct fmt::formatter<locator::node> : fmt::formatter<std::string_view> {
 };
 
 template <>
-struct fmt::formatter<locator::node::state> : fmt::formatter<std::string_view> {
+struct fmt::formatter<locator::node::state> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const locator::node::state& state, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", locator::node::to_string(state));

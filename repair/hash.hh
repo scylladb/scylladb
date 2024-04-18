@@ -41,7 +41,7 @@ public:
     repair_hash do_hash_for_mf(const decorated_key_with_hash& dk_with_hash, const mutation_fragment& mf);
 };
 
-template <> struct fmt::formatter<repair_hash>  : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<repair_hash>  : fmt::formatter<string_view> {
     auto format(const repair_hash& x, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", x.hash);
     }

@@ -40,6 +40,6 @@ public:
 
 } // namespace streaming
 
-template <> struct fmt::formatter<streaming::stream_request> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<streaming::stream_request> : fmt::formatter<string_view> {
     auto format(const streaming::stream_request&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

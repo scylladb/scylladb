@@ -213,14 +213,14 @@ struct compaction_descriptor {
 }
 
 template <>
-struct fmt::formatter<sstables::compaction_type> : fmt::formatter<std::string_view> {
+struct fmt::formatter<sstables::compaction_type> : fmt::formatter<string_view> {
     auto format(sstables::compaction_type, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 template <>
-struct fmt::formatter<sstables::compaction_type_options::scrub::mode> : fmt::formatter<std::string_view> {
+struct fmt::formatter<sstables::compaction_type_options::scrub::mode> : fmt::formatter<string_view> {
     auto format(sstables::compaction_type_options::scrub::mode, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 template <>
-struct fmt::formatter<sstables::compaction_type_options::scrub::quarantine_mode> : fmt::formatter<std::string_view> {
+struct fmt::formatter<sstables::compaction_type_options::scrub::quarantine_mode> : fmt::formatter<string_view> {
     auto format(sstables::compaction_type_options::scrub::quarantine_mode, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

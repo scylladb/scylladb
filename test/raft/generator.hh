@@ -826,14 +826,14 @@ stagger_gen<G> stagger(
 } // namespace generator
 
 template <operation::Executable... Ops>
-struct fmt::formatter<operation::either_of<Ops...>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<operation::either_of<Ops...>> : fmt::formatter<string_view> {
     auto format(operation::either_of<Ops...>& e, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", e.op);
     }
 };
 
 template <typename Op>
-struct fmt::formatter<operation::exceptional_result<Op>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<operation::exceptional_result<Op>> : fmt::formatter<string_view> {
     auto format(const operation::exceptional_result<Op>& r, fmt::format_context& ctx) const {
         try {
             std::rethrow_exception(r.eptr);
@@ -844,14 +844,14 @@ struct fmt::formatter<operation::exceptional_result<Op>> : fmt::formatter<std::s
 };
 
 template <operation::Executable Op>
-struct fmt::formatter<operation::completion<Op>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<operation::completion<Op>> : fmt::formatter<string_view> {
     auto format(const operation::completion<Op>& c, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "c{{r:{}, t:{}, tid:{}}}", c.result, c.time, c.thread);
     }
 };
 
 template <operation::Executable Op>
-struct fmt::formatter<operation::invocable<Op>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<operation::invocable<Op>> : fmt::formatter<string_view> {
     auto format(const operation::invocable<Op>& op, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", static_cast<Op>(op));
     }

@@ -132,7 +132,7 @@ collection_mutation difference(const abstract_type&, collection_mutation_view, c
 bytes_ostream serialize_for_cql(const abstract_type&, collection_mutation_view);
 
 template <>
-struct fmt::formatter<collection_mutation_view::printer> : fmt::formatter<std::string_view> {
+struct fmt::formatter<collection_mutation_view::printer> : fmt::formatter<string_view> {
     auto format(const collection_mutation_view::printer&, fmt::format_context& ctx) const
       -> decltype(ctx.out());
 };

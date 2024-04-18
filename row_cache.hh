@@ -522,6 +522,6 @@ public:
 
 }
 
-template <> struct fmt::formatter<cache_entry> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<cache_entry> : fmt::formatter<string_view> {
     auto format(const cache_entry&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

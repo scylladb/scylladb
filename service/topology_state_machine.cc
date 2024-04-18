@@ -251,7 +251,7 @@ auto fmt::formatter<service::topology::transition_state>::format(service::topolo
     if (it == service::transition_state_to_name_map.end()) {
         on_internal_error(service::tsmlogger, "cannot print transition_state");
     }
-    return formatter<std::string_view>::format(it->second, ctx);
+    return formatter<string_view>::format(std::string_view(it->second), ctx);
 }
 
 auto fmt::formatter<service::node_state>::format(service::node_state s,
@@ -260,13 +260,13 @@ auto fmt::formatter<service::node_state>::format(service::node_state s,
     if (it == service::node_state_to_name_map.end()) {
         on_internal_error(service::tsmlogger, "cannot print node_state");
     }
-    return formatter<std::string_view>::format(it->second, ctx);
+    return formatter<string_view>::format(std::string_view(it->second), ctx);
 }
 
 
 auto fmt::formatter<service::topology_request>::format(service::topology_request req,
                                                        fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    return formatter<std::string_view>::format(service::topology_request_to_name_map[req], ctx);
+    return formatter<string_view>::format(std::string_view(service::topology_request_to_name_map[req]), ctx);
 }
 
 auto fmt::formatter<service::global_topology_request>::format(service::global_topology_request req,
@@ -275,7 +275,7 @@ auto fmt::formatter<service::global_topology_request>::format(service::global_to
     if (it == service::global_topology_request_to_name_map.end()) {
         on_internal_error(service::tsmlogger, fmt::format("cannot print global topology request {}", static_cast<uint8_t>(req)));
     }
-    return formatter<std::string_view>::format(it->second, ctx);
+    return formatter<string_view>::format(std::string_view(it->second), ctx);
 }
 
 
@@ -297,5 +297,5 @@ auto fmt::formatter<service::raft_topology_cmd::command>::format(service::raft_t
             name = "wait_for_ip";
             break;
     }
-    return formatter<std::string_view>::format(name, ctx);
+    return formatter<string_view>::format(name, ctx);
 }

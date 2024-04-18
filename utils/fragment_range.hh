@@ -413,7 +413,7 @@ void write_native(Out& out, std::type_identity_t<T> v) {
 }
 
 template <FragmentedView View>
-struct fmt::formatter<View> : fmt::formatter<std::string_view> {
+struct fmt::formatter<View> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const View& b, FormatContext& ctx) const {
         auto out = ctx.out();

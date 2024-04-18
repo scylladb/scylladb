@@ -83,18 +83,18 @@ enum class partition_region : uint8_t {
 struct view_and_holder;
 
 template <>
-struct fmt::formatter<partition_region> : fmt::formatter<std::string_view> {
+struct fmt::formatter<partition_region> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const ::partition_region& r, FormatContext& ctx) const {
         switch (r) {
             case partition_region::partition_start:
-                return formatter<std::string_view>::format("partition_start", ctx);
+                return formatter<string_view>::format("partition_start", ctx);
             case partition_region::static_row:
-                return formatter<std::string_view>::format("static_row", ctx);
+                return formatter<string_view>::format("static_row", ctx);
             case partition_region::clustered:
-                return formatter<std::string_view>::format("clustered", ctx);
+                return formatter<string_view>::format("clustered", ctx);
             case partition_region::partition_end:
-                return formatter<std::string_view>::format("partition_end", ctx);
+                return formatter<string_view>::format("partition_end", ctx);
         }
         std::abort(); // compiler will error before we reach here
     }
@@ -266,7 +266,7 @@ public:
 };
 
 template <>
-struct fmt::formatter<position_in_partition_view> : fmt::formatter<std::string_view> {
+struct fmt::formatter<position_in_partition_view> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const ::position_in_partition_view& pos, FormatContext& ctx) const {
         fmt::format_to(ctx.out(), "{{position: {}, ", pos._type);
@@ -280,7 +280,7 @@ struct fmt::formatter<position_in_partition_view> : fmt::formatter<std::string_v
 };
 
 template <>
-struct fmt::formatter<position_in_partition_view::printer> : fmt::formatter<std::string_view> {
+struct fmt::formatter<position_in_partition_view::printer> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const ::position_in_partition_view::printer& p, FormatContext& ctx) const {
         auto& pos = p._pipv;
@@ -647,7 +647,7 @@ public:
 };
 
 template <>
-struct fmt::formatter<position_in_partition> : fmt::formatter<std::string_view> {
+struct fmt::formatter<position_in_partition> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const ::position_in_partition& pos, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", position_in_partition_view(pos));
@@ -816,7 +816,7 @@ bool position_range::is_all_clustered_rows(const schema& s) const {
 // If `r` does not contain any keys, returns nullopt.
 std::optional<query::clustering_range> position_range_to_clustering_range(const position_range& r, const schema&);
 
-template <> struct fmt::formatter<position_range> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<position_range> : fmt::formatter<string_view> {
     auto format(const position_range& range, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{{}, {}}}", range.start(), range.end());
     }

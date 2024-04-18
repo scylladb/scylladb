@@ -1038,29 +1038,29 @@ inline void check_schema_version(table_schema_version expected, const schema& ac
     }
 }
 
-template <> struct fmt::formatter<ordinal_column_id> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<ordinal_column_id> : fmt::formatter<string_view> {
     auto format(ordinal_column_id id, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", static_cast<column_count_type>(id));
     }
 };
 
-template <> struct fmt::formatter<column_definition> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<column_definition> : fmt::formatter<string_view> {
     auto format(const column_definition&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<column_mapping> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<column_mapping> : fmt::formatter<string_view> {
     auto format(const column_mapping&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<raw_view_info> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<raw_view_info> : fmt::formatter<string_view> {
     auto format(const raw_view_info&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<schema> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<schema> : fmt::formatter<string_view> {
     auto format(const schema&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 std::ostream& operator<<(std::ostream& os, const schema& s);
 
-template <> struct fmt::formatter<view_ptr> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<view_ptr> : fmt::formatter<string_view> {
     auto format(const view_ptr& view, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

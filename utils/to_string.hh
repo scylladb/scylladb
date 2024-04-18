@@ -122,7 +122,7 @@ std::ostream& operator<<(std::ostream& os, const std::optional<T>& opt) {
 } // namespace std
 
 template<typename T>
-struct fmt::formatter<std::optional<T>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<std::optional<T>> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const std::optional<T>& opt, FormatContext& ctx) const {
         if (opt) {
@@ -133,14 +133,14 @@ struct fmt::formatter<std::optional<T>> : fmt::formatter<std::string_view> {
      }
 };
 
-template <> struct fmt::formatter<std::strong_ordering> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<std::strong_ordering> : fmt::formatter<string_view> {
     auto format(std::strong_ordering, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<std::weak_ordering> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<std::weak_ordering> : fmt::formatter<string_view> {
     auto format(std::weak_ordering, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<std::partial_ordering> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<std::partial_ordering> : fmt::formatter<string_view> {
     auto format(std::partial_ordering, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

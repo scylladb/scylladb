@@ -286,8 +286,8 @@ struct hash<node_repair_meta_id> {
 
 }
 
-template <> struct fmt::formatter<row_level_diff_detect_algorithm> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<row_level_diff_detect_algorithm> : fmt::formatter<string_view> {
     auto format(row_level_diff_detect_algorithm algo, fmt::format_context& ctx) const {
-        return formatter<std::string_view>::format(format_as(algo), ctx);
+        return formatter<string_view>::format(format_as(algo), ctx);
     }
 };

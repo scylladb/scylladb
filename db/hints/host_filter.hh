@@ -94,6 +94,6 @@ public:
 }
 
 template <>
-struct fmt::formatter<db::hints::host_filter> : fmt::formatter<std::string_view> {
+struct fmt::formatter<db::hints::host_filter> : fmt::formatter<string_view> {
     auto format(const db::hints::host_filter&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

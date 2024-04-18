@@ -41,7 +41,7 @@ public:
     friend fmt::formatter<canonical_mutation>;
 };
 
-template <> struct fmt::formatter<canonical_mutation> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<canonical_mutation> : fmt::formatter<string_view> {
     auto format(const canonical_mutation&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 

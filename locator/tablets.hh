@@ -514,40 +514,40 @@ public:
 }
 
 template <>
-struct fmt::formatter<locator::tablet_transition_stage> : fmt::formatter<std::string_view> {
+struct fmt::formatter<locator::tablet_transition_stage> : fmt::formatter<string_view> {
     auto format(const locator::tablet_transition_stage&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>
-struct fmt::formatter<locator::tablet_transition_kind> : fmt::formatter<std::string_view> {
+struct fmt::formatter<locator::tablet_transition_kind> : fmt::formatter<string_view> {
     auto format(const locator::tablet_transition_kind&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>
-struct fmt::formatter<locator::global_tablet_id> : fmt::formatter<std::string_view> {
+struct fmt::formatter<locator::global_tablet_id> : fmt::formatter<string_view> {
     auto format(const locator::global_tablet_id&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>
-struct fmt::formatter<locator::tablet_id> : fmt::formatter<std::string_view> {
+struct fmt::formatter<locator::tablet_id> : fmt::formatter<string_view> {
     auto format(locator::tablet_id  id, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", id.value());
     }
 };
 
 template <>
-struct fmt::formatter<locator::tablet_replica> : fmt::formatter<std::string_view> {
+struct fmt::formatter<locator::tablet_replica> : fmt::formatter<string_view> {
     auto format(const locator::tablet_replica& r, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}:{}", r.host, r.shard);
     }
 };
 
 template <>
-struct fmt::formatter<locator::tablet_map> : fmt::formatter<std::string_view> {
+struct fmt::formatter<locator::tablet_map> : fmt::formatter<string_view> {
     auto format(const locator::tablet_map&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>
-struct fmt::formatter<locator::tablet_metadata> : fmt::formatter<std::string_view> {
+struct fmt::formatter<locator::tablet_metadata> : fmt::formatter<string_view> {
     auto format(const locator::tablet_metadata&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

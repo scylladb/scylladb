@@ -524,7 +524,7 @@ public:
 };
 
 template <typename Component>
-struct fmt::formatter<std::pair<Component, composite::eoc>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<std::pair<Component, composite::eoc>> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const std::pair<Component, composite::eoc>& c, FormatContext& ctx) const {
         if constexpr (std::same_as<Component, bytes_view>) {
@@ -636,7 +636,7 @@ public:
 };
 
 template <>
-struct fmt::formatter<composite_view> : fmt::formatter<std::string_view> {
+struct fmt::formatter<composite_view> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const composite_view& v, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{{{}, compound={}, static={}}}",
@@ -650,7 +650,7 @@ composite::composite(const composite_view& v)
 { }
 
 template <>
-struct fmt::formatter<composite> : fmt::formatter<std::string_view> {
+struct fmt::formatter<composite> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const composite& v, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", composite_view(v));

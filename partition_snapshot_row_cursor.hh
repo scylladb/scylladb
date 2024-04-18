@@ -756,7 +756,7 @@ public:
     friend fmt::formatter<partition_snapshot_row_cursor>;
 };
 
-template <> struct fmt::formatter<partition_snapshot_row_cursor> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<partition_snapshot_row_cursor> : fmt::formatter<string_view> {
     auto format(const  partition_snapshot_row_cursor& cur, fmt::format_context& ctx) const {
         auto out = ctx.out();
         out = fmt::format_to(out, "{{cursor: position={}, cont={}, rt={}}}",

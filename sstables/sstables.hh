@@ -1043,7 +1043,7 @@ struct sstable_files_snapshot {
 
 } // namespace sstables
 
-template <> struct fmt::formatter<sstables::sstable_state> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<sstables::sstable_state> : fmt::formatter<string_view> {
     auto format(sstables::sstable_state state, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", state_to_dir(state));
     }

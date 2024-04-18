@@ -98,7 +98,7 @@ void mutation_partition_v2::ensure_last_dummy(const schema& s) {
 }
 
 template <>
-struct fmt::formatter<apply_resume> : fmt::formatter<std::string_view> {
+struct fmt::formatter<apply_resume> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const apply_resume& res, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{{{}, {}}}", int(res._stage), res._pos);

@@ -287,28 +287,28 @@ template <> struct fmt::formatter<service::topology::upgrade_state_type> {
     auto format(service::topology::upgrade_state_type status, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<service::fencing_token> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<service::fencing_token> : fmt::formatter<string_view> {
     auto format(const service::fencing_token& fencing_token, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{{}}}", fencing_token.topology_version);
     }
 };
 
-template <> struct fmt::formatter<service::topology::transition_state> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<service::topology::transition_state> : fmt::formatter<string_view> {
     auto format(service::topology::transition_state, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<service::node_state> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<service::node_state> : fmt::formatter<string_view> {
     auto format(service::node_state, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<service::topology_request> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<service::topology_request> : fmt::formatter<string_view> {
     auto format(service::topology_request, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<service::global_topology_request> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<service::global_topology_request> : fmt::formatter<string_view> {
     auto format(service::global_topology_request, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<service::raft_topology_cmd::command> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<service::raft_topology_cmd::command> : fmt::formatter<string_view> {
     auto format(service::raft_topology_cmd::command, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

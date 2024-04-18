@@ -33,7 +33,7 @@ public:
     bool match_key(const test_key& k) const { return _value == (int)k + 10; }
 };
 
-template <> struct fmt::formatter<test_data> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<test_data> : fmt::formatter<string_view> {
     auto format(test_data d, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", static_cast<unsigned long>(d));
     }

@@ -119,13 +119,13 @@ struct hash<cql3::column_identifier_raw> {
 
 }
 
-template <> struct fmt::formatter<cql3::column_identifier> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<cql3::column_identifier> : fmt::formatter<string_view> {
     auto format(const cql3::column_identifier& i, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", i.text());
     }
 };
 
-template <> struct fmt::formatter<cql3::column_identifier_raw> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<cql3::column_identifier_raw> : fmt::formatter<string_view> {
     auto format(const cql3::column_identifier_raw& id, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", id.text());
     }

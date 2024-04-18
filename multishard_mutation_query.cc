@@ -289,7 +289,7 @@ public:
     future<> stop();
 };
 
-template <> struct fmt::formatter<read_context::dismantle_buffer_stats> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<read_context::dismantle_buffer_stats> : fmt::formatter<string_view> {
     auto format(const read_context::dismantle_buffer_stats& s, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(),
                               "kept {} partitions/{} fragments/{} bytes, discarded {} partitions/{} fragments/{} bytes",

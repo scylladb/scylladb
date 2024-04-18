@@ -65,5 +65,5 @@ auto fmt::formatter<tombstone_gc_mode>::format(tombstone_gc_mode mode, fmt::form
     case tombstone_gc_mode::immediate:   name = "immediate"; break;
     case tombstone_gc_mode::repair:      name = "repair"; break;
     }
-    return formatter<std::string_view>::format(name, ctx);
+    return formatter<string_view>::format(name, ctx);
 }

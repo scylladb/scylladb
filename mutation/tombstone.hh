@@ -64,7 +64,7 @@ struct tombstone final {
 };
 
 template <>
-struct fmt::formatter<tombstone> : fmt::formatter<std::string_view> {
+struct fmt::formatter<tombstone> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const tombstone& t, FormatContext& ctx) const {
         if (t) {

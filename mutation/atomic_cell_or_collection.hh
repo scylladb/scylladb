@@ -60,6 +60,6 @@ public:
 };
 
 template <>
-struct fmt::formatter<atomic_cell_or_collection::printer> : fmt::formatter<std::string_view> {
+struct fmt::formatter<atomic_cell_or_collection::printer> : fmt::formatter<string_view> {
     auto format(const atomic_cell_or_collection::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

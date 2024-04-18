@@ -578,7 +578,7 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary:
 
 }
 
-template <> struct fmt::formatter<cql3::expr::untyped_constant::type_class> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<cql3::expr::untyped_constant::type_class> : fmt::formatter<string_view> {
     auto format(cql3::expr::untyped_constant::type_class t, fmt::format_context& ctx) const {
         using enum cql3::expr::untyped_constant::type_class;
         std::string_view name;
