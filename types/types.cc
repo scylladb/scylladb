@@ -15,8 +15,10 @@
 #include "cql3/util.hh"
 #include "concrete_types.hh"
 #include <exception>
+#include <iterator>
 #include <seastar/core/print.hh>
 #include "types/types.hh"
+#include "seastar/core/shared_ptr.hh"
 #include "utils/serialization.hh"
 #include "vint-serialization.hh"
 #include <cmath>
@@ -38,6 +40,7 @@
 #include <boost/multiprecision/cpp_int.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <seastar/net/inet_address.hh>
+#include <unordered_set>
 #include "utils/big_decimal.hh"
 #include "utils/date.h"
 #include "utils/utf8.hh"
@@ -842,6 +845,45 @@ bool abstract_type::references_user_type(const sstring& keyspace, const bytes& n
         bool operator()(const user_type_impl& u) const { return u._keyspace == keyspace && u._name == name; }
     };
     return find(*this, visitor{keyspace, name});
+}
+
+namespace {
+// For tuples and collection types: recurse over inner types
+// For user-defined types: add it's name to referenced udts
+// For other types: do nothing
+struct get_all_referenced_user_types_visitor {
+    std::set<user_type> referenced_udts;
+
+    template<typename T>
+    void operator()(const concrete_type<T>&) { return; }
+    void operator()(const counter_type_impl&) { return; }
+    void operator()(const empty_type_impl&) { return; }
+    void operator()(const reversed_type_impl& r) {
+        visit(*r.underlying_type(), *this);
+    }
+    void operator()(const user_type_impl& u) {
+        referenced_udts.insert(::static_pointer_cast<const user_type_impl>(u.shared_from_this()));
+    }
+    void operator()(const tuple_type_impl& t) {
+        for (auto& field: t.all_types()) {
+            visit(*field, *this);
+        }
+    }
+    void operator()(const map_type_impl& m) {
+        visit(*m.get_keys_type(), *this);
+        visit(*m.get_values_type(), *this);
+    }
+    void operator()(const listlike_collection_type_impl& l) {
+        visit(*l.get_elements_type(), *this);
+    }
+};
+}
+
+std::set<user_type> user_type_impl::get_all_referenced_user_types() const {
+    get_all_referenced_user_types_visitor v;
+    // cast this UDT to tuple to iterate over all fields
+    v(static_cast<const tuple_type_impl&>(*this));
+    return std::move(v.referenced_udts);
 }
 
 namespace {
