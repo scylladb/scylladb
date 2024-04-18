@@ -42,6 +42,7 @@ struct ring_position_range_and_shard {
 };
 
 // Incrementally divides a `partition_range` into sub-ranges wholly owned by a single shard.
+// During tablet migration uses a view on shard routing for reads.
 class ring_position_range_sharder {
     const sharder& _sharder;
     dht::partition_range _range;
@@ -74,7 +75,7 @@ struct ring_position_range_and_shard_and_element : ring_position_range_and_shard
 // Incrementally divides several non-overlapping `partition_range`:s into sub-ranges wholly owned by
 // a single shard.
 //
-// Similar to ring_position_range_sharder, but instead of stopping when the input range is exhauseted,
+// Similar to ring_position_range_sharder, but instead of stopping when the input range is exhausted,
 // moves on to the next input range (input ranges are supplied in a vector).
 //
 // This has two use cases:
@@ -85,7 +86,8 @@ struct ring_position_range_and_shard_and_element : ring_position_range_and_shard
 // 2. sstable shard mappings. An sstable has metadata describing which ranges it owns, and this is
 //    used to see what shards these ranges map to (and therefore to see if the sstable is shared or
 //    not, and which shards share it).
-
+//
+// During migration uses a view on shard routing for reads.
 class ring_position_range_vector_sharder {
     using vec_type = dht::partition_range_vector;
     vec_type _ranges;

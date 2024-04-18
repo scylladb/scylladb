@@ -185,8 +185,8 @@ ring_position_range_sharder::next(const schema& s) {
         return {};
     }
     auto token = _range.start() ? _range.start()->value().token() : dht::minimum_token();
-    auto shard = _sharder.shard_of(token);
-    auto next_shard_and_token = _sharder.next_shard(token);
+    auto shard = _sharder.shard_for_reads(token);
+    auto next_shard_and_token = _sharder.next_shard_for_reads(token);
     if (!next_shard_and_token) {
         _done = true;
         return ring_position_range_and_shard{std::move(_range), shard};
