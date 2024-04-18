@@ -431,7 +431,7 @@ private:
 };
 
 template<typename U>
-struct fmt::formatter<wrapping_interval<U>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<wrapping_interval<U>> : fmt::formatter<string_view> {
     auto format(const wrapping_interval<U>& r, fmt::format_context& ctx) const {
         auto out = ctx.out();
         if (r.is_singular()) {
@@ -737,7 +737,7 @@ public:
 };
 
 template<typename U>
-struct fmt::formatter<interval<U>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<interval<U>> : fmt::formatter<string_view> {
     auto format(const interval<U>& r, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", r._interval);
     }

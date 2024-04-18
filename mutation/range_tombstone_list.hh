@@ -78,7 +78,7 @@ private:
 };
 
 template <>
-struct fmt::formatter<range_tombstone_entry> : fmt::formatter<std::string_view> {
+struct fmt::formatter<range_tombstone_entry> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const range_tombstone_entry& rt, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", rt.tombstone());
@@ -300,7 +300,7 @@ private:
 };
 
 template <>
-struct fmt::formatter<range_tombstone_list> : fmt::formatter<std::string_view> {
+struct fmt::formatter<range_tombstone_list> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const range_tombstone_list& list, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{{{}}}", fmt::join(list, ", "));

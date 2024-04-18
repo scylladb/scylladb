@@ -247,19 +247,19 @@ std::pair<sstring, std::vector<data_type>> decode_signature(std::string_view enc
 }
 
 template <>
-struct fmt::formatter<auth::resource_kind> : fmt::formatter<std::string_view> {
+struct fmt::formatter<auth::resource_kind> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const auth::resource_kind kind, FormatContext& ctx) const {
         using enum auth::resource_kind;
         switch (kind) {
         case data:
-            return formatter<std::string_view>::format("data", ctx);
+            return formatter<string_view>::format("data", ctx);
         case role:
-            return formatter<std::string_view>::format("role", ctx);
+            return formatter<string_view>::format("role", ctx);
         case service_level:
-            return formatter<std::string_view>::format("service_level", ctx);
+            return formatter<string_view>::format("service_level", ctx);
         case functions:
-            return formatter<std::string_view>::format("functions", ctx);
+            return formatter<string_view>::format("functions", ctx);
         }
         std::abort();
     }

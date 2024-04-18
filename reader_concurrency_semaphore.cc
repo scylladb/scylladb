@@ -55,7 +55,7 @@ struct reader_concurrency_semaphore::inactive_read {
 };
 
 template <>
-struct fmt::formatter<reader_concurrency_semaphore::evict_reason> : fmt::formatter<std::string_view> {
+struct fmt::formatter<reader_concurrency_semaphore::evict_reason> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const reader_concurrency_semaphore::evict_reason& reason, FormatContext& ctx) const {
         static const char* value_table[] = {"permit", "time", "manual"};
@@ -681,7 +681,7 @@ auto fmt::formatter<reader_permit::state>::format(reader_permit::state s, fmt::f
             name = "evicted";
             break;
     }
-    return formatter<std::string_view>::format(name, ctx);
+    return formatter<string_view>::format(name, ctx);
 }
 
 namespace {

@@ -586,38 +586,38 @@ struct appending_hash<mutation_fragment> {
     void operator()(Hasher& h, const mutation_fragment& mf, const schema& s) const;
 };
 
-template <> struct fmt::formatter<clustering_row::printer> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<clustering_row::printer> : fmt::formatter<string_view> {
     auto format(const clustering_row::printer& p, fmt::format_context& ctx) const {
         auto& row = p._clustering_row;
         return fmt::format_to(ctx.out(), "{{clustering_row: ck {} dr {}}}",
                               row._ck, deletable_row::printer(p._schema, row._row));
     }
 };
-template <> struct fmt::formatter<static_row::printer> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<static_row::printer> : fmt::formatter<string_view> {
     auto format(const static_row::printer& p, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{static_row: {}}}",
                               row::printer(p._schema, column_kind::static_column, p._static_row._cells));
     }
 };
-template <> struct fmt::formatter<partition_start> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<partition_start> : fmt::formatter<string_view> {
     auto format(const partition_start& ph, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{partition_start: pk {} partition_tombstone {}}}",
                               ph._key, ph._partition_tombstone);
     }
 };
-template <> struct fmt::formatter<partition_end> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<partition_end> : fmt::formatter<string_view> {
     auto format(const partition_end&, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{partition_end}}");
     }
 };
-template <> struct fmt::formatter<mutation_fragment::printer> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<mutation_fragment::printer> : fmt::formatter<string_view> {
     auto format(const mutation_fragment::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<mutation_fragment::kind> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<mutation_fragment::kind> : fmt::formatter<string_view> {
     auto format(mutation_fragment::kind, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
-template <> struct fmt::formatter<range_tombstone_stream> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<range_tombstone_stream> : fmt::formatter<string_view> {
     auto format(const range_tombstone_stream& rtl, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", rtl._list);
     }

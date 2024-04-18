@@ -2592,7 +2592,7 @@ struct raft_call {
 };
 
 template <PureStateMachine M>
-struct fmt::formatter<raft_call<M>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<raft_call<M>> : fmt::formatter<string_view> {
     auto format(const raft_call<M>& r, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "raft_call{{input:{}, timeout:{}}}", r.input, r.timeout);
     }
@@ -2630,7 +2630,7 @@ struct raft_read {
 };
 
 template <PureStateMachine M>
-struct fmt::formatter<raft_read<M>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<raft_read<M>> : fmt::formatter<string_view> {
     auto format(const raft_read<M>& r, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "raft_read{{id:{}, timeout:{}}}", r.read_id, r.timeout);
     }
@@ -2706,7 +2706,7 @@ public:
 };
 
 template <PureStateMachine M>
-struct fmt::formatter<network_majority_grudge<M>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<network_majority_grudge<M>> : fmt::formatter<string_view> {
     auto format(const network_majority_grudge<M>& p, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "network_majority_grudge{{duration:{}}}", p._duration);
     }
@@ -2836,7 +2836,7 @@ struct reconfiguration {
 };
 
 template <PureStateMachine M>
-struct fmt::formatter<reconfiguration<M>>: fmt::formatter<std::string_view> {
+struct fmt::formatter<reconfiguration<M>>: fmt::formatter<string_view> {
     auto format(const reconfiguration<M>& r, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "reconfiguration{{timeout:{}}}", r.timeout);
     }
@@ -2847,7 +2847,7 @@ struct fmt::formatter<reconfiguration<M>>: fmt::formatter<std::string_view> {
 struct stop_crash_result {};
 
 template <>
-struct fmt::formatter<stop_crash_result>: fmt::formatter<std::string_view> {
+struct fmt::formatter<stop_crash_result>: fmt::formatter<string_view> {
     auto format(stop_crash_result, fmt::format_context& ctx) const {
         return ctx.out();
     }
@@ -2890,13 +2890,13 @@ struct stop_crash {
 };
 
 template <PureStateMachine M>
-struct fmt::formatter<stop_crash<M>>: fmt::formatter<std::string_view> {
+struct fmt::formatter<stop_crash<M>>: fmt::formatter<string_view> {
     auto format(const stop_crash<M>& c, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "stop_crash{{delay:{}}}", c.restart_delay);
     }
 };
 
-template <> struct fmt::formatter<operation::thread_id>: fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<operation::thread_id>: fmt::formatter<string_view> {
     auto format(const operation::thread_id& tid, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "thread_id{{{}}}", tid.id);
     }
@@ -3005,7 +3005,7 @@ struct AppendReg {
     static thread_local const state_t init;
 };
 
-template <> struct fmt::formatter<append_seq> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<append_seq> : fmt::formatter<string_view> {
     auto format(const append_seq& s, fmt::format_context& ctx) const {
         // TODO: don't copy the elements
         std::vector<append_seq::elem_t> v{s._seq->begin(), s._seq->begin() + s._end};
@@ -3204,13 +3204,13 @@ private:
     }
 };
 
-template <> struct fmt::formatter<AppendReg::append> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<AppendReg::append> : fmt::formatter<string_view> {
     auto format(const AppendReg::append& a, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "append{{{}}}", a.x);
     }
 };
 
-template <> struct fmt::formatter<AppendReg::ret> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<AppendReg::ret> : fmt::formatter<string_view> {
     auto format(const AppendReg::ret& r, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "ret{{{}, {}}}", r.x, r.prev);
     }

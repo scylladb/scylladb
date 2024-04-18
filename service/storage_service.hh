@@ -910,7 +910,7 @@ private:
 }
 
 template <>
-struct fmt::formatter<service::storage_service::mode> : fmt::formatter<std::string_view> {
+struct fmt::formatter<service::storage_service::mode> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(service::storage_service::mode mode, FormatContext& ctx) const {
         std::string_view name;

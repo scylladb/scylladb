@@ -265,7 +265,7 @@ std::ostream& operator<<(std::ostream& os, const utils::tagged_uuid<Tag>& id) {
 } // namespace std
 
 template <>
-struct fmt::formatter<utils::UUID> : fmt::formatter<std::string_view> {
+struct fmt::formatter<utils::UUID> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const utils::UUID& id, FormatContext& ctx) const {
         // This matches Java's UUID.toString() actual implementation. Note that
@@ -281,7 +281,7 @@ struct fmt::formatter<utils::UUID> : fmt::formatter<std::string_view> {
 };
 
 template <typename Tag>
-struct fmt::formatter<utils::tagged_uuid<Tag>> : fmt::formatter<std::string_view> {
+struct fmt::formatter<utils::tagged_uuid<Tag>> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const utils::tagged_uuid<Tag>& id, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", id.id);

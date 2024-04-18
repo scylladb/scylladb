@@ -19,7 +19,7 @@
 #include <fmt/core.h>
 
 
-template <> struct fmt::formatter<std::vector<data_type>> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<std::vector<data_type>> : fmt::formatter<string_view> {
     auto format(const std::vector<data_type>& arg_types, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 

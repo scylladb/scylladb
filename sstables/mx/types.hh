@@ -84,6 +84,6 @@ inline bound_kind boundary_to_end_bound(bound_kind_m kind) {
 
 }
 
-template <> struct fmt::formatter<sstables::bound_kind_m> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<sstables::bound_kind_m> : fmt::formatter<string_view> {
     auto format(sstables::bound_kind_m, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

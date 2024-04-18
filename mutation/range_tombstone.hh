@@ -287,7 +287,7 @@ public:
 };
 
 template<>
-struct fmt::formatter<range_tombstone> : fmt::formatter<std::string_view> {
+struct fmt::formatter<range_tombstone> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const range_tombstone& rt, FormatContext& ctx) const {
         if (rt) {

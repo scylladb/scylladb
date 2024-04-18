@@ -539,7 +539,7 @@ future<> use_standard_allocator_segment_pool_backend(size_t available_memory);
 
 }
 
-template <> struct fmt::formatter<logalloc::occupancy_stats> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<logalloc::occupancy_stats> : fmt::formatter<string_view> {
     auto format(const logalloc::occupancy_stats& stats, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{:.2f}%, {:d} / {:d} [B]",
                               stats.used_fraction() * 100, stats.used_space(), stats.total_space());

@@ -189,7 +189,7 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v3(
 #if FMT_VERSION < 100000
 // fmt v10 introduced formatter for std::exception
 template <>
-struct fmt::formatter<cdc::no_generation_data_exception> : fmt::formatter<std::string_view> {
+struct fmt::formatter<cdc::no_generation_data_exception> : fmt::formatter<string_view> {
     auto format(const cdc::no_generation_data_exception& e, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", e.what());
     }

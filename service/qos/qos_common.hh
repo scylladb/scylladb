@@ -100,8 +100,8 @@ future<service_levels_info> get_service_level(cql3::query_processor& qp, std::st
 
 }
 
-template <> struct fmt::formatter<qos::service_level_options::workload_type> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<qos::service_level_options::workload_type> : fmt::formatter<string_view> {
     auto format(qos::service_level_options::workload_type wt, fmt::format_context& ctx) const {
-        return formatter<std::string_view>::format(qos::service_level_options::to_string(wt), ctx);
+        return formatter<string_view>::format(qos::service_level_options::to_string(wt), ctx);
     }
 };

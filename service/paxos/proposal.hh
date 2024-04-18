@@ -50,7 +50,7 @@ inline bool operator>(const proposal& lhs, const proposal& rhs) {
 } // end of namespace "service"
 
 // Used for logging and debugging.
-template <> struct fmt::formatter<service::paxos::proposal> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<service::paxos::proposal> : fmt::formatter<string_view> {
     auto format(const service::paxos::proposal&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 

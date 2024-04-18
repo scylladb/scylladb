@@ -170,7 +170,7 @@ struct aio_writes_result_mixin {
 
 struct perf_result_with_aio_writes : public perf_result, public aio_writes_result_mixin {};
 
-template <> struct fmt::formatter<perf_result_with_aio_writes> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<perf_result_with_aio_writes> : fmt::formatter<string_view> {
     auto format(const perf_result_with_aio_writes&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
@@ -283,10 +283,10 @@ public:
 
 } // namespace perf
 
-template <> struct fmt::formatter<scheduling_latency_measurer> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<scheduling_latency_measurer> : fmt::formatter<string_view> {
     auto format(const scheduling_latency_measurer&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<perf_result> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<perf_result> : fmt::formatter<string_view> {
     auto format(const perf_result&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

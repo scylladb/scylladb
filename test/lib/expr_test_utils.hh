@@ -152,7 +152,7 @@ raw_value evaluate_with_bind_variables(const expression& e, std::vector<raw_valu
 }  // namespace expr
 }  // namespace cql3
 
-template <> struct fmt::formatter<cql3::expr::test_utils::mutation_column_value> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<cql3::expr::test_utils::mutation_column_value> : fmt::formatter<string_view> {
     auto format(const cql3::expr::test_utils::mutation_column_value& mcv, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{{}/ts={}/ttl={}}}", mcv.value, mcv.timestamp, mcv.ttl);
 

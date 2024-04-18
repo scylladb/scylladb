@@ -167,7 +167,7 @@ enum class storage_proxy_remote_read_verb {
 
 }
 
-template <> struct fmt::formatter<service::storage_proxy_remote_read_verb> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<service::storage_proxy_remote_read_verb> : fmt::formatter<string_view> {
     auto format(service::storage_proxy_remote_read_verb verb, fmt::format_context& ctx) const {
         std::string_view name;
         using enum service::storage_proxy_remote_read_verb;
@@ -182,7 +182,7 @@ template <> struct fmt::formatter<service::storage_proxy_remote_read_verb> : fmt
             name = "read_digest";
             break;
         }
-        return formatter<std::string_view>::format(name, ctx);
+        return formatter<string_view>::format(name, ctx);
     }
 };
 
@@ -2223,7 +2223,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
 
 // debug output in mutate_internal needs this
 template <>
-struct fmt::formatter<service::paxos_response_handler> : fmt::formatter<std::string_view> {
+struct fmt::formatter<service::paxos_response_handler> : fmt::formatter<string_view> {
     auto format(const service::paxos_response_handler& h, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "paxos_response_handler{{{}}}", h.id());
     }
@@ -2854,14 +2854,14 @@ struct read_repair_mutation {
 
 }
 
-template <> struct fmt::formatter<service::hint_wrapper> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<service::hint_wrapper> : fmt::formatter<string_view> {
     auto format(const service::hint_wrapper& h, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "hint_wrapper{{{}}}", h.mut);
     }
 };
 
 template <>
-struct fmt::formatter<service::read_repair_mutation> : fmt::formatter<std::string_view> {
+struct fmt::formatter<service::read_repair_mutation> : fmt::formatter<string_view> {
     auto format(const service::read_repair_mutation& m, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", m.value);
     }

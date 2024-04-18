@@ -73,6 +73,6 @@ using prepare_response = std::variant<utils::UUID, promise>;
 
 } // end of namespace "service"
 
-template <> struct fmt::formatter<service::paxos::promise> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<service::paxos::promise> : fmt::formatter<string_view> {
     auto format(const service::paxos::promise&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

@@ -574,7 +574,7 @@ struct fmt::formatter<E> : public fmt::formatter<cql3::expr::expression> {
 };
 
 template <>
-struct fmt::formatter<cql3::expr::column_mutation_attribute::attribute_kind> : fmt::formatter<std::string_view> {
+struct fmt::formatter<cql3::expr::column_mutation_attribute::attribute_kind> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(cql3::expr::column_mutation_attribute::attribute_kind k, FormatContext& ctx) const {
         switch (k) {

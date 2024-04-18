@@ -674,7 +674,7 @@ public:
 };
 
 template <>
-struct fmt::formatter<partition_key_view> : fmt::formatter<std::string_view> {
+struct fmt::formatter<partition_key_view> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const partition_key_view& pk, FormatContext& ctx) const {
         return with_linearized(pk.representation(), [&] (bytes_view v) {
@@ -758,7 +758,7 @@ public:
 };
 
 template <>
-struct fmt::formatter<partition_key> : fmt::formatter<std::string_view> {
+struct fmt::formatter<partition_key> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const partition_key& pk, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "pk{{{}}}", managed_bytes_view(pk.representation()));
@@ -790,7 +790,7 @@ auto format_pk(const WithSchemaWrapper& pk, FormatContext& ctx) {
 } // namespace detail
 
 template <>
-struct fmt::formatter<partition_key::with_schema_wrapper> : fmt::formatter<std::string_view> {
+struct fmt::formatter<partition_key::with_schema_wrapper> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const partition_key::with_schema_wrapper& pk, FormatContext& ctx) const {
         return ::detail::format_pk(pk, ctx);
@@ -908,7 +908,7 @@ public:
 };
 
 template <>
-struct fmt::formatter<clustering_key_prefix> : fmt::formatter<std::string_view> {
+struct fmt::formatter<clustering_key_prefix> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const clustering_key_prefix& ckp, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "ckp{{{}}}", managed_bytes_view(ckp.representation()));
@@ -916,7 +916,7 @@ struct fmt::formatter<clustering_key_prefix> : fmt::formatter<std::string_view> 
 };
 
 template <>
-struct fmt::formatter<clustering_key_prefix::with_schema_wrapper> : fmt::formatter<std::string_view> {
+struct fmt::formatter<clustering_key_prefix::with_schema_wrapper> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const clustering_key_prefix::with_schema_wrapper& pk, FormatContext& ctx) const {
         return ::detail::format_pk(pk, ctx);

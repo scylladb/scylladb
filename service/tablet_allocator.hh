@@ -127,6 +127,6 @@ public:
 }
 
 template <>
-struct fmt::formatter<service::tablet_migration_info> : fmt::formatter<std::string_view> {
+struct fmt::formatter<service::tablet_migration_info> : fmt::formatter<string_view> {
     auto format(const service::tablet_migration_info&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

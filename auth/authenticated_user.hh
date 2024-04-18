@@ -50,7 +50,7 @@ inline bool is_anonymous(const authenticated_user& u) noexcept {
 /// The user name, or "anonymous".
 ///
 template <>
-struct fmt::formatter<auth::authenticated_user> : fmt::formatter<std::string_view> {
+struct fmt::formatter<auth::authenticated_user> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const auth::authenticated_user& u, FormatContext& ctx) const {
         if (u.name) {

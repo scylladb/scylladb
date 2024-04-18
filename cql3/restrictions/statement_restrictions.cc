@@ -36,7 +36,7 @@ struct maybe_column_definition {
 }
 
 template<>
-struct fmt::formatter<maybe_column_definition> : fmt::formatter<std::string_view> {
+struct fmt::formatter<maybe_column_definition> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const maybe_column_definition& cd, FormatContext& ctx) const {
         if (cd.value != nullptr) {

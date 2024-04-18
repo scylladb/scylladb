@@ -89,7 +89,7 @@ public:
 using counter_shard_view = basic_counter_shard_view<mutable_view::no>;
 
 template <>
-struct fmt::formatter<counter_shard_view> : fmt::formatter<std::string_view> {
+struct fmt::formatter<counter_shard_view> : fmt::formatter<string_view> {
     auto format(const counter_shard_view&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
@@ -352,7 +352,7 @@ struct counter_cell_view : basic_counter_cell_view<mutable_view::no> {
 };
 
 template <>
-struct fmt::formatter<counter_cell_view> : fmt::formatter<std::string_view> {
+struct fmt::formatter<counter_cell_view> : fmt::formatter<string_view> {
     auto format(const counter_cell_view&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 

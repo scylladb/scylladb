@@ -216,6 +216,6 @@ public:
 
 }
 
-template <> struct fmt::formatter<raft::log> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<raft::log> : fmt::formatter<string_view> {
     auto format(const raft::log&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

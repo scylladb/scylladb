@@ -61,7 +61,7 @@ public:
 
 } // namespace gms
 
-template <> struct fmt::formatter<gms::gossip_digest> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<gms::gossip_digest> : fmt::formatter<string_view> {
     auto format(const gms::gossip_digest& d, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}:{}:{}", d._endpoint, d._generation, d._max_version);
     }

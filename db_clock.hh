@@ -56,7 +56,7 @@ gc_clock::time_point to_gc_clock(db_clock::time_point tp) noexcept {
 
 /* For debugging and log messages. */
 template <>
-struct fmt::formatter<db_clock::time_point> : fmt::formatter<std::string_view> {
+struct fmt::formatter<db_clock::time_point> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const db_clock::time_point& tp, FormatContext& ctx) const {
         auto t = db_clock::to_time_t(tp);

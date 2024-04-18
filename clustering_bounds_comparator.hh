@@ -155,10 +155,10 @@ public:
     friend fmt::formatter<bound_view>;
 };
 
-template <> struct fmt::formatter<bound_kind> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<bound_kind> : fmt::formatter<string_view> {
     auto format(bound_kind, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
-template <> struct fmt::formatter<bound_view> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<bound_view> : fmt::formatter<string_view> {
     auto format(const bound_view& b, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{bound: prefix={},kind={}}}", b._prefix.get(), b._kind);
     }

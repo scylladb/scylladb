@@ -222,7 +222,7 @@ public:
 #if FMT_VERSION < 100000
 // fmt v10 introduced formatter for std::exception
 template <>
-struct fmt::formatter<invalid_mutation_fragment_stream> : fmt::formatter<std::string_view> {
+struct fmt::formatter<invalid_mutation_fragment_stream> : fmt::formatter<string_view> {
     auto format(const invalid_mutation_fragment_stream& e, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", e.what());
     }

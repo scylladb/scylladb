@@ -86,7 +86,7 @@ struct hash<gms::inet_address> {
 }
 
 template <>
-struct fmt::formatter<gms::inet_address> : fmt::formatter<std::string_view> {
+struct fmt::formatter<gms::inet_address> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const ::gms::inet_address& x, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", x.addr());

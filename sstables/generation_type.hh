@@ -218,7 +218,7 @@ struct numeric_limits<sstables::generation_type> : public numeric_limits<sstable
 } //namespace std
 
 template <>
-struct fmt::formatter<sstables::generation_type> : fmt::formatter<std::string_view> {
+struct fmt::formatter<sstables::generation_type> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const sstables::generation_type& generation, FormatContext& ctx) const {
         if (!generation) {

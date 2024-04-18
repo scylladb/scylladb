@@ -365,9 +365,9 @@ inline bool operator==(const cql3_type& a, const cql3_type& b) {
 }
 
 template <>
-struct fmt::formatter<cql3::cql3_type>: fmt::formatter<std::string_view> {
+struct fmt::formatter<cql3::cql3_type>: fmt::formatter<string_view> {
     auto format(const cql3::cql3_type& t, fmt::format_context& ctx) const {
-        return formatter<std::string_view>::format(format_as(t), ctx);
+        return formatter<string_view>::format(format_as(t), ctx);
     }
 };
 

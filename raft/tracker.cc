@@ -289,5 +289,5 @@ auto fmt::formatter<raft::vote_result>::format(const raft::vote_result& v, fmt::
         name = "LOST";
         break;
     }
-    return formatter<std::string_view>::format(name, ctx);
+    return formatter<string_view>::format(name, ctx);
 }

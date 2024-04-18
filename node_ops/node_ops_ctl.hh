@@ -78,7 +78,7 @@ enum class node_ops_cmd_category {
 node_ops_cmd_category categorize_node_ops_cmd(node_ops_cmd cmd) noexcept;
 
 template <>
-struct fmt::formatter<node_ops_cmd> : fmt::formatter<std::string_view> {
+struct fmt::formatter<node_ops_cmd> : fmt::formatter<string_view> {
     auto format(node_ops_cmd, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
@@ -167,6 +167,6 @@ public:
 };
 
 template <>
-struct fmt::formatter<node_ops_cmd_request> : fmt::formatter<std::string_view> {
+struct fmt::formatter<node_ops_cmd_request> : fmt::formatter<string_view> {
     auto format(const node_ops_cmd_request&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

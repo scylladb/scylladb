@@ -322,9 +322,9 @@ bool operator==(const tracking_allocator<T>& a, const tracking_allocator<T>& b) 
     return a._semaphore == b._semaphore;
 }
 
-template <> struct fmt::formatter<reader_permit::state> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<reader_permit::state> : fmt::formatter<string_view> {
     auto format(reader_permit::state, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
-template <> struct fmt::formatter<reader_resources> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<reader_resources> : fmt::formatter<string_view> {
     auto format(const reader_resources&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

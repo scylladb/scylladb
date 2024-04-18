@@ -1022,7 +1022,7 @@ struct unset_value {
 using data_value_or_unset = std::variant<data_value, unset_value>;
 
 template <>
-struct fmt::formatter<unset_value> : fmt::formatter<std::string_view> {
+struct fmt::formatter<unset_value> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const unset_value& u, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "unset");
@@ -1030,7 +1030,7 @@ struct fmt::formatter<unset_value> : fmt::formatter<std::string_view> {
 };
 
 template <>
-struct fmt::formatter<data_value_or_unset> : fmt::formatter<std::string_view> {
+struct fmt::formatter<data_value_or_unset> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const data_value_or_unset& var, FormatContext& ctx) const {
         return std::visit(overloaded_functor {

@@ -206,14 +206,14 @@ public:
 
 } // namespace raft
 
-template <> struct fmt::formatter<raft::election_tracker> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<raft::election_tracker> : fmt::formatter<string_view> {
     auto format(const raft::election_tracker& v, fmt::format_context& ctx) const  -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<raft::votes> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<raft::votes> : fmt::formatter<string_view> {
     auto format(const raft::votes& v, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<raft::vote_result> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<raft::vote_result> : fmt::formatter<string_view> {
     auto format(const raft::vote_result& v, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

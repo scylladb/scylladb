@@ -730,6 +730,6 @@ inline const partition_version_ref& partition_snapshot::version() const
     }
 }
 
-template <> struct fmt::formatter<partition_entry::printer> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<partition_entry::printer> : fmt::formatter<string_view> {
     auto format(const partition_entry::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

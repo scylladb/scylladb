@@ -29,29 +29,29 @@ enum class stream_reason : uint8_t {
 }
 
 template <>
-struct fmt::formatter<streaming::stream_reason> : fmt::formatter<std::string_view> {
+struct fmt::formatter<streaming::stream_reason> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const streaming::stream_reason& r, FormatContext& ctx) const {
         using enum streaming::stream_reason;
         switch (r) {
         case unspecified:
-            return formatter<std::string_view>::format("unspecified", ctx);
+            return formatter<string_view>::format("unspecified", ctx);
         case bootstrap:
-            return formatter<std::string_view>::format("bootstrap", ctx);
+            return formatter<string_view>::format("bootstrap", ctx);
         case decommission:
-            return formatter<std::string_view>::format("decommission", ctx);
+            return formatter<string_view>::format("decommission", ctx);
         case removenode:
-            return formatter<std::string_view>::format("removenode", ctx);
+            return formatter<string_view>::format("removenode", ctx);
         case rebuild:
-            return formatter<std::string_view>::format("rebuild", ctx);
+            return formatter<string_view>::format("rebuild", ctx);
         case repair:
-            return formatter<std::string_view>::format("repair", ctx);
+            return formatter<string_view>::format("repair", ctx);
         case replace:
-            return formatter<std::string_view>::format("replace", ctx);
+            return formatter<string_view>::format("replace", ctx);
         case tablet_migration:
-            return formatter<std::string_view>::format("tablet migration", ctx);
+            return formatter<string_view>::format("tablet migration", ctx);
         case tablet_rebuild:
-            return formatter<std::string_view>::format("tablet rebuild", ctx);
+            return formatter<string_view>::format("tablet rebuild", ctx);
         }
         std::abort();
     }

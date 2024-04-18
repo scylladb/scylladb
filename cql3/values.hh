@@ -293,11 +293,11 @@ inline bytes_opt to_bytes_opt(const cql3::raw_value& value) {
     return to_bytes_opt(value.view());
 }
 
-template <> struct fmt::formatter<cql3::raw_value_view> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<cql3::raw_value_view> : fmt::formatter<string_view> {
     auto format(const cql3::raw_value_view& value, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<cql3::raw_value> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<cql3::raw_value> : fmt::formatter<string_view> {
     auto format(const cql3::raw_value& value, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", value.view());
     }

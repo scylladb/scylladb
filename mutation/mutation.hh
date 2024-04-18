@@ -462,7 +462,7 @@ boost::iterator_range<std::vector<mutation>::const_iterator> slice(
 // clustering order. The resulting mutation will contain a reverse schema too.
 mutation reverse(mutation mut);
 
-template <> struct fmt::formatter<mutation> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<mutation> : fmt::formatter<string_view> {
     auto format(const mutation&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 

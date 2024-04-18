@@ -256,6 +256,6 @@ public:
 } // namespace parsed
 } // namespace alternator
 
-template <> struct fmt::formatter<alternator::parsed::path> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<alternator::parsed::path> : fmt::formatter<string_view> {
     auto format(const alternator::parsed::path&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

@@ -25,6 +25,6 @@ enum class stream_session_state {
 
 } // namespace
 
-template <> struct fmt::formatter<streaming::stream_session_state> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<streaming::stream_session_state> : fmt::formatter<string_view> {
     auto format(streaming::stream_session_state, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

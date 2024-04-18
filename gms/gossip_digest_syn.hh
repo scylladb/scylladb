@@ -73,6 +73,6 @@ public:
 
 }
 
-template <> struct fmt::formatter<gms::gossip_digest_syn> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<gms::gossip_digest_syn> : fmt::formatter<string_view> {
     auto format(const gms::gossip_digest_syn&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

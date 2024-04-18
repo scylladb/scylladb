@@ -119,7 +119,7 @@ std::optional<shard_id> is_single_shard(const dht::sharder&, const schema&, cons
 
 } // dht
 
-template <> struct fmt::formatter<dht::i_partitioner> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<dht::i_partitioner> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const dht::i_partitioner& p, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{{partitioner name = {}}}", p.name());

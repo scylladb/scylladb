@@ -77,7 +77,7 @@ public:
     friend fmt::formatter<view_info>;
 };
 
-template <> struct fmt::formatter<view_info> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<view_info> : fmt::formatter<string_view> {
     auto format(const view_info& view, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", view._raw);
     }

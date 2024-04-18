@@ -508,7 +508,7 @@ struct fmt::formatter<dht::ring_position> {
     auto format(const dht::ring_position& pos, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<dht::partition_ranges_view> : fmt::formatter<std::string_view> {
+template <> struct fmt::formatter<dht::partition_ranges_view> : fmt::formatter<string_view> {
     auto format(const dht::partition_ranges_view&, fmt::format_context& ctx) const
       -> decltype(ctx.out());
 };

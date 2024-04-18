@@ -47,7 +47,7 @@ public:
 };
 
 template <>
-struct fmt::formatter<big_decimal> : fmt::formatter<std::string_view> {
+struct fmt::formatter<big_decimal> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const big_decimal& v, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", v.to_string());
