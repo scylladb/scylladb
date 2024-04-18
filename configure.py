@@ -20,9 +20,6 @@ import textwrap
 from shutil import which
 from typing import NamedTuple
 
-outdir = 'build'
-
-tempfile.tempdir = f"{outdir}/tmp"
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=')])
 
@@ -287,7 +284,7 @@ def generate_compdb(compdb, ninja, buildfile, modes):
             mode_out = outdir + '/' + mode
             submodule_compdbs = [mode_out + '/' + submodule + '/' + compdb for submodule in ['seastar']]
             with open(mode_out + '/' + compdb, 'w+b') as combined_mode_specific_compdb:
-                subprocess.run(['./scripts/merge-compdb.py', 'build/' + mode,
+                subprocess.run(['./scripts/merge-compdb.py', outdir + '/' + mode,
                                 ninja_compdb.name] + submodule_compdbs, stdout=combined_mode_specific_compdb)
 
     # sort modes by supposed indexing speed
@@ -780,9 +777,15 @@ arg_parser.add_argument('--date-stamp', dest='date_stamp', type=str,
                         help='Set datestamp for SCYLLA-VERSION-GEN')
 arg_parser.add_argument('--use-cmake', action='store_true', help='Use CMake as the build system')
 arg_parser.add_argument('--coverage', action = 'store_true', help = 'Compile scylla with coverage instrumentation')
+arg_parser.add_argument('--build-dir', action='store', default='build',
+                        help='Build directory path')
+
 args = arg_parser.parse_args()
 
 PROFILES_LIST_FILE_NAME = "coverage_sources.list"
+
+outdir = os.path.abspath(args.build_dir)
+tempfile.tempdir = f"{outdir}/tmp"
 
 if args.list_artifacts:
     for artifact in sorted(all_artifacts):
@@ -1613,7 +1616,7 @@ def generate_version(date_stamp):
     date_stamp_opt = ''
     if date_stamp:
         date_stamp_opt = f'--date-stamp {date_stamp}'
-    status = subprocess.call(f"./SCYLLA-VERSION-GEN {date_stamp_opt}", shell=True)
+    status = subprocess.call(f"./SCYLLA-VERSION-GEN --output-dir {outdir} {date_stamp_opt}", shell=True)
     if status != 0:
         print('Version file generation failed')
         sys.exit(1)
@@ -1885,17 +1888,17 @@ def write_build_file(f,
         rule strip
             command = scripts/strip.sh $in
         rule package
-            command = scripts/create-relocatable-package.py --build-dir build/$mode $out
+            command = scripts/create-relocatable-package.py --build-dir $builddir/$mode --node-exporter-dir $builddir/node_exporter --debian-dir $builddir/debian/debian $out
         rule stripped_package
-            command = scripts/create-relocatable-package.py --stripped --build-dir build/$mode $out
+            command = scripts/create-relocatable-package.py --stripped --build-dir $builddir/$mode --node-exporter-dir $builddir/node_exporter --debian-dir $builddir/debian/debian $out
         rule debuginfo_package
-            command = dist/debuginfo/scripts/create-relocatable-package.py --build-dir build/$mode $out
+            command = dist/debuginfo/scripts/create-relocatable-package.py --build-dir $builddir/$mode --node-exporter-dir $builddir/node_exporter $out
         rule rpmbuild
             command = reloc/build_rpm.sh --reloc-pkg $in --builddir $out
         rule debbuild
             command = reloc/build_deb.sh --reloc-pkg $in --builddir $out
         rule unified
-            command = unified/build_unified.sh --build-dir build/$mode --unified-pkg $out
+            command = unified/build_unified.sh --build-dir $builddir/$mode --unified-pkg $out
         rule rust_header
             command = cxxbridge --include rust/cxx.h --header $in > $out
             description = RUST_HEADER $out
@@ -2127,6 +2130,17 @@ def write_build_file(f,
                 mode=mode,
             )
         )
+        compiler_training_artifacts=[]
+        if mode == 'dev':
+            compiler_training_artifacts.append(f'$builddir/{mode}/scylla')
+        elif mode == 'release' or mode == 'debug':
+            compiler_training_artifacts.append(f'$builddir/{mode}/service/storage_proxy.o')
+        f.write(
+            'build {mode}-compiler-training: phony {artifacts}\n'.format(
+                mode=mode,
+                artifacts=str.join(' ', compiler_training_artifacts)
+            )
+        )
 
         gen_dir = '$builddir/{}/gen'.format(mode)
         gen_headers = []
@@ -2266,6 +2280,9 @@ def write_build_file(f,
     f.write(
             'build wasm: phony {}\n'.format(' '.join([f'$builddir/{binary}' for binary in sorted(wasms)]))
     )
+    f.write(
+            'build compiler-training: phony {}\n'.format(' '.join(['{mode}-compiler-training'.format(mode=mode) for mode in default_modes]))
+    )
 
     f.write(textwrap.dedent(f'''\
         build dist-unified-tar: phony {' '.join([f'$builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz' for mode in default_modes])}
@@ -2278,54 +2295,54 @@ def write_build_file(f,
         build dist-server: phony dist-server-tar dist-server-debuginfo dist-server-rpm dist-server-deb
 
         rule build-submodule-reloc
-          command = cd $reloc_dir && ./reloc/build_reloc.sh --version $$(<../../build/SCYLLA-PRODUCT-FILE)-$$(sed 's/-/~/' <../../build/SCYLLA-VERSION-FILE)-$$(<../../build/SCYLLA-RELEASE-FILE) --nodeps $args
+          command = cd $reloc_dir && ./reloc/build_reloc.sh --version $$(<$builddir/SCYLLA-PRODUCT-FILE)-$$(sed 's/-/~/' <$builddir/SCYLLA-VERSION-FILE)-$$(<$builddir/SCYLLA-RELEASE-FILE) --nodeps $args
         rule build-submodule-rpm
           command = cd $dir && ./reloc/build_rpm.sh --reloc-pkg $artifact
         rule build-submodule-deb
           command = cd $dir && ./reloc/build_deb.sh --reloc-pkg $artifact
 
-        build tools/jmx/build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz: build-submodule-reloc | build/SCYLLA-PRODUCT-FILE build/SCYLLA-VERSION-FILE build/SCYLLA-RELEASE-FILE
+        build tools/jmx/build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz: build-submodule-reloc | $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE
           reloc_dir = tools/jmx
         build dist-jmx-rpm: build-submodule-rpm tools/jmx/build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
           dir = tools/jmx
-          artifact = $builddir/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
+          artifact = build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
         build dist-jmx-deb: build-submodule-deb tools/jmx/build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
           dir = tools/jmx
-          artifact = $builddir/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
+          artifact = build/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz
         build dist-jmx-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-jmx-{scylla_version}-{scylla_release}.noarch.tar.gz'.format(mode=mode, scylla_product=scylla_product, scylla_version=scylla_version, scylla_release=scylla_release) for mode in default_modes])}
         build dist-jmx: phony dist-jmx-tar dist-jmx-rpm dist-jmx-deb
 
-        build tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz: build-submodule-reloc | build/SCYLLA-PRODUCT-FILE build/SCYLLA-VERSION-FILE build/SCYLLA-RELEASE-FILE
+        build tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz: build-submodule-reloc | $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE
           reloc_dir = tools/java
         build dist-tools-rpm: build-submodule-rpm tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
           dir = tools/java
-          artifact = $builddir/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
+          artifact = build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
         build dist-tools-deb: build-submodule-deb tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
           dir = tools/java
-          artifact = $builddir/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
+          artifact = build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
         build dist-tools-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz'.format(mode=mode, scylla_product=scylla_product, scylla_version=scylla_version, scylla_release=scylla_release) for mode in default_modes])}
         build dist-tools: phony dist-tools-tar dist-tools-rpm dist-tools-deb
 
-        build tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.noarch.tar.gz: build-submodule-reloc | build/SCYLLA-PRODUCT-FILE build/SCYLLA-VERSION-FILE build/SCYLLA-RELEASE-FILE
+        build tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.noarch.tar.gz: build-submodule-reloc | $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE
           reloc_dir = tools/cqlsh
         build dist-cqlsh-rpm: build-submodule-rpm tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.noarch.tar.gz
           dir = tools/cqlsh
-          artifact = $builddir/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.noarch.tar.gz
+          artifact = build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.noarch.tar.gz
         build dist-cqlsh-deb: build-submodule-deb tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.noarch.tar.gz
           dir = tools/cqlsh
-          artifact = $builddir/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.noarch.tar.gz
+          artifact = build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.noarch.tar.gz
         build dist-cqlsh-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.noarch.tar.gz'.format(mode=mode, scylla_product=scylla_product, scylla_version=scylla_version, scylla_release=scylla_release) for mode in default_modes])}
         build dist-cqlsh: phony dist-cqlsh-tar dist-cqlsh-rpm dist-cqlsh-deb
 
-        build tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz: build-submodule-reloc | build/SCYLLA-PRODUCT-FILE build/SCYLLA-VERSION-FILE build/SCYLLA-RELEASE-FILE
+        build tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz: build-submodule-reloc | $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE
           reloc_dir = tools/python3
           args = --packages "{python3_dependencies}" --pip-packages "{pip_dependencies}" --pip-symlinks "{pip_symlinks}"
         build dist-python3-rpm: build-submodule-rpm tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
           dir = tools/python3
-          artifact = $builddir/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
+          artifact = build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build dist-python3-deb: build-submodule-deb tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
           dir = tools/python3
-          artifact = $builddir/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
+          artifact = build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build dist-python3-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch, scylla_version=scylla_version, scylla_release=scylla_release) for mode in default_modes])}
         build dist-python3: phony dist-python3-tar dist-python3-rpm dist-python3-deb
         build dist-deb: phony dist-server-deb dist-python3-deb dist-jmx-deb dist-tools-deb dist-cqlsh-deb
@@ -2360,10 +2377,10 @@ def write_build_file(f,
 
     f.write(textwrap.dedent('''\
         rule configure
-          command = {python} configure.py --out=build.ninja.new $configure_args && mv build.ninja.new build.ninja
+          command = {python} configure.py --out={buildfile}.new $configure_args && mv {buildfile}.new {buildfile}
           generator = 1
           description = CONFIGURE $configure_args
-        build build.ninja {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {args.seastar_path}/CMakeLists.txt
+        build {buildfile} {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {args.seastar_path}/CMakeLists.txt
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
@@ -2377,7 +2394,7 @@ def write_build_file(f,
             description = List configured modes
         build mode_list: mode_list
         default {modes_list}
-        ''').format(modes_list=' '.join(default_modes), build_ninja_list=' '.join([f'build/{mode}/{dir}/build.ninja' for mode in build_modes for dir in ['seastar']]), **globals()))
+        ''').format(modes_list=' '.join(default_modes), build_ninja_list=' '.join([f'{outdir}/{mode}/{dir}/build.ninja' for mode in build_modes for dir in ['seastar']]), **globals()))
     unit_test_list = set(test for test in build_artifacts if test in set(tests))
     f.write(textwrap.dedent('''\
         rule unit_test_list
@@ -2388,14 +2405,14 @@ def write_build_file(f,
     f.write(textwrap.dedent('''\
         build always: phony
         rule scylla_version_gen
-            command = ./SCYLLA-VERSION-GEN
+            command = ./SCYLLA-VERSION-GEN --output-dir $builddir
             restat = 1
         build $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE: scylla_version_gen | always
         rule debian_files_gen
-            command = ./dist/debian/debian_files_gen.py
+            command = ./dist/debian/debian_files_gen.py --build-dir $builddir
         build $builddir/debian/debian: debian_files_gen | always
         rule extract_node_exporter
-            command = tar -C build -xvpf {node_exporter_filename} --no-same-owner && rm -rfv build/node_exporter && mv -v build/{node_exporter_dirname} build/node_exporter
+            command = tar -C $builddir -xvpf {node_exporter_filename} --no-same-owner && rm -rfv $builddir/node_exporter && mv -v $builddir/{node_exporter_dirname} $builddir/node_exporter
         build $builddir/node_exporter/node_exporter: extract_node_exporter | always
         build $builddir/node_exporter/node_exporter.stripped: strip $builddir/node_exporter/node_exporter
         build $builddir/node_exporter/node_exporter.debug: phony $builddir/node_exporter/node_exporter.stripped
