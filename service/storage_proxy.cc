@@ -3208,6 +3208,12 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
         throw overloaded_exception(_hints_manager.size_of_hints_in_progress());
     }
 
+    if (!can_update_views(all, s, tr_state)) {
+        // A base replica won't be able to send its view updates because there's too many of them.
+        // To avoid any base or view inconsistencies, the request should be retried when the replica
+        // isn't overloaded
+        throw overloaded_exception("View update backlog is too high on node containing the base replica");
+    }
     // filter live endpoints from dead ones
     inet_address_vector_replica_set live_endpoints;
     inet_address_vector_topology_change dead_endpoints;
@@ -3284,6 +3290,12 @@ storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxo
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
     auto& [commit, s, paxos_handler, token, endpoints] = meta;
 
+    if (!can_update_views(endpoints, s, tr_state)) {
+        // A base replica won't be able to send its view updates because there's too many of them.
+        // To avoid any base or view inconsistencies, the request should be retried when the replica
+        // isn't overloaded
+        throw overloaded_exception("View update backlog is too high on node containing the base replica");
+    }
     slogger.trace("creating write handler for paxos repair token: {} endpoint: {}", token, endpoints);
     tracing::trace(tr_state, "Creating write handler for paxos repair token: {} endpoint: {}", token, endpoints);
 
@@ -3292,6 +3304,21 @@ storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxo
     // No rate limiting for paxos (yet)
     return create_write_response_handler(std::move(ermp), cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s, nullptr), std::move(endpoints),
                     inet_address_vector_topology_change(), inet_address_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate(), is_cancellable::no);
+}
+
+// After sending the write to replicas(targets), the replicas might generate send view updates. If the number of view updates
+// that the replica is already sending is too high, the replica should not send any more view updates, and consequently,
+// we should not send the write to the replica.
+template<typename Range>
+bool storage_proxy::can_update_views(const Range& targets, const schema_ptr& s, tracing::trace_state_ptr tr_state) const {
+    if (!_db.local().find_column_family(s).views().empty() && targets.begin() != targets.end()) {
+        for (auto ep : targets) {
+            if (get_backlog_of(ep).relative_size() >= 0.8) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 void storage_proxy::register_cdc_operation_result_tracker(const storage_proxy::unique_response_handler_vector& ids, lw_shared_ptr<cdc::operation_result_tracker> tracker) {
