@@ -1953,20 +1953,26 @@ future<> view_builder::drain() {
     vlogger.info("Draining view builder");
     _as.request_abort();
     return _started.then([this] {
+        vlogger.info("Unregistering mnotifier listener");
         return _mnotifier.unregister_listener(this).then([this] {
+            vlogger.info("Waiting build sem");
             return _sem.wait();
         }).then([this] {
             _sem.broken();
+            vlogger.info("Joining build step");
             return _build_step.join();
         }).handle_exception_type([] (const broken_semaphore&) {
             // ignored
         }).handle_exception_type([] (const semaphore_timed_out&) {
             // ignored
         }).finally([this] {
+            vlogger.info("Closing step readers");
             return parallel_for_each(_base_to_build_step, [] (std::pair<const table_id, build_step>& p) {
                 return p.second.reader.close();
             });
         });
+    }).then([] {
+        vlogger.info("Stopped successfully");
     });
 }
 
