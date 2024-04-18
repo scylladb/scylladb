@@ -13,6 +13,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <variant>
 
 #include "auth/service.hh"
 #include "cdc/generation.hh"
@@ -1963,7 +1964,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     }
 
-                    if (auto* reject = std::get_if<join_node_response_params::rejected>(&validation_result)) {
+                    if (std::holds_alternative<join_node_response_params::rejected>(validation_result)) {
                         // Transition to left
                         topology_mutation_builder builder(node.guard.write_timestamp());
                         topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
