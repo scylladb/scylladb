@@ -120,6 +120,7 @@ dht::token first_token(const dht::partition_range&);
 
 // Returns true iff a given partition range is wholly owned by a single shard.
 // If so, returns that shard. Otherwise, return std::nullopt.
+// During tablet migration, uses the view on shard ownership for reads.
 std::optional<shard_id> is_single_shard(const dht::sharder&, const schema&, const dht::partition_range&);
 
 } // dht

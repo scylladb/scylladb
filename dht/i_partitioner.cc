@@ -484,11 +484,11 @@ dht::token first_token(const dht::partition_range& pr) {
 
 std::optional<shard_id> is_single_shard(const dht::sharder& sharder, const schema& s, const dht::partition_range& pr) {
     auto token = first_token(pr);
-    auto shard = sharder.shard_of(token);
+    auto shard = sharder.shard_for_reads(token);
     if (pr.is_singular()) {
         return shard;
     }
-    if (auto s_a_t = sharder.next_shard(token)) {
+    if (auto s_a_t = sharder.next_shard_for_reads(token)) {
         dht::ring_position_comparator cmp(s);
         auto end = dht::ring_position_view::for_range_end(pr);
         if (cmp(end, dht::ring_position_view::starting_at(s_a_t->token)) > 0) {
