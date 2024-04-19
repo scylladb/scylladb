@@ -115,7 +115,7 @@ snapshot_ctl::get_snapshot_details() {
         snapshot_map result;
         for (auto& [name, details] : co_await _db.local().get_snapshot_details()) {
           for (auto& r : details) {
-            result[name].emplace_back(std::move(r.details));
+            result[name].emplace_back(r.details.live, r.details.total, std::move(r.cf), std::move(r.ks));
           }
         }
         co_return result;

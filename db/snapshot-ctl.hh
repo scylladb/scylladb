@@ -34,6 +34,14 @@ public:
         int64_t live;
     };
 
+    struct table_snapshot_details_ext {
+        sstring ks;
+        sstring cf;
+        table_snapshot_details details;
+    };
+
+    using db_snapshot_details = std::vector<table_snapshot_details_ext>;
+
     struct snapshot_details {
         int64_t live;
         int64_t total;

@@ -1745,12 +1745,7 @@ public:
      */
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name);
 
-    struct snapshot_details_result {
-        db::snapshot_ctl::snapshot_details details;
-        bool operator==(const snapshot_details_result&) const = default;
-    };
-    using snapshot_details = std::vector<snapshot_details_result>;
-
+    using snapshot_details = db::snapshot_ctl::db_snapshot_details;
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
