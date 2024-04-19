@@ -421,10 +421,7 @@ public:
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
     };
 
-    struct snapshot_details {
-        int64_t total;
-        int64_t live;
-    };
+    using snapshot_details = db::snapshot_ctl::table_snapshot_details;
     struct cache_hit_rate {
         cache_temperature rate;
         lowres_clock::time_point last_updated;

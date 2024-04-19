@@ -29,6 +29,11 @@ public:
     using skip_flush = bool_class<class skip_flush_tag>;
     using snap_views = bool_class<class snap_views_tag>;
 
+    struct table_snapshot_details {
+        int64_t total;
+        int64_t live;
+    };
+
     struct snapshot_details {
         int64_t live;
         int64_t total;
