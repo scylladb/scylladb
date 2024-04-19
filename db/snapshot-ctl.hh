@@ -42,14 +42,6 @@ public:
 
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;
 
-    struct snapshot_details {
-        int64_t live;
-        int64_t total;
-        sstring cf;
-        sstring ks;
-
-        bool operator==(const snapshot_details&) const = default;
-    };
     explicit snapshot_ctl(sharded<replica::database>& db) : _db(db) {}
 
     future<> stop() {
