@@ -71,6 +71,7 @@
 #include "sstables/sstables.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
+#include "db/view/view_builder.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
 #include <seastar/core/metrics.hh>
@@ -136,6 +137,7 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<locator::snitch_ptr>& snitch,
     sharded<service::tablet_allocator>& tablet_allocator,
     sharded<cdc::generation_service>& cdc_gens,
+    sharded<db::view::view_builder>& view_builder,
     cql3::query_processor& qp,
     sharded<qos::service_level_controller>& sl_controller)
         : _abort_source(abort_source)
@@ -164,6 +166,7 @@ storage_service::storage_service(abort_source& abort_source,
         })
         , _tablet_allocator(tablet_allocator)
         , _cdc_gens(cdc_gens)
+        , _view_builder(view_builder)
 {
     register_metrics();
 
@@ -1843,7 +1846,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             // bootstrap_tokens was previously set using tokens gossiped by the replaced node
         }
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
-        co_await mark_existing_views_as_built();
+        co_await _view_builder.local().mark_existing_views_as_built();
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         co_await bootstrap(bootstrap_tokens, cdc_gen_id, ri);
     } else {
@@ -2008,15 +2011,6 @@ future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded
         rtlogger.error("failed to start one of the raft-related background fibers: {}", std::current_exception());
         abort();
     }
-}
-
-future<> storage_service::mark_existing_views_as_built() {
-    assert(this_shard_id() == 0);
-    auto views = _db.local().get_views();
-    co_await coroutine::parallel_for_each(views, [this] (view_ptr& view) -> future<> {
-        co_await _sys_ks.local().mark_view_as_built(view->ks_name(), view->cf_name());
-        co_await _sys_dist_ks.local().finish_view_build(view->ks_name(), view->cf_name());
-    });
 }
 
 std::list<locator::host_id_or_endpoint> storage_service::parse_node_list(sstring comma_separated_list) {
@@ -4415,6 +4409,7 @@ future<> storage_service::do_drain() {
     co_await _db.invoke_on_all(&replica::database::drain);
     co_await _sys_ks.invoke_on_all(&db::system_keyspace::shutdown);
     co_await _repair.invoke_on_all(&repair_service::shutdown);
+    co_await _view_builder.invoke_on_all(&db::view::view_builder::drain);
 }
 
 future<> storage_service::do_cluster_cleanup() {
@@ -5351,7 +5346,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     case node_state::replacing: {
                         set_mode(mode::BOOTSTRAP);
                         // See issue #4001
-                        co_await mark_existing_views_as_built();
+                        co_await _view_builder.local().mark_existing_views_as_built();
                         co_await _db.invoke_on_all([] (replica::database& db) {
                             for (auto& cf : db.get_non_system_column_families()) {
                                 cf->notify_bootstrap_or_replace_start();
