@@ -5764,7 +5764,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         });
     }
 
-    co_await transit_tablet(table, token, [=] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
+    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
         std::vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
@@ -5827,7 +5827,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         });
     }
 
-    co_await transit_tablet(table, token, [=] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
+    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
         std::vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
@@ -5871,7 +5871,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         });
     }
 
-    co_await transit_tablet(table, token, [=] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
+    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
         std::vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
