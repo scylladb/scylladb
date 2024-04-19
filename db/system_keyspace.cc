@@ -236,12 +236,15 @@ schema_ptr system_keyspace::topology() {
             .with_column("request_id", timeuuid_type)
             .with_column("ignore_nodes", set_type_impl::get_instance(uuid_type, true), column_kind::static_column)
             .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
+            .with_column("new_keyspace_rf_change_ks_name", utf8_type, column_kind::static_column)
+            .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false), column_kind::static_column)
             .with_column("version", long_type, column_kind::static_column)
             .with_column("fence_version", long_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
             .with_column("committed_cdc_generations", set_type_impl::get_instance(cdc_generation_ts_id_type, true), column_kind::static_column)
             .with_column("unpublished_cdc_generations", set_type_impl::get_instance(cdc_generation_ts_id_type, true), column_kind::static_column)
             .with_column("global_topology_request", utf8_type, column_kind::static_column)
+            .with_column("global_topology_request_id", timeuuid_type, column_kind::static_column)
             .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
             .with_column("session", uuid_type, column_kind::static_column)
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
@@ -3070,6 +3073,11 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ret.committed_cdc_generations = decode_cdc_generations_ids(deserialize_set_column(*topology(), some_row, "committed_cdc_generations"));
         }
 
+        if (some_row.has("new_keyspace_rf_change_data")) {
+            ret.new_keyspace_rf_change_ks_name = some_row.get_as<sstring>("new_keyspace_rf_change_ks_name");
+            ret.new_keyspace_rf_change_data = some_row.get_map<sstring,sstring>("new_keyspace_rf_change_data");
+        }
+
         if (!ret.committed_cdc_generations.empty()) {
             // Sanity check for CDC generation data consistency.
             auto gen_id = ret.committed_cdc_generations.back();
@@ -3099,6 +3107,10 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             auto req = service::global_topology_request_from_string(
                     some_row.get_as<sstring>("global_topology_request"));
             ret.global_request.emplace(req);
+        }
+
+        if (some_row.has("global_topology_request_id")) {
+            ret.global_request_id = some_row.get_as<utils::UUID>("global_topology_request_id");
         }
 
         if (some_row.has("enabled_features")) {

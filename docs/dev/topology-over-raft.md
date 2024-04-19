@@ -549,7 +549,10 @@ CREATE TABLE system.topology (
     committed_cdc_generations set<tuple<timestamp, timeuuid>> static,
     unpublished_cdc_generations set<tuple<timestamp, timeuuid>> static,
     global_topology_request text static,
+    global_topology_request_id timeuuid static,
     new_cdc_generation_data_uuid timeuuid static,
+    new_keyspace_rf_change_ks_name text static,
+    new_keyspace_rf_change_data frozen<map<text, text>> static,
     PRIMARY KEY (key, host_id)
 )
 ```
@@ -575,8 +578,11 @@ There are also a few static columns for cluster-global properties:
 - `committed_cdc_generations` - the IDs of the committed CDC generations
 - `unpublished_cdc_generations` - the IDs of the committed yet unpublished CDC generations
 - `global_topology_request` - if set, contains one of the supported global topology requests
+- `global_topology_request_id` - if set, contains global topology request's id, which is a new group0's state id
 - `new_cdc_generation_data_uuid` - used in `commit_cdc_generation` state, the time UUID of the generation to be committed
 - `upgrade_state` - describes the progress of the upgrade to raft-based topology.
+- 'new_keyspace_rf_change_ks_name' - the name of the KS that is being the target of the scheduled ALTER KS statement 
+- 'new_keyspace_rf_change_data' - the KS options to be used when executing the scheduled ALTER KS statement
 
 # Join procedure
 

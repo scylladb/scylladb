@@ -11,6 +11,7 @@
 #include "types/tuple.hh"
 #include "types/types.hh"
 #include "types/set.hh"
+#include "types/map.hh"
 
 namespace db {
     extern thread_local data_type cdc_generation_ts_id_type;
@@ -213,6 +214,15 @@ topology_mutation_builder& topology_mutation_builder::set_committed_cdc_generati
     return apply_set("committed_cdc_generations", collection_apply_mode::overwrite, std::move(dv));
 }
 
+topology_mutation_builder& topology_mutation_builder::set_new_keyspace_rf_change_data(
+        const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc) {
+    apply_atomic("new_keyspace_rf_change_ks_name", ks_name);
+    apply_atomic("new_keyspace_rf_change_data",
+                 make_map_value(schema().get_column_definition("new_keyspace_rf_change_data")->type,
+                                map_type_impl::native_type(rf_per_dc.begin(), rf_per_dc.end())));
+    return *this;
+}
+
 topology_mutation_builder& topology_mutation_builder::set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
     auto dv = values | boost::adaptors::transformed([&] (const auto& v) {
         return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
@@ -222,6 +232,10 @@ topology_mutation_builder& topology_mutation_builder::set_unpublished_cdc_genera
 
 topology_mutation_builder& topology_mutation_builder::set_global_topology_request(global_topology_request value) {
     return apply_atomic("global_topology_request", ::format("{}", value));
+}
+
+topology_mutation_builder& topology_mutation_builder::set_global_topology_request_id(const utils::UUID& value) {
+    return apply_atomic("global_topology_request_id", value);
 }
 
 topology_mutation_builder& topology_mutation_builder::set_upgrade_state(topology::upgrade_state_type value) {
