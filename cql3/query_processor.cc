@@ -55,6 +55,10 @@ struct query_processor::remote {
     seastar::gate gate;
 };
 
+bool query_processor::topology_global_queue_empty() {
+    return remote().first.get().ss.topology_global_queue_empty();
+}
+
 static service::query_state query_state_for_internal_call() {
     return {service::client_state::for_internal_calls(), empty_service_permit()};
 }

@@ -462,6 +462,8 @@ public:
 
     void reset_cache();
 
+    bool topology_global_queue_empty();
+
 private:
     // Keep the holder until you stop using the `remote` services.
     std::pair<std::reference_wrapper<remote>, gate::holder> remote();
