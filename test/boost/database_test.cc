@@ -658,8 +658,9 @@ SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
 
         auto details = e.local_db().get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 1);
+        BOOST_REQUIRE_EQUAL(details.begin()->second.size(), 1);
 
-        const auto& sd = details.front().details;
+        const auto& sd = details.begin()->second.front().details;
         BOOST_REQUIRE_GT(sd.live, 0);
         BOOST_REQUIRE_EQUAL(sd.total, sd.live);
 
@@ -674,10 +675,12 @@ SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
         details = e.local_db().get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 4);
 
-        for (const auto& result : details) {
+        for (const auto& [name, r] : details) {
+            BOOST_REQUIRE_EQUAL(r.size(), 1);
+            const auto& result = r.front();
             const auto& sd = result.details;
 
-            if (result.snapshot_name == "test2" || result.snapshot_name == "test3") {
+            if (name == "test2" || name == "test3") {
                 BOOST_REQUIRE_EQUAL(sd.live, 0);
                 BOOST_REQUIRE_GT(sd.total, 0);
             } else {

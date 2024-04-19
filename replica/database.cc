@@ -2627,9 +2627,9 @@ static std::pair<sstring, table_id> extract_cf_name_and_uuid(const sstring& dire
     return std::make_pair(directory_name.substr(0, pos), table_id(utils::UUID(directory_name.substr(pos + 1))));
 }
 
-future<std::vector<database::snapshot_details_result>> database::get_snapshot_details() {
+future<std::unordered_map<sstring, database::snapshot_details>> database::get_snapshot_details() {
     std::vector<sstring> data_dirs = _cfg.data_file_directories();
-    std::vector<database::snapshot_details_result> details;
+    std::unordered_map<sstring, snapshot_details> details;
 
     for (auto& datadir : data_dirs) {
         co_await lister::scan_dir(fs::path{datadir}, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details] (fs::path parent_dir, directory_entry de) -> future<> {
@@ -2649,8 +2649,8 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
 
                 auto cf_name_and_uuid = extract_cf_name_and_uuid(de.name);
                 co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
+                    auto snapshot_name = de.name;
                     database::snapshot_details_result snapshot_result = {
-                        .snapshot_name = de.name,
                         .details = {0, 0, cf_name, ks_name}
                     };
 
@@ -2686,7 +2686,7 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
                         }
                     });
 
-                    details.emplace_back(std::move(snapshot_result));
+                    details[snapshot_name].emplace_back(std::move(snapshot_result));
                 });
             });
         });
