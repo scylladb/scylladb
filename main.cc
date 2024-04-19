@@ -59,6 +59,7 @@
 #include "repair/row_level.hh"
 #include <cstdio>
 #include <seastar/core/file.hh>
+#include <unistd.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/prctl.h>
@@ -638,8 +639,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
     // If --version is requested, print it out and exit immediately to avoid
     // Seastar-specific warnings that may occur when running the app
-    auto parsed_opts = bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run();
-    print_starting_message(ac, av, parsed_opts);
+    if (!isatty(fileno(stdin))) {
+        auto parsed_opts = bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run();
+        print_starting_message(ac, av, parsed_opts);
+    }
 
     sharded<locator::shared_token_metadata> token_metadata;
     sharded<locator::effective_replication_map_factory> erm_factory;
