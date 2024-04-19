@@ -154,6 +154,9 @@ struct topology {
     // Pending global topology request (i.e. not related to any specific node).
     std::optional<global_topology_request> global_request;
 
+    // Pending global topology request's id, which is a new group0's state id
+    std::optional<utils::UUID> global_request_id;
+
     // The IDs of the committed CDC generations sorted by timestamps.
     // The obsolete generations may not be in this list as they are continually deleted.
     std::vector<cdc::generation_id_v2> committed_cdc_generations;
@@ -162,6 +165,11 @@ struct topology {
     // e.g. when a new node bootstraps, needed in `commit_cdc_generation` transition state.
     // It's used as the first column of the clustering key in CDC_GENERATIONS_V3 table.
     std::optional<utils::UUID> new_cdc_generation_data_uuid;
+
+    // The name of the KS that is being the target of the scheduled ALTER KS statement
+    std::optional<sstring> new_keyspace_rf_change_ks_name;
+    // The KS options to be used when executing the scheduled ALTER KS statement
+    std::optional<std::unordered_map<sstring, sstring>> new_keyspace_rf_change_data;
 
     // The IDs of the committed yet unpublished CDC generations sorted by timestamps.
     std::vector<cdc::generation_id_v2> unpublished_cdc_generations;
