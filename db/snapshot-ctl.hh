@@ -98,7 +98,7 @@ public:
      */
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name);
 
-    future<std::unordered_map<sstring, std::vector<snapshot_details>>> get_snapshot_details();
+    future<std::unordered_map<sstring, db_snapshot_details>> get_snapshot_details();
 
     future<int64_t> true_snapshots_size();
 private:

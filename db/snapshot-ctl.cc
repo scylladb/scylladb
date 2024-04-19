@@ -107,18 +107,12 @@ future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace
     });
 }
 
-future<std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>>
+future<std::unordered_map<sstring, snapshot_ctl::db_snapshot_details>>
 snapshot_ctl::get_snapshot_details() {
-    using snapshot_map = std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>;
+    using snapshot_map = std::unordered_map<sstring, db_snapshot_details>;
 
     co_return co_await run_snapshot_list_operation(coroutine::lambda([this] () -> future<snapshot_map> {
-        snapshot_map result;
-        for (auto& [name, details] : co_await _db.local().get_snapshot_details()) {
-          for (auto& r : details) {
-            result[name].emplace_back(r.details.live, r.details.total, std::move(r.cf), std::move(r.ks));
-          }
-        }
-        co_return result;
+        return _db.local().get_snapshot_details();
     }));
 }
 
