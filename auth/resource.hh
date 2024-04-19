@@ -41,6 +41,28 @@ enum class resource_kind {
     data, role, service_level, functions
 };
 
+}
+
+template <>
+struct fmt::formatter<auth::resource_kind> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const auth::resource_kind kind, FormatContext& ctx) const {
+        using enum auth::resource_kind;
+        switch (kind) {
+        case data:
+            return formatter<string_view>::format("data", ctx);
+        case role:
+            return formatter<string_view>::format("role", ctx);
+        case service_level:
+            return formatter<string_view>::format("service_level", ctx);
+        case functions:
+            return formatter<string_view>::format("functions", ctx);
+        }
+        std::abort();
+    }
+};
+
+namespace auth {
 ///
 /// Type tag for constructing data resources.
 ///
@@ -245,25 +267,6 @@ sstring encode_signature(std::string_view name, std::vector<data_type> args);
 std::pair<sstring, std::vector<data_type>> decode_signature(std::string_view encoded_signature);
 
 }
-
-template <>
-struct fmt::formatter<auth::resource_kind> : fmt::formatter<string_view> {
-    template <typename FormatContext>
-    auto format(const auth::resource_kind kind, FormatContext& ctx) const {
-        using enum auth::resource_kind;
-        switch (kind) {
-        case data:
-            return formatter<string_view>::format("data", ctx);
-        case role:
-            return formatter<string_view>::format("role", ctx);
-        case service_level:
-            return formatter<string_view>::format("service_level", ctx);
-        case functions:
-            return formatter<string_view>::format("functions", ctx);
-        }
-        std::abort();
-    }
-};
 
 namespace std {
 
