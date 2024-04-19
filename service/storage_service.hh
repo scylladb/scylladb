@@ -818,6 +818,11 @@ private:
     // coordinator fiber
     future<> raft_state_monitor_fiber(raft::server&, sharded<db::system_distributed_keyspace>& sys_dist_ks);
 
+public:
+    bool topology_global_queue_empty() const {
+        return !_topology_state_machine._topology.global_request.has_value();
+    }
+private:
      // State machine that is responsible for topology change
     topology_state_machine _topology_state_machine;
 
