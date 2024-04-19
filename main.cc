@@ -113,8 +113,6 @@
 
 #include <boost/algorithm/string/join.hpp>
 
-namespace fs = std::filesystem;
-
 seastar::metrics::metric_groups app_metrics;
 
 using namespace std::chrono_literals;
