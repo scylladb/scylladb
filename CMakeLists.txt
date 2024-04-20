@@ -42,8 +42,6 @@ else()
         COMMENT "List configured modes")
 endif()
 
-add_compile_definitions(
-    FMT_DEPRECATED_OSTREAM)
 include(limit_jobs)
 # Configure Seastar compile options to align with Scylla
 set(CMAKE_CXX_STANDARD "20" CACHE INTERNAL "")

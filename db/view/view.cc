@@ -23,6 +23,8 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>
 
+#include <fmt/ranges.h>
+
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>

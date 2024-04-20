@@ -23,6 +23,7 @@
 #include "dht/boot_strapper.hh"
 #include <exception>
 #include <optional>
+#include <fmt/ranges.h>
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -44,6 +45,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/topology_state_machine.hh"
 #include "utils/UUID.hh"
+#include "utils/to_string.hh"
 #include "gms/inet_address.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"

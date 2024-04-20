@@ -13,6 +13,7 @@
 
 #include <exception>
 #include <stdexcept>
+#include <fmt/std.h>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/file.hh>
@@ -29,6 +30,7 @@
 #include "utils/memory_data_sink.hh"
 #include "utils/s3/client.hh"
 #include "utils/exceptions.hh"
+#include "utils/to_string.hh"
 
 #include "checked-file-impl.hh"
 
@@ -189,7 +191,9 @@ future<> filesystem_storage::remove_temp_dir() {
     if (!_temp_dir) {
         co_return;
     }
-    sstlog.debug("Removing temp_dir={}", _temp_dir);
+    std::optional<int> opt;
+    sstlog.debug("Removing temp_dir={}", opt);
+    //sstlog.debug("Removing temp_dir={}", _temp_dir);
     try {
         co_await remove_file(_temp_dir->native());
     } catch (...) {

@@ -8,10 +8,12 @@
 
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptors.hpp>
+#include <fmt/ranges.h>
 #include "gms/inet_address.hh"
 #include "locator/types.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/sequenced_set.hh"
+#include "utils/to_string.hh"
 #include "locator/network_topology_strategy.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>

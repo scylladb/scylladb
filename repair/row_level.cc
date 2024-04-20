@@ -7,6 +7,7 @@
  */
 
 #include <exception>
+#include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
 #include "gms/endpoint_state.hh"
 #include "repair/repair.hh"
@@ -38,6 +39,7 @@
 #include "gms/gossiper.hh"
 #include "repair/row_level.hh"
 #include "utils/stall_free.hh"
+#include "utils/to_string.hh"
 #include "service/migration_manager.hh"
 #include "streaming/consumer.hh"
 #include <seastar/core/coroutine.hh>

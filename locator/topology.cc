@@ -16,6 +16,7 @@
 #include "locator/topology.hh"
 #include "locator/production_snitch_base.hh"
 #include "utils/stall_free.hh"
+#include "utils/to_string.hh"
 
 struct node_printer {
     const locator::node* v;

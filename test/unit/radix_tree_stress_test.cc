@@ -15,6 +15,7 @@
 #include <iostream>
 #include <fmt/core.h>
 #include <fmt/ostream.h>
+#include <fmt/ranges.h>
 
 #include "utils/compact-radix-tree.hh"
 #include "radix_tree_printer.hh"

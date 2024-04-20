@@ -28,6 +28,7 @@
 #include "gms/feature_service.hh"
 #include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/to_string.hh"
 
 #include "cdc/generation.hh"
 #include "cdc/cdc_options.hh"

@@ -36,6 +36,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "utils/throttle.hh"
 
+#include <fmt/ranges.h>
 #include <boost/range/algorithm/min_element.hpp>
 #include "readers/from_mutations_v2.hh"
 #include "readers/delegating_v2.hh"

@@ -7,6 +7,7 @@
  */
 
 #include <string_view>
+#include <fmt/ranges.h>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>

@@ -10,8 +10,10 @@
 #include "auth/certificate_authenticator.hh"
 
 #include <regex>
+#include <fmt/ranges.h>
 
 #include "utils/class_registrator.hh"
+#include "utils/to_string.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"

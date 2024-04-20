@@ -21,11 +21,13 @@
 #include "schema_upgrader.hh"
 #include "readers/combined.hh"
 #include "replica/memtable.hh"
+#include "utils/to_string.hh"
 
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/fragment_scatterer.hh"
+#include "test/lib/test_utils.hh"
 
 #include <boost/range/algorithm/transform.hpp>
 #include "readers/from_mutations_v2.hh"

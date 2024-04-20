@@ -16,6 +16,7 @@
 #include "partition_slice_builder.hh"
 #include "utils/int_range.hh"
 #include "utils/div_ceil.hh"
+#include "utils/to_string.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include <seastar/core/reactor.hh>
 #include <fmt/core.h>

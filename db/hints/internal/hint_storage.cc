@@ -9,6 +9,8 @@
 
 #include "db/hints/internal/hint_storage.hh"
 
+#include <fmt/std.h>
+
 // Seastar features.
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/file.hh>

@@ -15,6 +15,7 @@
 #include <seastar/util/backtrace.hh>
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
+#include "utils/to_string.hh"
 #include "seastarx.hh"
 #include <random>
 

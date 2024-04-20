@@ -21,6 +21,7 @@
 #include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <fmt/chrono.h>
+#include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/when_all.hh>

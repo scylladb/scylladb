@@ -9,13 +9,13 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <fmt/ranges.h>
 #include "query-request.hh"
 #include "query-result.hh"
 #include "query-result-writer.hh"
 #include "query-result-set.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
-#include "utils/to_string.hh"
 #include "bytes.hh"
 #include "mutation/mutation_partition_serializer.hh"
 #include "query-result-reader.hh"

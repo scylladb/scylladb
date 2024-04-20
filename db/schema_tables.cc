@@ -21,6 +21,7 @@
 #include "schema/schema_builder.hh"
 #include "map_difference.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/to_string.hh"
 #include <seastar/coroutine/all.hh>
 #include "log.hh"
 #include "frozen_schema.hh"
@@ -43,6 +44,8 @@
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "utils/hashers.hh"
+
+#include <fmt/ranges.h>
 
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/rpc/rpc_types.hh>

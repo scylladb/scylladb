@@ -16,6 +16,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/types.hh"
 #include "utils/buffer_input_stream.hh"
+#include "utils/to_string.hh"
 
 namespace sstables {
 

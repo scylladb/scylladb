@@ -14,6 +14,7 @@
 #include "sstables/m_format_read_helpers.hh"
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/processing_result_generator.hh"
+#include "utils/to_string.hh"
 
 namespace sstables {
 namespace mx {

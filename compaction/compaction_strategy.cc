@@ -11,6 +11,7 @@
 
 #include <vector>
 #include <chrono>
+#include <fmt/ranges.h>
 #include <seastar/core/shared_ptr.hh>
 #include "seastar/core/on_internal_error.hh"
 #include "sstables/shared_sstable.hh"
@@ -31,6 +32,7 @@
 #include "compaction_backlog_manager.hh"
 #include "size_tiered_backlog_tracker.hh"
 #include "leveled_manifest.hh"
+#include "utils/to_string.hh"
 
 logging::logger leveled_manifest::logger("LeveledManifest");
 

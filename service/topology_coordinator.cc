@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <fmt/ranges.h>
+
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -39,6 +41,7 @@
 #include "service/topology_state_machine.hh"
 #include "topology_mutation.hh"
 #include "utils/error_injection.hh"
+#include "utils/to_string.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 
 #include "idl/join_node.dist.hh"

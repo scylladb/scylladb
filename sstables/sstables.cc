@@ -10,6 +10,7 @@
 #include <concepts>
 #include <vector>
 #include <limits>
+#include <fmt/ranges.h>
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sstring.hh>
@@ -32,6 +33,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 
+#include "utils/to_string.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
 #include "writer.hh"

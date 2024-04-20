@@ -7,6 +7,7 @@
  */
 
 #include "replication.hh"
+#include "utils/to_string.hh"
 
 // Test Raft library with declarative test definitions
 

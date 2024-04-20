@@ -25,6 +25,7 @@
 #include "db/config.hh"
 
 #include <fmt/core.h>
+#include <fmt/ranges.h>
 #include <boost/algorithm/string/erase.hpp>
 
 class distributed_loader_for_tests {

@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <fmt/ranges.h>
+#include <fmt/std.h>
 #include "log.hh"
 #include "replica/database_fwd.hh"
 #include "utils/lister.hh"
@@ -18,7 +20,6 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
-#include "utils/to_string.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"

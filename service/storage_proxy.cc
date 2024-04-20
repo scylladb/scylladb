@@ -9,6 +9,7 @@
  */
 
 #include <random>
+#include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
 #include "partition_range_compat.hh"
@@ -91,6 +92,7 @@
 #include "utils/exceptions.hh"
 #include "utils/tuple_utils.hh"
 #include "utils/rpc_utils.hh"
+#include "utils/to_string.hh"
 #include "replica/exceptions.hh"
 #include "db/operation_type.hh"
 #include "locator/util.hh"

@@ -17,6 +17,7 @@
 #include "db/commitlog/commitlog.hh"
 
 #include <boost/range/irange.hpp>
+#include <fmt/ranges.h>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/units.hh>

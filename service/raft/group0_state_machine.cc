@@ -39,6 +39,7 @@
 #include "partition_slice_builder.hh"
 #include "timestamp.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/to_string.hh"
 #include <boost/range/algorithm/transform.hpp>
 #include <optional>
 #include "db/config.hh"

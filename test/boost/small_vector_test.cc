@@ -9,6 +9,7 @@
 #define BOOST_TEST_MODULE small_vector
 
 #include <boost/test/included/unit_test.hpp>
+#include <fmt/ranges.h>
 
 #include "utils/small_vector.hh"
 

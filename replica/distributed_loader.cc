@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <fmt/std.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/coroutine/maybe_yield.hh>

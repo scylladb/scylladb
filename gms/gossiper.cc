@@ -22,6 +22,7 @@
 #include "message/messaging_service.hh"
 #include "log.hh"
 #include "db/system_keyspace.hh"
+#include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
@@ -44,6 +45,7 @@
 #include "locator/token_metadata.hh"
 #include "utils/exceptions.hh"
 #include "utils/error_injection.hh"
+#include "utils/to_string.hh"
 
 namespace gms {
 
