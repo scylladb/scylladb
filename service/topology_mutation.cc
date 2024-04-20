@@ -265,6 +265,10 @@ topology_mutation_builder& topology_mutation_builder::del_global_topology_reques
     return del("global_topology_request");
 }
 
+topology_mutation_builder& topology_mutation_builder::del_global_topology_request_id() {
+    return del("global_topology_request_id");
+}
+
 topology_node_mutation_builder& topology_mutation_builder::with_node(raft::server_id n) {
     _node_builder.emplace(*this, n);
     return *_node_builder;

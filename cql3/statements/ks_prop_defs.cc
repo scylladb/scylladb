@@ -72,6 +72,35 @@ static std::map<sstring, sstring> prepare_options(
     return options;
 }
 
+ks_prop_defs::ks_prop_defs(std::map<sstring, sstring> options) {
+    std::map<sstring, sstring> replication_opts, storage_opts, tablets_opts, durable_writes_opts;
+
+    auto read_property_into = [] (auto& map, const sstring& name, const sstring& value, const sstring& tag) {
+        map[name.substr(sstring(tag).size() + 1)] = value;
+    };
+
+    for (const auto& [name, value] : options) {
+        if (name.starts_with(KW_DURABLE_WRITES)) {
+            read_property_into(durable_writes_opts, name, value, KW_DURABLE_WRITES);
+        } else if (name.starts_with(KW_REPLICATION)) {
+            read_property_into(replication_opts, name, value, KW_REPLICATION);
+        } else if (name.starts_with(KW_TABLETS)) {
+            read_property_into(tablets_opts, name, value, KW_TABLETS);
+        } else if (name.starts_with(KW_STORAGE)) {
+            read_property_into(storage_opts, name, value, KW_STORAGE);
+        }
+    }
+
+    if (!replication_opts.empty())
+        add_property(KW_REPLICATION, replication_opts);
+    if (!storage_opts.empty())
+        add_property(KW_STORAGE, storage_opts);
+    if (!tablets_opts.empty())
+        add_property(KW_TABLETS, tablets_opts);
+    if (!durable_writes_opts.empty())
+        add_property(KW_DURABLE_WRITES, durable_writes_opts.begin()->second);
+}
+
 void ks_prop_defs::validate() {
     // Skip validation if the strategy class is already set as it means we've already
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
@@ -157,6 +186,26 @@ std::optional<unsigned> ks_prop_defs::get_initial_tablets(const sstring& strateg
 
 std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
     return _strategy_class;
+}
+
+bool ks_prop_defs::get_durable_writes() const {
+    return get_boolean(KW_DURABLE_WRITES, true);
+}
+
+std::map<sstring, sstring> ks_prop_defs::get_all_options_flattened(const gms::feature_service& feat) const {
+    std::map<sstring, sstring> all_options;
+
+    auto ingest_flattened_options = [&all_options](const std::map<sstring, sstring>& options, const sstring& prefix) {
+        for (auto& option: options) {
+            all_options[prefix + ":" + option.first] = option.second;
+        }
+    };
+    ingest_flattened_options(get_replication_options(), KW_REPLICATION);
+    ingest_flattened_options(get_storage_options().to_map(), KW_STORAGE);
+    ingest_flattened_options(get_map(KW_TABLETS).value_or(std::map<sstring, sstring>{}), KW_TABLETS);
+    ingest_flattened_options({{sstring(KW_DURABLE_WRITES), to_sstring(get_boolean(KW_DURABLE_WRITES, true))}}, KW_DURABLE_WRITES);
+
+    return all_options;
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm, const gms::feature_service& feat) {
