@@ -954,18 +954,19 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
     return _messaging.send_definitions_update(id, std::vector<frozen_mutation>{}, std::move(cm));
 }
 
+template<typename mutation_type>
 future<> migration_manager::announce_with_raft(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
     assert(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(std::move(schema), schema_features);
 
     auto group0_cmd = _group0_client.prepare_command(
-        schema_change{
-            .mutations{adjusted_schema.begin(), adjusted_schema.end()},
+        mutation_type {
+                .mutations{adjusted_schema.begin(), adjusted_schema.end()},
         },
         guard, std::move(description));
 
-    co_return co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as, raft_timeout{});
+    return _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as);
 }
 
 future<> migration_manager::announce_without_raft(std::vector<mutation> schema, group0_guard guard) {
@@ -1027,6 +1028,7 @@ static void add_committed_by_group0_flag(std::vector<mutation>& schema, const gr
 }
 
 // Returns a future on the local application of the schema
+template<typename mutation_type>
 future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
     if (_feat.group0_schema_versioning) {
         schema.push_back(make_group0_schema_version_mutation(_storage_proxy.data_dictionary(), guard));
@@ -1034,11 +1036,20 @@ future<> migration_manager::announce(std::vector<mutation> schema, group0_guard 
     }
 
     if (guard.with_raft()) {
-        return announce_with_raft(std::move(schema), std::move(guard), std::move(description));
+        return announce_with_raft<mutation_type>(std::move(schema), std::move(guard), std::move(description));
     } else {
         return announce_without_raft(std::move(schema), std::move(guard));
     }
 }
+template
+future<> migration_manager::announce_with_raft<schema_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+template
+future<> migration_manager::announce_with_raft<topology_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+
+template
+future<> migration_manager::announce<schema_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+template
+future<> migration_manager::announce<topology_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
 
 future<group0_guard> migration_manager::start_group0_operation() {
     assert(this_shard_id() == 0);
