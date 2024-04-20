@@ -136,6 +136,7 @@ public:
 
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
+    template<typename mutation_type = schema_change>
     future<> announce(std::vector<mutation> schema, group0_guard, std::string_view description);
 
     void passive_announce(table_schema_version version);
@@ -164,6 +165,7 @@ private:
 
     future<> maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint);
 
+    template<typename mutation_type = schema_change>
     future<> announce_with_raft(std::vector<mutation> schema, group0_guard, std::string_view description);
     future<> announce_without_raft(std::vector<mutation> schema, group0_guard);
 
@@ -192,6 +194,17 @@ public:
     // For tests only.
     void set_concurrent_ddl_retries(size_t);
 };
+
+extern template
+future<> migration_manager::announce_with_raft<schema_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+extern template
+future<> migration_manager::announce_with_raft<topology_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+
+extern template
+future<> migration_manager::announce<schema_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+extern template
+future<> migration_manager::announce<topology_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+
 
 future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id, table_schema_version v);
 
