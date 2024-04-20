@@ -8,11 +8,13 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <boost/range/algorithm.hpp>
 #include <seastar/core/coroutine.hh>
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/topology_mutation.hh"
 #include "db/system_keyspace.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
@@ -20,6 +22,8 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "create_keyspace_statement.hh"
 #include "gms/feature_service.hh"
+
+static logging::logger mylogger("alter_keyspace");
 
 bool is_system_keyspace(std::string_view keyspace);
 
@@ -37,6 +41,9 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
 }
 
 void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {
+        // TODO: when processing a tablet-enabled keyspace,
+        //       we must check if the new RF differs by at most 1 from the old RF,
+        //       and fail the query if that's not the case
         auto tmp = _name;
         std::transform(tmp.begin(), tmp.end(), tmp.begin(), ::tolower);
         if (is_system_keyspace(tmp)) {
@@ -83,20 +90,60 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
+    using namespace cql_transport;
     try {
-        auto old_ksm = qp.db().find_keyspace(_name).metadata();
+        event::schema_change::target_type target_type = event::schema_change::target_type::KEYSPACE;
+        auto ks = qp.db().find_keyspace(_name);
+        auto ks_md = ks.metadata();
         const auto& tm = *qp.proxy().get_token_metadata_ptr();
         const auto& feat = qp.proxy().features();
+        auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, tm, feat);
+        std::vector<mutation> muts;
+        std::vector<sstring> warnings;
+        // TODO: need to correctly handle the generic 'replication_factor' tag in NTS
+        auto ks_options = _attrs->get_all_options_flattened(feat);
 
-        auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(), _attrs->as_ks_metadata_update(old_ksm, tm, feat), ts);
+        // we only want to run the tablets path if there are actually any tablets changes, not only schema changes
+        if (ks.get_replication_strategy().uses_tablets() && !_attrs->get_replication_options().empty()) {
+            if (!qp.topology_global_queue_empty()) {
+                return make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
+                        exceptions::invalid_request_exception("Another global topology request is ongoing, please retry."));
+            }
+            qp.db().real_database().validate_keyspace_update(*ks_md_update);
 
-        using namespace cql_transport;
+            service::topology_mutation_builder builder(ts);
+            builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
+            builder.set_global_topology_request_id(this->global_req_id);
+            builder.set_new_keyspace_rf_change_data(_name, ks_options);
+            service::topology_change change{{builder.build()}};
+
+            auto topo_schema = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+            boost::transform(change.mutations, std::back_inserter(muts), [topo_schema] (const canonical_mutation& cm) {
+                return cm.to_mutation(topo_schema);
+            });
+
+            service::topology_request_tracking_mutation_builder rtbuilder{utils::UUID{this->global_req_id}};
+            rtbuilder.set("done", false)
+                     .set("start_time", db_clock::now());
+            service::topology_change req_change{{rtbuilder.build()}};
+
+            auto topo_req_schema = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
+            boost::transform(req_change.mutations, std::back_inserter(muts), [topo_req_schema] (const canonical_mutation& cm) {
+                return cm.to_mutation(topo_req_schema);
+            });
+
+            target_type = event::schema_change::target_type::TABLET_KEYSPACE;
+        } else {
+            auto schema_mutations = service::prepare_keyspace_update_announcement(qp.db().real_database(), ks_md_update, ts);
+            muts.insert(muts.begin(), schema_mutations.begin(), schema_mutations.end());
+        }
+
         auto ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::KEYSPACE,
+                target_type,
                 keyspace());
 
-        return make_ready_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>()));
+        return make_ready_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(std::make_tuple(std::move(ret), std::move(muts), warnings));
     } catch (data_dictionary::no_such_keyspace& e) {
         return make_exception_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(exceptions::invalid_request_exception("Unknown keyspace " + _name));
     }
@@ -107,7 +154,6 @@ cql3::statements::alter_keyspace_statement::prepare(data_dictionary::database db
     return std::make_unique<prepared_statement>(make_shared<alter_keyspace_statement>(*this));
 }
 
-static logging::logger mylogger("alter_keyspace");
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::alter_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {

@@ -14,6 +14,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 
 #include "service/storage_proxy.hh"
+#include "service/topology_mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/forward_service.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -1025,15 +1026,27 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
 
     cql3::cql_warnings_vec warnings;
 
+    auto request_id = guard->new_group0_state_id();
+    stmt.global_req_id = request_id;
+
     auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, options, guard->write_timestamp());
     warnings = std::move(cql_warnings);
 
+    ce = std::move(ret);
     if (!m.empty()) {
         auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
-        co_await remote_.get().mm.announce(std::move(m), std::move(*guard), description);
+        if (ce && ce->target == cql_transport::event::schema_change::target_type::TABLET_KEYSPACE) {
+            co_await remote_.get().mm.announce<service::topology_change>(std::move(m), std::move(*guard), description);
+            // TODO: eliminate timeout from alter ks statement on the cqlsh/driver side
+            auto error = co_await remote_.get().ss.wait_for_topology_request_completion(request_id);
+            if (!error.empty()) {
+                log.error("CQL statement \"{}\" with topology request_id \"{}\" failed with error: \"{}\"", stmt.raw_cql_statement, request_id, error);
+                throw exceptions::request_execution_exception(exceptions::exception_code::INVALID, error);
+            }
+        } else {
+            co_await remote_.get().mm.announce<service::schema_change>(std::move(m), std::move(*guard), description);
+        }
     }
-
-    ce = std::move(ret);
 
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)

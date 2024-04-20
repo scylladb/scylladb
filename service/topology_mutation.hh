@@ -126,6 +126,7 @@ public:
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del_session();
     topology_mutation_builder& del_global_topology_request();
+    topology_mutation_builder& del_global_topology_request_id();
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
