@@ -529,19 +529,19 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
             break;
         case node_state::replacing: {
-                assert(_topology_state_machine._topology.req_param.contains(id));
-                auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
-                auto existing_ip = am.find(replaced_id);
-                if (!existing_ip) {
-                    // FIXME: What if not known?
-                    on_fatal_internal_error(rtlogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
-                }
-                assert(existing_ip);
-                const auto replaced_host_id = locator::host_id(replaced_id.uuid());
-                tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
-                update_topology(host_id, ip, rs);
-                tmptr->add_replacing_endpoint(replaced_host_id, host_id);
-                co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
+            assert(_topology_state_machine._topology.req_param.contains(id));
+            auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
+            auto existing_ip = am.find(replaced_id);
+            if (!existing_ip) {
+                // FIXME: What if not known?
+                on_fatal_internal_error(rtlogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
+            }
+            assert(existing_ip);
+            const auto replaced_host_id = locator::host_id(replaced_id.uuid());
+            tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
+            update_topology(host_id, ip, rs);
+            tmptr->add_replacing_endpoint(replaced_host_id, host_id);
+            co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
         }
             break;
         case node_state::rebuilding:
