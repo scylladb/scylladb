@@ -529,7 +529,6 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
             break;
         case node_state::replacing: {
-            if (rs.ring.has_value()) {
                 assert(_topology_state_machine._topology.req_param.contains(id));
                 auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
                 auto existing_ip = am.find(replaced_id);
@@ -543,7 +542,6 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
                 update_topology(host_id, ip, rs);
                 tmptr->add_replacing_endpoint(replaced_host_id, host_id);
                 co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
-            }
         }
             break;
         case node_state::rebuilding:
