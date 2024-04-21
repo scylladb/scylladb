@@ -481,6 +481,8 @@ public:
      * @return the rpc address
      */
     sstring get_rpc_address(const inet_address& endpoint) const;
+
+    future<> real_mark_alive(inet_address addr);
 private:
     // FIXME: for now, allow modifying the endpoint_state's heartbeat_state in place
     // Gets or creates endpoint_state for this node
@@ -497,8 +499,6 @@ private:
     void update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map);
 
     void mark_alive(inet_address addr);
-
-    future<> real_mark_alive(inet_address addr);
 
     // Must be called under lock_endpoint.
     future<> mark_dead(inet_address addr, endpoint_state_ptr local_state, permit_id);
