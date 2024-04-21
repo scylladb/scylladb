@@ -6124,6 +6124,27 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     }
 }
 
+future<> storage_service::await_topology_quiesced() {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.await_topology_quiesced();
+        });
+        co_return;
+    }
+
+    group0_guard guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+
+    while (_topology_state_machine._topology.is_busy()) {
+        rtlogger.debug("await_topology_quiesced(): topology is busy");
+        release_guard(std::move(guard));
+        co_await _topology_state_machine.event.wait();
+        guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+    }
+}
+
 future<join_node_request_result> storage_service::join_node_request_handler(join_node_request_params params) {
     join_node_request_result result;
     rtlogger.info("received request to join from host_id: {}", params.host_id);

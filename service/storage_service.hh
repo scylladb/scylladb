@@ -873,6 +873,7 @@ public:
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> set_tablet_balancing_enabled(bool);
+    future<> await_topology_quiesced();
 
     // In the maintenance mode, other nodes won't be available thus we disabled joining
     // the token ring and the token metadata won't be populated with the local node's endpoint.

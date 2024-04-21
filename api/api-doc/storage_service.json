@@ -2727,6 +2727,22 @@
          ]
       },
       {
+         "path":"/storage_service/quiesce_topology",
+         "operations":[
+            {
+               "nickname":"quiesce_topology",
+               "method":"POST",
+               "summary":"Waits until there are no ongoing topology operations. Guarantees that topology operations which started before the call are finished after the call. This doesn't consider requested but not started operations. Such operations may start after the call succeeds.",
+               "type":"void",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/metrics/total_hints",
          "operations":[
             {

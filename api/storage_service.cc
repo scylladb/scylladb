@@ -1630,6 +1630,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
+    ss::quiesce_topology.set(r, [&ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+        co_await ss.local().await_topology_quiesced();
+        co_return json_void();
+    });
+
     sp::get_schema_versions.set(r, [&ss](std::unique_ptr<http::request> req)  {
         return ss.local().describe_schema_versions().then([] (auto result) {
             std::vector<sp::mapper_list> res;
@@ -1733,6 +1738,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::add_tablet_replica.unset(r);
     ss::del_tablet_replica.unset(r);
     ss::tablet_balancing_enable.unset(r);
+    ss::quiesce_topology.unset(r);
     sp::get_schema_versions.unset(r);
 }
 
