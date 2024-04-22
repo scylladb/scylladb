@@ -653,9 +653,21 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
         if (ep == this->get_broadcast_address() && !this->is_in_shadow_round()) {
             return make_ready_future<>();
         }
-        if (_just_removed_endpoints.contains(ep)) {
-            logger.trace("Ignoring gossip for {} because it is quarantined", ep);
-            return make_ready_future<>();
+        if (topo_sm) {
+            locator::host_id hid = map[ep].get_host_id();
+            if (hid == locator::host_id::create_null_id()) {
+                // If there is no host id in the new state there should be one locally
+                hid = get_host_id(ep);
+            }
+            if (topo_sm->_topology.left_nodes.contains(raft::server_id(hid.uuid()))) {
+                logger.trace("Ignoring gossip for {} because it left", ep);
+                return make_ready_future<>();
+            }
+        } else {
+            if (_just_removed_endpoints.contains(ep)) {
+                logger.trace("Ignoring gossip for {} because it is quarantined", ep);
+                return make_ready_future<>();
+            }
         }
         return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, &ep, &map] () mutable {
             return do_apply_state_locally(ep, std::move(map[ep]), true);
@@ -1128,8 +1140,9 @@ void gossiper::run() {
                         logger.trace("Failed to send gossip to unreachable members: {}", ep);
                     });
                 });
-
-                do_status_check().get();
+                if (!topo_sm) {
+                    do_status_check().get();
+                }
             }
     }).then_wrapped([this] (auto&& f) {
         try {
@@ -1263,7 +1276,10 @@ void gossiper::quarantine_endpoint(inet_address endpoint) {
 }
 
 void gossiper::quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_start) {
-    _just_removed_endpoints[endpoint] = quarantine_start;
+    if (!topo_sm) {
+        // In raft topology mode the coodinator maintains banned nodes list
+        _just_removed_endpoints[endpoint] = quarantine_start;
+    }
 }
 
 void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) const {

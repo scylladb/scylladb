@@ -829,6 +829,7 @@ private:
     future<> raft_rebuild(sstring source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
+    void set_topology_change_kind(topology_change_kind kind);
 
 public:
     // This is called on all nodes for each new command received through raft

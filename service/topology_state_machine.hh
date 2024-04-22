@@ -202,17 +202,6 @@ struct topology {
     std::set<sstring> calculate_not_yet_enabled_features() const;
 };
 
-struct raft_topology_snapshot {
-    // Mutations for the system.topology table.
-    std::vector<canonical_mutation> topology_mutations;
-
-    // Mutations for system.cdc_generations_v3, contains all the CDC generation data.
-    std::vector<canonical_mutation> cdc_generation_mutations;
-
-    // Mutations for system.topology_requests table
-    std::vector<canonical_mutation> topology_requests_mutations;
-};
-
 struct raft_snapshot {
     // FIXME: handle this with rpc streaming instead as we can't guarantee size bounds.
     utils::chunked_vector<canonical_mutation> mutations;
