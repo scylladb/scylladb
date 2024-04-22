@@ -77,6 +77,8 @@
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
 
+#include <algorithm>
+
 using namespace std::chrono_literals;
 using namespace db;
 
@@ -1931,7 +1933,6 @@ future<> database::apply(const std::vector<frozen_mutation>& muts, db::timeout_c
 future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::timeout_clock::time_point timeout) {
     std::vector<commitlog_entry_writer> writers;
     db::commitlog* cl = nullptr;
-    std::optional<shard_id> shard;
 
     if (muts.empty()) {
         co_return;
@@ -1952,14 +1953,9 @@ future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::t
                               first_cf.schema()->ks_name(), first_cf.schema()->cf_name()));
         }
 
-        auto m_shard = cf.shard_of(dht::get_token(*s, muts[i].key()));
-        if (!shard) {
-            if (this_shard_id() != m_shard) {
-                on_internal_error(dblog, format("Must call apply() on the owning shard ({} != {})", this_shard_id(), m_shard));
-            }
-            shard = m_shard;
-        } else if (*shard != m_shard) {
-            on_internal_error(dblog, "Cannot apply atomically across shards");
+        auto m_shards = cf.shard_for_writes(dht::get_token(*s, muts[i].key()));
+        if (std::ranges::find(m_shards, this_shard_id()) == std::ranges::end(m_shards)) {
+            on_internal_error(dblog, format("Must call apply() on the owning shard ({} not in {})", this_shard_id(), m_shards));
         }
 
         dblog.trace("apply [{}/{}]: {}", i, muts.size() - 1, muts[i].pretty_printer(s));
