@@ -784,7 +784,7 @@ args = arg_parser.parse_args()
 
 PROFILES_LIST_FILE_NAME = "coverage_sources.list"
 
-outdir = os.path.abspath(args.build_dir)
+outdir = args.build_dir
 tempfile.tempdir = f"{outdir}/tmp"
 
 if args.list_artifacts:
@@ -2294,7 +2294,7 @@ def write_build_file(f,
         build dist-server: phony dist-server-tar dist-server-debuginfo dist-server-rpm dist-server-deb
 
         rule build-submodule-reloc
-          command = cd $reloc_dir && ./reloc/build_reloc.sh --version $$(<$builddir/SCYLLA-PRODUCT-FILE)-$$(sed 's/-/~/' <$builddir/SCYLLA-VERSION-FILE)-$$(<$builddir/SCYLLA-RELEASE-FILE) --nodeps $args
+          command = cd $reloc_dir && ./reloc/build_reloc.sh --version $$(<../../$builddir/SCYLLA-PRODUCT-FILE)-$$(sed 's/-/~/' <../../$builddir/SCYLLA-VERSION-FILE)-$$(<../../$builddir/SCYLLA-RELEASE-FILE) --nodeps $args
         rule build-submodule-rpm
           command = cd $dir && ./reloc/build_rpm.sh --reloc-pkg $artifact
         rule build-submodule-deb

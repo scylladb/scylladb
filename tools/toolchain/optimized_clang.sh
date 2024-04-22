@@ -36,8 +36,10 @@ CLANG_ROOT_DIR="${SCYLLA_DIR}"/clang_build
 CLANG_CHECKOUT_NAME=llvm-project
 CLANG_BUILD_DIR="${CLANG_ROOT_DIR}"/"${CLANG_CHECKOUT_NAME}"
 
-SCYLLA_BUILD_DIR="${SCYLLA_DIR}"/build_profile
-SCYLLA_NINJA_FILE="${SCYLLA_DIR}"/build_profile.ninja
+SCYLLA_BUILD_DIR=build_profile
+SCYLLA_NINJA_FILE=build_profile.ninja
+SCYLLA_BUILD_DIR_FULLPATH="${SCYLLA_DIR}"/"${SCYLLA_BUILD_DIR}"
+SCYLLA_NINJA_FILE_FULLPATH="${SCYLLA_DIR}"/"${SCYLLA_NINJA_FILE}"
 
 # Which LLVM release to build in order to compile Scylla
 LLVM_CLANG_TAG=16.0.6
@@ -56,7 +58,7 @@ if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
     cmake -B build -S llvm "${CLANG_OPTS[@]}" -DLLVM_BUILD_INSTRUMENTED=IR
     ninja -C build
 
-    rm -rf "${SCYLLA_BUILD_DIR}" "${SCYLLA_NINJA_FILE}"
+    rm -rf "${SCYLLA_BUILD_DIR_FULLPATH}" "${SCYLLA_NINJA_FILE_FULLPATH}"
     cd "${SCYLLA_DIR}"
     ./configure.py "${SCYLLA_OPTS[@]}"
     LLVM_PROFILE_FILE="${CLANG_BUILD_DIR}"/build/profiles/default_%p-%m.profraw ninja -f "${SCYLLA_NINJA_FILE}" compiler-training
@@ -68,7 +70,7 @@ if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
     ninja -C build
 
     # 2nd compilation: gathering a clang profile for CSPGO
-    rm -rf "${SCYLLA_BUILD_DIR}" "${SCYLLA_NINJA_FILE}"
+    rm -rf "${SCYLLA_BUILD_DIR_FULLPATH}" "${SCYLLA_NINJA_FILE_FULLPATH}"
     cd "${SCYLLA_DIR}"
     ./configure.py "${SCYLLA_OPTS[@]}"
     LLVM_PROFILE_FILE="${CLANG_BUILD_DIR}"/build/profiles/csir-%p-%m.profraw ninja -f "${SCYLLA_NINJA_FILE}" compiler-training
@@ -89,7 +91,7 @@ if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
         llvm-bolt build/bin/clang-"${CLANG_SUFFIX}".prebolt -o build/bin/clang-"${CLANG_SUFFIX}" --instrument --instrumentation-file="${CLANG_BUILD_DIR}"/build/profiles/prof --instrumentation-file-append-pid --conservative-instrumentation
 
         # 3rd ScyllaDB compilation: gathering a clang profile for BOLT
-        rm -rf "${SCYLLA_BUILD_DIR}" "${SCYLLA_NINJA_FILE}"
+        rm -rf "${SCYLLA_BUILD_DIR_FULLPATH}" "${SCYLLA_NINJA_FILE_FULLPATH}"
         cd "${SCYLLA_DIR}"
         ./configure.py "${SCYLLA_OPTS[@]}"
         ninja -f "${SCYLLA_NINJA_FILE}" compiler-training
@@ -114,4 +116,4 @@ mv /usr/lib64/libLTO.so."${CLANG_SUFFIX}" /usr/lib64/libLTO.so."${CLANG_SUFFIX}"
 install -Z -m755 "${CLANG_BUILD_DIR}"/build/bin/clang-"${CLANG_SUFFIX}" /usr/bin/clang-"${CLANG_SUFFIX}"
 install -Z -m755 "${CLANG_BUILD_DIR}"/build/bin/lld /usr/bin/lld
 install -Z -m755 "${CLANG_BUILD_DIR}"/build/lib64/libLTO.so."${CLANG_SUFFIX}" /usr/lib64/libLTO.so."${CLANG_SUFFIX}"
-rm -rf "${CLANG_BUILD_DIR}" "${SCYLLA_BUILD_DIR}" "${SCYLLA_NINJA_FILE}"
+rm -rf "${CLANG_BUILD_DIR}" "${SCYLLA_BUILD_DIR_FULLPATH}" "${SCYLLA_NINJA_FILE_FULLPATH}"
