@@ -933,6 +933,7 @@ public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
 
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
+    static future<snapshot_details> get_snapshot_details(std::filesystem::path snapshot_dir, std::filesystem::path datadir);
 
     /*!
      * \brief write the schema to a 'schema.cql' file at the given directory.
