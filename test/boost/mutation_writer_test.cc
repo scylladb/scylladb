@@ -61,7 +61,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                 schema_ptr s = gen.schema();
 
                 for (auto& m : muts) {
-                    auto shard = s->get_sharder().shard_of(m.token());
+                    auto shard = s->get_sharder().shard_for_reads(m.token());
                     shards_before[shard]++;
                 }
                 auto source_reader = partition_nr > 0 ? make_flat_mutation_reader_from_mutations_v2(gen.schema(), make_reader_permit(e), muts) : make_empty_flat_reader_v2(s, make_reader_permit(e));
@@ -80,7 +80,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                             return reader().then([&sharder, &shards_after] (mutation_fragment_v2_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
-                                        auto shard = sharder.shard_of(mf_opt->as_partition_start().key().token());
+                                        auto shard = sharder.shard_for_reads(mf_opt->as_partition_start().key().token());
                                         BOOST_REQUIRE_EQUAL(shard, this_shard_id());
                                         shards_after[shard]++;
                                     }
@@ -151,7 +151,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
                             return reader().then([&sharder] (mutation_fragment_v2_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
-                                        auto shard = sharder.shard_of(mf_opt->as_partition_start().key().token());
+                                        auto shard = sharder.shard_for_reads(mf_opt->as_partition_start().key().token());
                                         BOOST_REQUIRE_EQUAL(shard, this_shard_id());
                                     }
                                     return make_ready_future<stop_iteration>(stop_iteration::no);

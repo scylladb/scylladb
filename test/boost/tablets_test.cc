@@ -401,7 +401,7 @@ SEASTAR_TEST_CASE(test_get_shard) {
 
         auto get_shard = [&] (tablet_id tid, host_id host) {
             tablet_sharder sharder(*stm.get(), table1, host);
-            return sharder.shard_of(tmap.get_last_token(tid));
+            return sharder.shard_for_reads(tmap.get_last_token(tid));
         };
 
         BOOST_REQUIRE_EQUAL(get_shard(tid1, h1), std::make_optional(shard_id(2)));
@@ -766,37 +766,37 @@ SEASTAR_TEST_CASE(test_sharder) {
         BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[6])), dht::shard_replica_set{5});
         BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[7])), dht::shard_replica_set{5});
 
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_last_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_last_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_last_token(tablet_ids[1]), 3), dht::maximum_token());
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_last_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_last_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_last_token(tablet_ids[1]), 3), dht::maximum_token());
 
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_first_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_first_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_first_token(tablet_ids[1]), 3), dht::maximum_token());
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_first_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_first_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_first_token(tablet_ids[1]), 3), dht::maximum_token());
 
         {
-            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[0]));
+            auto shard_opt = sharder.next_shard_for_reads(tm.get_last_token(tablet_ids[0]));
             BOOST_REQUIRE(shard_opt);
             BOOST_REQUIRE_EQUAL(shard_opt->shard, 0);
             BOOST_REQUIRE_EQUAL(shard_opt->token, tm.get_first_token(tablet_ids[1]));
         }
 
         {
-            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[1]));
+            auto shard_opt = sharder.next_shard_for_reads(tm.get_last_token(tablet_ids[1]));
             BOOST_REQUIRE(shard_opt);
             BOOST_REQUIRE_EQUAL(shard_opt->shard, 1);
             BOOST_REQUIRE_EQUAL(shard_opt->token, tm.get_first_token(tablet_ids[2]));
         }
 
         {
-            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[2]));
+            auto shard_opt = sharder.next_shard_for_reads(tm.get_last_token(tablet_ids[2]));
             BOOST_REQUIRE(shard_opt);
             BOOST_REQUIRE_EQUAL(shard_opt->shard, 0);
             BOOST_REQUIRE_EQUAL(shard_opt->token, tm.get_first_token(tablet_ids[3]));
         }
 
         {
-            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[tablet_ids.size() - 1]));
+            auto shard_opt = sharder.next_shard_for_reads(tm.get_last_token(tablet_ids[tablet_ids.size() - 1]));
             BOOST_REQUIRE(!shard_opt);
         }
     }, tablet_cql_test_config());

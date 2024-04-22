@@ -5770,7 +5770,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_insert) {
 
         auto pk = partition_key::from_singular(*sptr, int32_t(1));
 
-        unsigned local_shard = sptr->table().shard_of(dht::get_token(*sptr, pk.view()));
+        unsigned local_shard = sptr->table().shard_for_reads(dht::get_token(*sptr, pk.view()));
 
         smp::submit_to(local_shard, [&] {
             return seastar::async([&] { 
@@ -5786,7 +5786,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_insert) {
 
         auto pk2 = partition_key::from_singular(*sptr, int32_t(2));
 
-        unsigned local_shard2 = sptr->table().shard_of(dht::get_token(*sptr, pk2.view()));
+        unsigned local_shard2 = sptr->table().shard_for_reads(dht::get_token(*sptr, pk2.view()));
         unsigned foreign_shard = (local_shard2 + 1) % smp::count;
 
         smp::submit_to(foreign_shard, [&] { 
@@ -5812,7 +5812,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
 
         auto pk = partition_key::from_singular(*sptr, int32_t(1));
 
-        unsigned local_shard = sptr->table().shard_of(dht::get_token(*sptr, pk.view()));
+        unsigned local_shard = sptr->table().shard_for_reads(dht::get_token(*sptr, pk.view()));
         unsigned foreign_shard = (local_shard + 1) % smp::count;
 
         smp::submit_to(local_shard, [&] { 

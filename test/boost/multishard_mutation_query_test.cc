@@ -227,7 +227,7 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<replica:
     results.reserve(pkeys.size());
 
     for (const auto& pkey : pkeys) {
-        const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey, &slice] (replica::database& db) {
+        const auto res = db.invoke_on(sharder.shard_for_reads(pkey.token()), [gs = global_schema_ptr(s), &pkey, &slice] (replica::database& db) {
             return async([s = gs.get(), &pkey, &slice, &db] () mutable {
                 const auto cmd = query::read_command(s->id(), s->version(), slice,
                         query::max_result_size(query::result_memory_limiter::unlimited_result_size), query::tombstone_limit::max);
