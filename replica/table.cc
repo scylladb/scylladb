@@ -1013,6 +1013,21 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
     co_return std::move(ret);
 }
 
+future<utils::chunked_vector<sstables::entry_descriptor>>
+table::clone_tablet_storage(locator::tablet_id tid) {
+    utils::chunked_vector<sstables::entry_descriptor> ret;
+    auto holder = async_gate().hold();
+    // FIXME: guard storage group with shared lock.
+
+    auto* sg = storage_group_for_id(tid.value());
+    co_await sg->flush();
+    auto set = sg->make_sstable_set();
+    co_await set->for_each_sstable_gently([this, &ret] (const sstables::shared_sstable& sst) -> future<> {
+        ret.push_back(co_await sst->clone(calculate_generation_for_new_table()));
+    });
+    co_return ret;
+}
+
 void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept {
     _stats.live_disk_space_used += sst->bytes_on_disk();
     _stats.total_disk_space_used += sst->bytes_on_disk();
@@ -2458,6 +2473,12 @@ future<> compaction_group::flush() noexcept {
         return _memtables->flush();
     } catch (...) {
         return current_exception_as_future<>();
+    }
+}
+
+future<> storage_group::flush() noexcept {
+    for (auto& cg : compaction_groups()) {
+        co_await cg->flush();
     }
 }
 

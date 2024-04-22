@@ -72,6 +72,7 @@
 #include "supervisor.hh"
 #include "compaction/compaction_manager.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "db/view/view_builder.hh"
@@ -5642,6 +5643,48 @@ future<> storage_service::do_tablet_operation(locator::global_tablet_id tablet,
     }
 }
 
+future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id tablet, locator::tablet_replica leaving, locator::tablet_replica pending) {
+    if (leaving.host != pending.host) {
+        throw std::runtime_error(fmt::format("Leaving and pending tablet replicas belong to different nodes, {} and {} respectively",
+                                             leaving.host, pending.host));
+    }
+
+    auto d = co_await smp::submit_to(leaving.shard, [this, tablet] () -> future<utils::chunked_vector<sstables::entry_descriptor>> {
+        auto& table = _db.local().find_column_family(tablet.table);
+        auto op = table.stream_in_progress();
+        co_return co_await table.clone_tablet_storage(tablet.tablet);
+    });
+    rtlogger.debug("Cloned storage of tablet {} from leaving replica {}, {} sstables were found", tablet, leaving, d.size());
+
+    auto load_sstable = [] (const dht::sharder& sharder, replica::table& t, sstables::entry_descriptor d) -> future<sstables::shared_sstable> {
+        auto& mng = t.get_sstables_manager();
+        auto sst = mng.make_sstable(t.schema(), t.dir(), t.get_storage_options(), d.generation, d.state.value_or(sstables::sstable_state::normal),
+                                    d.version, d.format, gc_clock::now(), default_io_error_handler_gen());
+        // The loader will consider current shard as sstable owner, despite the tablet sharder
+        // will still point to leaving replica at this stage in migration. If node goes down,
+        // SSTables will be loaded at pending replica and migration is retried, so correctness
+        // wise, we're good.
+        auto cfg = sstables::sstable_open_config{ .current_shard_as_sstable_owner = true };
+        co_await sst->load(sharder, cfg);
+        co_return sst;
+    };
+
+    co_await smp::submit_to(pending.shard, [this, tablet, load_sstable, d = std::move(d)] () mutable -> future<> {
+        // Loads cloned sstables from leaving replica into pending one.
+        auto& table = _db.local().find_column_family(tablet.table);
+        auto op = table.stream_in_progress();
+        dht::auto_refreshing_sharder sharder(table.shared_from_this());
+
+        std::vector<sstables::shared_sstable> ssts;
+        ssts.reserve(d.size());
+        for (auto&& sst_desc : d) {
+            ssts.push_back(co_await load_sstable(sharder, table, std::move(sst_desc)));
+        }
+        co_await table.add_sstables_and_update_cache(ssts);
+    });
+    rtlogger.debug("Successfully loaded storage of tablet {} into pending replica {}", tablet, pending);
+}
+
 // Streams data to the pending tablet replica of a given tablet on this node.
 // The source tablet replica is determined from the current transition info of the tablet.
 future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
@@ -5690,20 +5733,10 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                 throw std::runtime_error(fmt::format("Invalid leaving replica for intra-node migration, tablet: {}, leaving: {}",
                                                      tablet, leaving_replica));
             }
-            auto range = to_partition_range(tmap.get_token_range(tablet.tablet));
             tm = nullptr;
-            co_await smp::submit_to(leaving_replica->shard, [this, tablet, pending_replica, reason, topo_guard, range] () -> future<> {
-                rtlogger.info("Starting intra-node streaming of tablet {} to shard {}", tablet, pending_replica->shard);
-                auto& table = _db.local().find_column_family(tablet.table);
-                dht::auto_refreshing_sharder sharder(table.shared_from_this(), dht::write_replica_set_selector::next);
-                auto estimated_partitions = 1; // FIXME
-                auto permit = co_await _db.local().obtain_reader_permit(table, "stream-session", db::no_timeout, {});
-                co_await mutation_writer::distribute_reader_and_consume_on_shards(table.schema(), sharder,
-                    table.make_streaming_reader(table.schema(), std::move(permit), range, gc_clock::now()),
-                    _stream_manager.local().make_streaming_consumer(estimated_partitions, reason, topo_guard),
-                    table.stream_in_progress());
-                rtlogger.info("Intra-node tablet streaming of {} finished", tablet, pending_replica->shard);
-            });
+            rtlogger.info("Starting intra-node streaming of tablet {} from shard {} to {}", tablet, leaving_replica->shard, pending_replica->shard);
+            co_await clone_locally_tablet_storage(tablet, *leaving_replica, *pending_replica);
+            rtlogger.info("Finished intra-node streaming of tablet {} from shard {} to {}", tablet, leaving_replica->shard, pending_replica->shard);
         } else {
             if (leaving_replica && leaving_replica->host == tm->get_my_id()) {
                 throw std::runtime_error(fmt::format("Cannot stream within the same node using regular migration, tablet: {}, shard {} -> {}",

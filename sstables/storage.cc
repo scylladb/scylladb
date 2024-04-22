@@ -50,6 +50,7 @@ private:
     future<> remove_temp_dir();
     virtual future<> create_links(const sstable& sst, const std::filesystem::path& dir) const override;
     future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
+    future<> create_links_common(const sstable& sst, const std::filesystem::path& dir, std::optional<generation_type> dst_gen) const;
     future<> touch_temp_dir(const sstable& sst);
     future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
     future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
@@ -64,7 +65,7 @@ public:
     {}
 
     virtual future<> seal(const sstable& sst) override;
-    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const override;
+    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -338,11 +339,15 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
     sstlog.trace("create_links: {} -> {} generation={}: done", sst.get_filename(), dst_dir, generation);
 }
 
+future<> filesystem_storage::create_links_common(const sstable& sst, const std::filesystem::path& dir, std::optional<generation_type> gen) const {
+    return create_links_common(sst, dir.native(), gen.value_or(sst._generation), mark_for_removal::no);
+}
+
 future<> filesystem_storage::create_links(const sstable& sst, const std::filesystem::path& dir) const {
     return create_links_common(sst, dir.native(), sst._generation, mark_for_removal::no);
 }
 
-future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs) const {
+future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const {
     std::filesystem::path snapshot_dir;
     if (abs) {
         snapshot_dir = dir;
@@ -350,7 +355,7 @@ future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_
         snapshot_dir = _dir / dir;
     }
     co_await sst.sstable_touch_directory_io_check(snapshot_dir);
-    co_await create_links(sst, snapshot_dir);
+    co_await create_links_common(sst, snapshot_dir, std::move(gen));
 }
 
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
@@ -514,7 +519,7 @@ public:
     }
 
     virtual future<> seal(const sstable& sst) override;
-    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const override;
+    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type>) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -628,7 +633,7 @@ future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {
     co_await _client->delete_object(prefix + "/" + sstable_version_constants::TOC_SUFFIX);
 }
 
-future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs) const {
+future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const {
     co_await coroutine::return_exception(std::runtime_error("Snapshotting S3 objects not implemented"));
 }
 
