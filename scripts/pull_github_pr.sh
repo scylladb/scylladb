@@ -69,7 +69,7 @@ git fetch "$REMOTE" pull/$PR_NUM/head
 
 nr_commits=$(git log --pretty=oneline HEAD..FETCH_HEAD | wc -l)
 
-closes="${NL}${NL}Closes ${PROJECT}#${PR_NUM}${NL}"
+closes="${NL}${NL}From pull request: ${PROJECT}#${PR_NUM}${NL}"
 
 if [[ $nr_commits == 1 ]]; then
 	commit=$(git log --pretty=oneline HEAD..FETCH_HEAD | awk '{print $1}')
@@ -84,7 +84,7 @@ if [[ $nr_commits == 1 ]]; then
 			exit 1
 		fi
 	fi
-	git commit --amend -m "${message}${closes}"
+	git notes add -m "${message}${closes}"
 else
 	git merge --no-ff --log=1000 FETCH_HEAD -m "Merge '$PR_TITLE' from $USER_NAME" -m "${PR_DESCR}${closes}"
 fi
