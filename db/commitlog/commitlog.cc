@@ -1865,18 +1865,19 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         // Always update total_size_on_disk. Will wrap-around iff existing_size > max_size. 
         // That is ok.
         totals.total_size_on_disk += (max_size - existing_size);
-
+        auto known_size = f.known_size();
+ 
         if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
             for (auto * ext : cfg.extensions->commitlog_file_extensions()) {
                 auto nf = co_await ext->wrap_file(filename, f, flags);
                 if (nf) {
-                    f.assign(std::move(nf), f.known_size());
+                    f.assign(std::move(nf), known_size);
                     align = is_overwrite ? f.disk_overwrite_dma_alignment() : f.disk_write_dma_alignment();
                 }
             }
         }
 
-        f.assign(make_checked_file(commit_error_handler, std::move(f)), f.known_size());
+        f.assign(make_checked_file(commit_error_handler, std::move(f)), known_size);
     } catch (...) {
         ep = std::current_exception();
     }
