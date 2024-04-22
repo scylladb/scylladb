@@ -49,6 +49,7 @@ debian_base_packages=(
     libabsl-dev
     librapidxml-dev
     libcrypto++-dev
+    libxxhash-dev
 )
 
 fedora_packages=(
