@@ -31,10 +31,10 @@ Example output:
 
 .. code-block:: console
 
-   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | rows   | compaction_time
-   --------------+------------+------------------+----------------+-----------------------------------------------------+--------+--------------------------
-          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} |    100 | 2018-07-23 08:10:34
-          testdb |       tmcr | md-7-big-Data.db |        1234567 | {key: pk{000400000001}, token:-3169959284402457813} | 100101 | 2018-07-23 08:10:34
+   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | range_tombstones | rows   | compaction_time     
+   --------------+------------+------------------+----------------+-----------------------------------------------------+------------------+--------+---------------------
+          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} |                0 |    100 | 2018-07-23 08:10:34 
+          testdb |       tmcr | md-7-big-Data.db |        1234567 | {key: pk{000400000001}, token:-3169959284402457813} |                0 | 100101 | 2018-07-23 08:10:34 
   
 ================================================  =================================================================================
 Parameter                                         Description
@@ -49,7 +49,9 @@ partition_size                                    The size of the partition in t
 ------------------------------------------------  ---------------------------------------------------------------------------------
 partition_key                                     The value of a partition key that identifies the large partition
 ------------------------------------------------  ---------------------------------------------------------------------------------
-rows                                              The number of rows in the partition in this sstable
+range_tombstones                                  The number of range tombstones in the partition in this sstable
+------------------------------------------------  ---------------------------------------------------------------------------------
+rows                                              The number of rows including range tombstones in the partition in this sstable
 ------------------------------------------------  ---------------------------------------------------------------------------------
 compaction_time                                   Time when compaction last occurred
 ================================================  =================================================================================
@@ -71,9 +73,9 @@ Example output:
 
 .. code-block:: console
 
-   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | rows | compaction_time
-   --------------+------------+------------------+----------------+-----------------------------------------------------+------+--------------------------
-          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} | 1942 | 2018-07-23 08:10:34
+   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | range_tombstones | rows | compaction_time
+   --------------+------------+------------------+----------------+-----------------------------------------------------+------------------+------+---------------------
+          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} |                0 | 1942 | 2018-07-23 08:10:34
 
 
 .. _large-partition-table-configure:
@@ -110,6 +112,7 @@ Large partitions are stored in a system table with the following schema:
        partition_size bigint,
        partition_key text,
        rows bigint,
+       range_tombstones bigint,
        compaction_time timestamp,
        PRIMARY KEY ((keyspace_name, table_name), sstable_name, partition_size, partition_key)
    ) WITH CLUSTERING ORDER BY (sstable_name ASC, partition_size DESC, partition_key ASC)
