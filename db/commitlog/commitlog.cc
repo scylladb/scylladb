@@ -1511,7 +1511,9 @@ db::commitlog::segment_manager::segment_manager(config c)
     clogger.trace("Commitlog {} maximum disk size: {} MB / cpu ({} cpus)",
             cfg.commit_log_location, max_disk_size / (1024 * 1024),
             smp::count);
-
+    if (!cfg.allow_going_over_size_limit && cfg.allow_oversized_allocation) {
+        throw std::invalid_argument("Oversized allocation requires allowing exceeding disk size limit");
+    }
     if (!cfg.metrics_category_name.empty()) {
         create_counters(cfg.metrics_category_name);
     }
