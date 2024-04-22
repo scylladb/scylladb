@@ -6,6 +6,7 @@
 """Scylla clusters for testing.
    Provides helpers to setup and manage clusters of Scylla servers for testing.
 """
+from functools import wraps
 import asyncio
 from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
@@ -1134,6 +1135,13 @@ class ScyllaClusterManager:
         app = aiohttp.web.Application()
         self._setup_routes(app)
         self.runner = aiohttp.web.AppRunner(app)
+        self.tasks_history = dict()
+
+    def repr_tasks_history(self):
+        out = "Cluster_history"
+        for key, val in self.tasks_history.items():
+            out += f"\n{val}:\t\t{repr(key)}"
+        return out
 
     async def start(self) -> None:
         """Get first cluster, setup API"""
@@ -1199,11 +1207,19 @@ class ScyllaClusterManager:
                     return aiohttp.web.Response(status=500, text=str(e))
             return catching_handler
 
+        def route_history_wrapper(handler: Callable)-> Callable:
+            @wraps(handler)
+            async def inner_wrapper(request):
+                self.logger.info("[ScyllaClusterManager][%s] %s", asyncio.current_task().get_name(), request.url)
+                self.tasks_history[asyncio.current_task()] = request
+                return await handler(request)
+            return inner_wrapper
+
         def add_get(route: str, handler: Callable):
-            app.router.add_get(route, make_catching_handler(handler))
+            app.router.add_get(route, make_catching_handler(route_history_wrapper(handler)))
 
         def add_put(route: str, handler: Callable):
-            app.router.add_put(route, make_catching_handler(handler))
+            app.router.add_put(route, make_catching_handler(route_history_wrapper(handler)))
 
         add_get('/up', self._manager_up)
         add_get('/cluster/up', self._cluster_up)
@@ -1274,6 +1290,7 @@ class ScyllaClusterManager:
     async def _after_test(self, _request) -> str:
         assert self.cluster is not None
         assert self.current_test_case_full_name
+        self.logger.info(self.repr_tasks_history())
         success = _request.match_info["success"] == "True"
         self.logger.info("Test %s %s, cluster: %s", self.current_test_case_full_name,
                          "SUCCEEDED" if success else "FAILED", self.cluster)
