@@ -2310,7 +2310,7 @@ future<> view_builder::do_build_step() {
             }
         }
     }).handle_exception([] (std::exception_ptr ex) {
-        vlogger.warn("Unexcepted error executing build step: {}. Ignored.", std::current_exception());
+        vlogger.warn("Unexcepted error executing build step: {}. Ignored.", ex);
     });
 }
 
