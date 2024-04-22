@@ -200,6 +200,20 @@ class CqlUpState(Enum):
     CONNECTED = 2,
     QUERIED = 3
 
+
+def start_stop_lock(func):
+    """
+    The methods stop, stop_gracefully, and start in ScyllaServer
+    are not designed for parallel execution.
+    This lock ensures that these methods are executed sequentially
+    """
+    async def wrap(self: 'ScyllaServer', *args, **kwargs):
+        async with self.start_stop_lock:
+            result = await func(self, *args, **kwargs)
+        return result
+    return wrap
+
+
 class ScyllaServer:
     """Starts and handles a single Scylla server, managing logs, checking if responsive,
        and cleanup when finished."""
@@ -233,6 +247,7 @@ class ScyllaServer:
         self.ip_addr = IPAddress(ip_addr)
         self.seeds = seeds
         self.cmd: Optional[Process] = None
+        self.start_stop_lock = asyncio.Lock()
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
@@ -458,6 +473,7 @@ class ScyllaServer:
             return False
         # Any other exception may indicate a problem, and is passed to the caller.
 
+    @start_stop_lock
     async def start(self, api: ScyllaRESTAPIClient, expected_error: Optional[str] = None) -> None:
         """Start an installed server. May be used for restarts."""
 
@@ -550,6 +566,7 @@ class ScyllaServer:
             self.control_cluster.shutdown()
             self.control_cluster = None
 
+    @start_stop_lock
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
         stop, so is not graceful. Waits for the process to exit before return."""
@@ -577,6 +594,7 @@ class ScyllaServer:
                 self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
 
+    @start_stop_lock
     async def stop_gracefully(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGTERM to
         stop, so it is graceful. Waits for the process to exit before return."""
