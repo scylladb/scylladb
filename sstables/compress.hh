@@ -36,6 +36,7 @@
 #include <vector>
 #include <cstdint>
 #include <iterator>
+#include <deque>
 
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
