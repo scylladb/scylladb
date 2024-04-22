@@ -1291,6 +1291,17 @@ class ScyllaClusterManager:
         assert self.cluster is not None
         assert self.current_test_case_full_name
         self.logger.info(self.repr_tasks_history())
+        self.tasks_history.pop(asyncio.current_task())
+        # copy current tasks
+        tasks = [key for key in self.tasks_history.keys()]
+        # wait for all other tasks in ScyllaClusterManager
+
+        for task in tasks:
+            request = self.tasks_history.pop(task)
+            if not task.done():
+                self.logger.info("wait for task:%s, request:%s", task, request.path_qs)
+                await asyncio.wait_for(task, timeout=120)
+
         success = _request.match_info["success"] == "True"
         self.logger.info("Test %s %s, cluster: %s", self.current_test_case_full_name,
                          "SUCCEEDED" if success else "FAILED", self.cluster)
