@@ -77,7 +77,7 @@ template <typename Event>
 void stream_result_future::fire_stream_event(Event event) {
     // delegate to listener
     for (auto listener : _event_listeners) {
-        listener->handle_stream_event(std::move(event));
+        listener->handle_stream_event(event);
     }
 }
 
