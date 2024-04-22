@@ -214,6 +214,20 @@ def start_stop_lock(func):
     return wrap
 
 
+def stop_event(func):
+    """
+    interrupt start node on state "wait for node started" if someone wants to stop it
+    """
+    async def wrap(self: 'ScyllaServer', *args, **kwargs):
+        try:
+            self.stop_event.set()
+            result = await func(self, *args, **kwargs)
+        finally:
+            self.stop_event.clear()
+        return result
+    return wrap
+
+
 class ScyllaServer:
     """Starts and handles a single Scylla server, managing logs, checking if responsive,
        and cleanup when finished."""
@@ -248,6 +262,7 @@ class ScyllaServer:
         self.seeds = seeds
         self.cmd: Optional[Process] = None
         self.start_stop_lock = asyncio.Lock()
+        self.stop_event = asyncio.Event()
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
@@ -514,7 +529,7 @@ class ScyllaServer:
                                          f"{logpath}\n"
                                          f"{self.log_filename}")
 
-        while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT:
+        while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT and not self.stop_event.is_set():
             assert self.cmd is not None
             if self.cmd.returncode:
                 self.cmd = None
@@ -536,7 +551,10 @@ class ScyllaServer:
             # Sleep and retry
             await asyncio.sleep(sleep_interval)
 
-        report_error('failed to start the node, timeout reached')
+        if self.stop_event.is_set():
+            report_error('failed to start the node as it was requested to be stopped in the meantime')
+        else:
+            report_error('failed to start the node, timeout reached')
 
     async def force_schema_migration(self) -> None:
         """This is a hack to change schema hash on an existing cluster node
@@ -566,6 +584,7 @@ class ScyllaServer:
             self.control_cluster.shutdown()
             self.control_cluster = None
 
+    @stop_event
     @start_stop_lock
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
@@ -594,6 +613,7 @@ class ScyllaServer:
                 self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
 
+    @stop_event
     @start_stop_lock
     async def stop_gracefully(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGTERM to
