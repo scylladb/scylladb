@@ -160,6 +160,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     // a build step we don't consider newly added or removed views. This simplifies
     // the algorithms. Also synchronizes an operation wrt. a call to stop().
     seastar::named_semaphore _sem{1, named_semaphore_exception_factory{"view builder"}};
+    sstring _last_sem_holer;
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
     // Used to coordinate between shards the conclusion of the build process for a particular view.

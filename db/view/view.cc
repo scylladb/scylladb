@@ -1884,6 +1884,7 @@ future<> view_builder::start(service::migration_manager& mm) {
             // so that it's not intercepted by `on_drop_view`, `on_create_view`
             // or `on_update_view` events.
             auto units = get_units(_sem, 1).get();
+            _last_sem_holer = "start";
             // Wait for schema agreement even if we're a seed node.
             mm.wait_for_schema_agreement(_db, db::timeout_clock::time_point::max(), &_as).get();
 
@@ -1955,7 +1956,7 @@ future<> view_builder::drain() {
     return _started.then([this] {
         vlogger.info("Unregistering mnotifier listener");
         return _mnotifier.unregister_listener(this).then([this] {
-            vlogger.info("Waiting build sem");
+            vlogger.info("Waiting build sem (last holder is {})", _last_sem_holer);
             return _sem.wait();
         }).then([this] {
             _sem.broken();
@@ -2239,6 +2240,7 @@ static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_sou
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
+        _last_sem_holer = "on_create_view";
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
         auto& step = get_or_create_build_step(view->view_info()->base_id());
         return when_all(step.base->await_pending_writes(), step.base->await_pending_streams()).discard_result().then([this, &step] {
@@ -2264,6 +2266,7 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
 void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
+        _last_sem_holer = "on_update_view";
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
         auto step_it = _base_to_build_step.find(view->view_info()->base_id());
         if (step_it == _base_to_build_step.end()) {
@@ -2282,6 +2285,7 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
     vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
+        _last_sem_holer = "on_drop_view";
         // The view is absent from the database at this point, so find it by brute force.
         ([&, this] {
             for (auto& [_, step] : _base_to_build_step) {
@@ -2320,6 +2324,7 @@ future<> view_builder::do_build_step() {
         exponential_backoff_retry r(1s, 1min);
         while (!_base_to_build_step.empty() && !_as.abort_requested()) {
             auto units = get_units(_sem, 1).get();
+            _last_sem_holer = "do_build_stem";
             ++_stats.steps_performed;
             try {
                 execute(_current_step->second, exponential_backoff_retry(1s, 1min));
