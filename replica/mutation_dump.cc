@@ -184,7 +184,7 @@ private:
                 auto& e = prepared_mutation_sources[ms_it->first];
                 e.ms = ms_it->second;
                 maybe_push(e.region_intervals, region_int, std::compare_three_way{});
-                maybe_push(e.underlying_crs, std::move(transformed_cr), clustering_key_view::tri_compare(*_underlying_schema));
+                maybe_push(e.underlying_crs, transformed_cr, clustering_key_view::tri_compare(*_underlying_schema));
                 ++ms_it;
             }
         }
