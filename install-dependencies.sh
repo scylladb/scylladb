@@ -30,6 +30,8 @@ fi
 debian_base_packages=(
     clang
     gdb
+    cargo
+    wabt
     liblua5.3-dev
     python3-aiohttp
     python3-pyparsing
