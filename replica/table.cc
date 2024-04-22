@@ -2364,39 +2364,54 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
             lister::scan_dir(snapshots_dir,  lister::dir_entry_types::of<directory_entry_type::directory>(), [datadir, &all_snapshots] (fs::path snapshots_dir, directory_entry de) {
                 auto snapshot_name = de.name;
                 all_snapshots.emplace(snapshot_name, snapshot_details());
-                return lister::scan_dir(snapshots_dir / fs::path(snapshot_name),  lister::dir_entry_types::of<directory_entry_type::regular>(), [datadir, &all_snapshots, snapshot_name] (fs::path snapshot_dir, directory_entry de) {
-                    return io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no).then([datadir, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (stat_data sd) {
-                        auto size = sd.allocated_size;
-
-                        // The manifest is the only file expected to be in this directory not belonging to the SSTable.
-                        // For it, we account the total size, but zero it for the true size calculation.
-                        //
-                        // All the others should just generate an exception: there is something wrong, so don't blindly
-                        // add it to the size.
-                        if (name != "manifest.json" && name != "schema.cql") {
-                            sstables::parse_path(snapshot_dir / name);
-                            all_snapshots.at(snapshot_name).total += size;
-                        } else {
-                            size = 0;
-                        }
-                        return io_check(file_size, (fs::path(datadir) / name).native()).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
-                            try {
-                                // File exists in the main SSTable directory. Snapshots are not contributing to size
-                                fut.get();
-                            } catch (std::system_error& e) {
-                                if (e.code() != std::error_code(ENOENT, std::system_category())) {
-                                    throw;
-                                }
-                                all_snapshots.at(snapshot_name).live += size;
-                            }
-                            return make_ready_future<>();
-                        });
-                    });
+                return get_snapshot_details(snapshots_dir / fs::path(snapshot_name), fs::path(datadir)).then([&all_snapshots, snapshot_name] (auto details) {
+                    auto& sd = all_snapshots.at(snapshot_name);
+                    sd.total += details.total;
+                    sd.live += details.live;
+                    return make_ready_future<>();
                 });
             }).get();
         }
         return all_snapshots;
     });
+}
+
+future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_dir, fs::path datadir) {
+    table::snapshot_details details{};
+
+    co_await lister::scan_dir(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [datadir, &details] (fs::path snapshot_dir, directory_entry de) -> future<> {
+        auto sd = co_await io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no);
+        auto size = sd.allocated_size;
+
+        // The manifest and schema.sql files are the only files expected to be in this directory not belonging to the SSTable.
+        //
+        // All the others should just generate an exception: there is something wrong, so don't blindly
+        // add it to the size.
+        if (de.name != "manifest.json" && de.name != "schema.cql") {
+            details.total += size;
+        } else {
+            size = 0;
+        }
+
+        try {
+            // File exists in the main SSTable directory. Snapshots are not contributing to size
+            auto psd = co_await io_check(file_stat, (datadir / de.name).native(), follow_symlink::no);
+            // File in main SSTable directory must be hardlinked to the file in the snapshot dir with the same name.
+            if (psd.device_id != sd.device_id || psd.inode_number != sd.inode_number) {
+                dblog.warn("[{} device_id={} inode_number={} size={}] is not the same file as [{} device_id={} inode_number={} size={}]",
+                        (datadir / de.name).native(), psd.device_id, psd.inode_number, psd.size,
+                        (snapshot_dir / de.name).native(), sd.device_id, sd.inode_number, sd.size);
+                details.live += size;
+            }
+        } catch (std::system_error& e) {
+            if (e.code() != std::error_code(ENOENT, std::system_category())) {
+                throw;
+            }
+            details.live += size;
+        }
+    });
+
+    co_return details;
 }
 
 future<> compaction_group::flush() noexcept {
