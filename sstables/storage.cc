@@ -149,7 +149,7 @@ void filesystem_storage::open(sstable& sst) {
         // TOC will exist at this point if write_components() was called with
         // the generation of a sstable that exists.
         w.close();
-        remove_file(file_path).get();
+        remove_file(sst.filename(component_type::TemporaryTOC)).get();
         throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {} of {}.{}", sst._generation, sst._schema->ks_name(), sst._schema->cf_name()));
     }
 
