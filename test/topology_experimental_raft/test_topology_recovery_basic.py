@@ -11,7 +11,7 @@ import time
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver, restart, enter_recovery_state, \
+from test.topology.util import reconnect_driver, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, log_run_time, wait_until_upgrade_finishes as wait_until_schema_upgrade_finishes, \
         wait_until_topology_upgrade_finishes, delete_raft_topology_state, wait_for_cdc_generations_publishing, \
         check_system_topology_and_cdc_generations_v3_consistency
@@ -31,8 +31,7 @@ async def test_topology_recovery_basic(request, manager: ManagerClient):
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
     # Restart sequentially, as it tests how nodes operating in legacy mode
     # react to raft topology mode nodes and vice versa
-    for srv in servers:
-        await restart(manager, srv)
+    await manager.rolling_restart(servers)
     cql = await reconnect_driver(manager)
 
     logging.info("Cluster restarted, waiting until driver reconnects to every server")
@@ -44,8 +43,7 @@ async def test_topology_recovery_basic(request, manager: ManagerClient):
     await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
     logging.info(f"Restarting hosts {hosts}")
-    for srv in servers:
-        await restart(manager, srv)
+    await manager.rolling_restart(servers)
     cql = await reconnect_driver(manager)
 
     logging.info("Cluster restarted, waiting until driver reconnects to every server")

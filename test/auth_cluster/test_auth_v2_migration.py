@@ -12,7 +12,7 @@ import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import read_barrier, wait_for_cql_and_get_hosts, unique_name
 from cassandra.cluster import ConsistencyLevel
-from test.topology.util import wait_until_topology_upgrade_finishes, restart, enter_recovery_state, reconnect_driver, \
+from test.topology.util import wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes
 
 def auth_data():
@@ -192,8 +192,7 @@ async def test_auth_v2_during_recovery(manager: ManagerClient):
 
     logging.info(f"Restarting hosts {hosts} in recovery mode")
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
-    for srv in servers:
-        await restart(manager, srv)
+    await manager.rolling_restart(servers)
 
     logging.info("Cluster restarted, waiting until driver reconnects to every server")
     await reconnect_driver(manager)
@@ -210,8 +209,7 @@ async def test_auth_v2_during_recovery(manager: ManagerClient):
     logging.info("Restoring cluster to normal status")
     await asyncio.gather(*(delete_raft_topology_state(cql, h) for h in hosts))
     await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
-    for srv in servers:
-        await restart(manager, srv)
+    await manager.rolling_restart(servers)
 
     await reconnect_driver(manager)
     cql, hosts = await manager.get_ready_cql(servers)

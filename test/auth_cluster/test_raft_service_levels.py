@@ -10,7 +10,7 @@ import logging
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, read_barrier
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo
-from test.topology.util import trigger_snapshot, wait_until_topology_upgrade_finishes, restart, enter_recovery_state, reconnect_driver, \
+from test.topology.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes
 from test.topology.conftest import skip_mode
 from cassandra import ConsistencyLevel
@@ -125,8 +125,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
 
     logging.info(f"Restarting hosts {hosts} in recovery mode")
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
-    for srv in servers:
-        await restart(manager, srv)
+    await manager.rolling_restart(servers)
     cql = await reconnect_driver(manager)
 
     logging.info("Cluster restarted, waiting until driver reconnects to every server")
@@ -141,8 +140,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
     await asyncio.gather(*(delete_raft_topology_state(cql, h) for h in hosts))
     await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
-    for srv in servers:
-        await restart(manager, srv)
+    await manager.rolling_restart(servers)
     cql = await reconnect_driver(manager)
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
