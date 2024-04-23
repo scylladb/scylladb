@@ -1958,10 +1958,6 @@ future<> view_builder::drain() {
         }).then([this] {
             _sem.broken();
             return _build_step.join();
-        }).handle_exception_type([] (const broken_semaphore&) {
-            // ignored
-        }).handle_exception_type([] (const semaphore_timed_out&) {
-            // ignored
         }).finally([this] {
             return parallel_for_each(_base_to_build_step, [] (std::pair<const table_id, build_step>& p) {
                 return p.second.reader.close();
