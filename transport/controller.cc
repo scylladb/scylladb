@@ -89,7 +89,7 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
     _listen_addresses.clear();
     std::vector<listen_cfg> configs;
 
-    const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get0();
+    const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get();
     int native_port_idx = -1, native_shard_aware_port_idx = -1;
 
     if (cfg.native_transport_port.is_set() ||

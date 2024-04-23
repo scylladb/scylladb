@@ -1336,7 +1336,7 @@ future<> repair::user_requested_repair_task_impl::run() {
         } else {
             participants = get_hosts_participating_in_repair(germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
-        bool hints_batchlog_flushed = flush_hints(rs, id, db, keyspace, cfs, ignore_nodes, participants).get0();
+        bool hints_batchlog_flushed = flush_hints(rs, id, db, keyspace, cfs, ignore_nodes, participants).get();
 
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
