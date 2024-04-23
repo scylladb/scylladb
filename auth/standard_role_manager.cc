@@ -222,8 +222,9 @@ future<> standard_role_manager::migrate_legacy_metadata() {
             return do_with(
                     row.get_as<sstring>("name"),
                     std::move(config),
-                    [this](const auto& name, const auto& config) {
-                return this->create_or_replace(name, config);
+                    ::service::mutations_collector::unused(),
+                    [this](const auto& name, const auto& config, auto& mc) {
+                return this->create_or_replace(name, config, mc);
             });
         }).finally([results] {});
     }).then([] {
@@ -272,7 +273,7 @@ future<> standard_role_manager::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});;
 }
 
-future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c) {
+future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::mutations_collector& mc) {
     const sstring query = format("INSERT INTO {}.{} ({}, is_superuser, can_login) VALUES (?, ?, ?)",
             get_auth_ks_name(_qp),
             meta::roles_table::name,
@@ -285,18 +286,18 @@ future<> standard_role_manager::create_or_replace(std::string_view role_name, co
                 {sstring(role_name), c.is_superuser, c.can_login},
                 cql3::query_processor::cache_internal::yes).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name), c.is_superuser, c.can_login}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc,  query, {sstring(role_name), c.is_superuser, c.can_login});
     }
 }
 
 future<>
-standard_role_manager::create(std::string_view role_name, const role_config& c) {
-    return this->exists(role_name).then([this, role_name, &c](bool role_exists) {
+standard_role_manager::create(std::string_view role_name, const role_config& c, ::service::mutations_collector& mc) {
+    return this->exists(role_name).then([this, role_name, &c, &mc](bool role_exists) {
         if (role_exists) {
             throw role_already_exists(role_name);
         }
 
-        return this->create_or_replace(role_name, c);
+        return this->create_or_replace(role_name, c, mc);
     });
 }
 

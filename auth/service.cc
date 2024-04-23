@@ -33,6 +33,7 @@
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
 #include "service/migration_manager.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "timestamp.hh"
 #include "utils/class_registrator.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -331,8 +332,9 @@ static void validate_authentication_options_are_supported(
 
 future<> service::create_role(std::string_view name,
         const role_config& config,
-        const authentication_options& options) const {
-    co_await underlying_role_manager().create(name, config);
+        const authentication_options& options,
+        ::service::mutations_collector& mc) const {
+    co_await underlying_role_manager().create(name, config, mc);
     if (!auth::any_authentication_options(options)) {
         co_return;
     }
@@ -340,13 +342,16 @@ future<> service::create_role(std::string_view name,
     try {
         validate_authentication_options_are_supported(options,
                 underlying_authenticator().supported_options());
-        co_await underlying_authenticator().create(name, options);
+        co_await underlying_authenticator().create(name, options, mc);
     } catch (...) {
         ep = std::current_exception();
     }
     if (ep) {
-        // Roll-back.
-        co_await underlying_role_manager().drop(name);
+        // Rollback only in legacy mode as normally mutations won't be
+        // applied in case exception is raised
+        if (legacy_mode(_qp)) {
+            co_await underlying_role_manager().drop(name);
+        }
         std::rethrow_exception(std::move(ep));
     }
 }
@@ -452,8 +457,9 @@ future<> create_role(
         const service& ser,
         std::string_view name,
         const role_config& config,
-        const authentication_options& options) {
-    return ser.create_role(name, config, options);
+        const authentication_options& options,
+        ::service::mutations_collector& mc) {
+    return ser.create_role(name, config, options, mc);
 }
 
 future<> alter_role(

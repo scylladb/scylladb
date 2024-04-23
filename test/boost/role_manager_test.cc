@@ -10,6 +10,7 @@
 
 #include "auth/standard_role_manager.hh"
 
+#include "service/raft/raft_group0_client.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/cql_test_env.hh"
@@ -34,11 +35,11 @@ SEASTAR_TEST_CASE(create_role) {
         //
         // Create a role, and verify its properties.
         //
-
-        auth::role_config c;
-        c.is_superuser = true;
-
-        m->create("admin", c).get();
+        do_with_mc(env, [&m] (auto& mc) {
+            auth::role_config c;
+            c.is_superuser = true;
+            m->create("admin", c, mc).get(); 
+        });
         BOOST_REQUIRE_EQUAL(m->exists("admin").get(), true);
         BOOST_REQUIRE_EQUAL(m->can_login("admin").get(), false);
         BOOST_REQUIRE_EQUAL(m->is_superuser("admin").get(), true);
@@ -50,8 +51,11 @@ SEASTAR_TEST_CASE(create_role) {
         //
         // Creating a role that already exists is an error.
         //
-
-        BOOST_REQUIRE_THROW(m->create("admin", c).get(), auth::role_already_exists);
+        do_with_mc(env, [&m] (auto& mc) {
+            auth::role_config c;
+            c.is_superuser = true;
+            BOOST_REQUIRE_THROW(m->create("admin", c, mc).get(), auth::role_already_exists);
+        });
     });
 }
 
@@ -66,7 +70,9 @@ SEASTAR_TEST_CASE(drop_role) {
         // Create a role, then drop it, then verify it's gone.
         //
 
-        m->create("lord", auth::role_config()).get();
+        do_with_mc(env, [&m] (auto& mc) {
+            m->create("lord", auth::role_config(), mc).get();
+        });
         m->drop("lord").get();
         BOOST_REQUIRE_EQUAL(m->exists("lord").get(), false);
 
@@ -74,14 +80,16 @@ SEASTAR_TEST_CASE(drop_role) {
         // Dropping a role revokes it from other roles and revokes other roles from it.
         //
 
-        m->create("peasant", auth::role_config()).get();
-        m->create("lord", auth::role_config()).get();
-        m->create("king", auth::role_config()).get();
+        do_with_mc(env, [&m] (auto& mc) {
+            m->create("peasant", auth::role_config(), mc).get();
+            m->create("lord", auth::role_config(), mc).get();
+            m->create("king", auth::role_config(), mc).get();
 
-        auth::role_config tim_config;
-        tim_config.is_superuser = false;
-        tim_config.can_login = true;
-        m->create("tim", tim_config).get();
+            auth::role_config tim_config;
+            tim_config.is_superuser = false;
+            tim_config.can_login = true;
+            m->create("tim", tim_config, mc).get();
+        });
 
         m->grant("lord", "peasant").get();
         m->grant("king", "lord").get();
@@ -112,13 +120,14 @@ SEASTAR_TEST_CASE(grant_role) {
 
         const auto anon = auth::authenticated_user();
 
-        auth::role_config jsnow_config;
-        jsnow_config.is_superuser = false;
-        jsnow_config.can_login = true;
-        m->create("jsnow", jsnow_config).get();
-
-        m->create("lord", auth::role_config()).get();
-        m->create("king", auth::role_config()).get();
+        do_with_mc(env, [&m] (auto& mc) {
+            auth::role_config jsnow_config;
+            jsnow_config.is_superuser = false;
+            jsnow_config.can_login = true;
+            m->create("jsnow", jsnow_config, mc).get();
+            m->create("lord", auth::role_config(), mc).get();
+            m->create("king", auth::role_config(), mc).get();
+        });
 
         //
         // All kings have the rights of lords, and 'jsnow' is a king.
@@ -154,13 +163,14 @@ SEASTAR_TEST_CASE(revoke_role) {
 
         const auto anon = auth::authenticated_user();
 
-        auth::role_config rrat_config;
-        rrat_config.is_superuser = false;
-        rrat_config.can_login = true;
-        m->create("rrat", rrat_config).get();
-
-        m->create("chef", auth::role_config()).get();
-        m->create("sous_chef", auth::role_config()).get();
+        do_with_mc(env, [&m] (auto& mc) {
+            auth::role_config rrat_config;
+            rrat_config.is_superuser = false;
+            rrat_config.can_login = true;
+            m->create("rrat", rrat_config, mc).get();
+            m->create("chef", auth::role_config(), mc).get();
+            m->create("sous_chef", auth::role_config(), mc).get();
+        });
 
         m->grant("chef", "sous_chef").get();
         m->grant("rrat", "chef").get();
@@ -193,10 +203,12 @@ SEASTAR_TEST_CASE(alter_role) {
 
         const auto anon = auth::authenticated_user();
 
-        auth::role_config tsmith_config;
-        tsmith_config.is_superuser = true;
-        tsmith_config.can_login = true;
-        m->create("tsmith", tsmith_config).get();
+        do_with_mc(env, [&m] (auto& mc) {
+            auth::role_config tsmith_config;
+            tsmith_config.is_superuser = true;
+            tsmith_config.can_login = true;
+            m->create("tsmith", tsmith_config, mc).get();
+        });
 
         auth::role_config_update u;
         u.can_login = false;

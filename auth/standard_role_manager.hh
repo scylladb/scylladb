@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "auth/common.hh"
 #include "auth/role_manager.hh"
 
 #include <string_view>
@@ -48,7 +49,7 @@ public:
 
     virtual future<> stop() override;
 
-    virtual future<> create(std::string_view role_name, const role_config&) override;
+    virtual future<> create(std::string_view role_name, const role_config&, ::service::mutations_collector&) override;
 
     virtual future<> drop(std::string_view role_name) override;
 
@@ -87,7 +88,7 @@ private:
 
     future<> create_default_role_if_missing();
 
-    future<> create_or_replace(std::string_view role_name, const role_config&);
+    future<> create_or_replace(std::string_view role_name, const role_config&, ::service::mutations_collector&);
 
     future<> modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change);
 };

@@ -164,7 +164,8 @@ public:
     ///
     future<> create_role(std::string_view name,
             const role_config& config,
-            const authentication_options& options) const;
+            const authentication_options& options,
+            ::service::mutations_collector& mc) const;
 
     ///
     /// Return the set of all roles granted to the given role, including itself and roles granted through other roles.
@@ -231,7 +232,8 @@ future<> create_role(
         const service&,
         std::string_view name,
         const role_config&,
-        const authentication_options&);
+        const authentication_options&,
+        ::service::mutations_collector&);
 
 ///
 /// Alter an existing role and its authentication information.

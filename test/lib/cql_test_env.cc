@@ -962,11 +962,16 @@ private:
                 config.is_superuser = true;
                 config.can_login = true;
 
+                auto as = &abort_sources.local();
+                auto guard = group0_client.start_operation(as).get();
+                service::mutations_collector mc{std::move(guard)};
                 auth::create_role(
                         _auth_service.local(),
                         testing_superuser,
                         config,
-                        auth::authentication_options()).get();
+                        auth::authentication_options(),
+                        mc).get();
+                std::move(mc).announce(group0_client, "auth test default user", *as, ::service::raft_timeout{}).get();
             } catch (const auth::role_already_exists&) {
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
@@ -1026,6 +1031,16 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
             return func(e);
         });
     }, std::move(cfg_in), std::move(init_configurables));
+}
+
+// this function should be called in seastar thread
+void do_with_mc(cql_test_env& env, std::function<void(service::mutations_collector&)> func) {
+    seastar::abort_source as;
+    auto& g0 = env.get_raft_group0_client();
+    auto guard = g0.start_operation(&as).get();
+    auto mc = service::mutations_collector(std::move(guard));
+    func(mc);
+    std::move(mc).announce(g0, "mutations_collector", as, std::nullopt).get();
 }
 
 reader_permit make_reader_permit(cql_test_env& env) {

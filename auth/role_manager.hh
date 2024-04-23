@@ -20,6 +20,7 @@
 #include "auth/resource.hh"
 #include "seastarx.hh"
 #include "exceptions/exceptions.hh"
+#include "auth/common.hh"
 
 namespace auth {
 
@@ -107,7 +108,7 @@ public:
     ///
     /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.
     ///
-    virtual future<> create(std::string_view role_name, const role_config&) = 0;
+    virtual future<> create(std::string_view role_name, const role_config&, ::service::mutations_collector&) = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.

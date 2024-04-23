@@ -39,7 +39,7 @@ public:
 
     virtual future<> stop() override;
 
-    virtual future<> create(std::string_view role_name, const role_config&) override;
+    virtual future<> create(std::string_view role_name, const role_config&, ::service::mutations_collector&) override;
 
     virtual future<> drop(std::string_view role_name) override;
 

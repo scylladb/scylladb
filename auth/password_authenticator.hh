@@ -64,7 +64,7 @@ public:
 
     virtual future<authenticated_user> authenticate(const credentials_map& credentials) const override;
 
-    virtual future<> create(std::string_view role_name, const authentication_options& options) override;
+    virtual future<> create(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) override;
 
     virtual future<> alter(std::string_view role_name, const authentication_options& options) override;
 

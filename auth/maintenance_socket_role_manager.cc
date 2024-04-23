@@ -49,7 +49,7 @@ future<T> operation_not_supported_exception(std::string_view operation) {
         std::runtime_error(format("role manager: {} operation not supported through maintenance socket", operation)));
 }
 
-future<> maintenance_socket_role_manager::create(std::string_view role_name, const role_config&) {
+future<> maintenance_socket_role_manager::create(std::string_view role_name, const role_config&, ::service::mutations_collector&) {
     return operation_not_supported_exception("CREATE");
 }
 

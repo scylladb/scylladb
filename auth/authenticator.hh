@@ -22,6 +22,7 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "auth/authentication_options.hh"
+#include "auth/common.hh"
 #include "auth/resource.hh"
 #include "auth/sasl_challenge.hh"
 
@@ -106,7 +107,7 @@ public:
     ///
     /// The options provided must be a subset of `supported_options()`.
     ///
-    virtual future<> create(std::string_view role_name, const authentication_options& options) = 0;
+    virtual future<> create(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) = 0;
 
     ///
     /// Alter the authentication record of an existing user.
