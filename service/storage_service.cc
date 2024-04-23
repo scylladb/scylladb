@@ -4272,7 +4272,8 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return make_ready_future<>();
             }).get();
-            node_ops_insert(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, coordinator_host_id, req = std::move(req)] () mutable {
+            auto ignore_nodes = std::move(req.ignore_nodes);
+            node_ops_insert(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, coordinator_host_id, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, coordinator_host_id, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: req.replace_nodes) {
                         auto existing_node = x.first;
