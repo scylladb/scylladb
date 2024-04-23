@@ -940,15 +940,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .build());
     }
 
-    future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
-        std::unordered_set<table_id> new_transitions;
-        for (const tablet_migration_info& mig : plan.migrations()) {
-            co_await coroutine::maybe_yield();
-            generate_migration_update(out, guard, mig);
-            new_transitions.insert(mig.tablet.table);
-        }
-
-        for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
+    void generate_resize_update(std::vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, locator::resize_decision resize_decision) {
+            // FIXME: indent.
             auto s = _db.find_schema(table_id);
             auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
             // Sequence number is monotonically increasing, globally. Therefore, it can be used to identify a decision.
@@ -959,24 +952,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
                     .set_resize_decision(std::move(resize_decision))
                     .build());
+    }
+
+    future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
+        for (const tablet_migration_info& mig : plan.migrations()) {
+            co_await coroutine::maybe_yield();
+            generate_migration_update(out, guard, mig);
         }
 
-        // FIXME: Finalize split requests when exiting the tablet migration track.
-        for (auto table_id : plan.resize_plan().finalize_resize) {
-            auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
-            // Only finalize split request if there's no ongoing transition or new ones for a given table.
-            if (tmap.transitions().size() > 0 || new_transitions.contains(table_id)) {
-                continue;
-            }
-
-            auto s = _db.find_schema(table_id);
-            auto new_tablet_map = co_await _tablet_allocator.split_tablets(get_token_metadata_ptr(), table_id);
-            out.emplace_back(co_await replica::tablet_map_to_mutation(
-                new_tablet_map,
-                table_id,
-                s->ks_name(),
-                s->cf_name(),
-                guard.write_timestamp()));
+        for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
+            co_await coroutine::maybe_yield();
+            generate_resize_update(out, guard, table_id, resize_decision);
         }
     }
 
@@ -1290,6 +1276,39 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     .build());
         }
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
+    }
+
+    future<> handle_tablet_split_finalization(group0_guard g) {
+        // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
+        // of token metadata will complete before we update topology.
+        auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
+
+        auto tm = get_token_metadata_ptr();
+        auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats, get_dead_nodes());
+
+        std::vector<canonical_mutation> updates;
+        updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
+
+        for (auto& table_id : plan.resize_plan().finalize_resize) {
+            auto s = _db.find_schema(table_id);
+            auto new_tablet_map = co_await _tablet_allocator.split_tablets(tm, table_id);
+            updates.emplace_back(co_await replica::tablet_map_to_mutation(
+                new_tablet_map,
+                table_id,
+                s->ks_name(),
+                s->cf_name(),
+                guard.write_timestamp()));
+
+            // Clears the resize decision for a table.
+            generate_resize_update(updates, guard, table_id, locator::resize_decision{});
+        }
+
+        updates.emplace_back(
+            topology_mutation_builder(guard.write_timestamp())
+                .del_transition_state()
+                .set_version(_topo_sm._topology.version + 1)
+                .build());
+        co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet split finalization"));
     }
 
     // This function must not release and reacquire the guard, callers rely
@@ -1783,6 +1802,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             case topology::transition_state::tablet_migration:
                 co_await handle_tablet_migration(std::move(guard), false);
                 break;
+            case topology::transition_state::tablet_split_finalization:
+                co_await handle_tablet_split_finalization(std::move(guard));
+                break;
             case topology::transition_state::left_token_ring: {
                 auto node = get_node_to_work_on(std::move(guard));
 
@@ -2223,6 +2245,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Returns true if the state machine was transitioned into tablet migration path.
     future<bool> maybe_start_tablet_migration(group0_guard);
 
+    // Returns true if the state machine was transitioned into tablet split finalization path.
+    future<bool> maybe_start_tablet_split_finalization(group0_guard, const table_resize_plan& plan);
+
     future<locator::load_stats> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
 
@@ -2287,6 +2312,12 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
 
     co_await generate_migration_updates(updates, guard, plan);
 
+    // We only want to consider transitioning into tablet split finalization path, if there's no other work
+    // to be done (e.g. start migration or/and emit split decision).
+    if (updates.empty()) {
+        co_return co_await maybe_start_tablet_split_finalization(std::move(guard), plan.resize_plan());
+    }
+
     updates.emplace_back(
         topology_mutation_builder(guard.write_timestamp())
             .set_transition_state(topology::transition_state::tablet_migration)
@@ -2294,6 +2325,23 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
             .build());
 
     co_await update_topology_state(std::move(guard), std::move(updates), "Starting tablet migration");
+    co_return true;
+}
+
+future<bool> topology_coordinator::maybe_start_tablet_split_finalization(group0_guard guard, const table_resize_plan& plan) {
+    if (plan.finalize_resize.empty()) {
+        co_return false;
+    }
+
+    std::vector<canonical_mutation> updates;
+
+    updates.emplace_back(
+        topology_mutation_builder(guard.write_timestamp())
+            .set_transition_state(topology::transition_state::tablet_split_finalization)
+            .set_version(_topo_sm._topology.version + 1)
+            .build());
+
+    co_await update_topology_state(std::move(guard), std::move(updates), "Started tablet split finalization");
     co_return true;
 }
 

@@ -661,6 +661,8 @@ future<> storage_service::topology_state_load() {
                     [[fallthrough]];
                 case topology::transition_state::tablet_migration:
                     [[fallthrough]];
+                case topology::transition_state::tablet_split_finalization:
+                    [[fallthrough]];
                 case topology::transition_state::commit_cdc_generation:
                     [[fallthrough]];
                 case topology::transition_state::tablet_draining:
