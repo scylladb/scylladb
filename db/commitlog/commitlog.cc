@@ -129,8 +129,14 @@ const std::string db::commitlog::descriptor::SEPARATOR("-");
 const std::string db::commitlog::descriptor::FILENAME_PREFIX("CommitLog" + SEPARATOR);
 const std::string db::commitlog::descriptor::FILENAME_EXTENSION(".log");
 
+// Internally used prefixes for recycled vs. "external" segment files.
+// Recycled -> clean, dropped by kept and reused
+static const std::string recycled_pfx("Recycled-"); 
+// External -> used for isolated storage of oversized mutation(s).
+static const std::string ext_pfx("Ext-"); 
+
 static const boost::regex allowed_prefix("[a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR);
-static const boost::regex filename_match("(?:Recycled-)?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR + ")(\\d+)(?:" + db::commitlog::descriptor::SEPARATOR + "(\\d+))?\\" + db::commitlog::descriptor::FILENAME_EXTENSION);
+static const boost::regex filename_match("(?:" + recycled_pfx + "|" + ext_pfx + ")?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR + ")(\\d+)(?:" + db::commitlog::descriptor::SEPARATOR + "(\\d+))?\\" + db::commitlog::descriptor::FILENAME_EXTENSION);
 
 db::commitlog::descriptor::descriptor(const std::string& filename, const std::string& fname_prefix)
     : descriptor([&filename, &fname_prefix]() {
@@ -144,7 +150,9 @@ db::commitlog::descriptor::descriptor(const std::string& filename, const std::st
         if (!boost::regex_match(cbegin, filename.cend(), m, filename_match)) {
             throw std::domain_error("Cannot parse the version of the file: " + filename);
         }
-        if (m[1].str() != fname_prefix) {
+        // Rule: either the filename _without_ the known prefix decorators match
+        // input prefix, _or_ we explicitly want to read such a prefixed file. (See replayer)
+        if (m[1].str() != fname_prefix && !m[0].str().starts_with(fname_prefix)) {
             throw std::domain_error("File does not match prefix pattern: " + filename + " / " + fname_prefix);
         }
         if (m[3].length() == 0) {
@@ -182,10 +190,12 @@ db::commitlog::descriptor::operator db::replay_position() const {
 struct db::commitlog::entry_writer {
     force_sync sync;
     size_t num_entries;
+    bool is_external; // see oversized_allocation
 
-    explicit entry_writer(force_sync fs, size_t ne = 1)
+    explicit entry_writer(force_sync fs, size_t ne = 1, bool ix = false)
         : sync(fs)
         , num_entries(ne)
+        , is_external(ix)
     {}
     virtual ~entry_writer() = default;
 
@@ -219,6 +229,15 @@ struct db::commitlog::entry_writer {
 
     /** the resulting rp_handle for writing a given entry */
     virtual void result(size_t, rp_handle) = 0;
+
+    // Used by oversized_allocation. Returns the external segment
+    // that holds actual data. This segment is ref-counted from
+    // the coordinating segment. When the latter is clean, it will
+    // drop cf count in the external segment and hopefully clean
+    // and remove it.
+    virtual shared_ptr<segment> external_segment(size_t) const {
+        return {};
+    }
 };
 
 class db::commitlog::segment_manager : public ::enable_shared_from_this<segment_manager> {
@@ -323,6 +342,8 @@ public:
     requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
     future<R> allocate_when_possible(T writer, db::timeout_clock::time_point timeout);
 
+    future<> oversized_allocation(entry_writer&, size_t, db::timeout_clock::time_point timeout);
+
     replay_position min_position();
 
     template<typename T>
@@ -416,15 +437,6 @@ public:
 
     uint64_t next_id() {
         return ++_ids;
-    }
-
-    void sanity_check_size(size_t size) {
-        if (size > max_mutation_size) {
-            throw std::invalid_argument(
-                            "Mutation of " + std::to_string(size)
-                                    + " bytes is too large for the maximum size of "
-                                    + std::to_string(max_mutation_size));
-        }
     }
 
     future<> init();
@@ -742,6 +754,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     size_t _buffer_ostream_size = 0;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     std::unordered_map<cf_id_type, gc_clock::time_point> _cf_min_time;
+    std::unordered_multimap<cf_id_type, shared_ptr<segment>> _ext_segments;
     time_point _sync_time;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
@@ -800,6 +813,7 @@ public:
     static constexpr size_t descriptor_header_size = 6 * sizeof(uint32_t);
     static constexpr uint32_t segment_magic = ('S'<<24) |('C'<< 16) | ('L' << 8) | 'C';
     static constexpr uint32_t multi_entry_size_magic = 0xffffffff;
+    static constexpr uint32_t ext_multi_entry_size_magic = 0xfffffffe;
 
     // The commit log (chained) sync marker/header size in bytes (int: length + int: checksum [segmentId, position])
     static constexpr size_t sync_marker_size = 2 * sizeof(uint32_t);
@@ -1242,7 +1256,7 @@ public:
      * Should only be called from "allocate_when_possible". "this" must be secure in a shared_ptr that will not
      * die. We don't keep ourselves alive (anymore)
      */
-    write_result allocate(entry_writer& writer, segment_manager::request_controller_units& permit, db::timeout_clock::time_point timeout) {
+    write_result allocate(entry_writer& writer, segment_manager::request_controller_units& permit, db::timeout_clock::time_point timeout, size_t max_size, size_t max_mutation_size) {
         if (must_sync()) {
             return write_result::must_sync;
         }
@@ -1250,9 +1264,13 @@ public:
         const auto size = writer.size(*this);
         const auto s = size + writer.num_entries * entry_overhead_size + (writer.num_entries > 1 ? multi_entry_overhead_size : 0u); // total size
 
-        _segment_manager->sanity_check_size(s);
+        if (s > max_mutation_size) {
+            throw std::invalid_argument("Mutation of " + std::to_string(s) + " bytes is too large for the maximum size of " 
+                + std::to_string(max_mutation_size)
+                );
+        }
 
-        if (!is_still_allocating() || next_position(s) > _segment_manager->max_size) { // would we make the file too big?
+        if (!is_still_allocating(max_size) || next_position(s) > max_size) { // would we make the file too big?
             return write_result::no_space;
         } else if (!_buffer.empty() && (s > _buffer_ostream.size())) {  // enough data?
             if (_segment_manager->cfg.mode == sync_mode::BATCH || writer.sync) {
@@ -1289,11 +1307,12 @@ public:
         //      size  : uint32_t
         //      crc1  : uint32_t - crc of magic, size
         // -> entries[]
-        if (writer.num_entries > 1) {
+        if (writer.num_entries > 1 || writer.is_external) {
             mecrc.emplace();
-            write<uint32_t>(out, multi_entry_size_magic);
+            auto magic = writer.is_external ? ext_multi_entry_size_magic : multi_entry_size_magic;
+            write<uint32_t>(out, magic);
             write<uint32_t>(out, s);
-            mecrc->process(multi_entry_size_magic);
+            mecrc->process(magic);
             mecrc->process(uint32_t(s));
             write<uint32_t>(out, mecrc->checksum());
         }
@@ -1319,6 +1338,20 @@ public:
             auto entry_out = out.write_substream(entry_size);
             writer.write(*this, entry_out, entry);
             writer.result(entry, std::move(h));
+
+            // If we wrote an external entry, add a reference to
+            // the external segment (if avail)
+            if (writer.is_external) {
+                auto exs = writer.external_segment(entry);
+                if (exs) {
+                    // remember: a cf_id can reference any number of 
+                    // external segments, hence this is a multimap.
+                    // Of course, same id can also reference same
+                    // external segment X times, in which case this also
+                    // serves as ref count
+                    _ext_segments.emplace(id, std::move(exs));
+                }
+            }
         }
 
         ++_segment_manager->totals.allocation_count;
@@ -1366,6 +1399,14 @@ public:
         }
         return size;
     }
+    void remove_external_segments(const cf_id_type& id) {
+        // for every reference from id -> a segment, decrease use cf_id count 
+        for (auto [rs, re] = _ext_segments.equal_range(id); auto& [mid, ex] : std::ranges::subrange(rs, re)) {
+            ex->mark_clean(id, 1);
+        }
+        // and now we no longer hold this
+        _ext_segments.erase(id);
+    }
     void mark_clean(const cf_id_type& id, uint64_t count) noexcept {
         auto i = _cf_dirty.find(id);
         if (i != _cf_dirty.end()) {
@@ -1373,17 +1414,26 @@ public:
             i->second -= count;
             if (i->second == 0) {
                 _cf_dirty.erase(i);
+                remove_external_segments(id);
             }
         }
     }
     void mark_clean(const cf_id_type& id) noexcept {
         _cf_dirty.erase(id);
+        remove_external_segments(id);
     }
     void mark_clean() noexcept {
         _cf_dirty.clear();
+        for (auto& [id, ex] : _ext_segments) {
+            ex->mark_clean(id, 1);
+        }
+        _ext_segments.clear();
+    }
+    bool is_still_allocating(size_t max_size) const noexcept {
+        return !_closed && position() < max_size;
     }
     bool is_still_allocating() const noexcept {
-        return !_closed && position() < _segment_manager->max_size;
+        return is_still_allocating(_segment_manager->max_size);
     }
     bool is_clean() const noexcept {
         return _cf_dirty.empty();
@@ -1423,8 +1473,18 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
     auto size = writer.size();
     // If this is already too big now, we should throw early. It's also a correctness issue, since
     // if we are too big at this moment we'll never reach allocate() to actually throw at that
-    // point.
-    sanity_check_size(size);
+    // point. If we alloc oversized (external) alloocation, call the significantly slower oversize_alloc
+    if (size > max_mutation_size) {
+        if (!cfg.allow_oversized_allocation && !writer.is_external) {
+            throw std::invalid_argument(
+                            "Mutation of " + std::to_string(size)
+                                    + " bytes is too large for the maximum size of "
+                                    + std::to_string(max_mutation_size));
+        }
+
+        co_await oversized_allocation(writer, size, timeout);
+        co_return writer.result();
+    }
 
     auto fut = get_units(_request_controller, size, timeout);
     if (_request_controller.waiters()) {
@@ -1445,7 +1505,7 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
     for (;;) {
         using write_result = segment::write_result;
 
-        switch (s->allocate(writer, permit, timeout)) {
+        switch (s->allocate(writer, permit, timeout, max_size, max_mutation_size)) {
             case write_result::ok:
                 co_return writer.result();
             case write_result::must_sync:
@@ -1458,6 +1518,197 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
                 s = co_await s->batch_cycle(timeout);
                 co_return writer.result();
         }
+    }
+}
+
+/**
+ * Write an oversized entry set as an external reference.
+ * 
+ * Note: potentially temporary solution. This cannot handle
+ * hard size limit. 
+ * 
+ * Technically, if we could add some sort of sync between writers
+ * we could fairly easily either write an oversized entry across several 
+ * segments (if size is divided into more than one entry), or just allow a segment
+ * to grow larger than normally allowed. However, such sync would probably impact 
+ * throughput in the common case, and it would also be sensitive to 
+ * both way to large temp buffer requirements (if we don't break each entry into 
+ * chunks like we do here), but more importantly: If we crash while writing we
+ * end up with half the entries written and any number missing -> partial 
+ * recovery. 
+ * We really want to know that the data is on disk fully before committing
+ * something that can be replayed to "real" commitlog. Hence we instead
+ * write data to an "external" segment (just a special allocated segment), which 
+ * we place no size limit on. We write each entry as a separate chunk to minimize
+ * memory usage, then we flush and close the file. 
+ * 
+ * Once we are sure the data is on disk, we then just write a metadata entry
+ * to the normal commitlog segment, in which we reference the external segment
+ * and provide some other metadata (off, size). Then we set up a reference from
+ * the "metedata" segment to the external one, so that once the metadata entries
+ * are released, we also release the external segment.
+ * 
+ * Since we use a special prefix for the external file, much like recycled segments,
+ * it will be picked up on replay, but ignored by the first level replay. If a metadata
+ * entry is encountered however, we will find the external file and, if avail, replay the
+ * data in it, pretending it comes from the "original" segment. I.e. transparent to 
+ * client. The external files will then be freed/reused the same way any other replayed
+ * segment is.
+ * 
+ * Again: this only works for non-hard limit CL.
+ * 
+*/
+future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writer, size_t size, db::timeout_clock::time_point timeout) {
+    descriptor d(next_id(), ext_pfx + cfg.fname_prefix);
+    auto dst = filename(d);
+    named_file f(dst);
+
+    // We need a new segment, so we can be sure we get it to our selves
+    // We want to ensure _all_ data in the original writer is written fully
+    // before we try to commit the metadata (references) to "actual" segment.
+    // If the latter fails, we just drop the external segment and it should be deleted.
+    auto s = co_await allocate_segment_ex(std::move(d), std::move(f), open_flags::wo|open_flags::create);
+    using id_pos_and_size = std::tuple<replay_position, size_t>;
+    using id_pos_and_sizes = std::vector<id_pos_and_size>;
+
+    id_pos_and_sizes tmp;
+    tmp.reserve(writer.num_entries);
+
+    scope_increment_counter allocating(totals.active_allocations);
+    request_controller_units fake_permit;
+
+    writer.size(*s); // ensure mutation sizes etc computed.
+
+    // write each entry as a separate chunk to reduce buffer usage,
+    // until such a time as we can more efficiently stream data or whatnot.
+    for (size_t i = 0; i < writer.num_entries; ++i) {
+        class single_entry_wrapper : public entry_writer {
+            entry_writer& _writer;
+            id_pos_and_sizes& _result;
+            size_t _index, _size;
+        public:
+            single_entry_wrapper(entry_writer& writer, id_pos_and_sizes& result, size_t index, size_t size)
+                : entry_writer(force_sync::no, 1)
+                , _writer(writer)
+                , _result(result)
+                , _index(index)
+                , _size(size)
+            {}
+            /** return the CF id for n:th entry */
+            const cf_id_type& id(size_t) const override {
+                return _writer.id(_index);
+            }
+            size_t size() const override {
+                return _size;
+            }
+            size_t size(segment& seg) override {
+                return _size;
+            }
+            size_t size(segment& seg, size_t) override {
+                return _size;
+            }
+            void write(segment& seg, output& out, size_t) const override {
+                _writer.write(seg, out, _index);
+            }
+            void result(size_t, rp_handle rp) override {
+                // ensure the segment retains a ref count to
+                // the written cf_id.
+                _result.emplace_back(rp.release(), _size);
+            }
+        };
+
+        single_entry_wrapper w(writer, tmp, i, writer.size(*s, i));
+        constexpr auto max_size = std::numeric_limits<uint64_t>::max();
+
+        for (;;) {
+            using write_result = segment::write_result;
+
+            switch (s->allocate(w, fake_permit, timeout, max_size, max_size)) {
+                case write_result::must_sync:
+                    co_await s->sync();
+                    continue; 
+                case write_result::ok:
+                case write_result::ok_need_batch_sync:
+                    break;
+                case write_result::no_space:
+                    throw std::runtime_error("should not reach");
+            }
+            break;
+        }
+    }
+
+    co_await s->shutdown(); // close extensively. this is a bit extensive, but ensures safe testing.
+
+    // this is our external file
+    auto filename = s->_file.name();
+
+    // writer that creates a multi-entry of file references.
+    class file_entry_wrapper : public entry_writer {
+        shared_ptr<segment> _segment;
+        entry_writer& _writer;
+        std::string _filename;
+        id_pos_and_sizes& _ext_result;
+        size_t _size;
+    public:
+        std::vector<rp_handle> _result;
+
+        file_entry_wrapper(shared_ptr<segment> s, entry_writer& writer, id_pos_and_sizes& ext_result)
+            : entry_writer(writer.sync, ext_result.size(), true /* external */)
+            , _segment(std::move(s))
+            , _writer(writer)
+            , _filename(_segment->_file.name())
+            , _ext_result(ext_result)
+            , _size(2*sizeof(size_t) + sizeof(uint64_t))
+        {
+            _result.reserve(_ext_result.size());
+        }
+        /** return the CF id for n:th entry */
+        const cf_id_type& id(size_t i) const override {
+            return _writer.id(i);
+        }
+        size_t size() const override {
+            return _ext_result.size() * _size + _filename.size();
+        }
+        size_t size(segment& seg) override {
+            return size();
+        }
+        size_t size(segment& seg, size_t i) override {
+            return i == 0 ? _size + _filename.size() : _size;
+        }
+        void write(segment& seg, output& out, size_t i) const override {
+            // small space-saver. Only write the external file name once.
+            // see replayer code where we handle this.
+            if (i == 0) {
+                ::write<size_t>(out, _filename.size());
+                out.write(_filename.data(), _filename.size());
+            } else {
+                ::write<size_t>(out, 0);
+            }
+            auto rp = std::get<replay_position>(_ext_result.at(i));
+            auto size = std::get<size_t>(_ext_result.at(i));
+            // store external position and size
+            ::write<uint64_t>(out, rp.pos);
+            ::write<size_t>(out, size); 
+        }
+        void result(size_t i, rp_handle rp) override {
+            _writer.result(i, std::move(rp));
+        }
+        shared_ptr<segment> external_segment(size_t) const override {
+            return _segment;
+        }
+
+        using result_type = int;
+
+        result_type result() const {
+            return {};
+        }
+    };
+
+    try {
+        co_await allocate_when_possible(file_entry_wrapper(s, writer, tmp), timeout);
+    } catch (...) {
+        s->mark_clean(); // we failed. mark the external segment clean so it will delete itself
+        throw;
     }
 }
 
@@ -2335,7 +2586,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
             auto next_usage = usage - size;
 
             if (next_usage <= max_disk_size && mode != dispose_mode::ForceDelete) {
-                descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
+                descriptor d(next_id(), recycled_pfx + cfg.fname_prefix);
                 auto dst = this->filename(d);
 
                 clogger.debug("Recycling segment file {} -> {}", f.name(), dst);
@@ -2803,9 +3054,10 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
         bool failed = false;
         fragmented_temporary_buffer::reader frag_reader;
         fragmented_temporary_buffer buffer, initial;
+        const db::extensions* exts;
 
-        work(file f, descriptor din, commit_load_reader_func fn, position_type o = 0)
-                : f(f), d(din), func(std::move(fn)), fin(make_file_input_stream(f, 0, make_file_input_stream_options())), start_off(o) {
+        work(file f, descriptor din, commit_load_reader_func fn, position_type o = 0, const db::extensions* e = nullptr)
+                : f(f), d(din), func(std::move(fn)), fin(make_file_input_stream(f, 0, make_file_input_stream_options())), start_off(o), exts(e) {
         }
         work(work&&) = default;
 
@@ -2970,6 +3222,7 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
                     auto checksum = crc.checksum();
 
                     if (check != checksum) {
+                        clogger.debug("replay CRC error {} at {}/{}, {:x} != {:x}", d.filename(), pos, next_pos(rem), check, checksum);
                         throw segment_data_corruption_error("Data corruption", alignment);
                     }
                     if (id != this->id) {
@@ -3084,6 +3337,10 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
         }
 
         future<> read_entry() {
+            return read_entry(func);
+        }
+
+        future<> read_entry(commit_load_reader_func func) {
             static constexpr size_t entry_header_size = segment::entry_overhead_size;
 
             clogger.debug("read_entry {}", pos);
@@ -3109,8 +3366,8 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
             crc32_nbo crc;
             crc.process(size);
 
-            // check for multi-entry
-            if (size == segment::multi_entry_size_magic) {
+            // check for multi-entry or extrnal ref.
+            if (size == segment::multi_entry_size_magic || size == segment::ext_multi_entry_size_magic) {
                 auto actual_size = checksum;
                 auto end = pos + actual_size - entry_header_size - sizeof(uint32_t);
 
@@ -3125,7 +3382,7 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
                 // verify header crc.
                 if (actual_size < 2 * segment::entry_overhead_size || crc.checksum() != checksum) {
                     auto slack = next - pos;
-                    if (size != 0) {
+                    if (actual_size != 0) {
                         clogger.debug("Segment entry at {} has broken header. Skipping to next chunk ({} bytes)", rp, slack);
                         corrupt_size += slack;
                     }
@@ -3135,6 +3392,88 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
 
                 // now read all sub-entries
                 // and send data to subscriber.
+
+                // If this is an external data entry, read it to ourselves and
+                // collect the meta data.
+                if (size == segment::ext_multi_entry_size_magic) {
+                    using ext_info = std::tuple<sstring, uint64_t, size_t, replay_position>;
+                    std::vector<ext_info> tmp;
+
+                    auto add_entry = [&](buffer_and_replay_position buf_rp) -> future<> {
+                        auto&& buf = buf_rp.buffer;
+                        auto&& rp = buf_rp.position;
+
+                        auto in = buf.get_istream();
+                        auto nsize = read<size_t>(in);
+                        sstring filename(nsize, '\0');
+                        in.read_to(nsize, const_cast<char*>(filename.c_str()));
+                        auto off = read<uint64_t>(in);
+                        auto size = read<size_t>(in);
+                        // See oversized_alloc. Only first entry for a given file name
+                        // is written into the array. Just reuse previous one if so.
+                        if (filename.empty() && !tmp.empty()) {
+                            filename = std::get<sstring>(tmp.back());
+                        }
+                        tmp.emplace_back(std::move(filename), off, size, rp);
+                        co_return;
+                    };
+
+                    while (pos < end) {
+                        co_await read_entry(add_entry);
+                        if (failed) {
+                            break;
+                        }
+                    }
+
+                    auto i = tmp.begin();
+                    auto e = tmp.end();
+
+                    // Now process the metadata. Note: this code
+                    // allows for an array with more than one external
+                    // file used. Currently that is not used, but why not...
+                    while (i != e) {
+                        auto j = i;
+                        auto filename = std::get<sstring>(*i); 
+                        auto off = std::get<1>(*i);
+
+                        while (++j != e) {
+                            // find partition endpoint (not used yet, will find end, but..)
+                            if (filename != std::get<sstring>(*j)) {
+                                break;
+                            }
+                        }
+
+                        auto produce_entry = [&](buffer_and_replay_position buf_rp) -> future<> {
+                            auto&& rp = buf_rp.position;
+                            // Check if we have data loss in the external file...
+                            while (i != j && std::get<1>(*i) < rp.pos) {
+                                clogger.warn("Segment entry at {}:{} missing", filename, std::get<replay_position>(*i));
+                                ++i;
+                            }
+                            // Now we have the metadata for the entry.
+                            if (i != j && std::get<1>(*i) == rp.pos) {
+                                if (std::get<2>(*i) != buf_rp.buffer.size_bytes()) {
+                                    throw std::runtime_error("Mismatched size in external entry");
+                                }
+                                // pretend the replay position is the reference location
+                                buf_rp.position = std::get<replay_position>(*i);
+                                co_await func(std::move(buf_rp));
+                                ++i;
+                            }
+                            co_return;
+                        };
+                        try {
+                            // Replay external file and match against metadata.
+                            co_await read_log_file(filename, ext_pfx + d.filename_prefix, produce_entry, off, exts);
+                        } catch (...) {
+                            clogger.warn("Segment entry at {} references unplayable external segment {}", rp, filename);
+                            throw;
+                        }
+                        i = j;
+                    }
+                    co_return; // done.
+                }
+
                 while (pos < end) {
                     co_await read_entry();
                     if (failed) {
@@ -3207,7 +3546,7 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
     f = make_checked_file(commit_error_handler, std::move(f));
 
     descriptor d(filename, pfx);
-    work w(std::move(f), d, std::move(next), off);
+    work w(std::move(f), d, std::move(next), off, exts);
 
     co_await w.read_file();
 }
