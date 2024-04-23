@@ -2338,17 +2338,19 @@ future<> table::finalize_snapshot(database& db, sstring jsondir, std::vector<sna
 
 future<bool> table::snapshot_exists(sstring tag) {
     sstring jsondir = _config.datadir + "/snapshots/" + tag;
-    return open_checked_directory(general_disk_error_handler, std::move(jsondir)).then_wrapped([] (future<file> f) {
-        try {
-            f.get();
-            return make_ready_future<bool>(true);
-        } catch (std::system_error& e) {
-            if (e.code() != std::error_code(ENOENT, std::system_category())) {
-                throw;
-            }
-            return make_ready_future<bool>(false);
+    bool exists = false;
+    try {
+        auto sd = co_await io_check(file_stat, jsondir, follow_symlink::no);
+        if (sd.type != directory_entry_type::directory) {
+            throw std::error_code(ENOTDIR, std::system_category());
         }
-    });
+        exists = true;
+    } catch (std::system_error& e) {
+        if (e.code() != std::error_code(ENOENT, std::system_category())) {
+            throw;
+        }
+    }
+    co_return exists;
 }
 
 future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details() {
