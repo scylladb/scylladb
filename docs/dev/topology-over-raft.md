@@ -343,10 +343,15 @@ local state,  which is pulled periodically by the coordinator.
 
 When the coordinator realizes all tablet replicas have completed the splitting work, the load balancer
 emits a decision to finalize the split request. The finalization is serialized with migration, as
-doubling tablet count would interfere with the migration process. When the state machine leaves the
-migration track, then finalize can proceed and split each preexisting tablet into two in the topology
-metadata. The replicas  will react to that by remapping its compaction groups into a new set which size
-is equal to the new tablet count.
+doubling tablet count would interfere with the migration process.
+
+When the state machine leaves the migration track, and there are tablets waiting for tablet split to
+be finalized, the topology will transition into `tablet_split_finalization` state. At this moment, there will
+be no migration running in the system. A global token metadata barrier is executed to make sure that no
+process e.g. repair will be holding stale metadata when finalizing split. After that, the new tablet map,
+which is a result of splitting each preexisting tablet into two, is committed to group0.
+The replicas will react to that by remapping its compaction groups into a new set which is, at least,
+twice as large as the old one.
 
 # Topology guards
 

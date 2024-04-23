@@ -584,7 +584,6 @@ public:
             // If all replicas have completed split work for the current sequence number, it means that
             // load balancer can emit finalize decision, for split to be completed.
             if (table_stats->split_ready_seq_number == tmap.resize_decision().sequence_number) {
-                resize_plan.resize[table] = cluster_resize_load::revoke_resize_decision();
                 _stats.for_cluster().resizes_finalized++;
                 resize_plan.finalize_resize.insert(table);
                 lblogger.info("Finalizing resize decision for table {} as all replicas agree on sequence number {}",
