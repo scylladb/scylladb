@@ -30,6 +30,8 @@ fi
 debian_base_packages=(
     clang
     gdb
+    cargo
+    wabt
     liblua5.3-dev
     python3-aiohttp
     python3-pyparsing
@@ -49,6 +51,7 @@ debian_base_packages=(
     libabsl-dev
     librapidxml-dev
     libcrypto++-dev
+    libxxhash-dev
 )
 
 fedora_packages=(
@@ -334,7 +337,6 @@ elif [ "$ID" = "fedora" ]; then
     done
     pip3 install "$PIP_DEFAULT_ARGS" $pip_constrained_packages
 
-    cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --root /usr/local
     if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
         echo "$(node_exporter_filename) already exists, skipping download"
     else
@@ -385,6 +387,8 @@ elif [ "$ID" == "arch" ]; then
     fi
     echo -e "Configure example:\n\t./configure.py\n\tninja release"
 fi
+
+cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --root /usr/local
 
 CURL_ARGS=$(minio_download_jobs)
 if [ ! -z "${CURL_ARGS}" ]; then
