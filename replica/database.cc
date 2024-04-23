@@ -828,6 +828,7 @@ void database::init_schema_commitlog() {
     c.extensions = &_cfg.extensions();
     c.use_o_dsync = _cfg.commitlog_use_o_dsync();
     c.allow_going_over_size_limit = true; // for lower latency
+    c.allow_oversized_allocation = true; // for humungous schema mutations
 
     _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(std::move(c)).get());
     _schema_commitlog->add_flush_handler([this] (db::cf_id_type id, db::replay_position pos) {
