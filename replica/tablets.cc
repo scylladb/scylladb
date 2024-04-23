@@ -480,22 +480,20 @@ future<std::optional<tablet_transition_stage>> read_tablet_transition_stage(cql3
 
 stop_iteration tablet_sstable_set::for_each_sstable_set_until(const dht::partition_range& pr, std::function<stop_iteration(lw_shared_ptr<sstables::sstable_set>)> func) const {
     for (const auto& i : subrange(pr)) {
-            // FIXME: indentation.
-            const auto& set = find_sstable_set(i);
-            if (func(set) == stop_iteration::yes) {
-                return stop_iteration::yes;
-            }
+        const auto& set = find_sstable_set(i);
+        if (func(set) == stop_iteration::yes) {
+            return stop_iteration::yes;
+        }
     }
     return stop_iteration::no;
 }
 
 future<stop_iteration> tablet_sstable_set::for_each_sstable_set_gently_until(const dht::partition_range& pr, std::function<future<stop_iteration>(lw_shared_ptr<sstables::sstable_set>)> func) const {
     for (const auto& i : subrange(pr)) {
-            // FIXME: indentation.
-            const auto& set = find_sstable_set(i);
-            if (co_await func(set) == stop_iteration::yes) {
-                co_return stop_iteration::yes;
-            }
+        const auto& set = find_sstable_set(i);
+        if (co_await func(set) == stop_iteration::yes) {
+            co_return stop_iteration::yes;
+        }
     }
     co_return stop_iteration::no;
 }
