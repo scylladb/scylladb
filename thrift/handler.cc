@@ -1868,11 +1868,13 @@ private:
             bool reversed) {
         std::vector<interval<RangeType>> ranges;
         std::transform(column_slices.begin(), column_slices.end(), std::back_inserter(ranges), [&](auto&& cslice) {
+            const std::string cslice_start = cslice.start;
+            const std::string cslice_finish = cslice.finish;
             auto range = mapper(std::move(cslice));
             if (!reversed && is_wrap_around(range)) {
-                throw make_exception<InvalidRequestException>("Column slice had start {} greater than finish {}", cslice.start, cslice.finish);
+                throw make_exception<InvalidRequestException>("Column slice had start {} greater than finish {}", cslice_start, cslice_finish);
             } else if (reversed && !is_wrap_around(range)) {
-                throw make_exception<InvalidRequestException>("Reversed column slice had start {} less than finish {}", cslice.start, cslice.finish);
+                throw make_exception<InvalidRequestException>("Reversed column slice had start {} less than finish {}", cslice_start, cslice_finish);
             } else if (reversed) {
                 range.reverse();
                 if (is_wrap_around(range)) {
