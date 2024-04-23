@@ -419,7 +419,6 @@ public:
         // Not really table-specific (it's a global configuration parameter), but stored here
         // for easy access from `table` member functions:
         utils::updateable_value<bool> reversed_reads_auto_bypass_cache{false};
-        utils::updateable_value<bool> enable_optimized_reversed_reads{true};
         uint32_t tombstone_warn_threshold{0};
         unsigned x_log2_compaction_groups{0};
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
