@@ -1,0 +1,1 @@
+Perform :doc:`the procedure for enabling consistent topology changes </upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology>`.
