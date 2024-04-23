@@ -650,7 +650,8 @@ public:
             partition_key pk,
             reader_permit permit,
             streamed_mutation::forwarding fwd_sm,
-            bool reversed)
+            bool reversed,
+            mutation_fragment_stream_validation_level validation_level)
         : _query_schema(std::move(query_schema))
         , _sstables(reversed ? set._sstables_reversed : set._sstables)
         , _it(_sstables->begin())
@@ -659,7 +660,7 @@ public:
         , _create_reader(std::move(create_reader))
         , _filter(std::move(filter))
         , _dummy_reader(make_flat_mutation_reader_from_mutations_v2(_query_schema,
-                std::move(permit), mutation(_query_schema, std::move(pk)), _query_schema->full_slice(), fwd_sm))
+                std::move(permit), mutation(_query_schema, std::move(pk)), _query_schema->full_slice(), fwd_sm, validation_level))
         , _reversed(reversed)
     {
         while (_it != _end && !this->filter(*_it->second)) {
@@ -736,10 +737,11 @@ std::unique_ptr<position_reader_queue> time_series_sstable_set::make_position_re
         std::function<flat_mutation_reader_v2(sstable&)> create_reader,
         std::function<bool(const sstable&)> filter,
         partition_key pk, schema_ptr query_schema, reader_permit permit,
-        streamed_mutation::forwarding fwd_sm, bool reversed) const {
+        streamed_mutation::forwarding fwd_sm, bool reversed,
+        mutation_fragment_stream_validation_level validation_level) const {
     return std::make_unique<sstable_position_reader_queue>(*this,
             std::move(query_schema), std::move(create_reader), std::move(filter),
-            std::move(pk), std::move(permit), fwd_sm, reversed);
+            std::move(pk), std::move(permit), fwd_sm, reversed, validation_level);
 }
 
 sstable_set_impl::selector_and_schema_t partitioned_sstable_set::make_incremental_selector() const {
@@ -966,7 +968,7 @@ sstable_set_impl::create_single_key_sstable_reader(
     // all sstables actually containing the partition were filtered.
     auto num_readers = readers.size();
     if (num_readers != num_sstables) {
-        readers.push_back(make_flat_mutation_reader_from_mutations_v2(schema, permit, mutation(schema, *pos.key()), slice, fwd));
+        readers.push_back(make_flat_mutation_reader_from_mutations_v2(schema, permit, mutation(schema, *pos.key()), slice, fwd, cf->get_config().validation_level));
     }
     sstable_histogram.add(num_readers);
     return make_combined_reader(schema, std::move(permit), std::move(readers), fwd, fwd_mr);
@@ -1049,7 +1051,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
     return make_clustering_combined_reader(
             schema, permit, fwd_sm,
             make_position_reader_queue(
-                std::move(create_reader), std::move(filter), *pos.key(), schema, permit, fwd_sm, reversed));
+                std::move(create_reader), std::move(filter), *pos.key(), schema, permit, fwd_sm, reversed, cf->get_config().validation_level));
 }
 
 compound_sstable_set::compound_sstable_set(schema_ptr schema, std::vector<lw_shared_ptr<sstable_set>> sets)

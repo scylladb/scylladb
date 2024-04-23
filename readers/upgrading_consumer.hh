@@ -30,8 +30,9 @@ class upgrading_consumer {
     }
 
 public:
-    upgrading_consumer(const schema& schema, reader_permit permit, EndConsumer&& end_consumer)
-        : _schema(schema), _permit(std::move(permit)), _end_consumer(std::move(end_consumer)), _rt_gen(_schema)
+    upgrading_consumer(const schema& schema, reader_permit permit, EndConsumer&& end_consumer,
+            mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none)
+        : _schema(schema), _permit(std::move(permit)), _end_consumer(std::move(end_consumer)), _rt_gen(_schema, validation_level)
     {}
     void set_position_range(position_range pr) {
         _rt_gen.trim(pr.start());

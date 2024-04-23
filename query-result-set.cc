@@ -206,9 +206,9 @@ result_set::from_raw_result(schema_ptr s, const partition_slice& slice, const re
     return builder.build();
 }
 
-result_set::result_set(const mutation& m) : result_set([&m] {
+result_set::result_set(const mutation& m, mutation_fragment_stream_validation_level validation_level) : result_set([&m, validation_level] {
     auto slice = partition_slice_builder(*m.schema()).build();
-    auto qr = query_mutation(mutation(m), slice);
+    auto qr = query_mutation(mutation(m), slice, validation_level);
     return result_set::from_raw_result(m.schema(), slice, qr);
 }())
 { }

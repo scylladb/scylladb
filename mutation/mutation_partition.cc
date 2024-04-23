@@ -2288,7 +2288,7 @@ reconcilable_result reconcilable_result_builder::consume_end_of_stream() {
 
 future<query::result>
 to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint64_t max_rows, uint32_t max_partitions,
-        query::result_options opts) {
+        query::result_options opts, mutation_fragment_stream_validation_level validation_level) {
     // This result was already built with a limit, don't apply another one.
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, query::max_tombstones);
     auto consumer = compact_for_query_v2<query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
@@ -2298,7 +2298,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
 
     // FIXME: frozen_mutation::consume supports only forward consumers
     if (reverse == consume_in_reverse::no) {
-        frozen_mutation_consumer_adaptor adaptor(s, consumer);
+        frozen_mutation_consumer_adaptor adaptor(s, consumer, validation_level);
         for (const partition& p : r.partitions()) {
             const auto res = co_await p.mut().consume_gently(s, adaptor);
             if (res.stop == stop_iteration::yes) {
@@ -2308,7 +2308,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     } else {
         for (const partition& p : r.partitions()) {
             auto m = co_await p.mut().unfreeze_gently(s);
-            const auto res = co_await std::move(m).consume_gently(consumer, reverse);
+            const auto res = co_await std::move(m).consume_gently(consumer, reverse, validation_level);
             if (res.stop == stop_iteration::yes) {
                 break;
             }
@@ -2321,13 +2321,14 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
 }
 
 query::result
-query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_limit, gc_clock::time_point now, query::result_options opts) {
+query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_limit, gc_clock::time_point now, query::result_options opts,
+        mutation_fragment_stream_validation_level validation_level) {
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, query::max_tombstones);
     auto consumer = compact_for_query_v2<query_result_builder>(*m.schema(), now, slice, row_limit,
             query::max_partitions, query_result_builder(*m.schema(), builder));
     auto compaction_state = consumer.get_state();
     const auto reverse = slice.is_reversed() ? consume_in_reverse::yes : consume_in_reverse::no;
-    std::move(m).consume(consumer, reverse);
+    std::move(m).consume(consumer, reverse, validation_level);
     return builder.build(compaction_state->current_full_position());
 }
 

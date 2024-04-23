@@ -753,7 +753,7 @@ flat_mutation_reader_v2 make_generating_reader_v2(schema_ptr s, reader_permit pe
     return make_flat_mutation_reader_v2<generating_reader_v2>(std::move(s), std::move(permit), std::move(get_next_fragment));
 }
 
-flat_mutation_reader_v2 make_generating_reader_v1(schema_ptr s, reader_permit permit, noncopyable_function<future<mutation_fragment_opt> ()> get_next_fragment) {
+flat_mutation_reader_v2 make_generating_reader_v1(schema_ptr s, reader_permit permit, noncopyable_function<future<mutation_fragment_opt> ()> get_next_fragment, mutation_fragment_stream_validation_level validation_level) {
     class adaptor {
         struct consumer {
             circular_buffer<mutation_fragment_v2>* buf;
@@ -765,9 +765,9 @@ flat_mutation_reader_v2 make_generating_reader_v1(schema_ptr s, reader_permit pe
         upgrading_consumer<consumer> _upgrading_consumer;
         noncopyable_function<future<mutation_fragment_opt> ()> _get_next_fragment;
     public:
-        adaptor(schema_ptr schema, reader_permit permit, noncopyable_function<future<mutation_fragment_opt> ()> get_next_fragment)
+        adaptor(schema_ptr schema, reader_permit permit, noncopyable_function<future<mutation_fragment_opt> ()> get_next_fragment, mutation_fragment_stream_validation_level validation_level)
             : _buffer(std::make_unique<circular_buffer<mutation_fragment_v2>>())
-            , _upgrading_consumer(*schema, std::move(permit), consumer{_buffer.get()})
+            , _upgrading_consumer(*schema, std::move(permit), consumer{_buffer.get()}, validation_level)
             , _get_next_fragment(std::move(get_next_fragment))
         { }
         future<mutation_fragment_v2_opt> operator()() {
@@ -786,7 +786,7 @@ flat_mutation_reader_v2 make_generating_reader_v1(schema_ptr s, reader_permit pe
             co_return mf;
         }
     };
-    return make_flat_mutation_reader_v2<generating_reader_v2>(s, permit, adaptor(s, permit, std::move(get_next_fragment)));
+    return make_flat_mutation_reader_v2<generating_reader_v2>(s, permit, adaptor(s, permit, std::move(get_next_fragment), validation_level));
 }
 
 class reader_from_mutation_base : public flat_mutation_reader_v2::impl {
@@ -850,24 +850,27 @@ make_flat_mutation_reader_from_mutations_v2(
         reader_permit permit,
         mutation m,
         streamed_mutation::forwarding fwd,
-        bool reversed) {
+        bool reversed,
+        mutation_fragment_stream_validation_level validation_level) {
     class reader final : public reader_from_mutation_base {
         mutation _mutation;
         bool _reversed;
+        mutation_fragment_stream_validation_level _validation_level;
         std::optional<mutation_consume_cookie> _cookie;
 
     public:
-        reader(schema_ptr schema, reader_permit permit, mutation&& m, bool reversed) noexcept
+        reader(schema_ptr schema, reader_permit permit, mutation&& m, bool reversed, mutation_fragment_stream_validation_level validation_level) noexcept
             : reader_from_mutation_base(std::move(schema), std::move(permit))
             , _mutation(std::move(m))
             , _reversed(reversed)
+            , _validation_level(validation_level)
         {}
         virtual future<> fill_buffer() override {
             if (_end_of_stream) {
                 return make_ready_future<>();
             }
 
-            auto res = std::move(_mutation).consume(*this, consume_in_reverse(_reversed), _cookie ? std::move(*_cookie) : mutation_consume_cookie());
+            auto res = std::move(_mutation).consume(*this, consume_in_reverse(_reversed), _validation_level, _cookie ? std::move(*_cookie) : mutation_consume_cookie());
             if (res.stop == stop_iteration::yes) {
                 _cookie.emplace(std::move(res.cookie));
             } else {
@@ -892,7 +895,7 @@ make_flat_mutation_reader_from_mutations_v2(
             return make_ready_future<>();
         }
     };
-    auto res = make_flat_mutation_reader_v2<reader>(s, std::move(permit), std::move(m), reversed);
+    auto res = make_flat_mutation_reader_v2<reader>(s, std::move(permit), std::move(m), reversed, validation_level);
     if (fwd) {
         return make_forwardable(std::move(res));
     }
@@ -906,29 +909,32 @@ make_flat_mutation_reader_from_mutations_v2(
         reader_permit permit,
         mutation m,
         const query::partition_slice& slice,
-        streamed_mutation::forwarding fwd) {
+        streamed_mutation::forwarding fwd,
+        mutation_fragment_stream_validation_level validation_level) {
     const auto reversed = slice.is_reversed();
     auto sliced_mutation = reversed
         ? slice_mutation(s->make_reversed(), std::move(m), query::half_reverse_slice(*s, slice))
         : slice_mutation(s, std::move(m), slice);
-    return make_flat_mutation_reader_from_mutations_v2(std::move(s), std::move(permit), std::move(sliced_mutation), fwd, reversed);
+    return make_flat_mutation_reader_from_mutations_v2(std::move(s), std::move(permit), std::move(sliced_mutation), fwd, reversed, validation_level);
 }
 
 flat_mutation_reader_v2
 make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr,
-        const query::partition_slice& query_slice, streamed_mutation::forwarding fwd) {
+        const query::partition_slice& query_slice, streamed_mutation::forwarding fwd, mutation_fragment_stream_validation_level validation_level) {
     class reader final : public reader_from_mutation_base {
         std::vector<mutation> _mutations;
         const dht::partition_range* _pr;
         bool _reversed;
+        mutation_fragment_stream_validation_level _validation_level;
         std::optional<mutation_consume_cookie> _cookie;
 
     public:
-        reader(schema_ptr schema, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, bool reversed)
+        reader(schema_ptr schema, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, bool reversed, mutation_fragment_stream_validation_level validation_level)
             : reader_from_mutation_base(std::move(schema), std::move(permit))
             , _mutations(std::move(mutations))
             , _pr(&pr)
             , _reversed(reversed)
+            , _validation_level(validation_level)
         {
             std::reverse(_mutations.begin(), _mutations.end());
         }
@@ -952,7 +958,7 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
                 if (!_cookie) {
                     _cookie.emplace();
                 }
-                auto res = std::move(mut).consume(*this, _reversed ? consume_in_reverse::yes : consume_in_reverse::no, std::move(*_cookie));
+                auto res = std::move(mut).consume(*this, _reversed ? consume_in_reverse::yes : consume_in_reverse::no, _validation_level, std::move(*_cookie));
                 if (res.stop == stop_iteration::yes) {
                     _cookie = std::move(res.cookie);
                     break;
@@ -989,7 +995,7 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
     } else {
         sliced_mutations = slice_mutations(s, std::move(mutations), query_slice);
     }
-    auto res = make_flat_mutation_reader_v2<reader>(s, std::move(permit), std::move(sliced_mutations), pr, reversed);
+    auto res = make_flat_mutation_reader_v2<reader>(s, std::move(permit), std::move(sliced_mutations), pr, reversed, validation_level);
     if (fwd) {
         return make_forwardable(std::move(res));
     }
@@ -997,7 +1003,7 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
 }
 
 flat_mutation_reader_v2
-make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, streamed_mutation::forwarding fwd) {
+make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, streamed_mutation::forwarding fwd, mutation_fragment_stream_validation_level validation_level) {
     if (mutations.size() == 1) {
         dht::ring_position_comparator cmp{*s};
         auto& m = mutations.back();
@@ -1006,12 +1012,13 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
             return make_empty_flat_reader_v2(std::move(s), std::move(permit));
         }
         if (!pr.after(dk, cmp)) {
-            return make_flat_mutation_reader_from_mutations_v2(std::move(s), std::move(permit), std::move(m), fwd);
+            constexpr bool reversed = false;
+            return make_flat_mutation_reader_from_mutations_v2(std::move(s), std::move(permit), std::move(m), fwd, reversed, validation_level);
         }
         // fallthrough to multi-partition reader
         // since it may be fast_forwarded to include this mutation.
     }
-    return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), std::move(mutations), pr, s->full_slice(), fwd);
+    return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), std::move(mutations), pr, s->full_slice(), fwd, validation_level);
 }
 
 static flat_mutation_reader_v2

@@ -10,6 +10,7 @@
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
 #include "mutation/mutation_fragment_fwd.hh"
+#include "mutation/mutation_fragment_stream_validator.hh"
 
 using namespace seastar;
 
@@ -20,4 +21,5 @@ flat_mutation_reader_v2
 make_generating_reader_v2(schema_ptr s, reader_permit permit, noncopyable_function<future<mutation_fragment_v2_opt> ()> get_next_fragment);
 
 flat_mutation_reader_v2
-make_generating_reader_v1(schema_ptr s, reader_permit permit, noncopyable_function<future<mutation_fragment_opt> ()> get_next_fragment);
+make_generating_reader_v1(schema_ptr s, reader_permit permit, noncopyable_function<future<mutation_fragment_opt> ()> get_next_fragment,
+        mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none);

@@ -44,7 +44,7 @@ public:
 };
 
 mutation_fragment_queue make_test_mutation_fragment_queue(schema_ptr s, reader_permit permit, std::deque<mutation_fragment_v2>& fragments) {
-    return mutation_fragment_queue(std::move(s), std::move(permit), seastar::make_shared<test_mutation_fragment_queue_impl>(fragments));
+    return mutation_fragment_queue(std::move(s), std::move(permit), seastar::make_shared<test_mutation_fragment_queue_impl>(fragments), mutation_fragment_stream_validation_level::clustering_key);
 }
 
 // repair_writer::impl abstracts away underlying writer that will receive
