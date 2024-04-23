@@ -32,7 +32,7 @@ static void remove_or_mark_as_unique_owner(partition_version* current, mutation_
 }
 
 partition_version::partition_version(partition_version&& pv) noexcept
-    : anchorless_list_base_hook(std::move(pv))
+    : anchorless_list_base_hook(std::move(static_cast<anchorless_list_base_hook&>(pv)))
     , _backref(pv._backref)
     , _schema(std::move(pv._schema))
     , _is_being_upgraded(pv._is_being_upgraded)
