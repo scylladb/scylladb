@@ -70,9 +70,7 @@ Manual Recovery Procedure
 You can follow the manual recovery procedure when:
 
 * The majority of nodes (for example, 2 out of 3) failed and are irrecoverable.
-* :ref:`The Raft upgrade procedure <verify-raft-procedure>`
-  or :doc:`the procedure for enabling consistent topology changes</upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology>`
-  got stuck because one of the nodes failed in the middle of the procedure and is irrecoverable.
+* .. scylladb_include_flag:: enabling-consistent-topology-failure.rst
 
 .. warning::
 
@@ -148,4 +146,4 @@ in the past and then had Raft enabled, and to clusters that were bootstrapped us
 
 #. The Raft upgrade procedure will start anew. :ref:`Verify <verify-raft-procedure>` that it finishes successfully.
 
-#. Perform :doc:`the procedure for enabling consistent topology changes </upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology>`.
+#. .. scylladb_include_flag:: enable-consistent-topology.rst
