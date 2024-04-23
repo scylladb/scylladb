@@ -357,7 +357,9 @@ static locator::node::state to_topology_node_state(node_state ns) {
 
 // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
 // gossiper) to align it with the other raft topology nodes.
-future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node, std::unordered_set<raft::server_id> prev_normal) {
+future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node, std::unordered_set<raft::server_id> prev_normal) {
+    nodes_to_notify_after_sync nodes_to_notify;
+
     const auto& am = _group0->address_map();
     const auto& t = _topology_state_machine._topology;
 
@@ -408,7 +410,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         if (_gossiper.get_endpoint_state_ptr(ip) && !get_used_ips().contains(ip)) {
             co_await _gossiper.force_remove_endpoint(ip, gms::null_permit_id);
             if (notify) {
-                co_await notify_left(ip, host_id);
+                nodes_to_notify.left.push_back({ip, host_id});
             }
         }
     };
@@ -466,7 +468,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             info.supported_features = fmt::to_string(fmt::join(rs.supported_features, ","));
             sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, host_id, info));
             if (!prev_normal.contains(id)) {
-                co_await notify_joined(*ip);
+                nodes_to_notify.joined.push_back(*ip);
             }
 
             if (const auto it = host_id_to_ip_map.find(host_id); it != host_id_to_ip_map.end() && it->second != *ip) {
@@ -598,6 +600,17 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
     }
 
     co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
+
+    co_return nodes_to_notify;
+}
+
+future<> storage_service::notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify) {
+    for (auto [ip, host_id] : nodes_to_notify.left) {
+        co_await notify_left(ip, host_id);
+    }
+    for (auto ip : nodes_to_notify.joined) {
+        co_await notify_joined(ip);
+    }
 }
 
 future<> storage_service::topology_state_load() {
@@ -686,7 +699,7 @@ future<> storage_service::topology_state_load() {
         }, _topology_state_machine._topology.tstate);
         tmptr->set_read_new(read_new);
 
-        co_await sync_raft_topology_nodes(tmptr, std::nullopt, std::move(prev_normal));
+        auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::nullopt, std::move(prev_normal));
 
         if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
@@ -694,6 +707,7 @@ future<> storage_service::topology_state_load() {
         }
 
         co_await replicate_to_all_cores(std::move(tmptr));
+        co_await notify_nodes_after_sync(std::move(nodes_to_notify));
     }
 
     co_await update_fence_version(_topology_state_machine._topology.fence_version);
@@ -891,9 +905,12 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
                     co_return;
                 }
                 co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
-                co_await _ss.mutate_token_metadata([this, hid](mutable_token_metadata_ptr t) {
-                    return _ss.sync_raft_topology_nodes(std::move(t), hid, {});
-                });
+                storage_service::nodes_to_notify_after_sync nodes_to_notify;
+                auto lock = co_await _ss.get_token_metadata_lock();
+                co_await _ss.mutate_token_metadata([this, hid, &nodes_to_notify](mutable_token_metadata_ptr t) -> future<> {
+                    nodes_to_notify = co_await _ss.sync_raft_topology_nodes(std::move(t), hid, {});
+                }, storage_service::acquire_merge_lock::no);
+                co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
             }));
         }
     }

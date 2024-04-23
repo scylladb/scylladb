@@ -882,10 +882,20 @@ public:
 private:
     future<std::vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<std::vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
+
+    struct nodes_to_notify_after_sync {
+        std::vector<std::pair<gms::inet_address, locator::host_id>> left;
+        std::vector<gms::inet_address> joined;
+    };
+
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.
     // Optional target_node can be provided to restrict the synchronization to the specified node.
-    future<> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node, std::unordered_set<raft::server_id> prev_normal);
+    // Returns a structure that describes which notifications to trigger after token metadata is updated.
+    future<nodes_to_notify_after_sync> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node, std::unordered_set<raft::server_id> prev_normal);
+    // Triggers notifications (on_joined, on_left) based on the recent changes to token metadata, as described by the passed in structure.
+    // This function should be called on the result of `sync_raft_topology_nodes`, after the global token metadata is updated.
+    future<> notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify);
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
     future<> topology_state_load();
