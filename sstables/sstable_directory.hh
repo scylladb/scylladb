@@ -45,8 +45,14 @@ public:
     {
     }
 
-    friend class sstable_directory;
-    friend class ::replica::table; // FIXME table snapshots should switch to sstable_directory
+    template <std::ranges::range Container, typename Func>
+    requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
+    future<> parallel_for_each(Container& c, Func func) {
+        co_await max_concurrent_for_each(c, _concurrency, [&] (auto& el) -> future<>{
+            auto units = co_await get_units(_sem, 1);
+            co_await func(el);
+        });
+    }
 };
 
 // Handles a directory containing SSTables. It could be an auxiliary directory (like upload),
@@ -174,9 +180,6 @@ private:
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg = {}) const;
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, process_flags flags) const;
 
-    template <std::ranges::range Container, typename Func>
-    requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
-    future<> parallel_for_each_restricted(Container& C, Func func);
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
     // Sort the sstable according to owner

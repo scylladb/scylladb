@@ -1511,8 +1511,6 @@ private:
     const locator::shared_token_metadata& _shared_token_metadata;
     wasm::manager& _wasm;
 
-    sharded<sstables::directory_semaphore>& _sst_dir_semaphore;
-
     utils::cross_shard_barrier _stop_barrier;
 
     db::rate_limiter _rate_limiter;
@@ -1601,7 +1599,7 @@ public:
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-            compaction_manager& cm, sstables::storage_manager& sstm, wasm::manager& wasm, sharded<sstables::directory_semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
+            compaction_manager& cm, sstables::storage_manager& sstm, wasm::manager& wasm, sstables::directory_semaphore& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
 
@@ -1887,11 +1885,6 @@ public:
     future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
 
     bool is_internal_query() const;
-
-    sharded<sstables::directory_semaphore>& get_sharded_sst_dir_semaphore() {
-        return _sst_dir_semaphore;
-    }
-
     bool is_user_semaphore(const reader_concurrency_semaphore& semaphore) const;
 };
 
