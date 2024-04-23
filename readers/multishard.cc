@@ -76,12 +76,12 @@ class foreign_reader : public flat_mutation_reader_v2::impl {
                 return exec_op_and_read_ahead();
             }
         }).then([this] (auto fut_and_result) {
-            _read_ahead_future = std::get<0>(std::move(fut_and_result));
+            _read_ahead_future = std::get<0>(std::move(fut_and_result)); // NOLINT(bugprone-use-after-move)
             static_assert(std::tuple_size<decltype(fut_and_result)>::value <= 2);
             if constexpr (std::tuple_size<decltype(fut_and_result)>::value == 1) {
                 return make_ready_future<>();
             } else {
-                auto result = std::get<1>(std::move(fut_and_result));
+                auto result = std::get<1>(std::move(fut_and_result)); // NOLINT(bugprone-use-after-move)
                 return make_ready_future<decltype(result)>(std::move(result));
             }
         }).finally([awaits_guard = std::move(awaits_guard)] { });
