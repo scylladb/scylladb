@@ -542,10 +542,6 @@ murmur3_partitioner_ignore_msb_bits: 12
 # Bypass in-memory data cache (the row cache) when performing reversed queries.
 # reversed_reads_auto_bypass_cache: false
 
-# Use a new optimized algorithm for performing reversed reads.
-# Set to `false` to fall-back to the old algorithm.
-# enable_optimized_reversed_reads: true
-
 # Use on a new, parallel algorithm for performing aggregate queries.
 # Set to `false` to fall-back to the old algorithm.
 # enable_parallelized_aggregation: true
