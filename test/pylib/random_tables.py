@@ -258,7 +258,7 @@ class RandomTables():
 
     def __init__(self, test_name: str, manager: ManagerClient, keyspace: str,
                  replication_factor: int, dc_replication_factor: dict[str, int] = None):
-        keyspace_query = f"CREATE KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : {replication_factor}}}"
+        keyspace_query = f"CREATE KEYSPACE IF NOT EXISTS {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : {replication_factor}}}"
         self.test_name = test_name
         self.manager = manager
         self.keyspace = keyspace
