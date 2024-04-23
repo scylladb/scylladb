@@ -257,7 +257,13 @@ public:
     stop_iteration consume_end_of_partition() {
         _state->builder.consume_end_of_partition();
         if (auto mut_opt = _state->builder.consume_end_of_stream(); mut_opt) {
-            _target.emplace_back(std::move(*mut_opt));
+            // This final mutation could be empty if the last consumed fragment was a range_tombstone_change
+            // with no timestamp (i.e. a closing rtc), but a range_tombstone ending at this position
+            // was already emitted in the previous mutation (because the previous mutation was flushed
+            // after consuming a clustering_row at that position).
+            if (!mut_opt->partition().empty()) {
+                _target.emplace_back(std::move(*mut_opt));
+            }
         } else {
             on_internal_error(mlog, "consume_end_of_stream didn't return a mutation");
         }
