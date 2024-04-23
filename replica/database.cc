@@ -2627,9 +2627,9 @@ static std::pair<sstring, table_id> extract_cf_name_and_uuid(const sstring& dire
     return std::make_pair(directory_name.substr(0, pos), table_id(utils::UUID(directory_name.substr(pos + 1))));
 }
 
-future<std::vector<database::snapshot_details_result>> database::get_snapshot_details() {
+future<std::unordered_map<sstring, database::snapshot_details>> database::get_snapshot_details() {
     std::vector<sstring> data_dirs = _cfg.data_file_directories();
-    std::vector<database::snapshot_details_result> details;
+    std::unordered_map<sstring, snapshot_details> details;
 
     for (auto& datadir : data_dirs) {
         co_await lister::scan_dir(fs::path{datadir}, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details] (fs::path parent_dir, directory_entry de) -> future<> {
@@ -2649,12 +2649,10 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
 
                 auto cf_name_and_uuid = extract_cf_name_and_uuid(de.name);
                 co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
-                    database::snapshot_details_result snapshot_result = {
-                        .snapshot_name = de.name,
-                        .details = {0, 0, cf_name, ks_name}
-                    };
+                    auto snapshot_name = de.name;
+                    table::snapshot_details cf_details = {0, 0};
 
-                    co_await lister::scan_dir(parent_dir / de.name,  lister::dir_entry_types::of<directory_entry_type::regular>(), [cf_dir, &snapshot_result] (fs::path snapshot_dir, directory_entry de) -> future<> {
+                    co_await lister::scan_dir(parent_dir / de.name,  lister::dir_entry_types::of<directory_entry_type::regular>(), [cf_dir, &cf_details] (fs::path snapshot_dir, directory_entry de) -> future<> {
                         auto sd = co_await io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no);
                         auto size = sd.allocated_size;
 
@@ -2663,7 +2661,7 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
                         // All the others should just generate an exception: there is something wrong, so don't blindly
                         // add it to the size.
                         if (de.name != "manifest.json" && de.name != "schema.cql") {
-                            snapshot_result.details.total += size;
+                            cf_details.total += size;
                         } else {
                             size = 0;
                         }
@@ -2676,17 +2674,17 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
                                 dblog.warn("[{} device_id={} inode_number={} size={}] is not the same file as [{} device_id={} inode_number={} size={}]",
                                         (cf_dir / de.name).native(), psd.device_id, psd.inode_number, psd.size,
                                         (snapshot_dir / de.name).native(), sd.device_id, sd.inode_number, sd.size);
-                                snapshot_result.details.live += size;
+                                cf_details.live += size;
                             }
                         } catch (std::system_error& e) {
                             if (e.code() != std::error_code(ENOENT, std::system_category())) {
                                 throw;
                             }
-                            snapshot_result.details.live += size;
+                            cf_details.live += size;
                         }
                     });
 
-                    details.emplace_back(std::move(snapshot_result));
+                    details[snapshot_name].emplace_back(ks_name, cf_name, std::move(cf_details));
                 });
             });
         });

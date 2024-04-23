@@ -660,8 +660,9 @@ SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
 
         auto details = e.local_db().get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 1);
+        BOOST_REQUIRE_EQUAL(details.begin()->second.size(), 1);
 
-        const auto& sd = details.front().details;
+        const auto& sd = details.begin()->second.front().details;
         BOOST_REQUIRE_GT(sd.live, 0);
         BOOST_REQUIRE_EQUAL(sd.total, sd.live);
 
@@ -676,10 +677,12 @@ SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
         details = e.local_db().get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 4);
 
-        for (const auto& result : details) {
+        for (const auto& [name, r] : details) {
+            BOOST_REQUIRE_EQUAL(r.size(), 1);
+            const auto& result = r.front();
             const auto& sd = result.details;
 
-            if (result.snapshot_name == "test2" || result.snapshot_name == "test3") {
+            if (name == "test2" || name == "test3") {
                 BOOST_REQUIRE_EQUAL(sd.live, 0);
                 BOOST_REQUIRE_GT(sd.total, 0);
             } else {
@@ -827,8 +830,8 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
         const auto &sc_sd = sc_sd_vec[0];
         BOOST_REQUIRE_EQUAL(sc_sd.ks, "ks");
         BOOST_REQUIRE_EQUAL(sc_sd.cf, "cf");
-        BOOST_REQUIRE_EQUAL(sc_sd.live, sd.live);
-        BOOST_REQUIRE_EQUAL(sc_sd.total, sd.total);
+        BOOST_REQUIRE_EQUAL(sc_sd.details.live, sd.live);
+        BOOST_REQUIRE_EQUAL(sc_sd.details.total, sd.total);
 
         lister::scan_dir(fs::path(cf.dir()), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
             fs::remove(parent_dir / de.name);
@@ -846,8 +849,8 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
         const auto &sc_sd_post_deletion = sc_sd_post_deletion_vec[0];
         BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.ks, "ks");
         BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.cf, "cf");
-        BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.live, sd_post_deletion.live);
-        BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.total, sd_post_deletion.total);
+        BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.details.live, sd_post_deletion.live);
+        BOOST_REQUIRE_EQUAL(sc_sd_post_deletion.details.total, sd_post_deletion.total);
 
         return make_ready_future<>();
     });

@@ -421,10 +421,7 @@ public:
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
     };
 
-    struct snapshot_details {
-        int64_t total;
-        int64_t live;
-    };
+    using snapshot_details = db::snapshot_ctl::table_snapshot_details;
     struct cache_hit_rate {
         cache_temperature rate;
         lowres_clock::time_point last_updated;
@@ -1746,13 +1743,8 @@ public:
      */
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name);
 
-    struct snapshot_details_result {
-        sstring snapshot_name;
-        db::snapshot_ctl::snapshot_details details;
-        bool operator==(const snapshot_details_result&) const = default;
-    };
-
-    future<std::vector<snapshot_details_result>> get_snapshot_details();
+    using snapshot_details = db::snapshot_ctl::db_snapshot_details;
+    future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
     const flat_hash_map<sstring, keyspace>& get_keyspaces() const {

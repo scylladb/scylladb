@@ -29,14 +29,19 @@ public:
     using skip_flush = bool_class<class skip_flush_tag>;
     using snap_views = bool_class<class snap_views_tag>;
 
-    struct snapshot_details {
-        int64_t live;
+    struct table_snapshot_details {
         int64_t total;
-        sstring cf;
-        sstring ks;
-
-        bool operator==(const snapshot_details&) const = default;
+        int64_t live;
     };
+
+    struct table_snapshot_details_ext {
+        sstring ks;
+        sstring cf;
+        table_snapshot_details details;
+    };
+
+    using db_snapshot_details = std::vector<table_snapshot_details_ext>;
+
     explicit snapshot_ctl(sharded<replica::database>& db) : _db(db) {}
 
     future<> stop() {
@@ -85,7 +90,7 @@ public:
      */
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name);
 
-    future<std::unordered_map<sstring, std::vector<snapshot_details>>> get_snapshot_details();
+    future<std::unordered_map<sstring, db_snapshot_details>> get_snapshot_details();
 
     future<int64_t> true_snapshots_size();
 private:
