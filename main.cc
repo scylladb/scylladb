@@ -555,8 +555,9 @@ static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace
     }
 
     linfo.listen_address = listen_address;
+    const auto host_id = linfo.host_id;
     sys_ks.local().save_local_info(std::move(linfo), snitch.local()->get_location(), broadcast_address, broadcast_rpc_address).get();
-    return linfo.host_id;
+    return host_id;
 }
 
 extern "C" void __attribute__((weak)) __llvm_profile_dump();
