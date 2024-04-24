@@ -107,12 +107,14 @@ private:
     std::vector<sstring> _tables;
     std::vector<tablet_repair_task_meta> _metas;
     optimized_optional<abort_source::subscription> _abort_subscription;
+    std::optional<int> _ranges_parallelism;
 public:
-    tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas)
+    tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism)
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", tasks::task_id::create_null_id(), reason)
         , _keyspace(std::move(keyspace))
         , _tables(std::move(tables))
         , _metas(std::move(metas))
+        , _ranges_parallelism(ranges_parallelism)
     {
     }
 
