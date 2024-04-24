@@ -29,7 +29,8 @@ async def test_cdc_generation_clearing(manager: ManagerClient):
     """Test that obsolete CDC generations are removed from CDC_GENERATIONS_V3 and TOPOLOGY.committed_cdc_generations
        if their timestamp is old enough according to the topology coordinator's clock."""
     logger.info("Bootstrapping first node")
-    servers = [await manager.server_add(cmdline=['--logger-log-level', 'storage_service=trace:raft_topology=trace'])]
+    servers = [await manager.server_add(cmdline=['--logger-log-level', 'storage_service=trace:raft_topology=trace'],
+                                        config={'error_injections_at_startup': ['increase_cdc_generation_leeway']})]
 
     log_file1 = await manager.server_open_log(servers[0].server_id)
     mark: Optional[int] = None
@@ -59,7 +60,7 @@ async def test_cdc_generation_clearing(manager: ManagerClient):
     servers += [await manager.server_add()]
 
     # The first and second generations should not be removed. The first generation's timestamp is too close to the
-    # topology coordinator's clock.
+    # topology coordinator's clock, which is ensured by the `increase_cdc_generation_leeway` error injection.
     mark, gen_ids, hosts = await wait_for(tried_to_remove_new_gen, time.time() + 60)
     logger.info(f"Generations after second clearing attempt: {gen_ids}")
     assert len(gen_ids) == 2 and first_gen_id in gen_ids
