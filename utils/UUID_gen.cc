@@ -15,6 +15,7 @@
 #include <net/if_arp.h>
 #endif // __linux__
 
+#include <atomic>
 #include <stdlib.h>
 #include "utils/hashers.hh"
 
