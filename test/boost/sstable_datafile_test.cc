@@ -3554,3 +3554,30 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_under_pressure) {
         .available_memory = 1000
     });
 }
+
+// Reproducer for https://github.com/scylladb/scylladb/issues/18398.
+SEASTAR_TEST_CASE(test_reclaimed_bloom_filter_deletion_from_disk) {
+    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+        return async([&env, tmpdir_path] {
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pks = ss.make_pkeys(1);
+
+            auto mut1 = mutation(s, pks[0]);
+            mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+            auto sst = make_sstable_containing([&] { return env.make_sstable(s, tmpdir_path, 0); }, {std::move(mut1)});
+            auto sst_test = sstables::test(sst);
+
+            const auto filter_path = sst_test.filename(component_type::Filter);
+            // confirm that the filter exists in disk
+            BOOST_REQUIRE(file_exists(filter_path).get());
+
+            // reclaim filter from memory and unlink the sst
+            sst_test.reclaim_memory_from_components();
+            sst->unlink().get();
+
+            // verify the filter doesn't exist in disk anymore
+            BOOST_REQUIRE(!file_exists(filter_path).get());
+        });
+    });
+}
