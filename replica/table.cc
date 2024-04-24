@@ -3462,7 +3462,6 @@ table::as_data_dictionary() const {
 }
 
 bool table::erase_sstable_cleanup_state(const sstables::shared_sstable& sst) {
-    // FIXME: it's possible that the sstable belongs to multiple compaction_groups
     auto& cg = compaction_group_for_sstable(sst);
     return get_compaction_manager().erase_sstable_cleanup_state(cg.as_table_state(), sst);
 }
