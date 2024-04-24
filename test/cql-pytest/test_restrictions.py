@@ -84,7 +84,6 @@ def test_multiple_restrictions_on_ck(cql, table2, scylla_only):
 # number of values on the right-hand-side of the restriction. Scylla should
 # cleanly report the error - and not silently ignore it or even crash as in
 # issue #13241.
-@pytest.mark.skip("Crashes due to issue #13241")
 def test_multi_column_restriction_in(cql, table3):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table3} (a, b, c, d) VALUES ({p}, 1, 2, 3)')
