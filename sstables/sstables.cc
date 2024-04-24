@@ -1416,9 +1416,9 @@ size_t sstable::reclaim_memory_from_components() {
     if (_components->filter) {
         auto filter_memory_size = _components->filter->memory_size();
         if (filter_memory_size > 0) {
-            // discard it from memory by replacing it with an always present variant
+            // Discard it from memory by replacing it with an always present variant.
+            // No need to remove it from _recognized_components as the filter is still in disk.
             _components->filter = std::make_unique<utils::filter::always_present_filter>();
-            _recognized_components.erase(component_type::Filter);
             total_memory_reclaimed += filter_memory_size;
         }
     }
