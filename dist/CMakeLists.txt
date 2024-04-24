@@ -48,7 +48,7 @@ set(iotune_path "${CMAKE_BINARY_DIR}/$<CONFIG>/iotune")
 add_custom_command(
   OUTPUT "${iotune_path}"
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:app_iotune> "${iotune_path}"
-  DEPENDS app_iotune)
+  DEPENDS $<OUTPUT_CONFIG:$<TARGET_FILE:app_iotune>>)
 add_stripped("${iotune_path}")
 
 find_program(TAR_COMMAND tar
