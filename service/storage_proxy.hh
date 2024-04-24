@@ -684,6 +684,7 @@ public:
     future<> start_hints_manager(shared_ptr<gms::gossiper>);
     void allow_replaying_hints() noexcept;
     future<> drain_on_shutdown();
+    future<> abort_view_writes();
 
     future<> change_hints_host_filter(db::hints::host_filter new_filter);
     const db::hints::host_filter& get_hints_host_filter() const;

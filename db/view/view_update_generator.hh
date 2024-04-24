@@ -78,6 +78,7 @@ public:
     ~view_update_generator();
 
     future<> start();
+    future<> drain();
     future<> stop();
     future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table);
 

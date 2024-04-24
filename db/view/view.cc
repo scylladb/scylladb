@@ -1954,6 +1954,7 @@ future<> view_builder::drain() {
     _as.request_abort();
     co_await std::move(_started);
     co_await _mnotifier.unregister_listener(this);
+    co_await _vug.drain();
     co_await _sem.wait();
     _sem.broken();
     co_await _build_step.join();

@@ -1402,6 +1402,10 @@ public:
         return _type == db::write_type::COUNTER;
     }
 
+    bool is_view() const noexcept {
+        return _type == db::write_type::VIEW;
+    }
+
     void set_cdc_operation_result_tracker(lw_shared_ptr<cdc::operation_result_tracker> tracker) {
         _cdc_operation_result_tracker = std::move(tracker);
     }
@@ -6590,6 +6594,12 @@ future<> storage_proxy::drain_on_shutdown() {
     return async([this] {
         cancel_write_handlers([] (const abstract_write_response_handler&) { return true; });
         _hints_resource_manager.stop().get();
+    });
+}
+
+future<> storage_proxy::abort_view_writes() {
+    return async([this] {
+        cancel_write_handlers([] (const abstract_write_response_handler& handler) { return handler.is_view(); });
     });
 }
 
