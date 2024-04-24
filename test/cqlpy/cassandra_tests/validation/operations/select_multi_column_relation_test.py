@@ -28,9 +28,8 @@ def testSingleClusteringInvalidQueries(cql, test_keyspace):
         assertInvalidMessage(cql, table, "Multi-column relations can only be applied to clustering columns but was applied to: a",
                              "SELECT * FROM %s WHERE (a, b) = (?, ?)", 0, 0)
 
-# We need to skip this test because issue #13241 causes it to frequently
-# crash Scylla, and not just fail cleanly.
-@pytest.mark.skip_bug(reason="Issue #13241")
+# Issue #13241 used to crash Scylla on this test; it is now fixed.
+# The test is still expected to fail due to the unrelated issue #4244.
 @pytest.mark.xfail(reason="Issue #4244")
 def testMultiClusteringInvalidQueries(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c, d))") as table:
