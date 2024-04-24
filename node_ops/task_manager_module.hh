@@ -13,6 +13,7 @@
 
 namespace service {
 class storage_service;
+enum class topology_request: uint16_t;
 }
 
 namespace node_ops {
@@ -34,6 +35,8 @@ public:
     virtual future<std::optional<tasks::task_status>> wait(tasks::task_id id) override;
     virtual future<> abort(tasks::task_id id) noexcept override;
     virtual future<std::vector<tasks::task_stats>> get_stats() override;
+private:
+    future<std::optional<tasks::task_status>> get_status_helper(tasks::task_id id) const;
 };
 
 class task_manager_module : public tasks::task_manager::module {

@@ -91,6 +91,7 @@ class loaded_endpoint_state;
 };
 
 namespace node_ops {
+class node_ops_virtual_task;
 class task_manager_module;
 }
 
@@ -959,6 +960,7 @@ private:
     abort_source _group0_as;
 
     friend class join_node_rpc_handshaker;
+    friend class node_ops::node_ops_virtual_task;
     friend class node_ops::task_manager_module;
 };
 
