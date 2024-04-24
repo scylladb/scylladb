@@ -443,8 +443,14 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         // returns immediately, not waiting for the repair to finish. The user
         // then has other mechanisms to track the ongoing repair's progress,
         // or stop it.
-        int res = co_await repair_start(repair, validate_keyspace(ctx, req->param), options_map);
-        co_return json::json_return_type(res);
+        try {
+            int res = co_await repair_start(repair, validate_keyspace(ctx, req->param), options_map);
+            co_return json::json_return_type(res);
+        } catch (const std::invalid_argument& e) {
+            // if the option is not sane, repair_start() throws immediately, so
+            // convert the exception to an HTTP error
+            throw httpd::bad_param_exception(e.what());
+        }
     });
 
     ss::get_active_repair_async.set(r, [&repair] (std::unique_ptr<http::request> req) {
