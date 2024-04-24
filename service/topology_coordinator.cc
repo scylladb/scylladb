@@ -1482,6 +1482,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         break;
                     case node_state::replacing: {
                         assert(!node.rs->ring);
+                        // Make sure all nodes are no longer trying to write to a node being replaced. This is important if the new node have the same IP, so that old write will not
+                        // go to the new node by mistake
+                        try {
+                            node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                        } catch (term_changed_error&) {
+                            throw;
+                        } catch (group0_concurrent_modification&) {
+                            throw;
+                        } catch (...) {
+                            rtlogger.error("transition_state::join_group0, "
+                                            "global_token_metadata_barrier failed, error {}",
+                                            std::current_exception());
+                            _rollback = fmt::format("global_token_metadata_barrier failed in join_group0 state {}", std::current_exception());
+                            break;
+                        }
+
                         auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
                         auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
                         assert(it != _topo_sm._topology.normal_nodes.end());
