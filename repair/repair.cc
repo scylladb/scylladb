@@ -2116,7 +2116,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         auto myhostid = erm->get_token_metadata_ptr()->get_my_id();
         auto myip = erm->get_topology().my_address();
         auto mydc = erm->get_topology().get_datacenter();
-        bool select_primary_ranges_within_dc = false;
+        auto all_dcs = boost::copy_range<std::vector<sstring>>(erm->get_topology().get_datacenters());
         // If the user specified the ranges option, ignore the primary_replica_only option.
         if (!ranges_specified.empty()) {
             primary_replica_only = false;
@@ -2125,9 +2125,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             // The logic below follows existing vnode table repair.
             // When "primary_range" option is on, neither data_centers nor hosts
             // may be set, except data_centers may contain only local DC (-local)
-            if (data_centers.size() == 1 && data_centers[0] == mydc) {
-                select_primary_ranges_within_dc = true;
-            } else if (data_centers.size() > 0 || hosts.size() > 0) {
+            if ((data_centers.size() == 1 && data_centers[0] != mydc) || data_centers.size() > 1 || hosts.size() > 0) {
                 throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
             }
         }
@@ -2137,13 +2135,21 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             }
         }
         co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
+            if (primary_replica_only && data_centers.empty()) {
+                // Check primary replica only within the selected primary dc
+                // since tablet allocation does not guarantee fairness of primary replica across dcs.
+                if (all_dcs[id.value() % all_dcs.size()] != mydc) {
+                    rlogger.info("repair[{}] Table {}.{} skipping tablet {}: primary dc={}", rid.uuid(), keyspace_name, table_name, id.value(), all_dcs[id.value() % all_dcs.size()]);
+                    return make_ready_future<>();
+                }
+            }
             auto range = tmap.get_token_range(id);
             auto& replicas = info.replicas;
             bool found = false;
             shard_id master_shard_id;
             // Repair all tablets belong to this node
             for (auto& r : replicas) {
-                if (select_primary_ranges_within_dc) {
+                if (primary_replica_only) {
                     auto dc = erm->get_topology().get_datacenter(r.host);
                     if (dc != mydc) {
                         continue;
