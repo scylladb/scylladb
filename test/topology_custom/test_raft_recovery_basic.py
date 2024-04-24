@@ -12,7 +12,7 @@ import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver, restart, enter_recovery_state, \
+from test.topology.util import reconnect_driver, enter_recovery_state, \
         wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
 
@@ -30,7 +30,7 @@ async def test_raft_recovery_basic(request, manager: ManagerClient):
 
     logging.info(f"Setting recovery state on {hosts}")
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
-    await asyncio.gather(*(restart(manager, srv) for srv in servers))
+    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logging.info("Cluster restarted, waiting until driver reconnects to every server")
@@ -41,7 +41,7 @@ async def test_raft_recovery_basic(request, manager: ManagerClient):
     await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
     logging.info(f"Restarting {servers}")
-    await asyncio.gather(*(restart(manager, srv) for srv in servers))
+    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to every server")

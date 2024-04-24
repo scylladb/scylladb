@@ -11,7 +11,7 @@ import time
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver, restart, enter_recovery_state, \
+from test.topology.util import reconnect_driver, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, log_run_time, wait_until_upgrade_finishes as wait_until_schema_upgrade_finishes, \
         wait_until_topology_upgrade_finishes, delete_raft_topology_state, wait_for_cdc_generations_publishing, \
         check_system_topology_and_cdc_generations_v3_consistency
@@ -35,7 +35,7 @@ async def test_topology_recovery_after_majority_loss(request, manager: ManagerCl
     logging.info(f"Entering recovery state on {srv1}")
     host1 = next(h for h in hosts if h.address == srv1.ip_addr)
     await enter_recovery_state(cql, host1)
-    await restart(manager, srv1)
+    await manager.server_restart(srv1.server_id)
     cql = await reconnect_driver(manager)
 
     logging.info("Node restarted, waiting until driver connects")
@@ -50,7 +50,7 @@ async def test_topology_recovery_after_majority_loss(request, manager: ManagerCl
     logging.info(f"Deleting old Raft data and upgrade state on {host1} and restarting")
     await delete_raft_topology_state(cql, host1)
     await delete_raft_data_and_upgrade_state(cql, host1)
-    await restart(manager, srv1)
+    await manager.server_restart(srv1.server_id)
     cql = await reconnect_driver(manager)
 
     logging.info("Node restarted, waiting until driver connects")

@@ -12,7 +12,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.topology.conftest import skip_mode
-from test.topology.util import reconnect_driver, restart, enter_recovery_state, wait_for_upgrade_state, \
+from test.topology.util import reconnect_driver, enter_recovery_state, wait_for_upgrade_state, \
         wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
 
@@ -40,7 +40,7 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
 
     logging.info(f"Setting recovery state on {hosts}")
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
-    await asyncio.gather(*(restart(manager, srv) for srv in servers))
+    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
@@ -77,7 +77,7 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
 
     logging.info(f"Restarting {others}")
-    await asyncio.gather(*(restart(manager, srv) for srv in others))
+    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in others))
     cql = await reconnect_driver(manager)
 
     logging.info(f"{others} restarted, waiting until driver reconnects to them")
@@ -103,7 +103,7 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     logging.info(f"Deleting Raft data and upgrade state on {hosts} and restarting")
     await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
-    await asyncio.gather(*(restart(manager, srv) for srv in others))
+    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in others))
     cql = await reconnect_driver(manager)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")

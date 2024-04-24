@@ -17,7 +17,7 @@ from cassandra.pool import Host # type: ignore
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.log_browsing import ScyllaLogFile
-from test.topology.util import reconnect_driver, restart, wait_until_upgrade_finishes, \
+from test.topology.util import reconnect_driver, wait_until_upgrade_finishes, \
         enter_recovery_state, delete_raft_data_and_upgrade_state
 
 
@@ -302,7 +302,7 @@ async def test_upgrade(manager: ManagerClient):
 
     logging.info(f"Setting recovery state on {hosts} and restarting")
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
-    await asyncio.gather(*(restart(manager, srv) for srv in servers))
+    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logging.info("Waiting until driver connects to every server")
@@ -318,7 +318,7 @@ async def test_upgrade(manager: ManagerClient):
     await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
     logging.info(f"Restarting {servers}")
-    await asyncio.gather(*(restart(manager, srv) for srv in servers))
+    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logger.info("Waiting for driver")
