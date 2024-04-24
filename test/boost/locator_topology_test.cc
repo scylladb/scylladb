@@ -414,7 +414,7 @@ SEASTAR_THREAD_TEST_CASE(test_left_node_is_kept_outside_dc) {
     BOOST_REQUIRE(topo.get_datacenter(id3) == dc_rack1.dc);
     BOOST_REQUIRE(topo.get_rack(id3) == dc_rack1.rack);
 
-    auto topo2 = topo.clone_gently().get0();
+    auto topo2 = topo.clone_gently().get();
     {
         auto *n = topo2.find_node(id3);
         BOOST_REQUIRE(n);
