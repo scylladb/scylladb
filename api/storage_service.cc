@@ -415,7 +415,7 @@ void unset_rpc_controller(http_context& ctx, routes& r) {
 }
 
 void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
-    ss::repair_async.set(r, [&ctx, &repair](std::unique_ptr<http::request> req) {
+    ss::repair_async.set(r, [&ctx, &repair](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         static std::unordered_set<sstring> options = {"primaryRange", "parallelism", "incremental",
                 "jobThreads", "ranges", "columnFamilies", "dataCenters", "hosts", "ignore_nodes", "trace",
                 "startToken", "endToken", "ranges_parallelism", "small_table_optimization"};
@@ -428,8 +428,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
                 continue;
             }
             if (!options.contains(x.first)) {
-                return make_exception_future<json::json_return_type>(
-                        httpd::bad_param_exception(format("option {} is not supported", x.first)));
+                throw httpd::bad_param_exception(format("option {} is not supported", x.first));
             }
         }
         std::unordered_map<sstring, sstring> options_map;
@@ -444,10 +443,8 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         // returns immediately, not waiting for the repair to finish. The user
         // then has other mechanisms to track the ongoing repair's progress,
         // or stop it.
-        return repair_start(repair, validate_keyspace(ctx, req->param),
-                options_map).then([] (int i) {
-                    return make_ready_future<json::json_return_type>(i);
-                });
+        int res = co_await repair_start(repair, validate_keyspace(ctx, req->param), options_map);
+        co_return json::json_return_type(res);
     });
 
     ss::get_active_repair_async.set(r, [&repair] (std::unique_ptr<http::request> req) {
