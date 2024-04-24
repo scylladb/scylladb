@@ -177,6 +177,9 @@ storage_service::storage_service(abort_source& abort_source,
         , _topology_state_machine(topology_state_machine)
 {
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
+    if (this_shard_id() == 0) {
+        _task_manager_module->make_virtual_task<node_ops::node_ops_virtual_task>(*this);
+    }
     register_metrics();
 
     _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
