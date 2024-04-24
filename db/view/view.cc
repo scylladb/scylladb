@@ -1956,6 +1956,9 @@ future<> view_builder::drain() {
     return _started.then([this] {
         vlogger.info("Unregistering mnotifier listener");
         return _mnotifier.unregister_listener(this).then([this] {
+            vlogger.info("Cancelling all updates");
+            return _vug.drain();
+        }).then([this] {
             vlogger.info("Waiting build sem (last holder is {})", _last_sem_holer);
             return _sem.wait();
         }).then([this] {

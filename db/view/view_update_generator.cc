@@ -17,6 +17,7 @@
 #include "readers/evictable.hh"
 #include "dht/partition_filter.hh"
 #include "utils/pretty_printers.hh"
+#include "service/storage_proxy.hh"
 
 static logging::logger vug_logger("view_update_generator");
 
@@ -237,6 +238,10 @@ void view_update_generator::do_abort() noexcept {
     vug_logger.info("Terminating background fiber");
     _as.request_abort();
     _pending_sstables.signal();
+}
+
+future<> view_update_generator::drain() {
+    return _proxy.local().abort_view_writes();
 }
 
 future<> view_update_generator::stop() {
