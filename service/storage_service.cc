@@ -6405,8 +6405,7 @@ future<std::vector<canonical_mutation>> storage_service::get_system_mutations(sc
     auto rs = co_await db::system_keyspace::query_mutations(_db, schema);
     result.reserve(rs->partitions().size());
     for (const auto& p : rs->partitions()) {
-        result.emplace_back(canonical_mutation{p.mut().unfreeze(schema)});
-        co_await coroutine::maybe_yield();
+        result.emplace_back(co_await make_canonical_mutation_gently(co_await unfreeze_gently(p.mut(), schema)));
     }
     co_return result;
 }
