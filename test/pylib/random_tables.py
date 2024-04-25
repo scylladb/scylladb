@@ -250,6 +250,14 @@ class RandomTable():
         await self.manager.cql.run_async(f"DROP INDEX {self.keyspace}.{name}")
         self.removed_indexes.add(name)
 
+    async def enable_cdc(self) -> None:
+        assert self.manager.cql is not None
+        await self.manager.cql.run_async(f"ALTER TABLE {self.full_name} WITH cdc = {{ 'enabled' : true }}")
+
+    async def disable_cdc(self) -> None:
+        assert self.manager.cql is not None
+        await self.manager.cql.run_async(f"ALTER TABLE {self.full_name} WITH cdc = {{ 'enabled' : false }}")
+
     def __str__(self):
         return self.full_name
 
