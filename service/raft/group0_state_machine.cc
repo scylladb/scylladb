@@ -13,6 +13,7 @@
 #include "dht/token.hh"
 #include "message/messaging_service.hh"
 #include "mutation/canonical_mutation.hh"
+#include "mutation/async_utils.hh"
 #include "seastar/core/abort_source.hh"
 #include "seastar/core/on_internal_error.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
@@ -119,9 +120,9 @@ static future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_addr
     mutations.reserve(cms.size());
     bool need_system_topology_flush = false;
     try {
-        for (const auto& cm : cms) {
+        for (auto& cm : cms) {
             auto& tbl = proxy.local_db().find_column_family(cm.column_family_id());
-            auto mut = cm.to_mutation(tbl.schema());
+            auto mut = co_await to_mutation_gently(cm, tbl.schema());
             need_system_topology_flush = need_system_topology_flush || should_flush_system_topology_after_applying(mut, proxy.data_dictionary());
             mutations.emplace_back(std::move(mut));
         }
