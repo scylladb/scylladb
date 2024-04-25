@@ -346,8 +346,8 @@ future<> view_update_generator::populate_views(const replica::table& table,
             }
             size_t update_size = memory_usage_of(*updates);
             size_t units_to_wait_for = std::min(table.get_config().view_update_concurrency_semaphore_limit, update_size);
-            auto units = co_await seastar::get_units(table.view_update_sem(), units_to_wait_for);
-            units.adopt(seastar::consume_units(table.view_update_sem(), update_size - units_to_wait_for));
+            auto units = co_await seastar::get_units(_db.view_update_sem(), units_to_wait_for);
+            units.adopt(seastar::consume_units(_db.view_update_sem(), update_size - units_to_wait_for));
             co_await mutate_MV(schema, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(),
                     tracing::trace_state_ptr(), std::move(units), service::allow_hints::no, wait_for_all_updates::yes);
         } catch (...) {
@@ -407,8 +407,8 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
             break;
         }
         tracing::trace(tr_state, "Generated {} view update mutations", updates->size());
-        auto units = seastar::consume_units(table.view_update_sem(), memory_usage_of(*updates));
-        if (table.view_update_sem().current() == 0) {
+        auto units = seastar::consume_units(_db.view_update_sem(), memory_usage_of(*updates));
+        if (_db.view_update_sem().current() == 0) {
             // We don't have resources to propagate view updates for this write. If we reached this point, we failed to
             // throttle the client. The memory queue is already full, waiting on the semaphore would block view updates
             // that we've already started applying, and generating hints would ultimately result in the disk queue being

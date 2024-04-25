@@ -1228,10 +1228,6 @@ public:
     future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr);
 
     friend class compaction_group;
-
-    db::timeout_semaphore& view_update_sem() const { // FIXME -- temporary helper
-        return *_config.view_update_concurrency_semaphore;
-    }
 };
 
 lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::tablet_map&);
@@ -1871,6 +1867,10 @@ public:
 
     bool is_internal_query() const;
     bool is_user_semaphore(const reader_concurrency_semaphore& semaphore) const;
+
+    db::timeout_semaphore& view_update_sem() {
+        return _view_update_concurrency_sem;
+    }
 };
 
 } // namespace replica
