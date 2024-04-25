@@ -5087,7 +5087,8 @@ SEASTAR_TEST_CASE(test_sstable_reader_on_unknown_column) {
 namespace {
 struct large_row_handler : public db::large_data_handler {
     using callback_t = std::function<void(const schema& s, const sstables::key& partition_key,
-            const clustering_key_prefix* clustering_key, uint64_t row_size, const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements)>;
+            const clustering_key_prefix* clustering_key, uint64_t row_size, uint64_t range_tombstones,
+            const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements)>;
     callback_t callback;
 
     large_row_handler(uint64_t large_rows_threshold, uint64_t rows_count_threshold, uint64_t cell_threshold_bytes, uint64_t collection_elements_threshold, callback_t callback)
@@ -5100,21 +5101,21 @@ struct large_row_handler : public db::large_data_handler {
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const override {
         const schema_ptr s = sst.get_schema();
-        callback(*s, partition_key, clustering_key, row_size, nullptr, 0, 0);
+        callback(*s, partition_key, clustering_key, row_size, 0, nullptr, 0, 0);
         return make_ready_future<>();
     }
 
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const override {
         const schema_ptr s = sst.get_schema();
-        callback(*s, partition_key, clustering_key, 0, &cdef, cell_size, collection_elements);
+        callback(*s, partition_key, clustering_key, 0, 0, &cdef, cell_size, collection_elements);
         return make_ready_future<>();
     }
 
     virtual future<> record_large_partitions(const sstables::sstable& sst,
-        const sstables::key& partition_key, uint64_t partition_size, uint64_t rows_count) const override {
+        const sstables::key& partition_key, uint64_t partition_size, uint64_t rows_count, uint64_t range_tombstones_count) const override {
         const schema_ptr s = sst.get_schema();
-        callback(*s, partition_key, nullptr, rows_count, nullptr, 0, 0);
+        callback(*s, partition_key, nullptr, rows_count, range_tombstones_count, nullptr, 0, 0);
         return make_ready_future<>();
     }
 
@@ -5128,7 +5129,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
         std::vector<clustering_key*> expected, uint64_t threshold, sstables::sstable_version_types version) {
     unsigned i = 0;
     auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
-                     const clustering_key_prefix* clustering_key, uint64_t row_size,
+                     const clustering_key_prefix* clustering_key, uint64_t row_size, uint64_t range_tombstones,
                      const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements) {
         BOOST_REQUIRE_EQUAL(pk.components(s), partition_key.to_partition_key(s).components(s));
         BOOST_REQUIRE_LT(i, expected.size());
@@ -5179,7 +5180,7 @@ static void test_sstable_write_large_cell_f(schema_ptr s, reader_permit permit, 
         std::vector<clustering_key*> expected, uint64_t threshold, sstables::sstable_version_types version) {
     unsigned i = 0;
     auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
-                     const clustering_key_prefix* clustering_key, uint64_t row_size,
+                     const clustering_key_prefix* clustering_key, uint64_t row_size, uint64_t range_tombstones,
                      const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements) {
         BOOST_TEST_MESSAGE(format("i={} ck={} cell_size={} threshold={}", i, clustering_key ? format("{}", *clustering_key) : "null", cell_size, threshold));
         BOOST_REQUIRE_EQUAL(pk.components(s), partition_key.to_partition_key(s).components(s));
@@ -5227,7 +5228,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_cell) {
     }
 }
 
-static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool expected, sstable_version_types version) {
+static void test_sstable_log_too_many_rows_f(int rows, int range_tombstones, uint64_t threshold, bool expected, sstable_version_types version) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
     mutation p = s.new_mutation("pv");
@@ -5237,15 +5238,23 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
         sv += "foo ";
         s.add_row(p, s.make_ckey(sv), sv);
     }
+    for (auto idx = 0; idx < range_tombstones; ++idx) {
+        s.delete_range(p, s.make_ckey_range(0 + idx*2, 1 + idx*2));
+    }
+
     schema_ptr sc = s.schema();
     auto mt = make_memtable(sc, {p});
 
     bool logged = false;
-    auto f = [&logged, &pk, &threshold](const schema& sc, const sstables::key& partition_key,
-                     const clustering_key_prefix* clustering_key, uint64_t rows_count,
+    auto f = [&logged, &pk, &threshold, &rows, &range_tombstones](const schema& sc, const sstables::key& partition_key,
+                     const clustering_key_prefix* clustering_key, uint64_t rows_count, uint64_t range_tombstones_count,
                      const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements) {
         BOOST_REQUIRE_GT(rows_count, threshold);
         BOOST_REQUIRE_EQUAL(pk.components(sc), partition_key.to_partition_key(sc).components(sc));
+
+        // Inserting one range tombstone creates two range tombstone marker rows
+        BOOST_REQUIRE_EQUAL(rows_count, rows + range_tombstones * 2);
+        BOOST_REQUIRE_EQUAL(range_tombstones_count, range_tombstones * 2);
         logged = true;
     };
 
@@ -5264,15 +5273,19 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_rows) {
     uint64_t random = tests::random::get_int(1, 100);
 
     // This test creates a sstable with a given number of rows and test it against a
-    // compaction_rows_count_warning_threshold. A warning is triggered when the number of rows
-    // exceeds the threshold.
-  for (auto version : test_sstable_versions) {
-    test_sstable_log_too_many_rows_f(random, 0, true, version);
-    test_sstable_log_too_many_rows_f(random, (random - 1), true, version);
-    test_sstable_log_too_many_rows_f(random, random, false, version);
-    test_sstable_log_too_many_rows_f(random, (random + 1), false, version);
-    test_sstable_log_too_many_rows_f((random + 1), random, true, version);
-  }
+    // compaction_rows_count_warning_threshold. A warning is triggered when the sum of
+    // the number of rows and the number of range tombstone markers exceeds the threshold.
+    for (auto version : test_sstable_versions) {
+        test_sstable_log_too_many_rows_f(random, 0, 0, true, version);
+        test_sstable_log_too_many_rows_f(random, 0, (random - 1), true, version);
+        test_sstable_log_too_many_rows_f(random, 0, random, false, version);
+        test_sstable_log_too_many_rows_f(random, 0, (random + 1), false, version);
+        test_sstable_log_too_many_rows_f((random + 1), 0, random, true, version);
+
+        test_sstable_log_too_many_rows_f(random, 1, (random + 1), true, version);
+        test_sstable_log_too_many_rows_f(random, 1, (random + 2), false, version);
+        test_sstable_log_too_many_rows_f(random, 2, (random + 2), true, version);
+    }
 }
 
 
@@ -5291,7 +5304,7 @@ static void test_sstable_too_many_collection_elements_f(int elements, uint64_t t
 
     bool logged = false;
     auto f = [&logged, &pk, &threshold](const schema& sc, const sstables::key& partition_key,
-                     const clustering_key_prefix* clustering_key, uint64_t rows_count,
+                     const clustering_key_prefix* clustering_key, uint64_t rows_count, uint64_t range_tombstones,
                      const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements) {
         BOOST_REQUIRE_GT(collection_elements, threshold);
         BOOST_REQUIRE_EQUAL(pk.components(sc), partition_key.to_partition_key(sc).components(sc));
