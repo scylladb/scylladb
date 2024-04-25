@@ -1432,12 +1432,7 @@ future<gms::inet_address> resolve(const config_file::named_value<sstring>& addre
     co_return coroutine::exception(std::move(ex));
 }
 
-static future<std::vector<seastar::metrics::relabel_config>> get_relable_from_file(const std::string& name) {
-    file f = co_await seastar::open_file_dma(name, open_flags::ro);
-    size_t s = co_await f.size();
-    seastar::input_stream<char> in = seastar::make_file_input_stream(f);
-    temporary_buffer<char> buf = co_await in.read_exactly(s);
-    auto yaml = YAML::Load(sstring(buf.begin(), buf.end()));
+static std::vector<seastar::metrics::relabel_config> get_relable_from_yaml(const YAML::Node& yaml, const std::string& name) {
     std::vector<seastar::metrics::relabel_config> relabels;
     const YAML::Node& relabel_configs = yaml["relabel_configs"];
     relabels.resize(relabel_configs.size());
@@ -1470,17 +1465,51 @@ static future<std::vector<seastar::metrics::relabel_config>> get_relable_from_fi
             }
         }
     }
-    co_return relabels;
+    return relabels;
+}
+
+static std::vector<seastar::metrics::metric_family_config> get_metric_configs_from_yaml(const YAML::Node& yaml, const std::string& name) {
+    std::vector<seastar::metrics::metric_family_config> metric_config;
+    const YAML::Node& metric_family_configs = yaml["metric_family_configs"];
+    metric_config.resize(metric_family_configs.size());
+    size_t i = 0;
+    for (auto it = metric_family_configs.begin(); it != metric_family_configs.end(); ++it, i++) {
+        const YAML::Node& element = *it;
+        for(YAML::const_iterator e_it = element.begin(); e_it != element.end(); ++e_it) {
+            std::string key = e_it->first.as<std::string>();
+            if (key == "aggregate_labels") {
+                auto labels = e_it->second;
+                std::vector<std::string> aggregate_labels;
+                aggregate_labels.resize(labels.size());
+                size_t j = 0;
+                for (auto label_it = labels.begin(); label_it !=  labels.end(); ++label_it, j++) {
+                    aggregate_labels[j] = label_it->as<std::string>();
+                }
+                metric_config[i].aggregate_labels = aggregate_labels;
+            } else if (key == "name") {
+                metric_config[i].name = e_it->second.as<std::string>();
+            } else if (key == "regex") {
+                metric_config[i].regex_name = e_it->second.as<std::string>();
+            }
+        }
+    }
+    return metric_config;
 }
 
 future<> update_relabel_config_from_file(const std::string& name) {
     if (name.empty()) {
         co_return;
     }
-
-    std::vector<seastar::metrics::relabel_config> relabels = co_await  get_relable_from_file(name);
+    file f = co_await seastar::open_file_dma(name, open_flags::ro);
+    size_t s = co_await f.size();
+    seastar::input_stream<char> in = seastar::make_file_input_stream(f);
+    temporary_buffer<char> buf = co_await in.read_exactly(s);
+    auto yaml = YAML::Load(sstring(buf.begin(), buf.end()));
+    std::vector<seastar::metrics::relabel_config> relabels = get_relable_from_yaml(yaml, name);
+    std::vector<seastar::metrics::metric_family_config> metric_configs = get_metric_configs_from_yaml(yaml, name);
     bool failed = false;
-    co_await smp::invoke_on_all([&relabels, &failed] {
+    co_await smp::invoke_on_all([&relabels, &failed, &metric_configs] {
+        metrics::set_metric_family_configs(metric_configs);
         return metrics::set_relabel_configs(relabels).then([&failed](const metrics::metric_relabeling_result& result) {
             if (result.metrics_relabeled_due_to_collision > 0) {
                 failed = true;
