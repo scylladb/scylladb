@@ -88,10 +88,13 @@ else
 	SCYLLA_VERSION=$VERSION
 	if [ -z "$SCYLLA_RELEASE" ]; then
 		GIT_COMMIT=$(git -C "$SCRIPT_DIR" log --pretty=format:'%h' -n 1 --abbrev=12)
-		# For custom package builds, replace "0" with "counter.your_name",
+		# For custom package builds, replace "0" with "counter.yourname",
 		# where counter starts at 1 and increments for successive versions.
 		# This ensures that the package manager will select your custom
 		# package over the standard release.
+		# Do not use any special characters like - or _ in the name above!
+		# These characters either have special meaning or are illegal in
+		# version strings.
 		SCYLLA_BUILD=0
 		SCYLLA_RELEASE=$SCYLLA_BUILD.$DATE.$GIT_COMMIT
 	elif [ -f "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" ]; then
