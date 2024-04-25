@@ -69,8 +69,9 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     await asyncio.gather(*(wait_for_upgrade_state('synchronize', cql, h, time.time() + 60) for h in hosts))
     logging.info(f"{hosts} entered synchronize")
 
-    # TODO ensure that srv1 failed upgrade - look at logs?
-    # '[shard 0] raft_group0_upgrade - Raft upgrade failed: std::runtime_error (error injection before group 0 upgrade enters synchronize).'
+    log_file1 = await manager.server_open_log(srv1.server_id)
+    logging.info(f"Checking if Raft upgrade procedure failed on {srv1}")
+    await log_file1.wait_for("error injection before group 0 upgrade enters synchronize")
 
     logging.info(f"Setting recovery state on {hosts}")
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
