@@ -923,7 +923,7 @@ future<std::vector<mutation>> query_processor::get_mutations_internal(
         service::query_state& query_state,
         api::timestamp_type timestamp,
         std::vector<data_value_or_unset> values) {
-    log.trace("get_mutations_internal: \"{}\" ({})", query_string, fmt::join(values, ", "));
+    log.debug("get_mutations_internal: \"{}\" ({})", query_string, fmt::join(values, ", "));
     auto stmt = prepare_internal(query_string);
     auto mod_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(stmt->statement);
     if (!mod_stmt) {

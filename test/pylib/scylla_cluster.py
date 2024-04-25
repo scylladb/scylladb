@@ -137,6 +137,7 @@ SCYLLA_CMDLINE_OPTIONS = [
     '--abort-on-internal-error', '1',
     '--abort-on-ebadf', '1',
     '--logger-log-level', 'raft_topology=debug',
+    '--logger-log-level', 'query_processor=debug',
 ]
 
 # [--smp, 1], [--smp, 2] -> [--smp, 2]
