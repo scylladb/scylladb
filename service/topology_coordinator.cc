@@ -1629,6 +1629,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         auto reason = ::format(
                             "bootstrap: insert tokens and CDC generation data (UUID: {})", gen_uuid);
                         co_await update_topology_state(std::move(guard_), {std::move(mutation), builder.build()}, reason);
+
+                        co_await utils::get_local_injector().inject("topology_coordinator_pause_after_updating_cdc_generation",
+                            [] (auto& handler) -> future<> {
+                                rtlogger.info("topology_coordinator_pause_after_updating_cdc_generation: wait for message for 5 minutes");
+                                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                                rtlogger.info("topology_coordinator_pause_after_updating_cdc_generation: done");
+                            });
                     }
                         break;
                     case node_state::replacing: {

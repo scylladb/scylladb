@@ -74,6 +74,7 @@
 #include <seastar/net/dns.hh>
 #include <seastar/core/io_queue.hh>
 #include <seastar/core/abort_on_ebadf.hh>
+#include <csignal>
 
 #include "db/view/view_update_generator.hh"
 #include "service/cache_hitrate_calculator.hh"
@@ -1279,6 +1280,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("loading system sstables");
             replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db).get();
 
+            utils::get_local_injector().inject("stop_after_init_of_system_ks",
+                [] { std::raise(SIGSTOP); });
+
             // 1. Here we notify dependent services that system tables have been loaded,
             //    and they in turn can load the necessary data from them;
             // 2. This notification is important for the services that are needed
@@ -1295,6 +1299,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sst_format_selector.on_system_tables_loaded(sys_ks.local())).get();
 
             db.local().init_schema_commitlog();
+
+            utils::get_local_injector().inject("stop_after_init_of_schema_commitlog",
+                [] { std::raise(SIGSTOP); });
 
             // Mark all the system tables writable and assign the proper commitlog to them.
             sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
@@ -1460,6 +1467,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
+            utils::get_local_injector().inject("stop_after_starting_gossiper",
+                [] { std::raise(SIGSTOP); });
+
             api::set_server_gossip(ctx, gossiper).get();
             auto stop_gossip_api = defer_verbose_shutdown("gossiper API", [&ctx] {
                 api::unset_server_gossip(ctx).get();
@@ -1471,6 +1481,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_address_map = defer_verbose_shutdown("raft_address_map", [] {
                 raft_address_map.stop().get();
             });
+
+            utils::get_local_injector().inject("stop_after_starting_raft_address_map",
+                [] { std::raise(SIGSTOP); });
 
             static sharded<service::direct_fd_pinger> fd_pinger;
             supervisor::notify("starting direct failure detector pinger service");
@@ -1524,6 +1537,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
+
+            utils::get_local_injector().inject("stop_after_starting_migration_manager",
+                [] { std::raise(SIGSTOP); });
 
             // XXX: stop_raft has to happen before query_processor and migration_manager
             // is stopped, since some groups keep using the query
@@ -1656,6 +1672,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
+
+            utils::get_local_injector().inject("stop_after_starting_commitlog",
+                [] { std::raise(SIGSTOP); });
+
             if (cl != nullptr) {
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
@@ -1743,6 +1763,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_repair(ctx).get();
             });
 
+            utils::get_local_injector().inject("stop_after_starting_repair",
+                [] { std::raise(SIGSTOP); });
+
             supervisor::notify("starting CDC Generation Management service");
             /* This service uses the system distributed keyspace.
              * It will only do that *after* the node has joined the token ring, and the token ring joining
@@ -1765,6 +1788,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
                 cdc_generation_service.stop().get();
             });
+
+            utils::get_local_injector().inject("stop_after_starting_cdc_generation_service",
+                [] { std::raise(SIGSTOP); });
 
             auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
 
@@ -1904,6 +1930,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 group0_service.abort().get();
             });
 
+            utils::get_local_injector().inject("stop_after_starting_group0_service",
+                [] { std::raise(SIGSTOP); });
+
             // Set up group0 service earlier since it is needed by group0 setup just below
             ss.local().set_group0(group0_service);
 
@@ -1973,6 +2002,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // in scylla_local table. This allows to know the version at auth service
             // startup also when creating a new cluster.
             start_auth_service(auth_service, stop_auth_service, "auth service");
+
+            utils::get_local_injector().inject("stop_after_starting_auth_service",
+                [] { std::raise(SIGSTOP); });
 
             api::set_server_authorization_cache(ctx, auth_service).get();
             auto stop_authorization_cache_api = defer_verbose_shutdown("authorization cache api", [&ctx] {
