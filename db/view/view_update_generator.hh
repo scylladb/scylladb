@@ -83,6 +83,7 @@ public:
 
     replica::database& get_db() noexcept { return _db; }
 
+private:
     future<> mutate_MV(
             schema_ptr base,
             dht::token base_token,
@@ -94,6 +95,7 @@ public:
             service::allow_hints allow_hints,
             wait_for_all_updates wait_for_all);
 
+public:
     ssize_t available_register_units() const { return _registration_sem.available_units(); }
     size_t queued_batches_count() const { return _sstables_with_tables.size(); }
 
