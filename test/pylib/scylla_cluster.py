@@ -37,6 +37,8 @@ import glob
 import errno
 import re
 
+import psutil
+
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
@@ -1136,6 +1138,20 @@ class ScyllaCluster:
         server = self.running[server_id]
         server.unpause()
 
+    def server_get_process_status(self, server_id: ServerNum) -> str:
+        assert server_id in self.running
+
+        self.logger.info("Cluster %s get process status for server %s", self.name, server_id)
+        server = self.running[server_id]
+        try:
+            process = psutil.Process(server.cmd.pid)
+            status = process.status()
+        except psutil.NoSuchProcess:
+            status = psutil.STATUS_DEAD
+
+        self.logger.info("Cluster %s process status for server %s is %s", self.name, server_id, status)
+        return status
+
     def get_config(self, server_id: ServerNum) -> dict[str, object]:
         """Get conf/scylla.yaml of the given server as a dictionary.
            Fails if the server cannot be found."""
@@ -1377,6 +1393,7 @@ class ScyllaClusterManager:
         add_get('/cluster/server/{server_id}/exe', self._server_get_exe)
         add_put('/cluster/server/{server_id}/wipe_sstables', self._cluster_server_wipe_sstables)
         add_get('/cluster/server/{server_id}/sstables_disk_usage', self._server_get_sstables_disk_usage)
+        add_get('/cluster/server/{server_id}/process_status', self._server_get_process_status)
 
     async def _manager_up(self, _request) -> bool:
         return self.is_running
@@ -1710,6 +1727,12 @@ class ScyllaClusterManager:
         data = request.query
         server_id = ServerNum(int(request.match_info["server_id"]))
         return self.cluster.get_sstables_disk_usage(server_id, data["keyspace"], data["table"])
+
+    async def _server_get_process_status(self, request: aiohttp.web.Request) -> Optional[str]:
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        return self.cluster.server_get_process_status(server_id)
+
 
 @asynccontextmanager
 async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \

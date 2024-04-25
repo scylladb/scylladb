@@ -492,6 +492,18 @@ class ManagerClient():
 
         return await wait_for(host_is_known, deadline or (time() + 30))
 
+    async def wait_for_scylla_process_status(self,
+                                             server_id: ServerNum,
+                                             expected_statuses: list[str],
+                                             deadline: Optional[float] = None) -> str:
+        """Wait for Scylla's process status for server_id will be as expected, with timeout."""
+        async def process_status_is_as_expected() -> str | None:
+            current_status = await self.client.get_json(f"/cluster/server/{server_id}/process_status")
+            if current_status in expected_statuses:
+                return current_status
+
+        return await wait_for(process_status_is_as_expected, deadline or (time() + 30))
+
     async def get_host_ip(self, server_id: ServerNum) -> IPAddress:
         """Get host IP Address"""
         try:
