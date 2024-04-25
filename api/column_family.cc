@@ -764,24 +764,6 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cf::get_true_snapshots_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        auto uuid = get_uuid(req->param["name"], ctx.db.local());
-        return ctx.db.local().find_column_family(uuid).get_snapshot_details().then([](
-                const std::unordered_map<sstring, replica::column_family::snapshot_details>& sd) {
-            int64_t res = 0;
-            for (auto i : sd) {
-                res += i.second.total;
-            }
-            return make_ready_future<json::json_return_type>(res);
-        });
-    });
-
-    cf::get_all_true_snapshots_size.set(r, [] (std::unique_ptr<http::request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
-    });
-
     cf::get_row_cache_hit_out_of_range.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
@@ -1156,8 +1138,6 @@ void unset_column_family(http_context& ctx, routes& r) {
     cf::get_speculative_retries.unset(r);
     cf::get_all_speculative_retries.unset(r);
     cf::get_key_cache_hit_rate.unset(r);
-    cf::get_true_snapshots_size.unset(r);
-    cf::get_all_true_snapshots_size.unset(r);
     cf::get_row_cache_hit_out_of_range.unset(r);
     cf::get_all_row_cache_hit_out_of_range.unset(r);
     cf::get_row_cache_hit.unset(r);

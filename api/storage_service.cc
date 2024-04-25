@@ -64,6 +64,7 @@ namespace api {
 
 namespace ss = httpd::storage_service_json;
 namespace sp = httpd::storage_proxy_json;
+namespace cf = httpd::column_family_json;
 using namespace json;
 
 sstring validate_keyspace(const http_context& ctx, sstring ks_name) {
@@ -207,7 +208,6 @@ static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
 }
 
 seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request) {
-    namespace cf = httpd::column_family_json;
     return q.scatter().then([&q, legacy_request] {
         return sleep(q.duration()).then([&q, legacy_request] {
             return q.gather(q.capacity()).then([&q, legacy_request] (auto topk_results) {
@@ -1837,6 +1837,20 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 
         co_return json::json_return_type(static_cast<int>(scrub_status::successful));
     });
+
+    cf::get_true_snapshots_size.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) {
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->param["name"]);
+        return snap_ctl.local().true_snapshots_size(std::move(ks), std::move(cf)).then([] (int64_t res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
+    });
+
+    cf::get_all_true_snapshots_size.set(r, [] (std::unique_ptr<http::request> req) {
+        //TBD
+        unimplemented();
+        return make_ready_future<json::json_return_type>(0);
+    });
+
 }
 
 void unset_snapshot(http_context& ctx, routes& r) {
@@ -1845,6 +1859,8 @@ void unset_snapshot(http_context& ctx, routes& r) {
     ss::del_snapshot.unset(r);
     ss::true_snapshots_size.unset(r);
     ss::scrub.unset(r);
+    cf::get_true_snapshots_size.unset(r);
+    cf::get_all_true_snapshots_size.unset(r);
 }
 
 }
