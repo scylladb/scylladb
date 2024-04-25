@@ -125,6 +125,7 @@ public:
     const db::extensions& extensions() const;
     const gms::feature_service& features() const;
     replica::database& real_database() const; // For transition; remove
+    replica::database* real_database_ptr() const;
 };
 
 }

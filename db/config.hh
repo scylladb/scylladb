@@ -144,6 +144,7 @@ public:
     void add_cdc_extension();
     void add_per_partition_rate_limit_extension();
     void add_tags_extension();
+    void add_tombstone_gc_extension();
 
     /// True iff the feature is enabled.
     bool check_experimental(experimental_features_t::feature f) const;

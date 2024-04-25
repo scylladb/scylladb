@@ -208,9 +208,12 @@ so that admin sees the replace as finished after availability was restored.
 ### Impact on repair
 
 When tablet is rebuilt in the background after replace, its primary replica may be on the node which is no
-longer in topology. This means that running repair -pr on all nodes will not repair such a tablet, but it's fine because
-we decided that repair can be optimistic. It's safe with regards to tombstone gc because expiry is decided per table per token range
+longer in topology. This means that running repair -pr on all nodes will not repair such a tablet, but it's safe
+with regards to tombstone gc because by default expiry is decided per table per token range
 based on actual repair time of that range. Unrepaired tablets will not have their token range marked as repaired.
+
+If tombstone gc mode is set to timeout, make sure all tablets are repaired within gc_grace_seconds
+e.g. run full table repair with tablet migration disabled.
 
 # Tablet transitions
 

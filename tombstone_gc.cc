@@ -184,6 +184,20 @@ static bool needs_repair_before_gc(const replica::database& db, sstring ks_name)
     return needs_repair;
 }
 
+static bool requires_repair_before_gc(data_dictionary::database db, sstring ks_name) {
+    auto real_db_ptr = db.real_database_ptr();
+    if (!real_db_ptr) {
+        return false;
+    }
+
+    const auto& rs = db.find_keyspace(ks_name).get_replication_strategy();
+    return rs.uses_tablets() && needs_repair_before_gc(*real_db_ptr, ks_name);
+}
+
+std::map<sstring, sstring> get_default_tombstonesonte_gc_mode(data_dictionary::database db, sstring ks_name) {
+    return {{"mode", requires_repair_before_gc(db, ks_name) ? "repair" : "timeout"}};
+}
+
 void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name) {
     if (!options) {
         return;

@@ -197,6 +197,10 @@ database::real_database() const {
     return _ops->real_database(*this);
 }
 
+replica::database* database::real_database_ptr() const {
+    return _ops->real_database_ptr(*this);
+}
+
 impl::~impl() = default;
 
 keyspace_metadata::keyspace_metadata(std::string_view name,

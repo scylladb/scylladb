@@ -254,7 +254,7 @@ const db::per_partition_rate_limit_options* cf_prop_defs::get_per_partition_rate
     return &ext->get_options();
 }
 
-void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions) const {
+void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name) const {
     if (has_property(KW_COMMENT)) {
         builder.set_comment(get_string(KW_COMMENT, ""));
     }
@@ -346,7 +346,11 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
             schema_extensions.emplace(key, ext);
         }
     }
-
+    // Set default tombstone_gc mode.
+    if (!schema_extensions.contains(tombstone_gc_extension::NAME)) {
+        auto ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstonesonte_gc_mode(db, ks_name));
+        schema_extensions.emplace(tombstone_gc_extension::NAME, std::move(ext));
+    }
     builder.set_extensions(std::move(schema_extensions));
 
     if (has_property(KW_SYNCHRONOUS_UPDATES)) {
