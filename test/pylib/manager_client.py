@@ -18,7 +18,7 @@ import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, Host
-from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
+from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession, \
     ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore # pylint: disable=no-name-in-module
@@ -283,14 +283,16 @@ class ManagerClient():
         """Get the total size of all sstable files for the given table"""
         return await self.client.get_json(f"/cluster/server/{server_id}/sstables_disk_usage", params={"keyspace": keyspace, "table": table})
 
-    def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig],
+    def _create_server_add_data(self,
+                                replace_cfg: Optional[ReplaceConfig],
                                 cmdline: Optional[List[str]],
                                 config: Optional[dict[str, Any]],
                                 property_file: Optional[dict[str, Any]],
                                 start: bool,
                                 seeds: Optional[List[IPAddress]],
                                 expected_error: Optional[str],
-                                server_encryption: Optional[str]) -> dict[str, Any]:
+                                server_encryption: Optional[str],
+                                expected_server_up_state: Optional[ServerUpState]) -> dict[str, Any]:
         data: dict[str, Any] = {'start': start}
         if replace_cfg:
             data['replace_cfg'] = replace_cfg._asdict()
@@ -306,9 +308,12 @@ class ManagerClient():
             data['expected_error'] = expected_error
         if server_encryption:
             data['server_encryption'] = server_encryption
+        if expected_server_up_state:
+            data['expected_server_up_state'] = expected_server_up_state.name
         return data
 
-    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None,
+    async def server_add(self,
+                         replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
                          property_file: Optional[dict[str, Any]] = None,
@@ -316,10 +321,21 @@ class ManagerClient():
                          expected_error: Optional[str] = None,
                          seeds: Optional[List[IPAddress]] = None,
                          timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT,
-                         server_encryption: str = "none") -> ServerInfo:
+                         server_encryption: str = "none",
+                         expected_server_up_state: Optional[ServerUpState] = None) -> ServerInfo:
         """Add a new server"""
         try:
-            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, seeds, expected_error, server_encryption)
+            data = self._create_server_add_data(
+                replace_cfg,
+                cmdline,
+                config,
+                property_file,
+                start,
+                seeds,
+                expected_error,
+                server_encryption,
+                expected_server_up_state,
+            )
 
             # If we replace, we should wait until other nodes see the node being
             # replaced as dead because the replace operation can be rejected if
@@ -364,7 +380,7 @@ class ManagerClient():
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
 
         try:
-            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error, server_encryption)
+            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error, server_encryption, None)
             data['servers_num'] = servers_num
             server_infos = await self.client.put_json("/cluster/addservers", data, response_type="json",
                                                       timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)
