@@ -132,6 +132,11 @@ using timestamp_generator = std::function<api::timestamp_type(std::mt19937& engi
 /// Ignores timestamp destination.
 timestamp_generator default_timestamp_generator();
 
+/// Use this to generate mutations that cannot be compacted
+///
+/// Tombstones will not cover lower level tombstones, or data.
+timestamp_generator uncompactible_timestamp_generator(uint32_t seed);
+
 struct expiry_info {
     gc_clock::duration ttl;
     gc_clock::time_point expiry_point;

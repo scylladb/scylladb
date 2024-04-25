@@ -754,6 +754,43 @@ timestamp_generator default_timestamp_generator() {
     };
 }
 
+timestamp_generator uncompactible_timestamp_generator(uint32_t seed) {
+    auto engine = std::mt19937(seed);
+
+    const auto rank = [] (timestamp_destination dest) -> api::timestamp_type {
+        switch (dest) {
+            case timestamp_destination::partition_tombstone:
+                return 0;
+            case timestamp_destination::range_tombstone:
+                return 1;
+            case timestamp_destination::row_tombstone:
+                return 2;
+            case timestamp_destination::collection_tombstone:
+                return 3;
+            case timestamp_destination::row_marker:
+            case timestamp_destination::cell_timestamp:
+            case timestamp_destination::collection_cell_timestamp:
+                return 4;
+        }
+    };
+    const auto max_rank = rank(timestamp_destination::collection_cell_timestamp);
+    const auto margin = 1000;
+    std::vector<api::timestamp_type> points;
+    points.push_back(api::min_timestamp);
+    for (api::timestamp_type i = 0; i < max_rank; ++i) {
+        const auto remaining_ranks = max_rank - i;
+        const auto point = std::uniform_int_distribution<api::timestamp_type>(points.back() + margin, api::max_timestamp - (remaining_ranks * margin))(engine);
+        points.push_back(point);
+    }
+    points.push_back(api::max_timestamp);
+
+    return [rank, points] (std::mt19937& engine, timestamp_destination destination, api::timestamp_type min_timestamp) {
+        const auto r = rank(destination);
+        auto ts_dist = std::uniform_int_distribution<api::timestamp_type>(points.at(r), points.at(r + 1) - 1);
+        return ts_dist(engine);
+    };
+}
+
 expiry_generator no_expiry_expiry_generator() {
     return [] (std::mt19937& engine, timestamp_destination destination) -> std::optional<expiry_info> {
         return std::nullopt;
