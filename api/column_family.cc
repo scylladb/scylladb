@@ -338,7 +338,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_memtable_columns_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], uint64_t{0}, [](replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), uint64_t{0}, [](replica::column_family& cf) {
             return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed(std::mem_fn(&replica::memtable::partition_count)), uint64_t(0));
         }, std::plus<>());
     });
@@ -358,7 +358,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_memtable_off_heap_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], int64_t(0), [](replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), int64_t(0), [](replica::column_family& cf) {
             return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
                 return active_memtable->region().occupancy().total_space();
             }), uint64_t(0));
@@ -374,7 +374,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_memtable_live_data_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], int64_t(0), [](replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), int64_t(0), [](replica::column_family& cf) {
             return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
                 return active_memtable->region().occupancy().used_space();
             }), uint64_t(0));
@@ -399,7 +399,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::get_cf_all_memtables_off_heap_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         warn(unimplemented::cause::INDEXES);
-        return map_reduce_cf(ctx, req->param["name"], int64_t(0), [](replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), int64_t(0), [](replica::column_family& cf) {
             return cf.occupancy().total_space();
         }, std::plus<int64_t>());
     });
@@ -415,7 +415,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::get_cf_all_memtables_live_data_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         warn(unimplemented::cause::INDEXES);
-        return map_reduce_cf(ctx, req->param["name"], int64_t(0), [](replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), int64_t(0), [](replica::column_family& cf) {
             return cf.occupancy().used_space();
         }, std::plus<int64_t>());
     });
@@ -430,7 +430,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_memtable_switch_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx,req->param["name"] ,&replica::column_family_stats::memtable_switch_count);
+        return get_cf_stats(ctx,req->get_path_param("name") ,&replica::column_family_stats::memtable_switch_count);
     });
 
     cf::get_all_memtable_switch_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -439,7 +439,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     // FIXME: this refers to partitions, not rows.
     cf::get_estimated_row_size_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), utils::estimated_histogram(0), [](replica::column_family& cf) {
             utils::estimated_histogram res(0);
             for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
                 res.merge(i->get_stats_metadata().estimated_partition_size);
@@ -451,7 +451,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     // FIXME: this refers to partitions, not rows.
     cf::get_estimated_row_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], int64_t(0), [](replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), int64_t(0), [](replica::column_family& cf) {
             uint64_t res = 0;
             for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
                 res += i->get_stats_metadata().estimated_partition_size.count();
@@ -462,7 +462,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_estimated_column_count_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), utils::estimated_histogram(0), [](replica::column_family& cf) {
             utils::estimated_histogram res(0);
             for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
                 res.merge(i->get_stats_metadata().estimated_cells_count);
@@ -479,7 +479,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_pending_flushes.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx,req->param["name"] ,&replica::column_family_stats::pending_flushes);
+        return get_cf_stats(ctx,req->get_path_param("name") ,&replica::column_family_stats::pending_flushes);
     });
 
     cf::get_all_pending_flushes.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -487,7 +487,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_read.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats_count(ctx,req->param["name"] ,&replica::column_family_stats::reads);
+        return get_cf_stats_count(ctx,req->get_path_param("name") ,&replica::column_family_stats::reads);
     });
 
     cf::get_all_read.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -495,7 +495,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_write.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats_count(ctx, req->param["name"] ,&replica::column_family_stats::writes);
+        return get_cf_stats_count(ctx, req->get_path_param("name") ,&replica::column_family_stats::writes);
     });
 
     cf::get_all_write.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -503,19 +503,19 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_read_latency_histogram_depricated.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_histogram(ctx, req->param["name"], &replica::column_family_stats::reads);
+        return get_cf_histogram(ctx, req->get_path_param("name"), &replica::column_family_stats::reads);
     });
 
     cf::get_read_latency_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_rate_and_histogram(ctx, req->param["name"], &replica::column_family_stats::reads);
+        return get_cf_rate_and_histogram(ctx, req->get_path_param("name"), &replica::column_family_stats::reads);
     });
 
     cf::get_read_latency.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats_sum(ctx,req->param["name"] ,&replica::column_family_stats::reads);
+        return get_cf_stats_sum(ctx,req->get_path_param("name") ,&replica::column_family_stats::reads);
     });
 
     cf::get_write_latency.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats_sum(ctx, req->param["name"] ,&replica::column_family_stats::writes);
+        return get_cf_stats_sum(ctx, req->get_path_param("name") ,&replica::column_family_stats::writes);
     });
 
     cf::get_all_read_latency_histogram_depricated.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -527,11 +527,11 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_write_latency_histogram_depricated.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_histogram(ctx, req->param["name"], &replica::column_family_stats::writes);
+        return get_cf_histogram(ctx, req->get_path_param("name"), &replica::column_family_stats::writes);
     });
 
     cf::get_write_latency_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_rate_and_histogram(ctx, req->param["name"], &replica::column_family_stats::writes);
+        return get_cf_rate_and_histogram(ctx, req->get_path_param("name"), &replica::column_family_stats::writes);
     });
 
     cf::get_all_write_latency_histogram_depricated.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -543,7 +543,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_pending_compactions.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], int64_t(0), [](replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), int64_t(0), [](replica::column_family& cf) {
             return cf.estimate_pending_compactions();
         }, std::plus<int64_t>());
     });
@@ -555,7 +555,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_live_ss_table_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx, req->param["name"], &replica::column_family_stats::live_sstable_count);
+        return get_cf_stats(ctx, req->get_path_param("name"), &replica::column_family_stats::live_sstable_count);
     });
 
     cf::get_all_live_ss_table_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -563,11 +563,11 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_unleveled_sstables.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_unleveled_sstables(ctx, req->param["name"]);
+        return get_cf_unleveled_sstables(ctx, req->get_path_param("name"));
     });
 
     cf::get_live_disk_space_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return sum_sstable(ctx, req->param["name"], false);
+        return sum_sstable(ctx, req->get_path_param("name"), false);
     });
 
     cf::get_all_live_disk_space_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -575,7 +575,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_total_disk_space_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return sum_sstable(ctx, req->param["name"], true);
+        return sum_sstable(ctx, req->get_path_param("name"), true);
     });
 
     cf::get_all_total_disk_space_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -584,7 +584,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     // FIXME: this refers to partitions, not rows.
     cf::get_min_row_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], INT64_MAX, min_partition_size, min_int64);
+        return map_reduce_cf(ctx, req->get_path_param("name"), INT64_MAX, min_partition_size, min_int64);
     });
 
     // FIXME: this refers to partitions, not rows.
@@ -594,7 +594,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     // FIXME: this refers to partitions, not rows.
     cf::get_max_row_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], int64_t(0), max_partition_size, max_int64);
+        return map_reduce_cf(ctx, req->get_path_param("name"), int64_t(0), max_partition_size, max_int64);
     });
 
     // FIXME: this refers to partitions, not rows.
@@ -605,7 +605,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     // FIXME: this refers to partitions, not rows.
     cf::get_mean_row_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         // Cassandra 3.x mean values are truncated as integrals.
-        return map_reduce_cf(ctx, req->param["name"], integral_ratio_holder(), mean_partition_size, std::plus<integral_ratio_holder>());
+        return map_reduce_cf(ctx, req->get_path_param("name"), integral_ratio_holder(), mean_partition_size, std::plus<integral_ratio_holder>());
     });
 
     // FIXME: this refers to partitions, not rows.
@@ -615,7 +615,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_bloom_filter_false_positives.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), uint64_t(0), [] (replica::column_family& cf) {
             auto sstables = cf.get_sstables();
             return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_get_false_positive();
@@ -633,7 +633,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_recent_bloom_filter_false_positives.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), uint64_t(0), [] (replica::column_family& cf) {
             auto sstables = cf.get_sstables();
             return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_get_recent_false_positive();
@@ -651,7 +651,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], ratio_holder(), [] (replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), ratio_holder(), [] (replica::column_family& cf) {
             return boost::accumulate(*cf.get_sstables() | boost::adaptors::transformed(filter_false_positive_as_ratio_holder), ratio_holder());
         }, std::plus<>());
     });
@@ -663,7 +663,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_recent_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], ratio_holder(), [] (replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), ratio_holder(), [] (replica::column_family& cf) {
             return boost::accumulate(*cf.get_sstables() | boost::adaptors::transformed(filter_recent_false_positive_as_ratio_holder), ratio_holder());
         }, std::plus<>());
     });
@@ -675,7 +675,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_bloom_filter_disk_space_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), uint64_t(0), [] (replica::column_family& cf) {
             auto sstables = cf.get_sstables();
             return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_size();
@@ -693,7 +693,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_bloom_filter_off_heap_memory_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), uint64_t(0), [] (replica::column_family& cf) {
             auto sstables = cf.get_sstables();
             return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_memory_size();
@@ -711,7 +711,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_index_summary_off_heap_memory_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), uint64_t(0), [] (replica::column_family& cf) {
             auto sstables = cf.get_sstables();
             return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->get_summary().memory_footprint();
@@ -734,7 +734,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         // We are missing the off heap memory calculation
         // Return 0 is the wrong value. It's a work around
         // until the memory calculation will be available
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
+        //auto id = get_uuid(req->get_path_param("name"), ctx.db.local());
         return make_ready_future<json::json_return_type>(0);
     });
 
@@ -747,7 +747,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     cf::get_speculative_retries.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
+        //auto id = get_uuid(req->get_path_param("name"), ctx.db.local());
         return make_ready_future<json::json_return_type>(0);
     });
 
@@ -760,12 +760,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     cf::get_key_cache_hit_rate.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
+        //auto id = get_uuid(req->get_path_param("name"), ctx.db.local());
         return make_ready_future<json::json_return_type>(0);
     });
 
     cf::get_true_snapshots_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        auto uuid = get_uuid(req->param["name"], ctx.db.local());
+        auto uuid = get_uuid(req->get_path_param("name"), ctx.db.local());
         return ctx.db.local().find_column_family(uuid).get_snapshot_details().then([](
                 const std::unordered_map<sstring, replica::column_family::snapshot_details>& sd) {
             int64_t res = 0;
@@ -785,7 +785,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     cf::get_row_cache_hit_out_of_range.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
+        //auto id = get_uuid(req->get_path_param("name"), ctx.db.local());
         return make_ready_future<json::json_return_type>(0);
     });
 
@@ -796,7 +796,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_row_cache_hit.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_raw(ctx, req->param["name"], utils::rate_moving_average(), [](const replica::column_family& cf) {
+        return map_reduce_cf_raw(ctx, req->get_path_param("name"), utils::rate_moving_average(), [](const replica::column_family& cf) {
             return cf.get_row_cache().stats().hits.rate();
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
@@ -812,7 +812,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_row_cache_miss.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_raw(ctx, req->param["name"], utils::rate_moving_average(), [](const replica::column_family& cf) {
+        return map_reduce_cf_raw(ctx, req->get_path_param("name"), utils::rate_moving_average(), [](const replica::column_family& cf) {
             return cf.get_row_cache().stats().misses.rate();
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
@@ -829,57 +829,57 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_cas_prepare.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_time_histogram(ctx, req->param["name"], [](const replica::column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx, req->get_path_param("name"), [](const replica::column_family& cf) {
             return cf.get_stats().cas_prepare.histogram();
         });
     });
 
     cf::get_cas_propose.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_time_histogram(ctx, req->param["name"], [](const replica::column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx, req->get_path_param("name"), [](const replica::column_family& cf) {
             return cf.get_stats().cas_accept.histogram();
         });
     });
 
     cf::get_cas_commit.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_time_histogram(ctx, req->param["name"], [](const replica::column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx, req->get_path_param("name"), [](const replica::column_family& cf) {
             return cf.get_stats().cas_learn.histogram();
         });
     });
 
     cf::get_sstables_per_read_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](replica::column_family& cf) {
+        return map_reduce_cf(ctx, req->get_path_param("name"), utils::estimated_histogram(0), [](replica::column_family& cf) {
             return cf.get_stats().estimated_sstable_per_read;
         },
         utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_tombstone_scanned_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_histogram(ctx, req->param["name"], &replica::column_family_stats::tombstone_scanned);
+        return get_cf_histogram(ctx, req->get_path_param("name"), &replica::column_family_stats::tombstone_scanned);
     });
 
     cf::get_live_scanned_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_histogram(ctx, req->param["name"], &replica::column_family_stats::live_scanned);
+        return get_cf_histogram(ctx, req->get_path_param("name"), &replica::column_family_stats::live_scanned);
     });
 
     cf::get_col_update_time_delta_histogram.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
+        //auto id = get_uuid(req->get_path_param("name"), ctx.db.local());
         std::vector<double> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
     cf::get_auto_compaction.set(r, [&ctx] (const_req req) {
-        auto uuid = get_uuid(req.param["name"], ctx.db.local());
+        auto uuid = get_uuid(req.get_path_param("name"), ctx.db.local());
         replica::column_family& cf = ctx.db.local().find_column_family(uuid);
         return !cf.is_auto_compaction_disabled_by_user();
     });
 
     cf::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        apilog.info("column_family/enable_auto_compaction: name={}", req->param["name"]);
+        apilog.info("column_family/enable_auto_compaction: name={}", req->get_path_param("name"));
         return ctx.db.invoke_on(0, [&ctx, req = std::move(req)] (replica::database& db) {
             auto g = replica::database::autocompaction_toggle_guard(db);
-            return foreach_column_family(ctx, req->param["name"], [](replica::column_family &cf) {
+            return foreach_column_family(ctx, req->get_path_param("name"), [](replica::column_family &cf) {
                 cf.enable_auto_compaction();
             }).then([g = std::move(g)] {
                 return make_ready_future<json::json_return_type>(json_void());
@@ -888,10 +888,10 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        apilog.info("column_family/disable_auto_compaction: name={}", req->param["name"]);
+        apilog.info("column_family/disable_auto_compaction: name={}", req->get_path_param("name"));
         return ctx.db.invoke_on(0, [&ctx, req = std::move(req)] (replica::database& db) {
             auto g = replica::database::autocompaction_toggle_guard(db);
-            return foreach_column_family(ctx, req->param["name"], [](replica::column_family &cf) {
+            return foreach_column_family(ctx, req->get_path_param("name"), [](replica::column_family &cf) {
                 return cf.disable_auto_compaction();
             }).then([g = std::move(g)] {
                 return make_ready_future<json::json_return_type>(json_void());
@@ -900,14 +900,14 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_tombstone_gc.set(r, [&ctx] (const_req req) {
-        auto uuid = get_uuid(req.param["name"], ctx.db.local());
+        auto uuid = get_uuid(req.get_path_param("name"), ctx.db.local());
         replica::table& t = ctx.db.local().find_column_family(uuid);
         return t.tombstone_gc_enabled();
     });
 
     cf::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        apilog.info("column_family/enable_tombstone_gc: name={}", req->param["name"]);
-        return foreach_column_family(ctx, req->param["name"], [](replica::table& t) {
+        apilog.info("column_family/enable_tombstone_gc: name={}", req->get_path_param("name"));
+        return foreach_column_family(ctx, req->get_path_param("name"), [](replica::table& t) {
             t.set_tombstone_gc_enabled(true);
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
@@ -915,8 +915,8 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        apilog.info("column_family/disable_tombstone_gc: name={}", req->param["name"]);
-        return foreach_column_family(ctx, req->param["name"], [](replica::table& t) {
+        apilog.info("column_family/disable_tombstone_gc: name={}", req->get_path_param("name"));
+        return foreach_column_family(ctx, req->get_path_param("name"), [](replica::table& t) {
             t.set_tombstone_gc_enabled(false);
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
@@ -924,7 +924,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) {
-        auto ks_cf = parse_fully_qualified_cf_name(req->param["name"]);
+        auto ks_cf = parse_fully_qualified_cf_name(req->get_path_param("name"));
         auto&& ks = std::get<0>(ks_cf);
         auto&& cf_name = std::get<1>(ks_cf);
         return sys_ks.local().load_view_build_progress().then([ks, cf_name, &ctx](const std::vector<db::system_keyspace_view_build_progress>& vb) mutable {
@@ -962,7 +962,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_compression_ratio.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto uuid = get_uuid(req->param["name"], ctx.db.local());
+        auto uuid = get_uuid(req->get_path_param("name"), ctx.db.local());
 
         return ctx.db.map_reduce(sum_ratio<double>(), [uuid](replica::database& db) {
             replica::column_family& cf = db.find_column_family(uuid);
@@ -973,21 +973,21 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_read_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        return map_reduce_cf_time_histogram(ctx, req->param["name"], [](const replica::column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx, req->get_path_param("name"), [](const replica::column_family& cf) {
             return cf.get_stats().reads.histogram();
         });
     });
 
     cf::get_write_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        return map_reduce_cf_time_histogram(ctx, req->param["name"], [](const replica::column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx, req->get_path_param("name"), [](const replica::column_family& cf) {
             return cf.get_stats().writes.histogram();
         });
     });
 
     cf::set_compaction_strategy_class.set(r, [&ctx](std::unique_ptr<http::request> req) {
         sstring strategy = req->get_query_param("class_name");
-        apilog.info("column_family/set_compaction_strategy_class: name={} strategy={}", req->param["name"], strategy);
-        return foreach_column_family(ctx, req->param["name"], [strategy](replica::column_family& cf) {
+        apilog.info("column_family/set_compaction_strategy_class: name={} strategy={}", req->get_path_param("name"), strategy);
+        return foreach_column_family(ctx, req->get_path_param("name"), [strategy](replica::column_family& cf) {
             cf.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
         }).then([] {
                 return make_ready_future<json::json_return_type>(json_void());
@@ -995,7 +995,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_compaction_strategy_class.set(r, [&ctx](const_req req) {
-        return ctx.db.local().find_column_family(get_uuid(req.param["name"], ctx.db.local())).get_compaction_strategy().name();
+        return ctx.db.local().find_column_family(get_uuid(req.get_path_param("name"), ctx.db.local())).get_compaction_strategy().name();
     });
 
     cf::set_compression_parameters.set(r, [](std::unique_ptr<http::request> req) {
@@ -1011,7 +1011,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_sstable_count_per_level.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        return map_reduce_cf_raw(ctx, req->param["name"], std::vector<uint64_t>(), [](const replica::column_family& cf) {
+        return map_reduce_cf_raw(ctx, req->get_path_param("name"), std::vector<uint64_t>(), [](const replica::column_family& cf) {
             return cf.sstable_count_per_level();
         }, concat_sstable_count_per_level).then([](const std::vector<uint64_t>& res) {
             return make_ready_future<json::json_return_type>(res);
@@ -1020,7 +1020,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::get_sstables_for_key.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto key = req->get_query_param("key");
-        auto uuid = get_uuid(req->param["name"], ctx.db.local());
+        auto uuid = get_uuid(req->get_path_param("name"), ctx.db.local());
 
         return ctx.db.map_reduce0([key, uuid] (replica::database& db) -> future<std::unordered_set<sstring>> {
             auto sstables = co_await db.find_column_family(uuid).get_sstables_by_partition_key(key);
@@ -1036,7 +1036,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
 
     cf::toppartitions.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        auto name = req->param["name"];
+        auto name = req->get_path_param("name");
         auto [ks, cf] = parse_fully_qualified_cf_name(name);
 
         api::req_param<std::chrono::milliseconds, unsigned> duration{*req, "duration", 1000ms};
@@ -1063,7 +1063,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         }
         auto [ks, cf] = parse_fully_qualified_cf_name(*params.get("name"));
         auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        apilog.info("column_family/force_major_compaction: name={} flush={}", req->param["name"], flush);
+        apilog.info("column_family/force_major_compaction: name={} flush={}", req->get_path_param("name"), flush);
 
         auto keyspace = validate_keyspace(ctx, ks);
         std::vector<table_info> table_infos = {table_info{

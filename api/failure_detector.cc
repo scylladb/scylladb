@@ -81,9 +81,9 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::get_endpoint_state.set(r, [&g] (std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [req = std::move(req)] (gms::gossiper& g) {
-            auto state = g.get_endpoint_state_ptr(gms::inet_address(req->param["addr"]));
+            auto state = g.get_endpoint_state_ptr(gms::inet_address(req->get_path_param("addr")));
             if (!state) {
-                return make_ready_future<json::json_return_type>(format("unknown endpoint {}", req->param["addr"]));
+                return make_ready_future<json::json_return_type>(format("unknown endpoint {}", req->get_path_param("addr")));
             }
             std::stringstream ss;
             g.append_endpoint_state(ss, *state);

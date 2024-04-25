@@ -31,7 +31,7 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
     });
 
     ss::get_node_tokens.set(r, [&tm] (std::unique_ptr<http::request> req) {
-        gms::inet_address addr(req->param["endpoint"]);
+        gms::inet_address addr(req->get_path_param("endpoint"));
         auto& local_tm = *tm.local().get();
         const auto host_id = local_tm.get_host_id_if_known(addr);
         return make_ready_future<json::json_return_type>(stream_range_as_array(host_id ? local_tm.get_tokens(*host_id): std::vector<dht::token>{}, [](const dht::token& i) {

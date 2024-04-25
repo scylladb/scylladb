@@ -73,8 +73,8 @@ sstring validate_keyspace(const http_context& ctx, sstring ks_name) {
     throw bad_param_exception(replica::no_such_keyspace(ks_name).what());
 }
 
-sstring validate_keyspace(const http_context& ctx, const parameters& param) {
-    return validate_keyspace(ctx, param["keyspace"]);
+sstring validate_keyspace(const http_context& ctx, const http::request& req) {
+    return validate_keyspace(ctx, req.get_path_param("keyspace"));
 }
 
 static void validate_table(const http_context& ctx, sstring ks_name, sstring table_name) {
@@ -200,7 +200,7 @@ using ks_cf_func = std::function<future<json::json_return_type>(http_context&, s
 
 static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     return [&ctx, f = std::move(f)](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, *req);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         return f(ctx, std::move(req), std::move(keyspace), std::move(table_infos));
     };
@@ -444,7 +444,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         // returns immediately, not waiting for the repair to finish. The user
         // then has other mechanisms to track the ongoing repair's progress,
         // or stop it.
-        return repair_start(repair, validate_keyspace(ctx, req->param),
+        return repair_start(repair, validate_keyspace(ctx, *req),
                 options_map).then([] (int i) {
                     return make_ready_future<json::json_return_type>(i);
                 });
@@ -527,7 +527,7 @@ void unset_repair(http_context& ctx, routes& r) {
 
 void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader) {
     ss::load_new_ss_tables.set(r, [&ctx, &sst_loader](std::unique_ptr<http::request> req) {
-        auto ks = validate_keyspace(ctx, req->param);
+        auto ks = validate_keyspace(ctx, *req);
         auto cf = req->get_query_param("cf");
         auto stream = req->get_query_param("load_and_stream");
         auto primary_replica = req->get_query_param("primary_replica_only");
@@ -558,8 +558,8 @@ void unset_sstables_loader(http_context& ctx, routes& r) {
 
 void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb) {
     ss::view_build_statuses.set(r, [&ctx, &vb] (std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto view = req->param["view"];
+        auto keyspace = validate_keyspace(ctx, *req);
+        auto view = req->get_path_param("view");
         return vb.local().view_build_statuses(std::move(keyspace), std::move(view)).then([] (std::unordered_map<sstring, sstring> status) {
             std::vector<storage_service_json::mapper> res;
             return make_ready_future<json::json_return_type>(map_to_key_value(std::move(status), res));
@@ -664,7 +664,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, *req);
         auto table = req->get_query_param("cf");
 
         auto erm = std::invoke([&]() -> locator::effective_replication_map_ptr {
@@ -704,7 +704,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_pending_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, *req);
         std::vector<ss::maplist_mapper> res;
         return make_ready_future<json::json_return_type>(res);
     });
@@ -713,13 +713,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (!req->param.exists("keyspace")) {
             throw bad_param_exception("The keyspace param is not provided");
         }
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, *req);
         auto table = req->get_query_param("table");
         if (!table.empty()) {
             validate_table(ctx, keyspace, table);
             return describe_ring_as_json_for_table(ss, keyspace, table);
         }
-        return describe_ring_as_json(ss, validate_keyspace(ctx, req->param));
+        return describe_ring_as_json(ss, validate_keyspace(ctx, *req));
     });
 
     ss::get_load.set(r, [&ctx](std::unique_ptr<http::request> req) {
@@ -747,7 +747,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::get_natural_endpoints.set(r, [&ctx, &ss](const_req req) {
-        auto keyspace = validate_keyspace(ctx, req.param);
+        auto keyspace = validate_keyspace(ctx, req);
         return container_to_vec(ss.local().get_natural_endpoints(keyspace, req.get_query_param("cf"),
                 req.get_query_param("key")));
     });
@@ -816,7 +816,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, *req);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
         if (rs.get_type() == locator::replication_strategy_type::local || !rs.is_vnode_based()) {
@@ -911,7 +911,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, *req);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
         apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, column_families);
         auto& db = ctx.db;
@@ -1020,7 +1020,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::truncate.set(r, [&ctx](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, *req);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
     });
@@ -1164,14 +1164,14 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::bulk_load.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        auto path = req->param["path"];
+        auto path = req->get_path_param("path");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::bulk_load_async.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
-        auto path = req->param["path"];
+        auto path = req->get_path_param("path");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
@@ -1259,7 +1259,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, *req);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
@@ -1267,7 +1267,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, *req);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
@@ -1275,7 +1275,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, *req);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("enable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
@@ -1283,7 +1283,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, *req);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("disable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
@@ -1383,7 +1383,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::get_effective_ownership.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) {
-        auto keyspace_name = req->param["keyspace"] == "null" ? "" : validate_keyspace(ctx, req->param);
+        auto keyspace_name = req->get_path_param("keyspace") == "null" ? "" : validate_keyspace(ctx, *req);
         auto table_name = req->get_query_param("cf");
 
         if (!keyspace_name.empty()) {
