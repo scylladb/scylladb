@@ -48,6 +48,7 @@
 #include "utils/error_injection.hh"
 #include "utils/to_string.hh"
 #include "idl/gossip.dist.hh"
+#include <csignal>
 
 namespace gms {
 
@@ -2129,6 +2130,10 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         std::unordered_set<gms::inet_address> nodes_talked;
         auto start_time = clk::now();
         std::list<gms::gossip_get_endpoint_states_response> responses;
+
+        utils::get_local_injector().inject("stop_during_gossip_shadow_round",
+            [] { std::raise(SIGSTOP); });
+
         for (;;) {
             size_t nodes_down = 0;
             parallel_for_each(nodes.begin(), nodes.end(), [this, &request, &responses, &nodes_talked, &nodes_down] (gms::inet_address node) {

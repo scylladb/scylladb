@@ -38,6 +38,7 @@
 #include <seastar/util/defer.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <stdexcept>
+#include <csignal>
 
 #include "idl/group0.dist.hh"
 
@@ -490,9 +491,17 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
             } else {
                 co_await handshaker->pre_server_start(g0_info);
             }
+
+            utils::get_local_injector().inject("stop_after_sending_join_node_request",
+                [] { std::raise(SIGSTOP); });
+
             // Bootstrap the initial configuration
             co_await raft_sys_table_storage(qp, group0_id, my_id)
                     .bootstrap(std::move(initial_configuration), nontrivial_snapshot);
+
+            utils::get_local_injector().inject("stop_after_bootstrapping_initial_raft_configuration",
+                [] { std::raise(SIGSTOP); });
+
             co_await start_server_for_group0(group0_id, ss, qp, mm, topology_change_enabled);
             server = &_raft_gr.group0();
             // FIXME if we crash now or after getting added to the config but before storing group 0 ID,
@@ -758,6 +767,8 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
         auto my_id = load_my_id();
         if (!_raft_gr.group0().get_configuration().can_vote(my_id)) {
+            utils::get_local_injector().inject("stop_before_becoming_raft_voter",
+                [] { std::raise(SIGSTOP); });
             group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
             // Just bootstrapped and joined as non-voter. Become a voter.
             auto pause_shutdown = _shutdown_gate.hold();
