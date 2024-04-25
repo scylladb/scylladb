@@ -582,6 +582,57 @@ async def test_tablet_cleanup(manager: ManagerClient):
     assert 0 == (await cql.run_async("SELECT COUNT(*) FROM system.commitlog_cleanups", host=hosts[0]))[0].count
 
 @pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_cleanup_failure(manager: ManagerClient):
+    cmdline = ['--smp=1']
+
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    cql = manager.get_cql()
+    n_tablets = 1
+    n_partitions = 1000
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.servers_see_each_other(servers)
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {}}};".format(n_tablets))
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk) VALUES ({k});") for k in range(n_partitions)])
+
+    await inject_error_one_shot_on(manager, "tablet_cleanup_failure", servers)
+
+    s0_log = await manager.server_open_log(servers[0].server_id)
+    s0_mark = await s0_log.mark()
+
+    servers.append(await manager.server_add())
+
+    tablet_token = 0
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+    dst_shard = 0
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token))
+
+    logger.info("Waiting for injected cleanup failure...")
+    await s0_log.wait_for('Cleanup failed for tablet', from_mark=s0_mark)
+
+    logger.info("Waiting for cleanup success on retry...")
+    await s0_log.wait_for('Cleaned up tablet .* of table test.test successfully.', from_mark=s0_mark)
+
+    logger.info("Waiting for cleanup success on retry...")
+    await s0_log.wait_for('updating topology state: Finished tablet migration', from_mark=s0_mark)
+
+    logger.info("Waiting for migration task...")
+    await migration_task
+
+    assert n_partitions == (await cql.run_async("SELECT COUNT(*) FROM test.test"))[0].count
+
+    node_workdir = await manager.server_get_workdir(servers[0].server_id)
+    table_dir = glob.glob(os.path.join(node_workdir, "data", "test", "test-*"))[0]
+    logger.info(f"Table dir: {table_dir}")
+    ssts = glob.glob(os.path.join(table_dir, "*-Data.db"))
+    logger.info("Guarantee source node of migration left no sstables undeleted")
+    assert len(ssts) == 0
+
+@pytest.mark.asyncio
 async def test_tablet_resharding(manager: ManagerClient):
     cmdline = ['--smp=3']
     config = {'experimental_features': ['consistent-topology-changes', 'tablets']}
