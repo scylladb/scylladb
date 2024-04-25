@@ -20,7 +20,7 @@ sections common to data updating statements.
 Update parameters
 ~~~~~~~~~~~~~~~~~
 
-The ``UPDATE``, ``INSERT`` (and ``DELETE`` and ``BATCH`` for the ``TIMESTAMP``) statements support the following
+The ``UPDATE``, ``INSERT`` (and ``DELETE`` and ``BATCH`` for the ``TIMESTAMP`` and ``TIMEOUT``) statements support the following
 parameters:
 
 - ``TIMESTAMP``: sets the timestamp for the operation. If not specified, the coordinator will use the current time, in
