@@ -83,7 +83,6 @@ class abstract_write_response_handler;
 class paxos_response_handler;
 class abstract_read_executor;
 class mutation_holder;
-class view_update_write_response_handler;
 class client_state;
 class migration_manager;
 struct hint_wrapper;
@@ -732,7 +731,6 @@ public:
     friend class abstract_write_response_handler;
     friend class speculating_read_executor;
     friend class view_update_backlog_broker;
-    friend class view_update_write_response_handler;
     friend class paxos_response_handler;
     friend class mutation_holder;
     friend class per_destination_mutation;
