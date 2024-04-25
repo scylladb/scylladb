@@ -45,7 +45,8 @@ def pytest_addoption(parser):
     # presence.
     parser.addoption('--omit-scylla-output', action='store_true',
         help='Omit scylla\'s output from the test output')
-
+    parser.addoption('--host', action='store', default='localhost',
+        help='Scylla server host to connect to')
 def pytest_configure(config):
     config.addinivalue_line("markers", "veryslow: mark test as very slow to run")
 
@@ -79,6 +80,9 @@ def dynamodb(request):
         # for local runs.
         if request.config.getoption('url') != None:
             local_url = request.config.getoption('url')
+        elif request.config.getoption('host') is not None:
+            # this argument needed for compatibility with PythonTestSuite without modifying the previous behavior
+            local_url = f"http://{request.config.getoption('host')}:8000"
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
@@ -114,6 +118,9 @@ def dynamodbstreams(request):
         # for local runs.
         if request.config.getoption('url') != None:
             local_url = request.config.getoption('url')
+        elif request.config.getoption('host') is not None:
+            # this argument needed for compatibility with PythonTestSuite without modifying the previous behavior
+            local_url = f"http://{request.config.getoption('host')}:8000"
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates

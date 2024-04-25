@@ -977,6 +977,9 @@ class PythonTest(Test):
         cluster = await self.suite.clusters.get(logger)
         try:
             cluster.before_test(self.uname)
+            prepare_cql = self.suite.cfg.get("prepare_cql", None)
+            if prepare_cql:
+                next(iter(cluster.running.values())).control_connection.execute(prepare_cql)
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
             self.args.insert(0, "--host={}".format(cluster.endpoint()))
             self.is_before_test_ok = True
