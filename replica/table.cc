@@ -2769,6 +2769,8 @@ table::local_base_lock(
     }
 }
 
+} namespace db::view {
+
 /**
  * Given some updates on the base table and assuming there are no pre-existing, overlapping updates,
  * generates the mutations to be applied to the base table's views, and sends them to the paired
@@ -2780,16 +2782,15 @@ table::local_base_lock(
  * @param reader the base table updates being applied, which all correspond to the base token.
  * @return a future that resolves when the updates have been acknowledged by the view replicas
  */
-future<> table::populate_views(
-        shared_ptr<db::view::view_update_generator> gen,
-        std::vector<db::view::view_and_base> views,
+future<> view_update_generator::populate_views(const replica::table& table,
+        std::vector<view_and_base> views,
         dht::token base_token,
         flat_mutation_reader_v2&& reader,
         gc_clock::time_point now) {
     auto schema = reader.schema();
     db::view::view_update_builder builder = db::view::make_view_update_builder(
-            gen->get_db().as_data_dictionary(),
-            *this,
+            get_db().as_data_dictionary(),
+            table,
             schema,
             std::move(views),
             std::move(reader),
@@ -2803,11 +2804,11 @@ future<> table::populate_views(
             if (!updates) {
                 break;
             }
-            size_t update_size = memory_usage_of(*updates);
-            size_t units_to_wait_for = std::min(_config.view_update_concurrency_semaphore_limit, update_size);
-            auto units = co_await seastar::get_units(*_config.view_update_concurrency_semaphore, units_to_wait_for);
-            units.adopt(seastar::consume_units(*_config.view_update_concurrency_semaphore, update_size - units_to_wait_for));
-            co_await gen->mutate_MV(schema, base_token, std::move(*updates), _view_stats, *_config.cf_stats,
+            size_t update_size = replica::memory_usage_of(*updates);
+            size_t units_to_wait_for = std::min(table.get_config().view_update_concurrency_semaphore_limit, update_size);
+            auto units = co_await seastar::get_units(table.view_update_sem(), units_to_wait_for);
+            units.adopt(seastar::consume_units(table.view_update_sem(), update_size - units_to_wait_for));
+            co_await mutate_MV(schema, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(),
                     tracing::trace_state_ptr(), std::move(units), service::allow_hints::no, db::view::wait_for_all_updates::yes);
         } catch (...) {
             if (!err) {
@@ -2820,6 +2821,8 @@ future<> table::populate_views(
         std::rethrow_exception(err);
     }
 }
+
+} /* db::view namespace */ namespace replica {
 
 const ssize_t new_reader_base_cost{16 * 1024};
 

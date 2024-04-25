@@ -1025,7 +1025,11 @@ public:
         return _view_stats;
     }
 
-    replica::cf_stats* cf_stats() {
+    db::view::stats& view_stats() const noexcept {
+        return _view_stats;
+    }
+
+    replica::cf_stats* cf_stats() const {
         return _config.cf_stats;
     }
 
@@ -1142,14 +1146,6 @@ public:
         return _sstables_manager;
     }
 
-    // Reader's schema must be the same as the base schema of each of the views.
-    future<> populate_views(
-            shared_ptr<db::view::view_update_generator> gen,
-            std::vector<db::view::view_and_base>,
-            dht::token base_token,
-            flat_mutation_reader_v2&&,
-            gc_clock::time_point);
-
     reader_concurrency_semaphore& streaming_read_concurrency_semaphore() {
         return *_config.streaming_read_concurrency_semaphore;
     }
@@ -1239,6 +1235,10 @@ public:
     future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr);
 
     friend class compaction_group;
+
+    db::timeout_semaphore& view_update_sem() const { // FIXME -- temporary helper
+        return *_config.view_update_concurrency_semaphore;
+    }
 };
 
 lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::tablet_map&);

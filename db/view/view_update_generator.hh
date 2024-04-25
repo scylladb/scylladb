@@ -10,6 +10,7 @@
 
 #include "sstables/shared_sstable.hh"
 #include "db/timeout_clock.hh"
+#include "db_clock.hh"
 #include "utils/chunked_vector.hh"
 #include "schema/schema_fwd.hh"
 
@@ -22,6 +23,7 @@
 using namespace seastar;
 
 struct frozen_mutation_and_schema;
+class flat_mutation_reader_v2;
 
 namespace dht {
 class token;
@@ -46,6 +48,7 @@ using allow_hints = bool_class<allow_hints_tag>;
 namespace db::view {
 
 class stats;
+struct view_and_base;
 struct wait_for_all_updates_tag {};
 using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
 
@@ -90,6 +93,14 @@ public:
 
     ssize_t available_register_units() const { return _registration_sem.available_units(); }
     size_t queued_batches_count() const { return _sstables_with_tables.size(); }
+
+    // Reader's schema must be the same as the base schema of each of the views.
+    future<> populate_views(const replica::table& base,
+            std::vector<view_and_base>,
+            dht::token base_token,
+            flat_mutation_reader_v2&&,
+            gc_clock::time_point);
+
 private:
     bool should_throttle() const;
     void setup_metrics();
