@@ -93,6 +93,7 @@ public:
     future<std::unordered_map<sstring, db_snapshot_details>> get_snapshot_details();
 
     future<int64_t> true_snapshots_size();
+    future<int64_t> true_snapshots_size(sstring ks, sstring cf);
 private:
     sharded<replica::database>& _db;
     seastar::rwlock _lock;

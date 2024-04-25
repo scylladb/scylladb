@@ -126,4 +126,14 @@ future<int64_t> snapshot_ctl::true_snapshots_size() {
     }));
 }
 
+future<int64_t> snapshot_ctl::true_snapshots_size(sstring ks, sstring cf) {
+    co_return co_await run_snapshot_list_operation(coroutine::lambda([this, ks = std::move(ks), cf = std::move(cf)] () -> future<int64_t> {
+        int64_t total = 0;
+        for (auto& [name, details] : co_await _db.local().find_column_family(ks, cf).get_snapshot_details()) {
+            total += details.total;
+        }
+        co_return total;
+    }));
+}
+
 }

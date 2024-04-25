@@ -1838,14 +1838,9 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         co_return json::json_return_type(static_cast<int>(scrub_status::successful));
     });
 
-    cf::get_true_snapshots_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        auto uuid = get_uuid(req->param["name"], ctx.db.local());
-        return ctx.db.local().find_column_family(uuid).get_snapshot_details().then([](
-                const std::unordered_map<sstring, replica::column_family::snapshot_details>& sd) {
-            int64_t res = 0;
-            for (auto i : sd) {
-                res += i.second.total;
-            }
+    cf::get_true_snapshots_size.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) {
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->param["name"]);
+        return snap_ctl.local().true_snapshots_size(std::move(ks), std::move(cf)).then([] (int64_t res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
