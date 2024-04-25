@@ -23,7 +23,10 @@
 using namespace seastar;
 
 struct frozen_mutation_and_schema;
+class mutation;
+class reader_permit;
 class flat_mutation_reader_v2;
+using flat_mutation_reader_v2_opt = optimized_optional<flat_mutation_reader_v2>;
 
 namespace dht {
 class token;
@@ -100,6 +103,15 @@ public:
             dht::token base_token,
             flat_mutation_reader_v2&&,
             gc_clock::time_point);
+
+    future<> generate_and_propagate_view_updates(const replica::table& table,
+            const schema_ptr& base,
+            reader_permit permit,
+            std::vector<view_and_base>&& views,
+            mutation&& m,
+            flat_mutation_reader_v2_opt existings,
+            tracing::trace_state_ptr tr_state,
+            gc_clock::time_point now);
 
 private:
     bool should_throttle() const;

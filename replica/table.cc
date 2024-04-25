@@ -2618,6 +2618,8 @@ static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_sc
     }), 0);
 }
 
+} namespace db::view {
+
 /**
  * Given some updates on the base table and the existing values for the rows affected by that update, generates the
  * mutations to be applied to the base table's views, and sends them to the paired view replicas.
@@ -2631,18 +2633,19 @@ static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_sc
  * but has simply some updated values.
  * @return a future resolving to the mutations to apply to the views, which can be empty.
  */
-future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_update_generator> gen, const schema_ptr& base,
+future<> view_update_generator::generate_and_propagate_view_updates(const replica::table& table,
+        const schema_ptr& base,
         reader_permit permit,
         std::vector<db::view::view_and_base>&& views,
         mutation&& m,
         flat_mutation_reader_v2_opt existings,
         tracing::trace_state_ptr tr_state,
-        gc_clock::time_point now) const {
+        gc_clock::time_point now) {
     auto base_token = m.token();
     auto m_schema = m.schema();
     db::view::view_update_builder builder = db::view::make_view_update_builder(
-            gen->get_db().as_data_dictionary(),
-            *this,
+            get_db().as_data_dictionary(),
+            table,
             base,
             std::move(views),
             make_flat_mutation_reader_from_mutations_v2(std::move(m_schema), std::move(permit), std::move(m)),
@@ -2662,8 +2665,8 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
             break;
         }
         tracing::trace(tr_state, "Generated {} view update mutations", updates->size());
-        auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(*updates));
-        if (_config.view_update_concurrency_semaphore->current() == 0) {
+        auto units = seastar::consume_units(table.view_update_sem(), replica::memory_usage_of(*updates));
+        if (table.view_update_sem().current() == 0) {
             // We don't have resources to propagate view updates for this write. If we reached this point, we failed to
             // throttle the client. The memory queue is already full, waiting on the semaphore would block view updates
             // that we've already started applying, and generating hints would ultimately result in the disk queue being
@@ -2673,7 +2676,7 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
             break;
         }
         try {
-            co_await gen->mutate_MV(base, base_token, std::move(*updates), _view_stats, *_config.cf_stats, tr_state,
+            co_await mutate_MV(base, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(), tr_state,
                 std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no);
         } catch (...) {
             // Ignore exceptions: any individual failure to propagate a view update will be reported
@@ -2687,6 +2690,8 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
         std::rethrow_exception(err);
     }
 }
+
+} /* db::view namespace */ namespace replica {
 
 /**
  * Shard-local locking of clustering rows or entire partitions of the base
@@ -3256,7 +3261,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     const bool need_static = db::view::needs_static_row(m.partition(), views);
     if (!need_regular && !need_static) {
         tracing::trace(tr_state, "View updates do not require read-before-write");
-        co_await generate_and_propagate_view_updates(gen, base, sem.make_tracking_only_permit(s, "push-view-updates-1", timeout, tr_state), std::move(views), std::move(m), { }, tr_state, now);
+        co_await gen->generate_and_propagate_view_updates(*this, base, sem.make_tracking_only_permit(s, "push-view-updates-1", timeout, tr_state), std::move(views), std::move(m), { }, tr_state, now);
         // In this case we are not doing a read-before-write, just a
         // write, so no lock is needed.
         co_return row_locker::lock_holder();
@@ -3291,7 +3296,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     auto pk = dht::partition_range::make_singular(m.decorated_key());
     auto permit = sem.make_tracking_only_permit(base, "push-view-updates-2", timeout, tr_state);
     auto reader = source.make_reader_v2(base, permit, pk, slice, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-    co_await this->generate_and_propagate_view_updates(gen, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now);
+    co_await gen->generate_and_propagate_view_updates(*this, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now);
     tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());
     // return the local partition/row lock we have taken so it
     // remains locked until the caller is done modifying this
