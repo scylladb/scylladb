@@ -3423,6 +3423,7 @@ future<> compaction_group::cleanup() {
     tlogger.debug("Invalidating range {} for compaction group {} of table {} during cleanup.",
                   p_range, group_id(), _t.schema()->ks_name(), _t.schema()->cf_name());
     co_await _t._cache.invalidate(std::move(updater), p_range);
+    _t._cache.refresh_snapshot();
 }
 
 future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
