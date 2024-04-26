@@ -409,7 +409,6 @@ public:
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
         bool enable_node_aggregated_table_metrics = true;
-        db::timeout_semaphore* view_update_concurrency_semaphore;
         size_t view_update_concurrency_semaphore_limit;
         db::data_listeners* data_listeners = nullptr;
         // Not really table-specific (it's a global configuration parameter), but stored here
@@ -1026,7 +1025,11 @@ public:
         return _view_stats;
     }
 
-    replica::cf_stats* cf_stats() {
+    db::view::stats& view_stats() const noexcept {
+        return _view_stats;
+    }
+
+    replica::cf_stats* cf_stats() const {
         return _config.cf_stats;
     }
 
@@ -1143,14 +1146,6 @@ public:
         return _sstables_manager;
     }
 
-    // Reader's schema must be the same as the base schema of each of the views.
-    future<> populate_views(
-            shared_ptr<db::view::view_update_generator> gen,
-            std::vector<db::view::view_and_base>,
-            dht::token base_token,
-            flat_mutation_reader_v2&&,
-            gc_clock::time_point);
-
     reader_concurrency_semaphore& streaming_read_concurrency_semaphore() {
         return *_config.streaming_read_concurrency_semaphore;
     }
@@ -1165,13 +1160,6 @@ private:
     future<row_locker::lock_holder> do_push_view_replica_updates(shared_ptr<db::view::view_update_generator> gen, schema_ptr s, mutation m, db::timeout_clock::time_point timeout, mutation_source source,
             tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, query::partition_slice::option_set custom_opts) const;
     std::vector<view_ptr> affected_views(shared_ptr<db::view::view_update_generator> gen, const schema_ptr& base, const mutation& update) const;
-    future<> generate_and_propagate_view_updates(shared_ptr<db::view::view_update_generator> gen, const schema_ptr& base,
-            reader_permit permit,
-            std::vector<db::view::view_and_base>&& views,
-            mutation&& m,
-            flat_mutation_reader_v2_opt existings,
-            tracing::trace_state_ptr tr_state,
-            gc_clock::time_point now) const;
 
     mutable row_locker _row_locker;
     future<row_locker::lock_holder> local_base_lock(
@@ -1271,7 +1259,6 @@ public:
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
-        db::timeout_semaphore* view_update_concurrency_semaphore = nullptr;
         size_t view_update_concurrency_semaphore_limit;
     };
 private:
@@ -1879,6 +1866,10 @@ public:
 
     bool is_internal_query() const;
     bool is_user_semaphore(const reader_concurrency_semaphore& semaphore) const;
+
+    db::timeout_semaphore& view_update_sem() {
+        return _view_update_concurrency_sem;
+    }
 };
 
 } // namespace replica

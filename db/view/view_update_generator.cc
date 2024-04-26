@@ -17,6 +17,7 @@
 #include "readers/evictable.hh"
 #include "dht/partition_filter.hh"
 #include "utils/pretty_printers.hh"
+#include "readers/from_mutations_v2.hh"
 
 static logging::logger vug_logger("view_update_generator");
 
@@ -302,6 +303,134 @@ void view_update_generator::discover_staging_sstables() {
             }
         }
     });
+}
+
+static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_schema>& ms) {
+    return boost::accumulate(ms | boost::adaptors::transformed([] (const frozen_mutation_and_schema& m) {
+        return memory_usage_of(m);
+    }), 0);
+}
+
+/**
+ * Given some updates on the base table and assuming there are no pre-existing, overlapping updates,
+ * generates the mutations to be applied to the base table's views, and sends them to the paired
+ * view replicas. The future resolves when the updates have been acknowledged by the repicas, i.e.,
+ * propagating the view updates to the view replicas happens synchronously.
+ *
+ * @param views the affected views which need to be updated.
+ * @param base_token The token to use to match the base replica with the paired replicas.
+ * @param reader the base table updates being applied, which all correspond to the base token.
+ * @return a future that resolves when the updates have been acknowledged by the view replicas
+ */
+future<> view_update_generator::populate_views(const replica::table& table,
+        std::vector<view_and_base> views,
+        dht::token base_token,
+        flat_mutation_reader_v2&& reader,
+        gc_clock::time_point now) {
+    auto schema = reader.schema();
+    view_update_builder builder = make_view_update_builder(
+            get_db().as_data_dictionary(),
+            table,
+            schema,
+            std::move(views),
+            std::move(reader),
+            { },
+            now);
+
+    std::exception_ptr err;
+    while (true) {
+        try {
+            auto updates = co_await builder.build_some();
+            if (!updates) {
+                break;
+            }
+            size_t update_size = memory_usage_of(*updates);
+            size_t units_to_wait_for = std::min(table.get_config().view_update_concurrency_semaphore_limit, update_size);
+            auto units = co_await seastar::get_units(_db.view_update_sem(), units_to_wait_for);
+            units.adopt(seastar::consume_units(_db.view_update_sem(), update_size - units_to_wait_for));
+            co_await mutate_MV(schema, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(),
+                    tracing::trace_state_ptr(), std::move(units), service::allow_hints::no, wait_for_all_updates::yes);
+        } catch (...) {
+            if (!err) {
+                err = std::current_exception();
+            }
+        }
+    }
+    co_await builder.close();
+    if (err) {
+        std::rethrow_exception(err);
+    }
+}
+
+/**
+ * Given some updates on the base table and the existing values for the rows affected by that update, generates the
+ * mutations to be applied to the base table's views, and sends them to the paired view replicas.
+ *
+ * @param base the base schema at a particular version.
+ * @param views the affected views which need to be updated.
+ * @param updates the base table updates being applied.
+ * @param existings the existing values for the rows affected by updates. This is used to decide if a view is
+ * obsoleted by the update and should be removed, gather the values for columns that may not be part of the update if
+ * a new view entry needs to be created, and compute the minimal updates to be applied if the view entry isn't changed
+ * but has simply some updated values.
+ * @return a future resolving to the mutations to apply to the views, which can be empty.
+ */
+future<> view_update_generator::generate_and_propagate_view_updates(const replica::table& table,
+        const schema_ptr& base,
+        reader_permit permit,
+        std::vector<view_and_base>&& views,
+        mutation&& m,
+        flat_mutation_reader_v2_opt existings,
+        tracing::trace_state_ptr tr_state,
+        gc_clock::time_point now) {
+    auto base_token = m.token();
+    auto m_schema = m.schema();
+    view_update_builder builder = make_view_update_builder(
+            get_db().as_data_dictionary(),
+            table,
+            base,
+            std::move(views),
+            make_flat_mutation_reader_from_mutations_v2(std::move(m_schema), std::move(permit), std::move(m)),
+            std::move(existings),
+            now);
+
+    std::exception_ptr err = nullptr;
+    while (true) {
+        std::optional<utils::chunked_vector<frozen_mutation_and_schema>> updates;
+        try {
+            updates = co_await builder.build_some();
+        } catch (...) {
+            err = std::current_exception();
+            break;
+        }
+        if (!updates) {
+            break;
+        }
+        tracing::trace(tr_state, "Generated {} view update mutations", updates->size());
+        auto units = seastar::consume_units(_db.view_update_sem(), memory_usage_of(*updates));
+        if (_db.view_update_sem().current() == 0) {
+            // We don't have resources to propagate view updates for this write. If we reached this point, we failed to
+            // throttle the client. The memory queue is already full, waiting on the semaphore would block view updates
+            // that we've already started applying, and generating hints would ultimately result in the disk queue being
+            // full. Instead, we drop the base write, which will create inconsistencies between base replicas, but we
+            // will fix them using repair.
+            err = std::make_exception_ptr(exceptions::overloaded_exception("Too many view updates started concurrently"));
+            break;
+        }
+        try {
+            co_await mutate_MV(base, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(), tr_state,
+                std::move(units), service::allow_hints::yes, wait_for_all_updates::no);
+        } catch (...) {
+            // Ignore exceptions: any individual failure to propagate a view update will be reported
+            // by a separate mechanism in mutate_MV() function. Moreover, we should continue trying
+            // to generate updates even if some of them fail, in order to minimize the potential
+            // inconsistencies caused by not being able to propagate an update
+        }
+    }
+    co_await builder.close();
+    if (err) {
+        std::rethrow_exception(err);
+    }
 }
 
 }
