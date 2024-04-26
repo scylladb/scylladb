@@ -58,7 +58,7 @@ sstable_directory::make_components_lister() {
             return std::make_unique<sstable_directory::filesystem_components_lister>(_sstable_dir);
         },
         [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
-            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), _sstable_dir.native());
+            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), _table_dir);
         }
     }, _storage_opts->value);
 }
