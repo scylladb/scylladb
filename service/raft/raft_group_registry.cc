@@ -290,7 +290,7 @@ seastar::future<> raft_group_registry::start() {
     // then to send VoteRequest messages.
     init_rpc_verbs();
 
-    direct_fd_clock::base::duration threshold{std::chrono::seconds{1}};
+    direct_fd_clock::base::duration threshold{std::chrono::seconds{2}};
     if (const auto ms = utils::get_local_injector().inject_parameter<int64_t>("raft-group-registry-fd-threshold-in-ms"); ms) {
         threshold = direct_fd_clock::base::duration{std::chrono::milliseconds{*ms}};
     }

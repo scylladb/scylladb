@@ -40,6 +40,7 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
     # loop inside do_on_leader_with_retries.
 
     config = {
+        'direct_failure_detector_ping_timeout_in_ms': 300,
         'error_injections_at_startup': [
             {
                 'name': 'group0-raft-op-timeout-in-ms',
