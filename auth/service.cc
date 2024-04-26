@@ -462,36 +462,26 @@ future<> alter_role(
         std::string_view name,
         const role_config_update& config_update,
         const authentication_options& options) {
-    return ser.underlying_role_manager().alter(name, config_update).then([&ser, name, &options] {
-        if (!any_authentication_options(options)) {
-            return make_ready_future<>();
-        }
-
-        return futurize_invoke(
-                &validate_authentication_options_are_supported,
-                options,
-                ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
-            return ser.underlying_authenticator().alter(name, options);
-        });
-    });
+    co_await ser.underlying_role_manager().alter(name, config_update);
+    if (!any_authentication_options(options)) {
+        co_return;
+    }
+    validate_authentication_options_are_supported(options,
+            ser.underlying_authenticator().supported_options());
+    co_await ser.underlying_authenticator().alter(name, options);
 }
 
 future<> drop_role(const service& ser, std::string_view name) {
-    return do_with(make_role_resource(name), [&ser, name](const resource& r) {
-        auto& a = ser.underlying_authorizer();
-
-        return when_all_succeed(
-                a.revoke_all(name),
-                a.revoke_all(r))
-                    .discard_result()
-                    .handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
-        });
-    }).then([&ser, name] {
-        return ser.underlying_authenticator().drop(name);
-    }).then([&ser, name] {
-        return ser.underlying_role_manager().drop(name);
-    });
+    auto& a = ser.underlying_authorizer();
+    auto r = make_role_resource(name);
+    try {
+        co_await a.revoke_all(name);
+        co_await a.revoke_all(r);
+    } catch (const unsupported_authorization_operation&) {
+        // Nothing.
+    }
+    co_await ser.underlying_authenticator().drop(name);
+    co_await ser.underlying_role_manager().drop(name);
 }
 
 future<bool> has_role(const service& ser, std::string_view grantee, std::string_view name) {
