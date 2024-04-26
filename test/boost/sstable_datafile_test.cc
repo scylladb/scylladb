@@ -54,6 +54,7 @@
 #include "readers/from_fragments_v2.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/exception_utils.hh"
+#include "test/lib/eventually.hh"
 
 namespace fs = std::filesystem;
 
@@ -3209,12 +3210,13 @@ SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components_and_reload_reclaim
 std::pair<shared_sstable, size_t> create_sstable_with_bloom_filter(test_env& env, test_env_sstables_manager& sst_mgr, schema_ptr sptr, uint64_t estimated_partitions) {
     auto sst = env.make_sstable(sptr);
     sstables::test(sst).create_bloom_filter(estimated_partitions);
+    sstables::test(sst).write_filter();
     auto sst_bf_memory = sst->filter_memory_size();
     sst_mgr.increment_total_reclaimable_memory_and_maybe_reclaim(sst.get());
     return {sst, sst_bf_memory};
 }
 
-SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_under_pressure) {
+SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
         auto schema_ptr = ss.schema();
@@ -3248,6 +3250,16 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_under_pressure) {
         BOOST_REQUIRE_EQUAL(sst3->filter_memory_size(), sst3_bf_memory);
         BOOST_REQUIRE_EQUAL(sst4->filter_memory_size(), 0);
         BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst1_bf_memory + sst4_bf_memory);
+
+        // Test auto reload - disposing sst3 should trigger reload of the
+        // smallest filter in the reclaimed list, which is sst1's bloom filter.
+        shared_sstable::dispose(sst3.release().release());
+        REQUIRE_EVENTUALLY_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+        // only sst4's bloom filter memory should be reported as reclaimed
+        REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst4_bf_memory);
+        // sst2 and sst4 remain the same
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst4->filter_memory_size(), 0);
     }, {
         // limit available memory to the sstables_manager to test reclaiming.
         // this will set the reclaim threshold to 100 bytes.
