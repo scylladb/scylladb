@@ -1153,28 +1153,28 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
 
         if (nr_tablet_table != 0) {
             if (nr_vnode_table != 0) {
-                throw std::runtime_error("Mixed vnode table and tablet table");
+                throw std::invalid_argument("Mixed vnode table and tablet table");
             }
             is_tablet = true;
         }
         if (is_tablet) {
             // Reject unsupported options for tablet repair
             if (!options.start_token.empty()) {
-                throw std::runtime_error("The startToken option is not supported for tablet repair");
+                throw std::invalid_argument("The startToken option is not supported for tablet repair");
             }
             if (!options.end_token.empty()) {
-                throw std::runtime_error("The endToken option is not supported for tablet repair");
+                throw std::invalid_argument("The endToken option is not supported for tablet repair");
             }
             if (options.small_table_optimization) {
-                throw std::runtime_error("The small_table_optimization option is not supported for tablet repair");
+                throw std::invalid_argument("The small_table_optimization option is not supported for tablet repair");
             }
 
             // Reject unsupported option combinations.
             if (!options.data_centers.empty() && !options.hosts.empty()) {
-                throw std::runtime_error("Cannot combine dataCenters and hosts options.");
+                throw std::invalid_argument("Cannot combine dataCenters and hosts options.");
             }
             if (!options.ignore_nodes.empty() && !options.hosts.empty()) {
-                throw std::runtime_error("Cannot combine ignore_nodes and hosts options.");
+                throw std::invalid_argument("Cannot combine ignore_nodes and hosts options.");
             }
 
             auto host2ip = [&addr_map = _addr_map] (locator::host_id host) -> future<gms::inet_address> {
@@ -1192,7 +1192,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
                     auto node = gms::inet_address(n);
                     hosts.insert(node);
                 } catch(...) {
-                    throw std::runtime_error(format("Failed to parse node={} in hosts={} specified by user: {}",
+                    throw std::invalid_argument(format("Failed to parse node={} in hosts={} specified by user: {}",
                         n, options.hosts, std::current_exception()));
                 }
             }
@@ -1202,7 +1202,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
                     auto node = gms::inet_address(n);
                     ignore_nodes.insert(node);
                 } catch(...) {
-                    throw std::runtime_error(format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
+                    throw std::invalid_argument(format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
                         n, options.ignore_nodes, std::current_exception()));
                 }
             }
@@ -1246,7 +1246,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
             // owner in each of the DCs.
             ranges = erm.get_primary_ranges_within_dc(my_address);
         } else if (options.data_centers.size() > 0 || options.hosts.size() > 0) {
-            throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
+            throw std::invalid_argument("You need to run primary range repair on all nodes in the cluster.");
         } else {
             ranges = erm.get_primary_ranges(my_address);
         }
@@ -1256,11 +1256,11 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
     }
 
     if (!options.data_centers.empty() && !options.hosts.empty()) {
-        throw std::runtime_error("Cannot combine data centers and hosts options.");
+        throw std::invalid_argument("Cannot combine data centers and hosts options.");
     }
 
     if (!options.ignore_nodes.empty() && !options.hosts.empty()) {
-        throw std::runtime_error("Cannot combine ignore_nodes and hosts options.");
+        throw std::invalid_argument("Cannot combine ignore_nodes and hosts options.");
     }
     std::unordered_set<gms::inet_address> ignore_nodes;
     for (const auto& n: options.ignore_nodes) {
@@ -1268,7 +1268,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
             auto node = gms::inet_address(n);
             ignore_nodes.insert(node);
         } catch(...) {
-            throw std::runtime_error(format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
+            throw std::invalid_argument(format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
                 n, options.ignore_nodes, std::current_exception()));
         }
     }
