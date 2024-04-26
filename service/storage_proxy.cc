@@ -1551,11 +1551,13 @@ public:
         auto backlog = max_backlog();
         auto delay = calculate_delay(backlog);
         stats().last_mv_flow_control_delay = delay;
+        stats().mv_flow_control_delay += delay.count();
         if (delay.count() == 0) {
             tracing::trace(trace, "Delay decision due to throttling: do not delay, resuming now");
             on_resume(this);
         } else {
             ++stats().throttled_base_writes;
+            ++stats().total_throttled_base_writes;
             tracing::trace(trace, "Delaying user write due to view update backlog {}/{} by {}us",
                           backlog.current, backlog.max, delay.count());
             // Waited on indirectly.
@@ -2531,9 +2533,17 @@ void storage_proxy_stats::write_stats::register_stats() {
                            sm::description("number of currently throttled base replica write requests"),
                            {storage_proxy_stats::current_scheduling_group_label()}),
 
+            sm::make_counter("throttled_base_writes_total", total_throttled_base_writes,
+                           sm::description("number of throttled base replica write requests, a throttled write is one whose response was delayed, see mv_flow_control_delay_total"),
+                           {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
             sm::make_gauge("last_mv_flow_control_delay", [this] { return std::chrono::duration<float>(last_mv_flow_control_delay).count(); },
                                           sm::description("delay (in seconds) added for MV flow control in the last request"),
                                           {storage_proxy_stats::current_scheduling_group_label()}),
+
+            sm::make_counter("mv_flow_control_delay_total", [this] { return mv_flow_control_delay; },
+                                          sm::description("total delay (in microseconds) added for MV flow control, to delay the response sent to finished writes, divide this by throttled_base_writes_total to find the average delay"),
+                                          {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
             sm::make_total_operations("throttled_writes", throttled_writes,
                                       sm::description("number of throttled write requests"),

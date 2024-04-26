@@ -100,6 +100,7 @@ struct write_stats {
     uint64_t background_writes = 0; // client no longer waits for the write
     uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
     uint64_t throttled_base_writes = 0; // current number of base writes delayed due to view update backlog
+    uint64_t total_throttled_base_writes = 0; // total number of base writes delayed due to view update backlog
     uint64_t background_writes_failed = 0;
     uint64_t writes_failed_due_to_too_many_in_flight_hints = 0;
 
@@ -115,6 +116,7 @@ struct write_stats {
     seastar::metrics::metric_groups _metrics;
 
     std::chrono::microseconds last_mv_flow_control_delay; // delay added for MV flow control in the last request
+    uint64_t mv_flow_control_delay = 0; // total delay added for MV flow control (in microseconds)
 public:
     write_stats();
     write_stats(const sstring& category, bool auto_register_stats);
