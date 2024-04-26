@@ -5112,8 +5112,8 @@ struct large_row_handler : public db::large_data_handler {
         return make_ready_future<>();
     }
 
-    virtual future<> record_large_partitions(const sstables::sstable& sst,
-        const sstables::key& partition_key, uint64_t partition_size, uint64_t rows_count, uint64_t range_tombstones_count) const override {
+    virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key,
+            uint64_t partition_size, uint64_t rows_count, uint64_t range_tombstones_count, uint64_t dead_rows_count) const override {
         const schema_ptr s = sst.get_schema();
         callback(*s, partition_key, nullptr, rows_count, range_tombstones_count, nullptr, 0, 0);
         return make_ready_future<>();
