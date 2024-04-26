@@ -157,6 +157,42 @@ async def test_garbage_collect(manager: ManagerClient, s3_server):
 
 
 @pytest.mark.asyncio
+async def test_populate_from_quarantine(manager: ManagerClient, s3_server):
+    '''verify sstables are populated from quarantine state'''
+
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options']}
+    server = await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+
+    print(f'Create keyspace (minio listening at {s3_server.address})')
+    ks, cf = create_ks_and_cf(cql, s3_server)
+
+    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+    rows = {x.name: x.value for x in res}
+    assert len(rows) > 0, 'Test table is empty'
+
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+    # Move the sstables into "quarantine"
+    res = cql.execute("SELECT * FROM system.sstables;")
+    assert len(list(res)) > 0, 'No entries in registry'
+    for row in res:
+        cql.execute("UPDATE system.sstables SET state = 'quarantine'"
+                     f" WHERE location = '{row.location}' AND generation = {row.generation};")
+
+    print('Restart scylla')
+    await manager.server_restart(server.server_id)
+    cql = await reconnect_driver(manager)
+
+    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+    have_res = {x.name: x.value for x in res}
+    # Quarantine entries must have been processed normally
+    assert have_res == rows, f'Unexpected table content: {have_res}'
+
+
+@pytest.mark.asyncio
 async def test_misconfigured_storage(manager: ManagerClient, s3_server):
     '''creating keyspace with unknown endpoint is not allowed'''
     # scylladb/scylladb#15074
