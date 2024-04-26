@@ -1421,6 +1421,7 @@ public:
     future<> start() {
         // TODO: make it adjustable
         static const raft::logical_clock::duration fd_ping_period = 10_t;
+        static const raft::logical_clock::duration fd_ping_timeout = 30_t;
 
         assert(!_started);
         _started = true;
@@ -1428,7 +1429,7 @@ public:
         // _fd_service must be started before raft server,
         // because as soon as raft server is started, it may start adding endpoints to the service.
         // _fd_service is using _server's RPC, but not until the first endpoint is added.
-        co_await _fd_service->start(std::ref(*_fd_pinger), std::ref(*_fd_clock), fd_ping_period.count());
+        co_await _fd_service->start(std::ref(*_fd_pinger), std::ref(*_fd_clock), fd_ping_period.count(), fd_ping_timeout.count());
         _fd_subscription.emplace(co_await _fd_service->local().register_listener(*_fd_listener, _fd_convict_threshold.count()));
         co_await _server->start();
     }

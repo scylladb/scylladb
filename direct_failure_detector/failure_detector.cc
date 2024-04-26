@@ -96,6 +96,7 @@ struct failure_detector::impl {
     clock& _clock;
 
     clock::interval_t _ping_period;
+    clock::interval_t _ping_timeout;
 
     // Number of workers on each shard.
     // We use this to decide where to create new workers (we pick a shard with the smallest number of workers).
@@ -138,7 +139,7 @@ struct failure_detector::impl {
     // The unregistering process requires cross-shard operations which we perform on this fiber.
     future<> _destroy_subscriptions = make_ready_future<>();
 
-    impl(failure_detector& parent, pinger&, clock&, clock::interval_t ping_period);
+    impl(failure_detector& parent, pinger&, clock&, clock::interval_t ping_period, clock::interval_t ping_timeout);
     ~impl();
 
     // Inform update_endpoint_fiber() about an added/removed endpoint.
@@ -174,12 +175,14 @@ struct failure_detector::impl {
     future<> mark(listener* l, pinger::endpoint_id ep, bool alive);
 };
 
-failure_detector::failure_detector(pinger& pinger, clock& clock, clock::interval_t ping_period)
-        : _impl(std::make_unique<impl>(*this, pinger, clock, ping_period))
+failure_detector::failure_detector(
+    pinger& pinger, clock& clock, clock::interval_t ping_period, clock::interval_t ping_timeout)
+        : _impl(std::make_unique<impl>(*this, pinger, clock, ping_period, ping_timeout))
 {}
 
-failure_detector::impl::impl(failure_detector& parent, pinger& pinger, clock& clock, clock::interval_t ping_period)
-        : _parent(parent), _pinger(pinger), _clock(clock), _ping_period(ping_period) {
+failure_detector::impl::impl(
+    failure_detector& parent, pinger& pinger, clock& clock, clock::interval_t ping_period, clock::interval_t ping_timeout)
+        : _parent(parent), _pinger(pinger), _clock(clock), _ping_period(ping_period), _ping_timeout(ping_timeout) {
     if (this_shard_id() != 0) {
         return;
     }
@@ -536,11 +539,9 @@ future<> endpoint_worker::ping_fiber() noexcept {
         auto start = clock.now();
         auto next_ping_start = start + _fd._ping_period;
 
-        // A ping should take significantly less time than _ping_period, but we give it a multiple of ping_period before it times out
-        // just in case of transient network partitions.
-        // However, if there's a listener that's going to timeout soon (before the ping returns), we abort the ping in order to handle
+        auto timeout = start + _fd._ping_timeout;
+        // If there's a listener that's going to timeout soon (before the ping returns), we abort the ping in order to handle
         // the listener (mark it as dead).
-        auto timeout = start + 3 * _fd._ping_period;
         for (auto& [threshold, l]: _fd._listeners_liveness) {
             if (l.endpoint_liveness[_id].alive && last_response + threshold < timeout) {
                 timeout = last_response + threshold;
