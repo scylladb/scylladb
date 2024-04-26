@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <exception>
 #include <seastar/core/coroutine.hh>
 #include "auth/resource.hh"
 #include "auth/service.hh"
@@ -437,23 +438,23 @@ future<> create_role(
         std::string_view name,
         const role_config& config,
         const authentication_options& options) {
-    return ser.underlying_role_manager().create(name, config).then([&ser, name, &options] {
-        if (!auth::any_authentication_options(options)) {
-            return make_ready_future<>();
-        }
-
-        return futurize_invoke(
-                &validate_authentication_options_are_supported,
-                options,
-                ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
-            return ser.underlying_authenticator().create(name, options);
-        }).handle_exception([&ser, name](std::exception_ptr ep) {
-            // Roll-back.
-            return ser.underlying_role_manager().drop(name).then([ep = std::move(ep)] {
-                std::rethrow_exception(ep);
-            });
-        });
-    });
+    co_await ser.underlying_role_manager().create(name, config);
+    if (!auth::any_authentication_options(options)) {
+        co_return;
+    }
+    std::exception_ptr ep;
+    try {
+        validate_authentication_options_are_supported(options,
+                ser.underlying_authenticator().supported_options());
+        co_await ser.underlying_authenticator().create(name, options);
+    } catch (...) {
+        ep = std::current_exception();
+    }
+    if (ep) {
+        // Roll-back.
+        co_await ser.underlying_role_manager().drop(name);
+        std::rethrow_exception(std::move(ep));
+    }
 }
 
 future<> alter_role(
