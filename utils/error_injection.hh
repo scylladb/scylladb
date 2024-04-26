@@ -360,6 +360,17 @@ public:
     }
 
     [[gnu::always_inline]]
+<<<<<<< HEAD
+=======
+    static future<> receive_message_on_all(const std::string_view& injection_name) {
+        return make_ready_future<>();
+    }
+
+    [[gnu::always_inline]]
+    static void receive_message(const std::string_view& injection_name) {}
+
+    [[gnu::always_inline]]
+>>>>>>> 4d22c4b68b (sstable_datafile_test: add testcase to test reclaim during reload)
     static std::vector<sstring> enabled_injections_on_all() { return {}; }
 
     static error_injection& get_local() {
