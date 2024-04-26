@@ -2082,12 +2082,7 @@ void view_builder::setup_shard_build_step(
         // This is a safety check in case this node missed a create MV statement
         // but got a drop table for the base, and another node didn't get the
         // drop notification and sent us the view schema.
-        try {
-            _db.find_schema(view->view_info()->base_id());
-            return true;
-        } catch (const replica::no_such_column_family&) {
-            return false;
-        }
+        return _db.column_family_exists(view->view_info()->base_id());
     };
     auto maybe_fetch_view = [&, this] (system_keyspace_view_name& name) {
         try {
@@ -2144,12 +2139,7 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
         // This is a safety check in case this node missed a create MV statement
         // but got a drop table for the base, and another node didn't get the
         // drop notification and sent us the view schema.
-        try {
-            _db.find_schema(view->view_info()->base_id());
-            return true;
-        } catch (const replica::no_such_column_family&) {
-            return false;
-        }
+        return _db.column_family_exists(view->view_info()->base_id());
     };
     std::unordered_set<table_id> loaded_views;
     if (vbi.status_per_shard.size() != smp::count) {
