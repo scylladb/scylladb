@@ -640,7 +640,8 @@ public:
             service::direct_fd_clock fd_clock;
             fd.start(
                 std::ref(fd_pinger), std::ref(fd_clock),
-                service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
+                service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count(),
+                service::direct_fd_clock::base::duration{std::chrono::milliseconds{600}}.count()).get();
 
             auto stop_fd = defer([&fd] {
                 fd.stop().get();

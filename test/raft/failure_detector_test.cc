@@ -128,7 +128,7 @@ SEASTAR_TEST_CASE(failure_detector_test) {
     test_pinger pinger;
     test_clock clock;
     sharded<direct_failure_detector::failure_detector> fd;
-    co_await fd.start(std::ref(pinger), std::ref(clock), 10);
+    co_await fd.start(std::ref(pinger), std::ref(clock), 10, 30);
 
     test_listener l1, l2;
     auto sub1 = co_await fd.local().register_listener(l1, 95);
