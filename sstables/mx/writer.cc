@@ -709,8 +709,11 @@ private:
         const row& row_body, const row_time_properties& properties, bool has_complex_deletion);
     void write_row_body(bytes_ostream& writer, const clustering_row& row, bool has_complex_deletion);
     void write_static_row(const row&, column_kind);
-    void collect_row_stats(uint64_t row_size, const clustering_key_prefix* clustering_key) {
+    void collect_row_stats(uint64_t row_size, const clustering_key_prefix* clustering_key, bool is_dead = false) {
         ++_c_stats.rows_count;
+        if (is_dead) {
+            ++_c_stats.dead_rows_count;
+        }
         maybe_record_large_rows(_sst, *_partition_key, clustering_key, row_size);
     }
     void collect_range_tombstone_stats() {
@@ -1256,6 +1259,8 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
         }
     }
 
+    const bool is_dead = !clustered_row.is_live(_schema, tombstone(), gc_clock::now());
+
     if (clustered_row.tomb().regular()) {
         flags |= row_flags::has_deletion;
     }
@@ -1287,7 +1292,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
 
     // Collect statistics
     _collector.update_min_max_components(clustered_row.position());
-    collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key());
+    collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key(), is_dead);
 }
 
 stop_iteration writer::consume(clustering_row&& cr) {
