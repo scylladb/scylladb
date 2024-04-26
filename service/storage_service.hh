@@ -208,7 +208,7 @@ public:
 
     // Needed by distributed<>
     future<> stop();
-    void init_messaging_service(bool raft_topology_change_enabled);
+    void init_messaging_service();
     future<> uninit_messaging_service();
 
     future<> load_tablet_metadata();
@@ -358,7 +358,7 @@ public:
     future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
             sharded<gms::gossiper>& gossiper_ptr, start_hint_manager start_hm, gms::generation_type new_generation);
 
-    void set_group0(service::raft_group0&, bool raft_experimental_topology);
+    void set_group0(service::raft_group0&);
 
     future<> init_address_map(raft_address_map& address_map, gms::generation_type new_generation);
 
@@ -750,7 +750,6 @@ private:
 
     friend class group0_state_machine;
 
-    bool _raft_experimental_topology = false;
     enum class topology_change_kind {
         // The node is still starting and didn't determine yet which ops kind to use
         unknown,

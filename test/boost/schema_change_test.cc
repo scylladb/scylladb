@@ -780,6 +780,12 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
     }
     cql_test_config cfg_in(db_cfg_ptr);
     cfg_in.disabled_features = std::move(disabled_features);
+    // Copying the data directory makes the node incorrectly think it restarts. Then,
+    // after noticing it is not a part of group 0, the node would start the raft upgrade
+    // procedure if we didn't run it in the raft RECOVERY mode. This procedure would get
+    // stuck because it depends on messaging being enabled even if the node communicates
+    // only with itself and messaging is disabled in boost tests.
+    cfg_in.run_with_raft_recovery = true;
 
     return do_with_cql_env_thread([expected_digests = std::move(expected_digests), extra_schema_changes = std::move(extra_schema_changes)] (cql_test_env& e) {
         if (regenerate) {

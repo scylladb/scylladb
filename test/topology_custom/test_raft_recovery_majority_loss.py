@@ -29,7 +29,7 @@ async def test_recovery_after_majority_loss(request, manager: ManagerClient):
     about the schema changes.
     """
     cfg = {'enable_user_defined_functions': False,
-           'experimental_features': list[str]()}
+           'force_gossip_topology_changes': True}
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
 
     logging.info("Waiting until driver connects to every server")

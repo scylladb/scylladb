@@ -78,9 +78,6 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
     }
-    if (!cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
-        fcfg._disabled_features.insert("SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES"s);
-    }
     if (!cfg.check_experimental(db::experimental_features_t::feature::TABLETS)) {
         fcfg._disabled_features.insert("TABLETS"s);
     }
@@ -257,16 +254,11 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
     std::set<sstring> persisted_features;
     std::set<sstring> persisted_unsafe_to_disable_features;
 
-    bool fall_back_to_legacy = true;
-    if (_config.use_raft_cluster_features) {
-        auto topo_features = co_await sys_ks.load_topology_features_state();
-        if (topo_features) {
-            persisted_unsafe_to_disable_features = topo_features->calculate_not_yet_enabled_features();
-            persisted_features = std::move(topo_features->enabled_features);
-            fall_back_to_legacy = false;
-        }
-    }
-    if (fall_back_to_legacy) {
+    auto topo_features = co_await sys_ks.load_topology_features_state();
+    if (topo_features) {
+        persisted_unsafe_to_disable_features = topo_features->calculate_not_yet_enabled_features();
+        persisted_features = std::move(topo_features->enabled_features);
+    } else {
         persisted_features = co_await sys_ks.load_local_enabled_features();
     }
 

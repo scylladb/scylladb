@@ -19,19 +19,18 @@ from test.topology.util import log_run_time, wait_until_last_generation_is_in_us
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
 @log_run_time
 async def test_topology_upgrade_basic(request, mode: str, manager: ManagerClient):
-    # First, force the first node to start in legacy mode due to the error injection
+    # First, force the first node to start in legacy mode
     cfg = {
-        'error_injections_at_startup': ['force_gossip_based_join'],
+        'force_gossip_topology_changes': True,
         'ring_delay_ms': 15000 if mode == 'debug' else 5000,
     }
 
     servers = [await manager.server_add(config=cfg)]
-    # Disable injections for the subsequent nodes - they should fall back to
+    # Enable raft-based node operations for subsequent nodes - they should fall back to
     # using gossiper-based node operations
-    del cfg['error_injections_at_startup']
+    del cfg['force_gossip_topology_changes']
 
     servers += [await manager.server_add(config=cfg) for _ in range(2)]
     cql = manager.cql

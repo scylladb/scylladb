@@ -57,15 +57,14 @@ async def test_service_levels_snapshot(manager: ManagerClient):
     assert set([sl.service_level for sl in result]) == set([sl.service_level for sl in new_result])
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
 async def test_service_levels_upgrade(request, manager: ManagerClient):
-    # First, force the first node to start in legacy mode due to the error injection
-    cfg = {'error_injections_at_startup': ['force_gossip_based_join']}
+    # First, force the first node to start in legacy mode
+    cfg = {'force_gossip_topology_changes': True}
 
     servers = [await manager.server_add(config=cfg)]
-    # Disable injections for the subsequent nodes - they should fall back to
+    # Enable raft-based node operations for subsequent nodes - they should fall back to
     # using gossiper-based node operations
-    del cfg['error_injections_at_startup']
+    del cfg['force_gossip_topology_changes']
 
     servers += [await manager.server_add(config=cfg) for _ in range(2)]
     cql = manager.get_cql()

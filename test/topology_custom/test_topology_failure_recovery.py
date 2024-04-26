@@ -21,7 +21,7 @@ async def inject_error_on(manager, error_name, servers):
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False,
-           'experimental_features': ['tablets', 'consistent-topology-changes']}
+           'experimental_features': ['tablets']}
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
 
     logs = [await manager.server_open_log(srv.server_id) for srv in servers]

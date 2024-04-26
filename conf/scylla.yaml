@@ -278,7 +278,6 @@ batch_size_fail_threshold_in_kb: 1024
 # experimental_features:
 #     - udf
 #     - alternator-streams
-#     - consistent-topology-changes
 #     - broadcast-tables
 #     - keyspace-storage-options
 #     - tablets

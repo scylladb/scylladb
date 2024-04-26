@@ -86,7 +86,6 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         'enable_user_defined_functions': True,
         'experimental_features': ['udf',
                                   'alternator-streams',
-                                  'consistent-topology-changes',
                                   'broadcast-tables',
                                   'keyspace-storage-options'],
 

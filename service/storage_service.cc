@@ -176,8 +176,7 @@ storage_service::storage_service(abort_source& abort_source,
         _listeners.emplace_back(make_lw_shared(_snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
 
-    auto& cfg = _db.local().get_config();
-    init_messaging_service(cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES));
+    init_messaging_service();
 }
 
 enum class node_external_status {
@@ -608,10 +607,6 @@ future<> storage_service::topology_state_load() {
     });
     running = true;
 #endif
-
-    if (!_raft_experimental_topology) {
-        co_return;
-    }
 
     rtlogger.debug("reload raft topology state");
     std::unordered_set<raft::server_id> prev_normal = boost::copy_range<std::unordered_set<raft::server_id>>(_topology_state_machine._topology.normal_nodes | boost::adaptors::map_keys);
@@ -1768,7 +1763,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             throw std::runtime_error(err);
         }
 
-        co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), _raft_experimental_topology);
+        co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), true);
 
         // Initializes monitor only after updating local topology.
         start_tablet_split_monitor();
@@ -1933,20 +1928,18 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     assert(_group0);
-    co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), _raft_experimental_topology);
+    co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), false);
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 
-    if (_raft_experimental_topology) {
-        // Waited on during stop()
-        (void)([] (storage_service& me, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) -> future<> {
-            try {
-                co_await me.track_upgrade_progress_to_topology_coordinator(sys_dist_ks, proxy);
-            } catch (const abort_requested_exception&) {
-                // Ignore
-            }
-            // Other errors are handled internally by track_upgrade_progress_to_topology_coordinator
-        })(*this, sys_dist_ks, proxy);
-    }
+    // Waited on during stop()
+    (void)([] (storage_service& me, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) -> future<> {
+        try {
+            co_await me.track_upgrade_progress_to_topology_coordinator(sys_dist_ks, proxy);
+        } catch (const abort_requested_exception&) {
+            // Ignore
+        }
+        // Other errors are handled internally by track_upgrade_progress_to_topology_coordinator
+    })(*this, sys_dist_ks, proxy);
 }
 
 future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
@@ -2752,9 +2745,8 @@ future<> storage_service::drain_on_shutdown() {
         _drain_finished.get_future() : do_drain();
 }
 
-void storage_service::set_group0(raft_group0& group0, bool raft_experimental_topology) {
+void storage_service::set_group0(raft_group0& group0) {
     _group0 = &group0;
-    _raft_experimental_topology = raft_experimental_topology;
 }
 
 future<> storage_service::init_address_map(raft_address_map& address_map, gms::generation_type new_generation) {
@@ -2841,19 +2833,16 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         slogger.info("peer={}, supported_features={}", x.first, x.second);
     }
 
-    if (!_raft_experimental_topology) {
-        slogger.info("Booting in legacy operations mode because experimental raft topology is not enabled");
-        set_topology_change_kind(topology_change_kind::legacy);
-    } else if (utils::get_local_injector().is_enabled("force_gossip_based_join") && !_sys_ks.local().bootstrap_complete()) {
-        slogger.info("Booting in legacy topology operations mode because it was requested by an error injection");
-        set_topology_change_kind(topology_change_kind::legacy);
-    } else if (_group0->client().in_recovery()) {
+    if (_group0->client().in_recovery()) {
         slogger.info("Raft recovery - starting in legacy topology operations mode");
         set_topology_change_kind(topology_change_kind::legacy);
     } else if (_group0->joined_group0()) {
         // We are a part of group 0. The _topology_change_kind_enabled flag is maintained from there.
         _manage_topology_change_kind_from_group0 = true;
         set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
+        if (_db.local().get_config().force_gossip_topology_changes() && raft_topology_change_enabled()) {
+            throw std::runtime_error("Cannot force gossip topology changes - the cluster is using raft-based topology");
+        }
         slogger.info("The node is already in group 0 and will restart in {} mode", raft_topology_change_enabled() ? "raft" : "legacy");
     } else if (_sys_ks.local().bootstrap_complete()) {
         // We already bootstrapped but we are not a part of group 0. This means that we are restarting after recovery.
@@ -2868,8 +2857,13 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
 
         if (_group0->load_my_id() == g0_info.id) {
             // We're creating the group 0.
-            slogger.info("We are creating the group 0. Start in raft topology operations mode");
-            set_topology_change_kind(topology_change_kind::raft);
+            if (_db.local().get_config().force_gossip_topology_changes()) {
+                slogger.info("We are creating the group 0. Start in legacy topology operations mode by force");
+                set_topology_change_kind(topology_change_kind::legacy);
+            } else {
+                slogger.info("We are creating the group 0. Start in raft topology operations mode");
+                set_topology_change_kind(topology_change_kind::raft);
+            }
         } else {
             // Ask the current member of the raft group about which mode to use
             auto params = join_node_query_params {};
@@ -2877,6 +2871,9 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
                     &_messaging.local(), netw::msg_addr(g0_info.ip_addr), g0_info.id, std::move(params));
             switch (result.topo_mode) {
             case join_node_query_result::topology_mode::raft:
+                if (_db.local().get_config().force_gossip_topology_changes()) {
+                    throw std::runtime_error("Cannot force gossip topology changes - joining the cluster that is using raft-based topology");
+                }
                 slogger.info("Will join existing cluster in raft topology operations mode");
                 set_topology_change_kind(topology_change_kind::raft);
                 break;
@@ -6429,7 +6426,7 @@ node_state storage_service::get_node_state(locator::host_id id) {
     return p->second.state;
 }
 
-void storage_service::init_messaging_service(bool raft_topology_change_enabled) {
+void storage_service::init_messaging_service() {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         std::optional<locator::host_id> coordinator_host_id;
@@ -6440,116 +6437,114 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
             return ss.node_ops_cmd_handler(coordinator, coordinator_host_id, std::move(req));
         });
     });
-    if (raft_topology_change_enabled) {
-        auto handle_raft_rpc = [this] (raft::server_id dst_id, auto handler) {
-            return container().invoke_on(0, [dst_id, handler = std::move(handler)] (auto& ss) mutable {
-                if (!ss._group0 || !ss._group0->joined_group0()) {
-                    throw std::runtime_error("The node did not join group 0 yet");
-                }
-                if (ss._group0->load_my_id() != dst_id) {
-                    throw raft_destination_id_not_correct(ss._group0->load_my_id(), dst_id);
-                }
-                return handler(ss);
-            });
-        };
-        ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
-            return handle_raft_rpc(dst_id, [cmd = std::move(cmd), term, cmd_index] (auto& ss) {
-                return ss.raft_topology_cmd_handler(term, cmd_index, cmd);
-            });
+    auto handle_raft_rpc = [this] (raft::server_id dst_id, auto handler) {
+        return container().invoke_on(0, [dst_id, handler = std::move(handler)] (auto& ss) mutable {
+            if (!ss._group0 || !ss._group0->joined_group0()) {
+                throw std::runtime_error("The node did not join group 0 yet");
+            }
+            if (ss._group0->load_my_id() != dst_id) {
+                throw raft_destination_id_not_correct(ss._group0->load_my_id(), dst_id);
+            }
+            return handler(ss);
         });
-        ser::storage_service_rpc_verbs::register_raft_pull_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_snapshot_pull_params params) {
-            return handle_raft_rpc(dst_id, [params = std::move(params)] (storage_service& ss) -> future<raft_snapshot> {
-                utils::chunked_vector<canonical_mutation> mutations;
-                // FIXME: make it an rwlock, here we only need to lock for reads,
-                // might be useful if multiple nodes are trying to pull concurrently.
-                auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
-                for (const auto& table : params.tables) {
-                    auto schema = ss._db.local().find_schema(table);
-                    auto muts = co_await ss.get_system_mutations(schema);
+    };
+    ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
+        return handle_raft_rpc(dst_id, [cmd = std::move(cmd), term, cmd_index] (auto& ss) {
+            return ss.raft_topology_cmd_handler(term, cmd_index, cmd);
+        });
+    });
+    ser::storage_service_rpc_verbs::register_raft_pull_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_snapshot_pull_params params) {
+        return handle_raft_rpc(dst_id, [params = std::move(params)] (storage_service& ss) -> future<raft_snapshot> {
+            utils::chunked_vector<canonical_mutation> mutations;
+            // FIXME: make it an rwlock, here we only need to lock for reads,
+            // might be useful if multiple nodes are trying to pull concurrently.
+            auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
+            for (const auto& table : params.tables) {
+                auto schema = ss._db.local().find_schema(table);
+                auto muts = co_await ss.get_system_mutations(schema);
 
-                    if (table == db::system_keyspace::cdc_generations_v3()->id()) {
-                        utils::get_local_injector().inject("cdc_generation_mutations_topology_snapshot_replication",
-                            [target_size=ss._db.local().schema_commitlog()->max_record_size() * 2, &muts] {
-                                // Copy mutations n times, where n is picked so that the memory size of all mutations
-                                // together exceeds `schema_commitlog()->max_record_size()`.
-                                // We multiply by two to account for all possible deltas (like segment::entry_overhead_size).
+                if (table == db::system_keyspace::cdc_generations_v3()->id()) {
+                    utils::get_local_injector().inject("cdc_generation_mutations_topology_snapshot_replication",
+                        [target_size=ss._db.local().schema_commitlog()->max_record_size() * 2, &muts] {
+                            // Copy mutations n times, where n is picked so that the memory size of all mutations
+                            // together exceeds `schema_commitlog()->max_record_size()`.
+                            // We multiply by two to account for all possible deltas (like segment::entry_overhead_size).
 
-                                size_t current_size = 0;
-                                for (const auto& m: muts) {
-                                    current_size += m.representation().size();
-                                }
-                                const auto number_of_copies = (target_size / current_size + 1) * 2;
-                                muts.reserve(muts.size() * number_of_copies);
-                                const auto it_begin = muts.begin();
-                                const auto it_end = muts.end();
-                                for (unsigned i = 0; i < number_of_copies; ++i) {
-                                    std::copy(it_begin, it_end, std::back_inserter(muts));
-                                }
-                            });
-                    }
-
-                    mutations.reserve(mutations.size() + muts.size());
-                    std::move(muts.begin(), muts.end(), std::back_inserter(mutations));
+                            size_t current_size = 0;
+                            for (const auto& m: muts) {
+                                current_size += m.representation().size();
+                            }
+                            const auto number_of_copies = (target_size / current_size + 1) * 2;
+                            muts.reserve(muts.size() * number_of_copies);
+                            const auto it_begin = muts.begin();
+                            const auto it_end = muts.end();
+                            for (unsigned i = 0; i < number_of_copies; ++i) {
+                                std::copy(it_begin, it_end, std::back_inserter(muts));
+                            }
+                        });
                 }
 
-                auto sl_version_mut = co_await ss._sys_ks.local().get_service_levels_version_mutation();
-                if (sl_version_mut) {
-                    mutations.push_back(canonical_mutation(*sl_version_mut));
-                }
+                mutations.reserve(mutations.size() + muts.size());
+                std::move(muts.begin(), muts.end(), std::back_inserter(mutations));
+            }
 
-                auto auth_version_mut = co_await ss._sys_ks.local().get_auth_version_mutation();
-                if (auth_version_mut) {
-                    mutations.emplace_back(*auth_version_mut);
-                }
+            auto sl_version_mut = co_await ss._sys_ks.local().get_service_levels_version_mutation();
+            if (sl_version_mut) {
+                mutations.push_back(canonical_mutation(*sl_version_mut));
+            }
 
-                co_return raft_snapshot{
-                    .mutations = std::move(mutations),
-                };
-            });
+            auto auth_version_mut = co_await ss._sys_ks.local().get_auth_version_mutation();
+            if (auth_version_mut) {
+                mutations.emplace_back(*auth_version_mut);
+            }
+
+            co_return raft_snapshot{
+                .mutations = std::move(mutations),
+            };
         });
-        ser::storage_service_rpc_verbs::register_tablet_stream_data(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
-            return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
-                return ss.stream_tablet(tablet);
-            });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_stream_data(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
+        return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
+            return ss.stream_tablet(tablet);
         });
-        ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
-            return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
-                return ss.cleanup_tablet(tablet);
-            });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
+        return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
+            return ss.cleanup_tablet(tablet);
         });
-        ser::storage_service_rpc_verbs::register_table_load_stats(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id) {
-            return handle_raft_rpc(dst_id, [] (auto& ss) mutable {
-                return ss.load_stats_for_tablet_based_tables();
-            });
+    });
+    ser::storage_service_rpc_verbs::register_table_load_stats(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id) {
+        return handle_raft_rpc(dst_id, [] (auto& ss) mutable {
+            return ss.load_stats_for_tablet_based_tables();
         });
-        ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_request_params params) {
-            return handle_raft_rpc(dst_id, [params = std::move(params)] (auto& ss) mutable {
-                return ss.join_node_request_handler(std::move(params));
-            });
+    });
+    ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_request_params params) {
+        return handle_raft_rpc(dst_id, [params = std::move(params)] (auto& ss) mutable {
+            return ss.join_node_request_handler(std::move(params));
         });
-        ser::join_node_rpc_verbs::register_join_node_response(&_messaging.local(), [this] (raft::server_id dst_id, service::join_node_response_params params) {
-            return container().invoke_on(0, [dst_id, params = std::move(params)] (auto& ss) mutable -> future<join_node_response_result> {
-                co_await ss._join_node_group0_started.get_shared_future(ss._group0_as);
-                if (ss._group0->load_my_id() != dst_id) {
-                    throw raft_destination_id_not_correct(ss._group0->load_my_id(), dst_id);
-                }
-                co_return co_await ss.join_node_response_handler(std::move(params));
-            });
+    });
+    ser::join_node_rpc_verbs::register_join_node_response(&_messaging.local(), [this] (raft::server_id dst_id, service::join_node_response_params params) {
+        return container().invoke_on(0, [dst_id, params = std::move(params)] (auto& ss) mutable -> future<join_node_response_result> {
+            co_await ss._join_node_group0_started.get_shared_future(ss._group0_as);
+            if (ss._group0->load_my_id() != dst_id) {
+                throw raft_destination_id_not_correct(ss._group0->load_my_id(), dst_id);
+            }
+            co_return co_await ss.join_node_response_handler(std::move(params));
         });
-        ser::join_node_rpc_verbs::register_join_node_query(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_query_params) {
-            return handle_raft_rpc(dst_id, [] (auto& ss) -> future<join_node_query_result> {
-                if (!ss.legacy_topology_change_enabled() && !ss.raft_topology_change_enabled()) {
-                    throw std::runtime_error("The cluster is upgrading to raft topology. Nodes cannot join at this time.");
-                }
-                auto result = join_node_query_result{
-                    .topo_mode = ss.raft_topology_change_enabled()
-                            ? join_node_query_result::topology_mode::raft
-                            : join_node_query_result::topology_mode::legacy,
-                };
-                return make_ready_future<join_node_query_result>(std::move(result));
-            });
+    });
+    ser::join_node_rpc_verbs::register_join_node_query(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_query_params) {
+        return handle_raft_rpc(dst_id, [] (auto& ss) -> future<join_node_query_result> {
+            if (!ss.legacy_topology_change_enabled() && !ss.raft_topology_change_enabled()) {
+                throw std::runtime_error("The cluster is upgrading to raft topology. Nodes cannot join at this time.");
+            }
+            auto result = join_node_query_result{
+                .topo_mode = ss.raft_topology_change_enabled()
+                        ? join_node_query_result::topology_mode::raft
+                        : join_node_query_result::topology_mode::legacy,
+            };
+            return make_ready_future<join_node_query_result>(std::move(result));
         });
-    }
+    });
 }
 
 future<> storage_service::uninit_messaging_service() {
