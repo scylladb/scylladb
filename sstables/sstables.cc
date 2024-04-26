@@ -33,6 +33,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 
+#include "utils/error_injection.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
 #include "writer.hh"
@@ -1437,6 +1438,13 @@ future<> sstable::reload_reclaimed_components() {
         // nothing to reload
         co_return;
     }
+
+    co_await utils::get_local_injector().inject_with_handler("reload_reclaimed_components/pause", [] (auto& handler) {
+        sstlog.info("reload_reclaimed_components/pause init");
+        auto ret = handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{5});
+        sstlog.info("reload_reclaimed_components/pause done");
+        return ret;
+    });
 
     co_await read_filter();
     _total_reclaimable_memory.reset();

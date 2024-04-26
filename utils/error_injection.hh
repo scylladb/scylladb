@@ -545,6 +545,9 @@ public:
     }
 
     [[gnu::always_inline]]
+    static void receive_message(const std::string_view& injection_name) {}
+
+    [[gnu::always_inline]]
     static std::vector<sstring> enabled_injections_on_all() { return {}; }
 
     static error_injection& get_local() {
