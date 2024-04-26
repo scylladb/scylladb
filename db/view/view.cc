@@ -2078,18 +2078,15 @@ void view_builder::setup_shard_build_step(
         std::vector<system_keyspace_view_build_progress> in_progress) {
     // Shard 0 makes cleanup changes to the system tables, but none that could conflict
     // with the other shards; everyone is thus able to proceed independently.
-    auto base_table_exists = [this] (const view_ptr& view) {
-        // This is a safety check in case this node missed a create MV statement
-        // but got a drop table for the base, and another node didn't get the
-        // drop notification and sent us the view schema.
-        return _db.column_family_exists(view->view_info()->base_id());
-    };
     auto maybe_fetch_view = [&, this] (system_keyspace_view_name& name) {
         try {
             auto s = _db.find_schema(name.first, name.second);
             if (s->is_view()) {
                 auto view = view_ptr(std::move(s));
-                if (base_table_exists(view)) {
+                // This is a safety check in case this node missed a create MV statement
+                // but got a drop table for the base, and another node didn't get the
+                // drop notification and sent us the view schema.
+                if (_db.column_family_exists(view->view_info()->base_id())) {
                     return view;
                 }
             }
@@ -2135,12 +2132,6 @@ void view_builder::setup_shard_build_step(
 }
 
 future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) {
-    auto base_table_exists = [this] (const view_ptr& view) {
-        // This is a safety check in case this node missed a create MV statement
-        // but got a drop table for the base, and another node didn't get the
-        // drop notification and sent us the view schema.
-        return _db.column_family_exists(view->view_info()->base_id());
-    };
     std::unordered_set<table_id> loaded_views;
     if (vbi.status_per_shard.size() != smp::count) {
         reshard(std::move(vbi.status_per_shard), loaded_views);
@@ -2161,7 +2152,10 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
 
     auto all_views = _db.get_views();
     auto is_new = [&] (const view_ptr& v) {
-        return base_table_exists(v) && !loaded_views.contains(v->id())
+        // This is a safety check in case this node missed a create MV statement
+        // but got a drop table for the base, and another node didn't get the
+        // drop notification and sent us the view schema.
+        return _db.column_family_exists(v->view_info()->base_id()) && !loaded_views.contains(v->id())
                 && !vbi.built_views.contains(v->id());
     };
     for (auto&& view : all_views | boost::adaptors::filtered(is_new)) {
