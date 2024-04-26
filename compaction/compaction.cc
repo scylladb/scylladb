@@ -451,6 +451,7 @@ protected:
     uint64_t _compacting_data_file_size = 0;
     api::timestamp_type _compacting_max_timestamp = api::min_timestamp;
     uint64_t _estimated_partitions = 0;
+    double _estimated_droppable_tombstone_ratio = 0;
     uint64_t _bloom_filter_checks = 0;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
@@ -606,7 +607,8 @@ protected:
         sstable_writer_config cfg = _table_s.configure_writer("garbage_collection");
         cfg.run_identifier = gc_run;
         cfg.monitor = monitor.get();
-        auto writer = sst->get_writer(*schema(), partitions_per_sstable(), cfg, get_encoding_stats());
+        uint64_t estimated_partitions = std::max(1UL, uint64_t(ceil(partitions_per_sstable() * _estimated_droppable_tombstone_ratio)));
+        auto writer = sst->get_writer(*schema(), estimated_partitions, cfg, get_encoding_stats());
         return compaction_writer(std::move(monitor), std::move(writer), std::move(sst));
     }
 
@@ -724,6 +726,7 @@ private:
         auto fully_expired = _table_s.fully_expired_sstables(_sstables, gc_clock::now());
         min_max_tracker<api::timestamp_type> timestamp_tracker;
 
+        double sum_of_estimated_droppable_tombstone_ratio = 0;
         _input_sstable_generations.reserve(_sstables.size());
         for (auto& sst : _sstables) {
             co_await coroutine::maybe_yield();
@@ -751,6 +754,7 @@ private:
             // for a better estimate for the number of partitions in the merged
             // sstable than just adding up the lengths of individual sstables.
             _estimated_partitions += sst->get_estimated_key_count();
+            sum_of_estimated_droppable_tombstone_ratio += sst->estimate_droppable_tombstone_ratio(gc_clock::now(), _table_s.get_tombstone_gc_state(), _schema);
             _compacting_data_file_size += sst->ondisk_data_size();
             _compacting_max_timestamp = std::max(_compacting_max_timestamp, sst->get_stats_metadata().max_timestamp);
             if (sst->originated_on_this_node().value_or(false) && sst_stats.position.shard_id() == this_shard_id()) {
@@ -762,6 +766,8 @@ private:
             log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
                       _sstables.size() - ssts->size(), _sstables.size());
         }
+        // _estimated_droppable_tombstone_ratio could exceed 1.0 in certain cases, so limit it to 1.0.
+        _estimated_droppable_tombstone_ratio = std::min(1.0, sum_of_estimated_droppable_tombstone_ratio / ssts->size());
 
         _compacting = std::move(ssts);
 
