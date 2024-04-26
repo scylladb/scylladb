@@ -2578,7 +2578,7 @@ void shard_of_operation(schema_ptr, reader_permit,
             sst->generation(),
             sstable_state::normal,
             sst->get_version());
-        new_sst->load(schema->get_sharder(), sstables::sstable_open_config{}).get();
+        new_sst->load_owner_shards(schema->get_sharder()).get();
 
         writer.Key(sst->get_filename());
         writer.StartArray();
