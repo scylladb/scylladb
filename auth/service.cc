@@ -514,9 +514,8 @@ future<> grant_permissions(
         std::string_view role_name,
         permission_set perms,
         const resource& r) {
-    return validate_role_exists(ser, role_name).then([&ser, role_name, perms, &r] {
-        return ser.underlying_authorizer().grant(role_name, perms, r);
-    });
+    co_await validate_role_exists(ser, role_name);
+    co_await ser.underlying_authorizer().grant(role_name, perms, r);
 }
 
 future<> grant_applicable_permissions(const service& ser, std::string_view role_name, const resource& r) {
@@ -535,9 +534,8 @@ future<> revoke_permissions(
         std::string_view role_name,
         permission_set perms,
         const resource& r) {
-    return validate_role_exists(ser, role_name).then([&ser, role_name, perms, &r] {
-        return ser.underlying_authorizer().revoke(role_name, perms, r);
-    });
+    co_await validate_role_exists(ser, role_name);
+    co_await ser.underlying_authorizer().revoke(role_name, perms, r);
 }
 
 future<std::vector<permission_details>> list_filtered_permissions(
