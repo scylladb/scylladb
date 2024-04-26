@@ -2294,6 +2294,15 @@ future<> repair::tablet_repair_task_impl::run() {
             rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
         });
 
+        auto cleanup_repair_range_history = defer([&rs, uuid = id.uuid()] () mutable {
+            try {
+                rs.cleanup_history(tasks::task_id{uuid.uuid()}).get();
+            } catch (...) {
+                rlogger.warn("repair[{}]: Failed to cleanup history: {}", uuid, std::current_exception());
+            }
+        });
+
+
         rs.container().invoke_on_all([&idx, id, metas = _metas, parent_data, reason = _reason, tables = _tables] (repair_service& rs) -> future<> {
             for (auto& m : metas) {
                 if (m.master_shard_id != this_shard_id()) {
