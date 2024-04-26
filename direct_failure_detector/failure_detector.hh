@@ -120,14 +120,14 @@ public:
 
         // Every endpoint in the detected set will be periodically pinged every `ping_period`,
         // assuming that the pings return in a timely manner. A ping may take longer than `ping_period`
-        // before it's aborted (up to a certain multiple of `ping_period`), in which case the next ping
-        // will start immediately.
-        //
-        // `ping_period` should be chosen so that during normal operation, a ping takes significantly
-        // less time than `ping_period` (preferably at least an order of magnitude less).
+        // before it's aborted (up to `ping_timeout`), in which case the next ping will start immediately.
         //
         // The passed-in value must be the same on every shard.
-        clock::interval_t ping_period
+        clock::interval_t ping_period,
+
+        // Duration after which a ping is aborted, so that next ping can be started
+        // (pings are sent sequentially).
+        clock::interval_t ping_timeout
     );
 
     ~failure_detector();
@@ -147,7 +147,7 @@ public:
     // The listener stops being called when the returned subscription is destroyed.
     // The subscription must be destroyed before service is stopped.
     //
-    // `threshold` should be significantly larger than `ping_period`, preferably at least an order of magnitude larger.
+    // `threshold` should be significantly larger than `ping_timeout`, preferably at least an order of magnitude larger.
     //
     // Different listeners may use different thresholds, depending on the use case:
     // some listeners may want to mark endpoints as dead more aggressively if fast reaction times are important

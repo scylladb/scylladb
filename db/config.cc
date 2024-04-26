@@ -489,6 +489,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Adjusts the sensitivity of the failure detector on an exponential scale. Generally this setting never needs adjusting.\n"
         "Related information: Failure detection and recovery")
     , failure_detector_timeout_in_ms(this, "failure_detector_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 20 * 1000, "Maximum time between two successful echo message before gossip mark a node down in milliseconds.\n")
+    , direct_failure_detector_ping_timeout_in_ms(this, "direct_failure_detector_ping_timeout_in_ms", value_status::Used, 600, "Duration after which the direct failure detector aborts a ping message, so the next ping can start.\n"
+        "Note: this failure detector is used by Raft, and is different from gossiper's failure detector (configured by `failure_detector_timeout_in_ms`).\n")
     /**
     * @Group Performance tuning properties
     * @GroupDescription Tuning performance and system resource utilization, including commit log, compaction, memory, disk I/O, CPU, reads, and writes.
