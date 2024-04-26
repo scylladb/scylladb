@@ -3291,3 +3291,56 @@ SEASTAR_TEST_CASE(test_reclaimed_bloom_filter_deletion_from_disk) {
         BOOST_REQUIRE(!file_exists(filter_path).get());
     });
 }
+
+SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
+    return test_env::do_with_async([](test_env& env) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        simple_schema ss;
+        auto schema_ptr = ss.schema();
+
+        auto& sst_mgr = env.manager();
+
+        auto [sst1, sst1_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 100);
+        // there is sufficient memory for sst1's filter
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+
+        auto [sst2, sst2_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 60);
+        // total memory used by the bloom filters has crossed the threshold, so sst1's
+        // filter, which occupies the most memory, will be discarded from memory.
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst1_bf_memory);
+
+        // enable injector that delays reloading a filter
+        utils::get_local_injector().enable("reload_reclaimed_components/pause", true);
+
+        // dispose sst2 to trigger reload of sst1's bloom filter
+        shared_sstable::dispose(sst2.release().release());
+        // _total_reclaimable_memory will be updated when the reload begins; wait for it.
+        REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory);
+
+        // now that the reload is midway and paused, create new sst to verify that its
+        // filter gets evicted immediately as the memory that became available is reserved
+        // for sst1's filter reload.
+        auto [sst3, sst3_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 80);
+        BOOST_REQUIRE_EQUAL(sst3->filter_memory_size(), 0);
+        // confirm sst1 is not reloaded yet
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst1_bf_memory + sst3_bf_memory);
+
+        // resume reloading sst1 filter
+        utils::get_local_injector().receive_message("reload_reclaimed_components/pause");
+        REQUIRE_EVENTUALLY_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst3_bf_memory);
+
+        utils::get_local_injector().disable("reload_reclaimed_components/pause");
+    }, {
+        // limit available memory to the sstables_manager to test reclaiming.
+        // this will set the reclaim threshold to 100 bytes.
+        .available_memory = 1000
+    });
+}
