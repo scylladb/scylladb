@@ -370,7 +370,7 @@ seastar::future<> raft_group_registry::start() {
     init_rpc_verbs();
 
     _direct_fd_subscription.emplace(co_await _direct_fd.register_listener(*_direct_fd_proxy,
-        direct_fd_clock::base::duration{std::chrono::seconds{1}}.count()));
+        direct_fd_clock::base::duration{std::chrono::seconds{2}}.count()));
 }
 
 const raft::server_id& raft_group_registry::get_my_raft_id() {
