@@ -187,12 +187,12 @@ public:
         return make_ready_future<permission_set>(transitional_permissions);
     }
 
-    virtual future<> grant(std::string_view s, permission_set ps, const resource& r)  override {
-        return _authorizer->grant(s, std::move(ps), r);
+    virtual future<> grant(std::string_view s, permission_set ps, const resource& r, ::service::mutations_collector& mc)  override {
+        return _authorizer->grant(s, std::move(ps), r, mc);
     }
 
-    virtual future<> revoke(std::string_view s, permission_set ps, const resource& r) override {
-        return _authorizer->revoke(s, std::move(ps), r);
+    virtual future<> revoke(std::string_view s, permission_set ps, const resource& r, ::service::mutations_collector& mc) override {
+        return _authorizer->revoke(s, std::move(ps), r, mc);
     }
 
     virtual future<std::vector<permission_details>> list_all() const override {

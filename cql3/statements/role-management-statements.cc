@@ -56,13 +56,14 @@ std::unique_ptr<prepared_statement> create_role_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<create_role_statement>(*this));
 }
 
-future<> create_role_statement::grant_permissions_to_creator(const service::client_state& cs) const {
+future<> create_role_statement::grant_permissions_to_creator(const service::client_state& cs, ::service::mutations_collector& mc) const {
     auto resource = auth::make_role_resource(_role);
     try {
         co_await auth::grant_applicable_permissions(
                 *cs.get_auth_service(),
                 *cs.user(),
-                resource);
+                resource,
+                mc);
     } catch (const auth::unsupported_authorization_operation&) {
         // Nothing.
     }
@@ -97,8 +98,7 @@ create_role_statement::execute(query_processor&,
     service::mutations_collector mc{std::move(guard)};
     try {
         co_await auth::create_role(as, _role, config, extract_authentication_options(_options), mc);
-        co_await auth::announce_mutations(as, std::move(mc));
-        co_await grant_permissions_to_creator(cs);
+        co_await grant_permissions_to_creator(cs, mc);
     } catch (const auth::role_already_exists& e) {
         if (!_if_not_exists) {
             throw exceptions::invalid_request_exception(e.what());
@@ -107,6 +107,7 @@ create_role_statement::execute(query_processor&,
         throw exceptions::invalid_request_exception(e.what());
     }
 
+    co_await auth::announce_mutations(as, std::move(mc));
     co_return nullptr;
 }
 

@@ -510,6 +510,13 @@ api::timestamp_type mutations_collector::write_timestamp() const {
     return _guard->write_timestamp();
 }
 
+utils::UUID mutations_collector::new_group0_state_id() const {
+    if (!_guard) {
+        on_internal_error(logger, "mutations_collector: new_group0_state_id without guard taken");
+    }
+    return _guard->new_group0_state_id();
+}
+
 void mutations_collector::add_mutation(mutation m) {
     _muts.push_back(std::move(m));
 }

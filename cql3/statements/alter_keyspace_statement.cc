@@ -163,8 +163,6 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             boost::transform(req_change.mutations, std::back_inserter(muts), [topo_req_schema] (const canonical_mutation& cm) {
                 return cm.to_mutation(topo_req_schema);
             });
-
-            target_type = event::schema_change::target_type::TABLET_KEYSPACE;
         } else {
             auto schema_mutations = service::prepare_keyspace_update_announcement(qp.db().real_database(), ks_md_update, ts);
             muts.insert(muts.begin(), schema_mutations.begin(), schema_mutations.end());

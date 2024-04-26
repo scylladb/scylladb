@@ -309,7 +309,8 @@ future<> grant_permissions(
         const service&,
         std::string_view role_name,
         permission_set,
-        const resource&);
+        const resource&,
+        ::service::mutations_collector&);
 
 ///
 /// Like \ref grant_permissions, but grants all applicable permissions on the resource.
@@ -319,8 +320,8 @@ future<> grant_permissions(
 /// \returns an exceptional future with \ref unsupported_authorization_operation if granting permissions is not
 /// supported.
 ///
-future<> grant_applicable_permissions(const service&, std::string_view role_name, const resource&);
-future<> grant_applicable_permissions(const service&, const authenticated_user&, const resource&);
+future<> grant_applicable_permissions(const service&, std::string_view role_name, const resource&, ::service::mutations_collector&);
+future<> grant_applicable_permissions(const service&, const authenticated_user&, const resource&, ::service::mutations_collector&);
 
 ///
 /// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
@@ -332,7 +333,8 @@ future<> revoke_permissions(
         const service&,
         std::string_view role_name,
         permission_set,
-        const resource&);
+        const resource&,
+        ::service::mutations_collector&);
 
 using recursive_permissions = bool_class<struct recursive_permissions_tag>;
 

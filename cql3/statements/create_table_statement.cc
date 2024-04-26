@@ -24,6 +24,7 @@
 #include "auth/service.hh"
 #include "schema/schema_builder.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "types/user.hh"
 #include "gms/feature_service.hh"
 #include "service/migration_manager.hh"
@@ -142,13 +143,14 @@ create_table_statement::prepare(data_dictionary::database db, cql_stats& stats) 
     abort();
 }
 
-future<> create_table_statement::grant_permissions_to_creator(const service::client_state& cs) const {
+future<> create_table_statement::grant_permissions_to_creator(const service::client_state& cs, service::mutations_collector& mc) const {
     auto resource = auth::make_data_resource(keyspace(), column_family());
     try {
         co_await auth::grant_applicable_permissions(
                 *cs.get_auth_service(),
                 *cs.user(),
-                resource);
+                resource,
+                mc);
     } catch (const auth::unsupported_authorization_operation&) {
         // Nothing.
     }

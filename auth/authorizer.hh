@@ -20,6 +20,7 @@
 
 #include "auth/permission.hh"
 #include "auth/resource.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "seastarx.hh"
 
 namespace auth {
@@ -81,14 +82,14 @@ public:
     ///
     /// \throws \ref unsupported_authorization_operation if granting permissions is not supported.
     ///
-    virtual future<> grant(std::string_view role_name, permission_set, const resource&) = 0;
+    virtual future<> grant(std::string_view role_name, permission_set, const resource&, ::service::mutations_collector&) = 0;
 
     ///
     /// Revoke a set of permissions from a role for a particular \ref resource.
     ///
     /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
     ///
-    virtual future<> revoke(std::string_view role_name, permission_set, const resource&) = 0;
+    virtual future<> revoke(std::string_view role_name, permission_set, const resource&, ::service::mutations_collector&) = 0;
 
     ///
     /// Query for all directly granted permissions.

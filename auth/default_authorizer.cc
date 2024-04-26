@@ -90,9 +90,10 @@ future<> default_authorizer::migrate_legacy_metadata() {
             return do_with(
                     row.get_as<sstring>("username"),
                     parse_resource(row.get_as<sstring>(RESOURCE_NAME)),
-                    [this, &row](const auto& username, const auto& r) {
+                    ::service::mutations_collector::unused(),
+                    [this, &row](const auto& username, const auto& r, auto& mc) {
                 const permission_set perms = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
-                return grant(username, perms, r);
+                return grant(username, perms, r, mc);
             });
         }).finally([results] {});
     }).then([] {
@@ -185,7 +186,8 @@ default_authorizer::modify(
         std::string_view role_name,
         permission_set set,
         const resource& resource,
-        std::string_view op) {
+        std::string_view op,
+        ::service::mutations_collector& mc) {
     const sstring query = format("UPDATE {}.{} SET {} = {} {} ? WHERE {} = ? AND {} = ?",
             get_auth_ks_name(_qp),
             PERMISSIONS_CF,
@@ -202,17 +204,17 @@ default_authorizer::modify(
                 {permissions::to_strings(set), sstring(role_name), resource.name()},
                 cql3::query_processor::cache_internal::no).discard_result();
     }
-    co_return co_await announce_mutations(_qp, _group0_client, query,
-        {permissions::to_strings(set), sstring(role_name), resource.name()}, &_as, ::service::raft_timeout{});
+    co_await collect_mutations(_qp, mc, query,
+            {permissions::to_strings(set), sstring(role_name), resource.name()});
 }
 
 
-future<> default_authorizer::grant(std::string_view role_name, permission_set set, const resource& resource) {
-    return modify(role_name, std::move(set), resource, "+");
+future<> default_authorizer::grant(std::string_view role_name, permission_set set, const resource& resource, ::service::mutations_collector& mc) {
+    return modify(role_name, std::move(set), resource, "+", mc);
 }
 
-future<> default_authorizer::revoke(std::string_view role_name, permission_set set, const resource& resource) {
-    return modify(role_name, std::move(set), resource, "-");
+future<> default_authorizer::revoke(std::string_view role_name, permission_set set, const resource& resource, ::service::mutations_collector& mc) {
+    return modify(role_name, std::move(set), resource, "-", mc);
 }
 
 future<std::vector<permission_details>> default_authorizer::list_all() const {

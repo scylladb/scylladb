@@ -20,13 +20,11 @@ std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::revoke_s
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::revoke_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
-    if (guard) {
-        release_guard(std::move(*guard));
-    }
     auto& auth_service = *state.get_client_state().get_auth_service();
-
     try {
-        co_await auth::revoke_permissions(auth_service, _role_name, _permissions, _resource);
+        service::mutations_collector mc{std::move(guard)};
+        co_await auth::revoke_permissions(auth_service, _role_name, _permissions, _resource, mc);
+        co_await auth::announce_mutations(auth_service, std::move(mc));
     } catch (const auth::nonexistant_role& e) {
         throw exceptions::invalid_request_exception(e.what());
     } catch (const auth::unsupported_authorization_operation& e) {

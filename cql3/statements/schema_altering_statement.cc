@@ -13,6 +13,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace cql3 {
 
@@ -34,7 +35,7 @@ bool schema_altering_statement::needs_guard(query_processor&, service::query_sta
     return true;
 }
 
-future<> schema_altering_statement::grant_permissions_to_creator(const service::client_state&) const {
+future<> schema_altering_statement::grant_permissions_to_creator(const service::client_state&, service::mutations_collector&) const {
     return make_ready_future<>();
 }
 
@@ -70,13 +71,15 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
             throw std::logic_error(format("Attempted to modify {} via internal query: such schema changes are not propagated and thus illegal", info));
         }
     }
-    auto result = co_await qp.execute_schema_statement(*this, state, options, std::move(guard));
+    service::mutations_collector mc{std::move(guard)};
+    auto result = co_await qp.execute_schema_statement(*this, state, options, mc);
     // We don't want to grant the permissions to the supposed creator even if the statement succeeded if it's an internal query
     // or if the query did not actually create the item, i.e. the query is bounced to another shard or it's a IF NOT EXISTS
     // query where the item already exists.
     if (!internal && result->is_schema_change()) {
-        co_await grant_permissions_to_creator(state.get_client_state());
+        co_await grant_permissions_to_creator(state.get_client_state(), mc);
     }
+    co_await qp.announce_schema_statement(*this, mc);
     co_return std::move(result);
 }
 

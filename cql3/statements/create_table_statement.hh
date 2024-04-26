@@ -74,7 +74,7 @@ public:
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
-    virtual future<> grant_permissions_to_creator(const service::client_state&) const override;
+    virtual future<> grant_permissions_to_creator(const service::client_state&, service::mutations_collector&) const override;
 
     schema_ptr get_cf_meta_data(const data_dictionary::database) const;
 

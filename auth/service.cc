@@ -524,29 +524,31 @@ future<> grant_permissions(
         const service& ser,
         std::string_view role_name,
         permission_set perms,
-        const resource& r) {
+        const resource& r,
+        ::service::mutations_collector& mc) {
     co_await validate_role_exists(ser, role_name);
-    co_await ser.underlying_authorizer().grant(role_name, perms, r);
+    co_await ser.underlying_authorizer().grant(role_name, perms, r, mc);
 }
 
-future<> grant_applicable_permissions(const service& ser, std::string_view role_name, const resource& r) {
-    return grant_permissions(ser, role_name, r.applicable_permissions(), r);
+future<> grant_applicable_permissions(const service& ser, std::string_view role_name, const resource& r, ::service::mutations_collector& mc) {
+    return grant_permissions(ser, role_name, r.applicable_permissions(), r, mc);
 }
-future<> grant_applicable_permissions(const service& ser, const authenticated_user& u, const resource& r) {
+
+future<> grant_applicable_permissions(const service& ser, const authenticated_user& u, const resource& r, ::service::mutations_collector& mc) {
     if (is_anonymous(u)) {
         return make_ready_future<>();
     }
-
-    return grant_applicable_permissions(ser, *u.name, r);
+    return grant_applicable_permissions(ser, *u.name, r, mc);
 }
 
 future<> revoke_permissions(
         const service& ser,
         std::string_view role_name,
         permission_set perms,
-        const resource& r) {
+        const resource& r,
+        ::service::mutations_collector& mc) {
     co_await validate_role_exists(ser, role_name);
-    co_await ser.underlying_authorizer().revoke(role_name, perms, r);
+    co_await ser.underlying_authorizer().revoke(role_name, perms, r, mc);
 }
 
 future<std::vector<permission_details>> list_filtered_permissions(

@@ -47,9 +47,9 @@ public:
 
     virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override;
 
-    virtual future<> grant(std::string_view, permission_set, const resource&) override;
+    virtual future<> grant(std::string_view, permission_set, const resource&, ::service::mutations_collector&) override;
 
-    virtual future<> revoke( std::string_view, permission_set, const resource&) override;
+    virtual future<> revoke( std::string_view, permission_set, const resource&, ::service::mutations_collector&) override;
 
     virtual future<std::vector<permission_details>> list_all() const override;
 
@@ -70,7 +70,7 @@ private:
 
     future<> migrate_legacy_metadata();
 
-    future<> modify(std::string_view, permission_set, const resource&, std::string_view);
+    future<> modify(std::string_view, permission_set, const resource&, std::string_view, ::service::mutations_collector&);
 };
 
 } /* namespace auth */

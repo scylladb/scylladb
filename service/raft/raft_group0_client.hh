@@ -230,6 +230,7 @@ public:
 
     // Gets timestamp which should be used when building mutations.
     api::timestamp_type write_timestamp() const;
+    utils::UUID new_group0_state_id() const;
 
     void add_mutation(mutation m);
     void add_mutations(std::vector<mutation> ms);
