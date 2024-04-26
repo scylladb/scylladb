@@ -29,8 +29,6 @@ namespace cql3 {
 namespace statements {
 
 const sstring cf_prop_defs::KW_COMMENT = "comment";
-const sstring cf_prop_defs::KW_READREPAIRCHANCE = "read_repair_chance";
-const sstring cf_prop_defs::KW_DCLOCALREADREPAIRCHANCE = "dclocal_read_repair_chance";
 const sstring cf_prop_defs::KW_GCGRACESECONDS = "gc_grace_seconds";
 const sstring cf_prop_defs::KW_PAXOSGRACESECONDS = "paxos_grace_seconds";
 const sstring cf_prop_defs::KW_MINCOMPACTIONTHRESHOLD = "min_threshold";
@@ -78,7 +76,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     static std::set<sstring> keywords({
-        KW_COMMENT, KW_READREPAIRCHANCE, KW_DCLOCALREADREPAIRCHANCE,
+        KW_COMMENT,
         KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
         KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
         KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_COMPACTION,
@@ -89,6 +87,8 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         sstring("index_interval"),
         sstring("replicate_on_write"),
         sstring("populate_io_cache_on_flush"),
+        sstring("read_repair_chance"),
+        sstring("dclocal_read_repair_chance"),
     });
 
     const auto& exts = db.extensions();
@@ -257,14 +257,6 @@ const db::per_partition_rate_limit_options* cf_prop_defs::get_per_partition_rate
 void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name) const {
     if (has_property(KW_COMMENT)) {
         builder.set_comment(get_string(KW_COMMENT, ""));
-    }
-
-    if (has_property(KW_READREPAIRCHANCE)) {
-        builder.set_read_repair_chance(get_double(KW_READREPAIRCHANCE, builder.get_read_repair_chance()));
-    }
-
-    if (has_property(KW_DCLOCALREADREPAIRCHANCE)) {
-        builder.set_dc_local_read_repair_chance(get_double(KW_DCLOCALREADREPAIRCHANCE, builder.get_dc_local_read_repair_chance()));
     }
 
     if (has_property(KW_GCGRACESECONDS)) {

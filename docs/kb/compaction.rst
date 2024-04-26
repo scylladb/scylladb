@@ -145,7 +145,7 @@ The primary motivation for TWCS is to separate data on disk by timestamp and to 
 * If the user mixes old data and new data in the traditional write path, the data is commingled in the MemTables and flushed into the same SSTable, where it will remain commingled.
 * If the user’s read requests for old data causes read repairs that pull the old data into the current MemTable. The data is commingled in the MemTables and flushed into the same SSTable, where it will remain commingled.
 
-While TWCS tries to minimize the impact of commingled data, users should attempt to avoid this behavior. Specifically, users should avoid queries that explicitly set the timestamp. It is recommended to run frequent repairs (which streams data in such a way that it does not become commingled), and disable background read repair by setting the table’s :ref:`read_repair_chance <create-table-general-options>` and :ref:`dclocal_read_repair_chance <create-table-general-options>` to ``0``.
+While TWCS tries to minimize the impact of commingled data, users should attempt to avoid this behavior. Specifically, users should avoid queries that explicitly set the timestamp. It is recommended to run frequent repairs (which streams data in such a way that it does not become commingled).
 
 Changing Compaction Strategies or Properties
 --------------------------------------------

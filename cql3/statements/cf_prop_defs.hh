@@ -36,8 +36,6 @@ namespace statements {
 class cf_prop_defs : public property_definitions {
 public:
     static const sstring KW_COMMENT;
-    static const sstring KW_READREPAIRCHANCE;
-    static const sstring KW_DCLOCALREADREPAIRCHANCE;
     static const sstring KW_GCGRACESECONDS;
     static const sstring KW_PAXOSGRACESECONDS;
     static const sstring KW_MINCOMPACTIONTHRESHOLD;

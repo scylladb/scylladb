@@ -312,6 +312,8 @@ schema_ptr tables() {
          {"compaction", map_type_impl::get_instance(utf8_type, utf8_type, false)},
          {"compression", map_type_impl::get_instance(utf8_type, utf8_type, false)},
          {"crc_check_chance", double_type},
+         // dclocal_read_repair_chance has been deprecated, preserved to be
+         // backward compatible
          {"dclocal_read_repair_chance", double_type},
          {"default_time_to_live", int32_type},
          {"extensions", map_type_impl::get_instance(utf8_type, bytes_type, false)},
@@ -321,6 +323,8 @@ schema_ptr tables() {
          {"max_index_interval", int32_type},
          {"memtable_flush_period_in_ms", int32_type},
          {"min_index_interval", int32_type},
+         // read_repair_chance has been deprecated, preserved to be backward
+         // compatible
          {"read_repair_chance", double_type},
          {"speculative_retry", utf8_type},
         },
@@ -566,6 +570,8 @@ schema_ptr views() {
          {"compaction", map_type_impl::get_instance(utf8_type, utf8_type, false)},
          {"compression", map_type_impl::get_instance(utf8_type, utf8_type, false)},
          {"crc_check_chance", double_type},
+         // dclocal_read_repair_chance has been deprecated, preserved to be
+         // backward compatible
          {"dclocal_read_repair_chance", double_type},
          {"default_time_to_live", int32_type},
          {"extensions", map_type_impl::get_instance(utf8_type, bytes_type, false)},
@@ -575,6 +581,8 @@ schema_ptr views() {
          {"max_index_interval", int32_type},
          {"memtable_flush_period_in_ms", int32_type},
          {"min_index_interval", int32_type},
+         // read_repair_chance has been deprecated, preserved to be backward
+         // compatible
          {"read_repair_chance", double_type},
          {"speculative_retry", utf8_type},
         },
@@ -2545,13 +2553,11 @@ std::vector<mutation> make_create_table_mutations(schema_ptr table, api::timesta
 static void add_table_params_to_mutations(mutation& m, const clustering_key& ckey, schema_ptr table, api::timestamp_type timestamp) {
     m.set_clustered_cell(ckey, "bloom_filter_fp_chance", table->bloom_filter_fp_chance(), timestamp);
     m.set_clustered_cell(ckey, "comment", table->comment(), timestamp);
-    m.set_clustered_cell(ckey, "dclocal_read_repair_chance", table->dc_local_read_repair_chance(), timestamp);
     m.set_clustered_cell(ckey, "default_time_to_live", gc_clock::as_int32(table->default_time_to_live()), timestamp);
     m.set_clustered_cell(ckey, "gc_grace_seconds", gc_clock::as_int32(table->gc_grace_seconds()), timestamp);
     m.set_clustered_cell(ckey, "max_index_interval", table->max_index_interval(), timestamp);
     m.set_clustered_cell(ckey, "memtable_flush_period_in_ms", table->memtable_flush_period(), timestamp);
     m.set_clustered_cell(ckey, "min_index_interval", table->min_index_interval(), timestamp);
-    m.set_clustered_cell(ckey, "read_repair_chance", table->read_repair_chance(), timestamp);
     m.set_clustered_cell(ckey, "speculative_retry", table->speculative_retry().to_sstring(), timestamp);
     m.set_clustered_cell(ckey, "crc_check_chance", table->crc_check_chance(), timestamp);
 
@@ -3058,10 +3064,6 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
         builder.set_compressor_params(cp);
     }
 
-    if (auto val = table_row.get<double>("dclocal_read_repair_chance")) {
-        builder.set_dc_local_read_repair_chance(*val);
-    }
-
     if (auto val = table_row.get<int32_t>("default_time_to_live")) {
         builder.set_default_time_to_live(gc_clock::duration(*val));
     }
@@ -3118,10 +3120,6 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
 
     if (auto val = table_row.get<int>("max_index_interval")) {
         builder.set_max_index_interval(*val);
-    }
-
-    if (auto val = table_row.get<double>("read_repair_chance")) {
-        builder.set_read_repair_chance(*val);
     }
 
     if (auto val = table_row.get<double>("crc_check_chance")) {
