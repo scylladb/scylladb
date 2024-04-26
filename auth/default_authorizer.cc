@@ -315,46 +315,42 @@ future<> default_authorizer::revoke_all(const resource& resource) {
         co_return co_await revoke_all_legacy(resource);
     }
     auto name = resource.name();
-    try {
-        auto gen = [this, name] (api::timestamp_type& t) -> mutations_generator {
-            const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
-                    ROLE_NAME,
+    auto gen = [this, name] (api::timestamp_type& t) -> mutations_generator {
+        const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
+                ROLE_NAME,
+                get_auth_ks_name(_qp),
+                PERMISSIONS_CF,
+                RESOURCE_NAME);
+        auto res = co_await _qp.execute_internal(
+                query,
+                db::consistency_level::LOCAL_ONE,
+                {name},
+                cql3::query_processor::cache_internal::no);
+        for (const auto& r : *res) {
+            const sstring query = format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
                     get_auth_ks_name(_qp),
                     PERMISSIONS_CF,
+                    ROLE_NAME,
                     RESOURCE_NAME);
-            auto res = co_await _qp.execute_internal(
+            auto muts = co_await _qp.get_mutations_internal(
                     query,
-                    db::consistency_level::LOCAL_ONE,
-                    {name},
-                    cql3::query_processor::cache_internal::no);
-            for (const auto& r : *res) {
-                const sstring query = format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
-                        get_auth_ks_name(_qp),
-                        PERMISSIONS_CF,
-                        ROLE_NAME,
-                        RESOURCE_NAME);
-                auto muts = co_await _qp.get_mutations_internal(
-                        query,
-                        internal_distributed_query_state(),
-                        t,
-                        {r.get_as<sstring>(ROLE_NAME), name});
-                if (muts.size() != 1) {
-                    on_internal_error(alogger,
-                        format("expecting single delete mutation, got {}", muts.size()));
-                }
-                co_yield std::move(muts[0]);
+                    internal_distributed_query_state(),
+                    t,
+                    {r.get_as<sstring>(ROLE_NAME), name});
+            if (muts.size() != 1) {
+                on_internal_error(alogger,
+                    format("expecting single delete mutation, got {}", muts.size()));
             }
-        };
-        const auto timeout = ::service::raft_timeout{};
-        co_await announce_mutations_with_batching(
-                _group0_client,
-                [this, timeout](abort_source* as) { return _group0_client.start_operation(as, timeout); },
-                std::move(gen),
-                &_as,
+            co_yield std::move(muts[0]);
+        }
+    };
+    const auto timeout = ::service::raft_timeout{};
+    co_await announce_mutations_with_batching(
+            _group0_client,
+            [this, timeout](abort_source* as) { return _group0_client.start_operation(as, timeout); },
+            std::move(gen),
+            &_as,
             timeout);
-    } catch (exceptions::request_execution_exception& e) {
-        alogger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", name, e);
-    }
 }
 
 const resource_set& default_authorizer::protected_resources() const {
