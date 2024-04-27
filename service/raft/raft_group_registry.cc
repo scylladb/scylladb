@@ -536,7 +536,7 @@ future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std:
 }
 
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
-    auto dst_id = raft::server_id{std::move(id)};
+    auto dst_id = raft::server_id{id};
     auto addr = _address_map.find(dst_id);
     if (!addr) {
         {
