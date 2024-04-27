@@ -8,13 +8,8 @@
 
 #include <seastar/core/app-template.hh>
 #include <seastar/core/thread.hh>
-#include <map>
-#include <vector>
-#include <random>
 #include <string>
-#include <iostream>
 #include <fmt/core.h>
-#include "utils/logalloc.hh"
 
 #include "utils/compact-radix-tree.hh"
 #include "radix_tree_printer.hh"

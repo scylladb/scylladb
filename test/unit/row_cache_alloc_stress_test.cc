@@ -12,7 +12,6 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/closeable.hh>
 
-#include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"
 #include "row_cache.hh"
 #include "log.hh"
