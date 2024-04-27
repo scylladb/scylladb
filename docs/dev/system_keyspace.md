@@ -33,6 +33,7 @@ CREATE TABLE system.large_partitions (
     partition_size bigint,
     partition_key text,
     range_tombstones bigint,
+    dead_rows bigint,
     rows bigint,
     compaction_time timestamp,
     PRIMARY KEY ((keyspace_name, table_name), sstable_name, partition_size, partition_key)
