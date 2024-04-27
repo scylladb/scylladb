@@ -24,6 +24,14 @@
 #include "types/tuple.hh"
 #include "dht/i_partitioner.hh"
 
+// Lua 5.4 added an extra parameter to lua_resume
+
+#if LUA_VERSION_NUM >= 504
+#    define LUA_504_PLUS(x...) x
+#else
+#    define LUA_504_PLUS(x...)
+#endif
+
 namespace {
 
 class gc_clock_time_point;
@@ -1289,7 +1297,7 @@ private:
         int ret = LUA_YIELD;
         int nresults = 0;
         while (ret == LUA_YIELD) {
-            ret = lua_resume(l, nullptr, nargs, &nresults);
+            ret = lua_resume(l, nullptr, nargs LUA_504_PLUS(, &nresults));
             if (ret == LUA_YIELD) {
                 if (nresults == 0) {
                     co_await coroutine::maybe_yield();
