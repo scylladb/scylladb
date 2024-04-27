@@ -12,6 +12,7 @@
 
 #include "db/view/view_builder.hh"
 
+#include "test/lib/eventually.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"

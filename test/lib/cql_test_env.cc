@@ -12,8 +12,6 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
 #include "replica/database_fwd.hh"
-#include "sstables/sstables.hh"
-#include <seastar/core/do_with.hh>
 #include "test/lib/cql_test_env.hh"
 #include "cdc/generation_service.hh"
 #include "cql3/functions/functions.hh"
@@ -29,7 +27,6 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/coroutine.hh>
-#include "utils/UUID_gen.hh"
 #include "service/migration_manager.hh"
 #include "service/tablet_allocator.hh"
 #include "compaction/compaction_manager.hh"
@@ -46,7 +43,6 @@
 #include "db/batchlog_manager.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/tmpdir.hh"
-#include "test/lib/test_services.hh"
 #include "test/lib/log.hh"
 #include "unit_test_service_levels_accessor.hh"
 #include "db/view/view_builder.hh"
