@@ -12,8 +12,6 @@
 
 #include <seastar/util/std-compat.hh>
 
-#include "utils/UUID.hh"
-
 namespace fs = std::filesystem;
 
 // Creates a new empty directory with arbitrary name, which will be removed

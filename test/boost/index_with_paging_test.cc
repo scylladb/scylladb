@@ -9,6 +9,7 @@
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/eventually.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
 #include "transport/messages/result_message.hh"

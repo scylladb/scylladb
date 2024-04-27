@@ -25,7 +25,6 @@
 #include "bytes.hh"
 #include "schema/schema.hh"
 #include "service/tablet_allocator.hh"
-#include "test/lib/eventually.hh"
 
 namespace replica {
 class database;

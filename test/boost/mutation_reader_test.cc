@@ -22,6 +22,7 @@
 #include "sstables/generation_type.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
+#include "test/lib/eventually.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/sstable_utils.hh"

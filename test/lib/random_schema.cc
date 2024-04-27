@@ -12,9 +12,9 @@
 
 #include "cql3/cql3_type.hh"
 #include "mutation/mutation.hh"
-#include "mutation/mutation_fragment.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/random_utils.hh"
 #include "types/list.hh"

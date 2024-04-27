@@ -20,6 +20,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/eventually.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include "db/config.hh"
 #include "types/set.hh"

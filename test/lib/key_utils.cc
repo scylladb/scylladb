@@ -9,7 +9,6 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/random_utils.hh"
-#include "test/lib/test_utils.hh"
 #include "dht/i_partitioner.hh"
 
 namespace tests {

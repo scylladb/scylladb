@@ -11,6 +11,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <fmt/ranges.h>
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/eventually.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/to_string.hh"
 #include "bytes.hh"
