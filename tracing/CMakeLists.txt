@@ -3,6 +3,7 @@ include(add_whole_archive)
 add_library(scylla_tracing STATIC)
 target_sources(scylla_tracing
   PRIVATE
+    table_helper.cc
     tracing.cc
     trace_keyspace_helper.cc
     trace_state.cc

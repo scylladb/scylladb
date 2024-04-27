@@ -114,7 +114,6 @@ target_sources(scylla-main
     schema_mutations.cc
     serializer.cc
     sstables_loader.cc
-    table_helper.cc
     tasks/task_manager.cc
     timeout_config.cc
     unimplemented.cc
