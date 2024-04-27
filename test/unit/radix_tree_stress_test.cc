@@ -9,10 +9,7 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/thread.hh>
 #include <map>
-#include <vector>
-#include <random>
 #include <string>
-#include <iostream>
 #include <fmt/core.h>
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>

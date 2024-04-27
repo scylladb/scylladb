@@ -8,10 +8,7 @@
 
 #include <seastar/core/app-template.hh>
 #include <seastar/core/thread.hh>
-#include <map>
-#include <iostream>
 #include <fmt/core.h>
-#include "utils/logalloc.hh"
 
 constexpr int TEST_NODE_SIZE = 7;
 constexpr int TEST_LINEAR_THRESHOLD = 19;
