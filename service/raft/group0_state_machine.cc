@@ -16,6 +16,7 @@
 #include "mutation/async_utils.hh"
 #include "seastar/core/abort_source.hh"
 #include "seastar/core/on_internal_error.hh"
+#include "seastar/coroutine/parallel_for_each.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "schema_mutations.hh"
 #include "frozen_schema.hh"
@@ -116,22 +117,25 @@ static bool should_flush_system_topology_after_applying(const mutation& mut, con
 }
 
 static future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms) {
-    std::vector<mutation> mutations;
+    std::vector<frozen_mutation_and_schema> mutations;
     mutations.reserve(cms.size());
     bool need_system_topology_flush = false;
     try {
         for (auto& cm : cms) {
             auto& tbl = proxy.local_db().find_column_family(cm.column_family_id());
-            auto mut = co_await to_mutation_gently(cm, tbl.schema());
+            auto& s = tbl.schema();
+            auto mut = co_await to_mutation_gently(cm, s);
             need_system_topology_flush = need_system_topology_flush || should_flush_system_topology_after_applying(mut, proxy.data_dictionary());
-            mutations.emplace_back(std::move(mut));
+            mutations.emplace_back(co_await freeze_gently(mut), s);
         }
     } catch (replica::no_such_column_family& e) {
         slogger.error("Error while applying mutations from {}: {}", from, e);
         throw std::runtime_error(::format("Error while applying mutations: {}", e));
     }
 
-    co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
+    co_await coroutine::parallel_for_each(mutations, [&] (const frozen_mutation_and_schema& x) {
+        return proxy.mutate_locally(x.s, x.fm, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+    });
     if (need_system_topology_flush) {
         slogger.trace("write_mutations_to_database: flushing {}.{}", db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
         co_await proxy.get_db().local().flush(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
