@@ -846,6 +846,7 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
         auto rs = co_await db::system_keyspace::query_mutations(db, NAME, table);
         auto s = db.local().find_schema(NAME, table);
         std::vector<canonical_mutation> results;
+        results.reserve(rs->partitions().size());
         for (auto&& p : rs->partitions()) {
             auto mut = co_await unfreeze_gently(p.mut(), s);
             auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
@@ -853,7 +854,7 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
                 continue;
             }
             mut = redact_columns_for_missing_features(std::move(mut), features);
-            results.emplace_back(mut);
+            results.emplace_back(co_await make_canonical_mutation_gently(mut));
         }
         co_return results;
     };
