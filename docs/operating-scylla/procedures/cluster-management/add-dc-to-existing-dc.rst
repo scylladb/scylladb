@@ -121,7 +121,7 @@ Add New DC
    * **seeds** - IP address of an existing node (or nodes).
    * **listen_address** - IP address that Scylla used to connect to the other Scylla nodes in the cluster.
    * **endpoint_snitch** - Set the selected snitch.
-   * **rpc_address** - Address for client connections (Thrift, CQL).
+   * **rpc_address** - Address for CQL client connections.
 
    The parameters ``seeds``, ``cluster_name`` and ``endpoint_snitch`` need to match the existing cluster.
 

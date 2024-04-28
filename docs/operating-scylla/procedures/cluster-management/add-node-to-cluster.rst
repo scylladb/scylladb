@@ -47,7 +47,7 @@ Procedure
 
     * **endpoint_snitch** - Specifies the selected snitch.
 
-    * **rpc_address** - Specifies the address for client connections (Thrift, CQL).
+    * **rpc_address** - Specifies the address for CQL client connections.
 
     * **seeds** - Specifies the IP address of an existing node in the cluster. The new node will use this IP to connect to the cluster and learn the cluster topology and state.
 

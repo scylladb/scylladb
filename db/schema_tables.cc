@@ -2813,7 +2813,6 @@ static void add_drop_column_to_mutations(schema_ptr table, const sstring& name, 
 static void make_update_columns_mutations(schema_ptr old_table,
         schema_ptr new_table,
         api::timestamp_type timestamp,
-        bool from_thrift,
         std::vector<mutation>& mutations) {
     mutation columns_mutation(columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
     mutation view_virtual_columns_mutation(view_virtual_columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
@@ -2826,9 +2825,6 @@ static void make_update_columns_mutations(schema_ptr old_table,
         // Thrift only knows about the REGULAR ColumnDefinition type, so don't consider other type
         // are being deleted just because they are not here.
         const column_definition& column = *old_table->v3().columns_by_name().at(name);
-        if (from_thrift && !column.is_regular()) {
-            continue;
-        }
         if (column.is_view_virtual()) {
             drop_column_from_schema_mutation(view_virtual_columns(), old_table, column.name_as_text(), timestamp, mutations);
         } else {
@@ -2870,13 +2866,12 @@ std::vector<mutation> make_update_table_mutations(replica::database& db,
     lw_shared_ptr<keyspace_metadata> keyspace,
     schema_ptr old_table,
     schema_ptr new_table,
-    api::timestamp_type timestamp,
-    bool from_thrift)
+    api::timestamp_type timestamp)
 {
     std::vector<mutation> mutations;
     add_table_or_view_to_schema_mutation(new_table, timestamp, false, mutations);
     make_update_indices_mutations(db, old_table, new_table, timestamp, mutations);
-    make_update_columns_mutations(std::move(old_table), std::move(new_table), timestamp, from_thrift, mutations);
+    make_update_columns_mutations(std::move(old_table), std::move(new_table), timestamp, mutations);
 
     warn(unimplemented::cause::TRIGGERS);
 #if 0
@@ -3561,7 +3556,7 @@ std::vector<mutation> make_update_view_mutations(lw_shared_ptr<keyspace_metadata
         add_table_or_view_to_schema_mutation(base, timestamp - 1, true, mutations);
     }
     add_table_or_view_to_schema_mutation(new_view, timestamp, false, mutations);
-    make_update_columns_mutations(old_view, new_view, timestamp, false, mutations);
+    make_update_columns_mutations(old_view, new_view, timestamp, mutations);
     return mutations;
 }
 

@@ -69,7 +69,7 @@ future<> modify_tags(service::migration_manager& mm, sstring ks, sstring cf,
         builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags));
 
         auto m = co_await service::prepare_column_family_update_announcement(mm.get_storage_proxy(),
-                builder.build(), false, std::vector<view_ptr>(), group0_guard.write_timestamp());
+                builder.build(), std::vector<view_ptr>(), group0_guard.write_timestamp());
 
         co_await mm.announce(std::move(m), std::move(group0_guard), format("Modify tags for {} table", cf));
     });

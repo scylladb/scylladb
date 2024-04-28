@@ -1690,28 +1690,6 @@
          "path":"/storage_service/rpc_server",
          "operations":[
             {
-               "method":"DELETE",
-               "summary":"Allows a user to disable thrift",
-               "type":"void",
-               "nickname":"stop_rpc_server",
-               "produces":[
-                  "application/json"
-               ],
-               "parameters":[
-               ]
-            },
-            {
-               "method":"POST",
-               "summary":"allows a user to re-enable thrift",
-               "type":"void",
-               "nickname":"start_rpc_server",
-               "produces":[
-                  "application/json"
-               ],
-               "parameters":[
-               ]
-            },
-            {
                "method":"GET",
                "summary":"Determine if thrift is running",
                "type":"boolean",
@@ -2070,7 +2048,7 @@
          "operations":[
             {
                "method":"POST",
-               "summary":"Enables/Disables tracing for the whole system. Only thrift requests can start tracing currently",
+               "summary":"Enables/Disables tracing for the whole system.",
                "type":"void",
                "nickname":"set_trace_probability",
                "produces":[

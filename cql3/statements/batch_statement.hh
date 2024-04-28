@@ -70,8 +70,7 @@ private:
     cql_stats& _stats;
 public:
     /**
-     * Creates a new BatchStatement from a list of statements and a
-     * Thrift consistency level.
+     * Creates a new BatchStatement from a list of statements
      *
      * @param type type of the batch
      * @param statements a list of UpdateStatements

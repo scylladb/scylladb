@@ -276,7 +276,7 @@ Implemented by `cluster_status_table` in `db/system_keyspace.cc`.
 ## system.protocol_servers
 
 The list of all the client-facing data-plane protocol servers and listen addresses (if running).
-Equivalent of the `nodetool statusbinary` plus the `Thrift active` and `Native Transport active` fields from `nodetool info`.
+Equivalent of the `nodetool statusbinary` plus the `Native Transport active` fields from `nodetool info`.
 
 TODO: include control-plane diagnostics-plane protocols here too.
 

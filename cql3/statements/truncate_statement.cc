@@ -84,9 +84,6 @@ future<> truncate_statement::check_access(query_processor& qp, const service::cl
 void truncate_statement::validate(query_processor&, const service::client_state& state) const
 {
     warn(unimplemented::cause::VALIDATION);
-#if 0
-    ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
-#endif
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>

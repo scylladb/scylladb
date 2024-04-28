@@ -42,12 +42,6 @@ public:
 protected:
     virtual user_type make_updated_type(data_dictionary::database db, user_type to_update) const = 0;
 private:
-    struct base_visitor {
-        virtual future<> operator()(view_ptr view) = 0;
-        virtual future<> operator()(user_type type) = 0;
-        virtual future<> operator()(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, std::optional<api::timestamp_type> ts_opt) = 0;
-    };
-
     future<std::vector<mutation>> prepare_announcement_mutations(service::storage_proxy& sp, api::timestamp_type) const;
 };
 

@@ -149,31 +149,25 @@ The CQL protocol support can be disabled altogether by setting the
 
 These option names were chosen for backward-compatibility with Cassandra
 configuration files: they refer to CQL as the "native transport", to
-contrast with the older Thrift protocol (described below) which wasn't
-native to Cassandra.
+contrast with the older Thrift protocol which wasn't
+native to Cassandra. The thrift protocol was once supported by Scylla,
+but the support of this protocol was later deprecated and removed.
 
 There is also a `rpc_address` configuration option to set the IP address
 (and therefore network interface) on which Scylla should listen for the
 CQL protocol. This address defaults to `localhost`, but in any setup except
-a one-node test, should be overridden. Note that the same option `rpc_address`
-applies to both CQL and Thrift protocols.
-
-TODO: there is also `rpc_interface` option... Which wins? What's the default?
+a one-node test, should be overridden.
 
 ## Thrift client protocol
 
 The Apache Thrift protocol was early Cassandra's client protocol, until
 it was superseded in Cassandra 1.2 with the binary CQL protocol. Thrift
 was still nominally supported by both Cassandra and Scylla for many years,
-but was recently dropped in Cassandra (version 4.0) and is likely to be
-dropped by Scylla in the future as well, so it is not recommended for new
-applications.
+but was recently dropped in Cassandra (version 4.0) and was also
+dropped by Scylla in version 6.0 as well.
 
-By default, Scylla does not enable the Thrift server. In order to use it,
-it must be explicitly enabled by setting the `start_rpc` configuration option
-to true.
-
-When Thrift is enabled, by default scylla listens to the Thrift protocol on port 9160,
+When Thrift was enabled by Scylla versions earlier than 6.0, by default scylla
+listens to the Thrift protocol on port 9160,
 which can be configured via the `rpc_port` configuration option. Again, this confusing
 name was used for backward-compatibility with Cassandra's configuration files.
 Cassandra used the term "rpc" because Apache Thrift is a remote procedure
@@ -181,14 +175,11 @@ call (RPC) framework. In Scylla, this name is especially confusing, because
 as mentioned above, Scylla's internal communication protocol is based on
 Seastar's RPC, which has nothing to do with the "`rpc_port`" described here.
 
-There is also a `rpc_address` configuration option to set the IP address
-(and therefore network interface) on which Scylla should listen for the
-Thrift protocol. This address defaults to `localhost`, but in any
-setup except a one-node test, should be overridden. Note that the same
-option `rpc_address` applies to both CQL and Thrift protocols.
+This option is now marked `Unused`, and still stays with us for one more
+release, because scylla need to be able to consume existing configurations,
+and to work with toolings which might be still setting this option.
 
 TODO: there is also `rpc_interface` option... Which wins? What's the default?
-TODO: is there an SSL version of Thrift?
 
 ## DynamoDB client protocol
 
@@ -224,8 +215,8 @@ and/or `redis_ssl_port` configuration option.
 The traditional port used for Redis is 6379. Regular Redis does not
 support SSL, so there is no traditional choice of port for it.
 
-The same `rpc_address` configuration option used by the CQL and Thrift
-protocols to set the IP address (and therefore network interface) on which
+The same `rpc_address` configuration option used by the CQL
+protocol to set the IP address (and therefore network interface) on which
 Scylla should listen also applies to the Redis protocol.
 
 See [redis.md](redis.md) for more information about Scylla's

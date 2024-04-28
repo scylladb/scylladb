@@ -67,7 +67,7 @@
                "parameters":[
                   {
                      "name":"pluginid",
-                     "description":"The plugin ID, describe the component the metric belongs to. Examples are cache, thrift, etc'. Regex are supported.The plugin ID, describe the component the metric belong to. Examples are: cache, thrift etc'. regex are supported",
+                     "description":"The plugin ID, describe the component the metric belongs to. Examples are cache and alternator, etc'. Regex are supported.",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",

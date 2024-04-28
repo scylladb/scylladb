@@ -215,7 +215,7 @@ std::vector<mutation> prepare_new_keyspace_announcement(replica::database& db, l
 // The timestamp parameter can be used to ensure that all nodes update their internal tables' schemas
 // with identical timestamps, which can prevent an undeeded schema exchange
 future<std::vector<mutation>> prepare_column_family_update_announcement(storage_proxy& sp,
-        schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, api::timestamp_type ts);
+        schema_ptr cfm, std::vector<view_ptr> view_updates, api::timestamp_type ts);
 
 future<std::vector<mutation>> prepare_new_column_family_announcement(storage_proxy& sp, schema_ptr cfm, api::timestamp_type timestamp);
 // The ksm parameter can describe a keyspace that hasn't been created yet.

@@ -88,7 +88,7 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
                 auto res = co_await service::prepare_view_update_announcement(sp, view_ptr(cfm.build()), ts);
                 std::move(res.begin(), res.end(), std::back_inserter(m));
             } else {
-                auto res = co_await service::prepare_column_family_update_announcement(sp, cfm.build(), false, {}, ts);
+                auto res = co_await service::prepare_column_family_update_announcement(sp, cfm.build(), {}, ts);
                 std::move(res.begin(), res.end(), std::back_inserter(m));
             }
         }

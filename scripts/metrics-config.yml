@@ -33,7 +33,6 @@
     _long_description_prefix: ["total number of write requests", "number of write requests that failed", "background_replica_writes_failed", "number of write operations in a read repair context"]
     _category: "storage_proxy_coordinator"
   allowmismatch: true
-"thrift/server.cc": skip
 "tracing/tracing.cc":
   params:
     "max_pending_trace_records + write_event_records_threshold": "max_pending_trace_records + write_event_records_threshold"

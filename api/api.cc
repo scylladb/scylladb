@@ -100,8 +100,8 @@ future<> unset_transport_controller(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_transport_controller(ctx, r); });
 }
 
-future<> set_rpc_controller(http_context& ctx, thrift_controller& ctl) {
-    return ctx.http_server.set_routes([&ctx, &ctl] (routes& r) { set_rpc_controller(ctx, r, ctl); });
+future<> set_rpc_controller(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { set_rpc_controller(ctx, r); });
 }
 
 future<> unset_rpc_controller(http_context& ctx) {

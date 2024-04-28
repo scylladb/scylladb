@@ -67,7 +67,7 @@ The following addresses can be configured in scylla.yaml:
    * - listen_address
      - Address Scylla listens for connections from other nodes. See storage_port and ssl_storage_ports.
    * - rpc_address
-     - Address on which Scylla is going to expect Thrift and CQL client connections. See rpc_port, native_transport_port and native_transport_port_ssl in the :ref:`Networking <cqlsh-networking>` parameters.
+     - Address on which Scylla is going to expect CQL client connections. See rpc_port, native_transport_port and native_transport_port_ssl in the :ref:`Networking <cqlsh-networking>` parameters.
    * - broadcast_address
      - Address that is broadcasted to tell other Scylla nodes to connect to. Related to listen_address above.
    * - broadcast_rpc_address
@@ -167,7 +167,7 @@ Do not set any IP address to :code:`0.0.0.0`.
      - Address Scylla listens for connections from other nodes. See storage_port and ssl_storage_ports.
      - No default
    * - rpc_address (required)
-     - Address on which Scylla is going to expect Thrift and CQL clients connections. See rpc_port, native_transport_port and native_transport_port_ssl in the :ref:`Networking <cqlsh-networking>` parameters.
+     - Address on which Scylla is going to expect CQL clients connections. See rpc_port, native_transport_port and native_transport_port_ssl in the :ref:`Networking <cqlsh-networking>` parameters.
      - No default
    * - broadcast_address
      - Address that is broadcasted to tell other Scylla nodes to connect to. Related to listen_address above.

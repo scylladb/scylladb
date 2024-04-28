@@ -34,11 +34,6 @@ std::ostream& operator<<(std::ostream& os, const result_message::set_keyspace& m
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const result_message::prepared::thrift& msg) {
-    fmt::print(os, "{{result_message::prepared::thrift {:d}}}", msg.get_id());
-    return os;
-}
-
 std::ostream& operator<<(std::ostream& os, const result_message::prepared::cql& msg) {
     fmt::print(os, "{{result_message::prepared::cql {}}}", to_hex(msg.get_id()));
     return os;
@@ -58,7 +53,6 @@ std::ostream& operator<<(std::ostream& os, const result_message& msg) {
         void visit(const result_message::void_message& m) override { _os << m; };
         void visit(const result_message::set_keyspace& m) override { _os << m; };
         void visit(const result_message::prepared::cql& m) override { _os << m; };
-        void visit(const result_message::prepared::thrift& m) override { _os << m; };
         void visit(const result_message::schema_change& m) override { _os << m; };
         void visit(const result_message::rows& m) override { fmt::print(_os, "{}", m); };
         void visit(const result_message::bounce_to_shard& m) override { _os << m; };

@@ -188,8 +188,6 @@ To display the log classes (output changes with each version so your display may
    tags
    task_manager
    testlog
-   thrift
-   thrift_controller
    token_group_based_splitting_mutation_writer
    token_metadata
    topology

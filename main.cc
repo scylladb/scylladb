@@ -82,7 +82,6 @@
 #include "sstables_loader.hh"
 #include "cql3/cql_config.hh"
 #include "transport/controller.hh"
-#include "thrift/controller.hh"
 #include "service/memory_limiter.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/schema_tables.hh"
@@ -2007,7 +2006,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Register controllers after drain_on_shutdown() below, so that even on start
             // failure drain is called and stops controllers
             cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
-            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss, proxy, dbcfg.statement_scheduling_group);
             alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, *cfg, dbcfg.statement_scheduling_group);
             redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
 
@@ -2022,8 +2020,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_transport_controller(ctx).get();
             });
 
-            ss.local().register_protocol_server(thrift_ctl, cfg->start_rpc()).get();
-            api::set_rpc_controller(ctx, thrift_ctl).get();
+            api::set_rpc_controller(ctx).get();
             auto stop_rpc_controller = defer_verbose_shutdown("rpc controller API", [&ctx] {
                 api::unset_rpc_controller(ctx).get();
             });

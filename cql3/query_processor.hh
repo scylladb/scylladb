@@ -139,10 +139,6 @@ public:
             std::string_view query_string,
             std::string_view keyspace);
 
-    static prepared_cache_key_type compute_thrift_id(
-            const std::string_view& query_string,
-            const sstring& keyspace);
-
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
@@ -404,7 +400,7 @@ public:
     prepare(sstring query_string, service::query_state& query_state);
 
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-    prepare(sstring query_string, const service::client_state& client_state, bool for_thrift);
+    prepare(sstring query_string, const service::client_state& client_state);
 
     future<> stop();
 
@@ -444,11 +440,6 @@ public:
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_schema_statement(const statements::schema_altering_statement&, service::query_state& state, const query_options& options, service::group0_batch& mc);
     future<> announce_schema_statement(const statements::schema_altering_statement&, service::group0_batch& mc);
-
-    future<std::string>
-    execute_thrift_schema_command(
-            std::function<future<std::vector<mutation>>(data_dictionary::database, api::timestamp_type)> prepare_schema_mutations,
-            std::string_view description);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
             const std::string_view& query,
@@ -520,10 +511,10 @@ private:
         ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options);
 
     ///
-    /// \tparam ResultMsgType type of the returned result message (CQL or Thrift)
+    /// \tparam ResultMsgType type of the returned result message (CQL)
     /// \tparam PreparedKeyGenerator a function that generates the prepared statement cache key for given query and
     ///         keyspace
-    /// \tparam IdGetter a function that returns the corresponding prepared statement ID (CQL or Thrift) for a given
+    /// \tparam IdGetter a function that returns the corresponding prepared statement ID (CQL) for a given
     ////        prepared statement cache key
     /// \param query_string
     /// \param client_state

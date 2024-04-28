@@ -158,10 +158,10 @@ partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 # commitlog_directory: /var/lib/cassandra/commitlog
 
 # policy for data disk failures:
-# die: shut down gossip and Thrift and kill the JVM for any fs errors or
+# die: shut down gossip and kill the JVM for any fs errors or
 #      single-sstable errors, so the node can be replaced.
-# stop_paranoid: shut down gossip and Thrift even for single-sstable errors.
-# stop: shut down gossip and Thrift, leaving the node effectively dead, but
+# stop_paranoid: shut down gossip even for single-sstable errors.
+# stop: shut down gossip, leaving the node effectively dead, but
 #       can still be inspected via JMX.
 # best_effort: stop using the failed disk and respond to requests based on
 #              remaining available sstables.  This means you WILL see obsolete
@@ -170,8 +170,8 @@ partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 disk_failure_policy: stop
 
 # policy for commit disk failures:
-# die: shut down gossip and Thrift and kill the JVM, so the node can be replaced.
-# stop: shut down gossip and Thrift, leaving the node effectively dead, but
+# die: shut down gossip and kill the JVM, so the node can be replaced.
+# stop: shut down gossip, leaving the node effectively dead, but
 #       can still be inspected via JMX.
 # stop_commit: shutdown the commit log, letting writes collect but
 #              continuing to service reads, as in pre-2.0.5 Cassandra
@@ -441,10 +441,7 @@ native_transport_port: 9042
 # be rejected as invalid. The default is 256MB.
 # native_transport_max_frame_size_in_mb: 256
 
-# Whether to start the thrift rpc server.
-start_rpc: true
-
-# The address or interface to bind the Thrift RPC service and native transport
+# The address or interface to bind the native transport
 # server to.
 #
 # Set rpc_address OR rpc_interface, not both. Interfaces must correspond
@@ -458,9 +455,6 @@ start_rpc: true
 rpc_address: localhost
 # rpc_interface: eth1
 
-# port for Thrift to listen for clients on
-rpc_port: 9160
-
 # RPC address to broadcast to drivers and other Cassandra nodes. This cannot
 # be set to 0.0.0.0. If left blank, this will be set to the value of
 # rpc_address. If rpc_address is set to 0.0.0.0, broadcast_rpc_address must
@@ -469,43 +463,6 @@ rpc_port: 9160
 
 # enable or disable keepalive on rpc/native connections
 rpc_keepalive: true
-
-# Cassandra provides two out-of-the-box options for the RPC Server:
-#
-# sync  -> One thread per thrift connection. For a very large number of clients, memory
-#          will be your limiting factor. On a 64 bit JVM, 180KB is the minimum stack size
-#          per thread, and that will correspond to your use of virtual memory (but physical memory
-#          may be limited depending on use of stack space).
-#
-# hsha  -> Stands for "half synchronous, half asynchronous." All thrift clients are handled
-#          asynchronously using a small number of threads that does not vary with the amount
-#          of thrift clients (and thus scales well to many clients). The rpc requests are still
-#          synchronous (one thread per active request). If hsha is selected then it is essential
-#          that rpc_max_threads is changed from the default value of unlimited.
-#
-# The default is sync because on Windows hsha is about 30% slower.  On Linux,
-# sync/hsha performance is about the same, with hsha of course using less memory.
-#
-# Alternatively,  can provide your own RPC server by providing the fully-qualified class name
-# of an o.a.c.t.TServerFactory that can create an instance of it.
-rpc_server_type: sync
-
-# Uncomment rpc_min|max_thread to set request pool size limits.
-#
-# Regardless of your choice of RPC server (see above), the number of maximum requests in the
-# RPC thread pool dictates how many concurrent requests are possible (but if you are using the sync
-# RPC server, it also dictates the number of clients that can be connected at all).
-#
-# The default is unlimited and thus provides no protection against clients overwhelming the server. You are
-# encouraged to set a maximum that makes sense for you in production, but do keep in mind that
-# rpc_max_threads represents the maximum number of client requests this server may execute concurrently.
-#
-# rpc_min_threads: 16
-# rpc_max_threads: 2048
-
-# uncomment to set socket buffer sizes on rpc connections
-# rpc_send_buff_size_in_bytes:
-# rpc_recv_buff_size_in_bytes:
 
 # Uncomment to set socket buffer size for internode communication
 # Note that when setting this, the buffer size is limited by net.core.wmem_max
@@ -518,9 +475,6 @@ rpc_server_type: sync
 # and: man tcp
 # internode_send_buff_size_in_bytes:
 # internode_recv_buff_size_in_bytes:
-
-# Frame size for thrift (maximum message length).
-thrift_framed_transport_size_in_mb: 15
 
 # Set to true to have Cassandra create a hard link to each sstable
 # flushed or streamed locally in a backups/ subdirectory of the

@@ -22,8 +22,6 @@ Port    Description                                   Protocol
 ------  --------------------------------------------  --------
 9100    node_exporter (Optionally)                    TCP
 ------  --------------------------------------------  --------
-9160    Scylla client port (Thrift)                   TCP
-------  --------------------------------------------  --------
 19042   Native shard-aware transport port             TCP
 ------  --------------------------------------------  --------
 19142   Native shard-aware transport port  (ssl)         TCP

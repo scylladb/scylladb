@@ -63,7 +63,7 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
             auto group0_guard = mm.start_group0_operation().get();
             auto ts = group0_guard.write_timestamp();
             mm.announce(service::prepare_column_family_update_announcement(mm.get_storage_proxy(),
-                    new_schema, false, std::vector<view_ptr>(), ts).get(), std::move(group0_guard), "").get();
+                    new_schema, std::vector<view_ptr>(), ts).get(), std::move(group0_guard), "").get();
 
             BOOST_REQUIRE_NE(e.db().local().find_schema(old_schema->id())->version(), old_table_version);
             BOOST_REQUIRE_NE(e.db().local().get_version(), old_node_version);
@@ -100,7 +100,7 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
             auto group0_guard = mm.start_group0_operation().get();
             auto ts = group0_guard.write_timestamp();
             mm.announce(service::prepare_column_family_update_announcement(mm.get_storage_proxy(),
-                    new_schema, false, std::vector<view_ptr>(), ts).get(), std::move(group0_guard), "").get();
+                    new_schema, std::vector<view_ptr>(), ts).get(), std::move(group0_guard), "").get();
 
             s = e.local_db().find_schema(old_schema->id());
             BOOST_REQUIRE_NE(*old_schema, *s);
@@ -198,7 +198,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
                 auto group0_guard = mm.start_group0_operation().get();
                 auto&& keyspace = e.db().local().find_keyspace(s0->ks_name()).metadata();
                 auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s0, s2,
-                        group0_guard.write_timestamp(), false);
+                        group0_guard.write_timestamp());
                 mm.announce(std::move(muts), std::move(group0_guard), "").get();
             }
 
@@ -364,7 +364,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
             {
                 auto group0_guard = mm.start_group0_operation().get();
                 auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s1, s2,
-                    group0_guard.write_timestamp(), false);
+                    group0_guard.write_timestamp());
                 mm.announce(std::move(muts), std::move(group0_guard), "").get();
             }
 
@@ -382,7 +382,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
 
                 auto group0_guard = mm.start_group0_operation().get();
                 auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s3, s4,
-                    group0_guard.write_timestamp(), false);
+                    group0_guard.write_timestamp());
                 mm.announce(std::move(muts), std::move(group0_guard), "").get();
             }
 

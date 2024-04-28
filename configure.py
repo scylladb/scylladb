@@ -203,18 +203,6 @@ class Source(object):
     def endswith(self, end):
         return self.source.endswith(end)
 
-class Thrift(Source):
-    def __init__(self, source, service):
-        Source.__init__(self, source, '.h', '.cpp')
-        self.service = service
-
-    def generated(self, gen_dir):
-        basename = os.path.splitext(os.path.basename(self.source))[0]
-        files = [basename + '_' + ext
-                 for ext in ['types.cpp', 'types.h', 'constants.cpp', 'constants.h']]
-        files += [self.service + ext
-                  for ext in ['.cpp', '.h']]
-        return [os.path.join(gen_dir, file) for file in files]
 
 def default_target_arch():
     if platform.machine() in ['i386', 'i686', 'x86_64']:
@@ -368,18 +356,6 @@ def check_for_lz4(cxx, cflags):
         '''), flags=cflags.split()):
         print('Installed lz4-devel is too old. Please upgrade it to r129 / v1.73 and up')
         sys.exit(1)
-
-
-def thrift_uses_boost_share_ptr():
-    # thrift version detection, see #4538
-    proc_res = subprocess.run(["thrift", "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    proc_res_output = proc_res.stdout.decode("utf-8")
-    if proc_res.returncode != 0 and not re.search(r'^Thrift version', proc_res_output):
-        raise Exception("Thrift compiler must be missing: {}".format(proc_res_output))
-
-    thrift_version = proc_res_output.split(" ")[-1]
-    thrift_boost_versions = ["0.{}.".format(n) for n in range(1, 11)]
-    return any(filter(thrift_version.startswith, thrift_boost_versions))
 
 
 def find_ninja():
@@ -742,8 +718,6 @@ arg_parser.add_argument('--optimization-level', action='append', dest='mode_o_le
                         help=f'Override default compiler optimization level for mode (defaults: {" ".join([x+"="+modes[x]["optimization-level"] for x in modes])})')
 arg_parser.add_argument('--static-stdc++', dest='staticcxx', action='store_true',
                         help='Link libgcc and libstdc++ statically')
-arg_parser.add_argument('--static-thrift', dest='staticthrift', action='store_true',
-                        help='Link libthrift statically')
 arg_parser.add_argument('--static-boost', dest='staticboost', action='store_true',
                         help='Link boost statically')
 arg_parser.add_argument('--static-yaml-cpp', dest='staticyamlcpp', action='store_true',
@@ -982,10 +956,6 @@ scylla_core = (['message/messaging_service.cc',
                 'cql3/ut_name.cc',
                 'cql3/role_name.cc',
                 'data_dictionary/data_dictionary.cc',
-                'thrift/handler.cc',
-                'thrift/server.cc',
-                'thrift/controller.cc',
-                'thrift/thrift_validation.cc',
                 'utils/runtime.cc',
                 'utils/murmur_hash.cc',
                 'utils/uuid.cc',
@@ -1203,7 +1173,7 @@ scylla_core = (['message/messaging_service.cc',
                 'service/topology_mutation.cc',
                 'service/topology_coordinator.cc',
                 'node_ops/node_ops_ctl.cc'
-                ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
+                ] + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
                )
 
@@ -1846,9 +1816,6 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
 if not args.staticboost:
     user_cflags += ' -DBOOST_ALL_DYN_LINK'
 
-if thrift_uses_boost_share_ptr():
-    user_cflags += ' -DTHRIFT_USES_BOOST'
-
 for pkg in pkgs:
     user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
@@ -2032,10 +1999,6 @@ def write_build_file(f,
             rule ar.{mode}
               command = rm -f $out; ar cr $out $in; ranlib $out
               description = AR $out
-            rule thrift.{mode}
-                command = thrift -gen cpp:cob_style -out $builddir/{mode}/gen $in
-                description = THRIFT $in
-                restat = 1
             rule antlr3.{mode}
                 # We replace many local `ExceptionBaseType* ex` variables with a single function-scope one.
                 # Because we add such a variable to every function, and because `ExceptionBaseType` is not a global
@@ -2079,7 +2042,6 @@ def write_build_file(f,
         compiles = {}
         swaggers = set()
         serializers = {}
-        thrifts = set()
         ragels = {}
         antlr3_grammars = set()
         rust_headers = {}
@@ -2095,12 +2057,8 @@ def write_build_file(f,
                     for src in srcs
                     if src.endswith('.cc')]
             objs.append('$builddir/../utils/arch/powerpc/crc32-vpmsum/crc32.S')
-            has_thrift = False
             has_rust = False
             for dep in deps[binary]:
-                if isinstance(dep, Thrift):
-                    has_thrift = True
-                    objs += dep.objects('$builddir/' + mode + '/gen')
                 if isinstance(dep, Antlr3Grammar):
                     objs += dep.objects(f'$builddir/{mode}/gen')
                 if isinstance(dep, Json2Code):
@@ -2113,9 +2071,6 @@ def write_build_file(f,
             if has_rust:
                 objs.append(f'$builddir/{mode}/rust-{mode}/librust_combined.a')
             local_libs = f'$seastar_libs_{mode} $libs'
-            if has_thrift:
-                local_libs += ' ' + maybe_static(args.staticthrift, '-lthrift')
-                local_libs += ' ' + maybe_static(args.staticboost, '-lboost_system')
             objs.extend([f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs])
             if binary in tests:
                 if binary in pure_boost_tests:
@@ -2153,8 +2108,6 @@ def write_build_file(f,
                 elif src.endswith('.rl'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
                     ragels[hh] = src
-                elif src.endswith('.thrift'):
-                    thrifts.add(src)
                 elif src.endswith('.g'):
                     antlr3_grammars.add(src)
                 elif src.endswith('.rs'):
@@ -2204,8 +2157,6 @@ def write_build_file(f,
 
         gen_dir = '$builddir/{}/gen'.format(mode)
         gen_headers = []
-        for th in thrifts:
-            gen_headers += th.headers('$builddir/{}/gen'.format(mode))
         for g in antlr3_grammars:
             gen_headers += g.headers('$builddir/{}/gen'.format(mode))
         for g in swaggers:
@@ -2244,12 +2195,6 @@ def write_build_file(f,
         f.write('build {}: cxxbridge_header\n'.format('$builddir/{}/gen/rust/cxx.h'.format(mode)))
         librust = '$builddir/{}/rust-{}/librust_combined'.format(mode, mode)
         f.write('build {}.a: rust_lib.{} rust/Cargo.lock\n  depfile={}.d\n'.format(librust, mode, librust))
-        for thrift in thrifts:
-            outs = ' '.join(thrift.generated('$builddir/{}/gen'.format(mode)))
-            f.write('build {}: thrift.{} {}\n'.format(outs, mode, thrift.source))
-            for cc in thrift.sources('$builddir/{}/gen'.format(mode)):
-                obj = cc.replace('.cpp', '.o')
-                f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
         for grammar in antlr3_grammars:
             outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: antlr3.{} {}\n  stem = {}\n'.format(outs, mode, grammar.source,

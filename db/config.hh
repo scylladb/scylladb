@@ -293,11 +293,6 @@ public:
     named_value<uint16_t> rpc_port;
     named_value<bool> start_rpc;
     named_value<bool> rpc_keepalive;
-    named_value<uint32_t> rpc_max_threads;
-    named_value<uint32_t> rpc_min_threads;
-    named_value<uint32_t> rpc_recv_buff_size_in_bytes;
-    named_value<uint32_t> rpc_send_buff_size_in_bytes;
-    named_value<sstring> rpc_server_type;
     named_value<bool> cache_hit_rate_read_balancing;
     named_value<double> dynamic_snitch_badness_threshold;
     named_value<uint32_t> dynamic_snitch_reset_interval_in_ms;
@@ -311,8 +306,6 @@ public:
     named_value<sstring> request_scheduler;
     named_value<sstring> request_scheduler_id;
     named_value<string_map> request_scheduler_options;
-    named_value<uint32_t> thrift_framed_transport_size_in_mb;
-    named_value<uint32_t> thrift_max_message_length_in_mb;
     named_value<sstring> authenticator;
     named_value<sstring> internode_authenticator;
     named_value<sstring> authorizer;

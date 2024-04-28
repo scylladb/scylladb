@@ -18,7 +18,6 @@
 #include <seastar/core/on_internal_error.hh>
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
-#include "thrift/server.hh"
 #include "cql3/query_processor.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
@@ -1552,7 +1551,7 @@ future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_
                             sysinfo.cluster_name,
                             version::release(),
                             cql3::query_processor::CQL_VERSION,
-                            ::cassandra::thrift_version,
+                            sstring("20.1.0"),  // thrift version. to be backward compatible
                             to_sstring(unsigned(cql_serialization_format::latest().protocol_version())),
                             location.dc,
                             location.rack,

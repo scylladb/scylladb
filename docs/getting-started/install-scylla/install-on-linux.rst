@@ -164,7 +164,7 @@ Configure and Run ScyllaDB
    * ``seeds`` - The IP address of the first node. Other nodes will use it as the first contact 
      point to discover the cluster topology when joining the cluster.
    * ``listen_address`` - The IP address that ScyllaDB uses to connect to other nodes in the cluster.
-   * ``rpc_address`` - The IP address of the interface for client connections (Thrift, CQL).
+   * ``rpc_address`` - The IP address of the interface for CQL client connections.
 
 #. Run the ``scylla_setup`` script to tune the system settings and determine the optimal configuration.
 

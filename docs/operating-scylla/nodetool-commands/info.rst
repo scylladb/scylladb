@@ -17,7 +17,7 @@ Example output:
 
     ID                     : 2110829b-47f2-4a6b-b87e-a81bc3b5cb31
     Gossip active          : true
-    Thrift active          : true
+    Thrift active          : false
     Native Transport active: true
     Load                   : 294.44 MB
     Generation No          : 1474434958

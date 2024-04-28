@@ -18,7 +18,7 @@ class updateable_timeout_config;
 
 /// timeout_config represents a snapshot of the options stored in it when
 /// an instance of this class is created. so far this class is only used by
-/// client_state and thrift_handler. so either these classes are obliged to
+/// client_state. so either these classes are obliged to
 /// update it by themselves, or they are fine with using the maybe-updated
 /// options in the lifecycle of a client / connection even if some of these
 /// options are changed whtn the client / connection is still alive.

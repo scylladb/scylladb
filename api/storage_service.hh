@@ -14,7 +14,6 @@
 #include "db/data_listeners.hh"
 
 namespace cql_transport { class controller; }
-class thrift_controller;
 namespace db {
 class snapshot_ctl;
 namespace view {
@@ -80,7 +79,7 @@ void set_repair(http_context& ctx, httpd::routes& r, sharded<repair_service>& re
 void unset_repair(http_context& ctx, httpd::routes& r);
 void set_transport_controller(http_context& ctx, httpd::routes& r, cql_transport::controller& ctl);
 void unset_transport_controller(http_context& ctx, httpd::routes& r);
-void set_rpc_controller(http_context& ctx, httpd::routes& r, thrift_controller& ctl);
+void set_rpc_controller(http_context& ctx, httpd::routes& r);
 void unset_rpc_controller(http_context& ctx, httpd::routes& r);
 void set_snapshot(http_context& ctx, httpd::routes& r, sharded<db::snapshot_ctl>& snap_ctl);
 void unset_snapshot(http_context& ctx, httpd::routes& r);
