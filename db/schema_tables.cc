@@ -775,18 +775,18 @@ schema_ptr scylla_table_schema_history() {
 
 static
 mutation
-redact_columns_for_missing_features(mutation m, schema_features features) {
+redact_columns_for_missing_features(mutation&& m, schema_features features) {
     if (features.contains(schema_feature::CDC_OPTIONS) && features.contains(schema_feature::PER_TABLE_PARTITIONERS)) {
-        return m;
+        return std::move(m);
     }
     if (m.schema()->cf_name() != SCYLLA_TABLES) {
-        return m;
+        return std::move(m);
     }
     slogger.debug("adjusting schema_tables mutation due to possible in-progress cluster upgrade");
     // The global schema ptr make sure it will be registered in the schema registry.
     global_schema_ptr redacted_schema{scylla_tables(features)};
     m.upgrade(redacted_schema);
-    return m;
+    return std::move(m);
 }
 
 /**
@@ -867,7 +867,7 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
 std::vector<mutation>
 adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features) {
     for (auto& m : schema) {
-        m = redact_columns_for_missing_features(m, features);
+        m = redact_columns_for_missing_features(std::move(m), features);
     }
     return schema;
 }
