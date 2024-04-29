@@ -814,6 +814,81 @@ SEASTAR_TEST_CASE(test_sharder) {
     }, tablet_cql_test_config());
 }
 
+SEASTAR_TEST_CASE(test_intranode_sharding) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+
+        token_metadata tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1 } });
+        tokm.get_topology().add_or_update_endpoint(h1, tokm.get_topology().my_address());
+
+        auto leaving_replica = tablet_replica{h1, 5};
+        auto pending_replica = tablet_replica{h1, 7};
+        auto const_replica = tablet_replica{h2, 1};
+
+        // Prepare a tablet map with different tablets being in intra-node migration at different stages.
+        std::vector<tablet_id> tablet_ids;
+        {
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+
+            auto set_tablet = [&] (tablet_id tid, tablet_transition_stage stage) {
+                tablet_ids.push_back(tid);
+                tmap.set_tablet(tid, tablet_info{
+                    tablet_replica_set{leaving_replica, const_replica}
+                });
+                tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                    stage,
+                    tablet_transition_kind::intranode_migration,
+                    tablet_replica_set{pending_replica, const_replica},
+                    pending_replica
+                });
+            };
+
+            // tablet_ids[0]
+            set_tablet(tid, tablet_transition_stage::allow_write_both_read_old);
+
+            // tablet_ids[1]
+            tid = *tmap.next_tablet(tid);
+            set_tablet(tid, tablet_transition_stage::write_both_read_old);
+
+            // tablet_ids[2]
+            tid = *tmap.next_tablet(tid);
+            set_tablet(tid, tablet_transition_stage::write_both_read_new);
+
+            // tablet_ids[3]
+            tid = *tmap.next_tablet(tid);
+            set_tablet(tid, tablet_transition_stage::use_new);
+
+            tablet_metadata tm;
+            tm.set_tablet_map(table1, std::move(tmap));
+            tokm.set_tablets(std::move(tm));
+        }
+
+        auto& tm = tokm.tablets().get_tablet_map(table1);
+        tablet_sharder sharder(tokm, table1); // for h1
+
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[0])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[1])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[2])), 7);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[3])), 7);
+
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[0])), dht::shard_replica_set{5});
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[1])), dht::shard_replica_set({7, 5}));
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[2])), dht::shard_replica_set({7, 5}));
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[3])), dht::shard_replica_set{7});
+
+        // On const replica
+        tablet_sharder sharder_h2(tokm, table1, const_replica.host);
+        for (auto id : tablet_ids) {
+            BOOST_REQUIRE_EQUAL(sharder_h2.shard_for_reads(tm.get_last_token(id)), const_replica.shard);
+            BOOST_REQUIRE_EQUAL(sharder_h2.shard_for_writes(tm.get_last_token(id)), dht::shard_replica_set{const_replica.shard});
+        }
+    }, tablet_cql_test_config());
+}
+
 SEASTAR_TEST_CASE(test_large_tablet_metadata) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         tablet_metadata tm;
