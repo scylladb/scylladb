@@ -744,7 +744,9 @@ SEASTAR_TEST_CASE(test_sharder) {
         }
 
         auto& tm = tokm.tablets().get_tablet_map(table1);
-        tablet_sharder sharder(tokm, table1);
+        tablet_sharder sharder(tokm, table1); // for h1
+        tablet_sharder sharder_h3(tokm, table1, h3);
+
         BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[0])), 3);
         BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[1])), 0); // missing
         BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[2])), 1);
@@ -765,6 +767,16 @@ SEASTAR_TEST_CASE(test_sharder) {
         BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[5])), dht::shard_replica_set{5});
         BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[6])), dht::shard_replica_set{5});
         BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[7])), dht::shard_replica_set{5});
+
+        // On pending host
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_reads(tm.get_last_token(tablet_ids[4])), 7);
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_reads(tm.get_last_token(tablet_ids[5])), 7);
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_reads(tm.get_last_token(tablet_ids[6])), 7);
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_reads(tm.get_last_token(tablet_ids[7])), 7);
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_writes(tm.get_last_token(tablet_ids[4])), dht::shard_replica_set{7});
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_writes(tm.get_last_token(tablet_ids[5])), dht::shard_replica_set{7});
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_writes(tm.get_last_token(tablet_ids[6])), dht::shard_replica_set{7});
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_writes(tm.get_last_token(tablet_ids[7])), dht::shard_replica_set{7});
 
         BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_last_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
         BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_last_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
