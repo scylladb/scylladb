@@ -11,6 +11,8 @@
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/iterator_range_core.hpp>
 
+#include "cdc/cdc_options.hh"
+#include "cdc/log.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/functions/function_name.hh"
 #include "cql3/statements/prepared_statement.hh"
@@ -83,6 +85,12 @@ struct description {
         element.describe(db, os, with_internals);
         _create_statement = os.str();
     }
+
+    description(replica::database& db, const keyspace_element& element, sstring create_statement)
+        : _keyspace(util::maybe_quote(element.keypace_name()))
+        , _type(element.element_type(db))
+        , _name(util::maybe_quote(element.element_name()))
+        , _create_statement(std::move(create_statement)) {}
 
     std::vector<bytes_opt> serialize() const {
         auto desc = std::vector<bytes_opt>{
@@ -244,10 +252,28 @@ description index(const data_dictionary::database& db, const sstring& ks, const 
     return description(db.real_database(), **idx, with_internals);
 }
 
+// `base_name` should be a table with enabled cdc
+std::optional<description> describe_cdc_log_table(const data_dictionary::database& db, const sstring& ks, const sstring& base_name) {
+    auto table = db.try_find_table(ks, cdc::log_name(base_name));
+    if (!table) {
+        dlogger.warn("Couldn't find cdc log table for base table {}.{}", ks, base_name);
+        return std::nullopt;
+    }
+
+    std::ostringstream os;
+    auto schema = table->schema();
+    schema->describe_alter_with_properties(db.real_database(), os);
+    return description(db.real_database(), *schema, std::move(os.str()));
+}
+
 future<std::vector<description>> table(const data_dictionary::database& db, const sstring& ks, const sstring& name, bool with_internals) {
     auto table = db.try_find_table(ks, name);
     if (!table) {
         throw exceptions::invalid_request_exception(format("Table '{}' not found in keyspace '{}'", name, ks));
+    }
+    if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
+        // we want to hide cdc log table from the user
+        throw exceptions::invalid_request_exception(format("{}.{} is a cdc log table and it cannot be described directly. Try `DESC TABLE {}.{}` to describe cdc base table and it's log table.", ks, name, ks, cdc::base_name(name)));
     }
 
     auto schema = table->schema();
@@ -278,11 +304,21 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
         co_await coroutine::maybe_yield();
     }
 
+    if (schema->cdc_options().enabled()) {
+        auto cdc_log_alter = describe_cdc_log_table(db, ks, name);
+        if (cdc_log_alter) {
+            result.push_back(*cdc_log_alter);
+        }
+    }
+
     co_return result;
 }
 
 future<std::vector<description>> tables(const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
-    auto tables = ks->tables();
+    auto& replica_db = db.real_database();
+    auto tables = boost::copy_range<std::vector<schema_ptr>>(ks->tables() | boost::adaptors::filtered([&replica_db] (const schema_ptr& s) {
+        return !cdc::is_log_for_some_table(replica_db, s->ks_name(), s->cf_name());
+    }));
     boost::sort(tables, [] (const auto& a, const auto& b) {
         return a->cf_name() < b->cf_name();
     });
@@ -298,7 +334,6 @@ future<std::vector<description>> tables(const data_dictionary::database& db, con
         co_return result;
     }
 
-    auto& replica_db = db.real_database();
     co_return boost::copy_range<std::vector<description>>(tables | boost::adaptors::transformed([&replica_db] (auto&& t) {
         return description(replica_db, *t);
     }));
