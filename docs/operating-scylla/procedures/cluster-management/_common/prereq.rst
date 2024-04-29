@@ -7,10 +7,11 @@
 
 .. Note:: 
 
-   If ``authenticator`` is set to ``PasswordAuthenticator`` - increase the replication factor of the ``system_auth`` keyspace.
-
-   For example:
-
+   If ``authenticator`` is set to ``PasswordAuthenticator``, increase the replication factor of the ``system_auth`` keyspace.
+   For example: 
+   
    ``ALTER KEYSPACE system_auth WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'dc1' : <new_replication_factor>};``
+   
+   Ensure you run repair after you alter the keyspace. See :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`.
 
    It is recommended to set ``system_auth`` replication factor to the number of nodes in each DC.
