@@ -67,13 +67,11 @@ async def test_raft_snapshot_request(manager: ManagerClient):
     cql = await reconnect_driver(manager)
     # Wait for one server to append the command and do a read_barrier on the other
     # to make sure both appended
-    async def appended_command() -> int | None:
+    async def appended_command() -> bool | None:
         await wait_for_cql_and_get_hosts(cql, [s1], time.time() + 60)
         s = await get_raft_log_size(cql, h1)
-        if s > 0:
-            return s
-        return None
-    log_size = await wait_for(appended_command, time.time() + 60)
+        return s > 0 or None
+    await wait_for(appended_command, time.time() + 60)
     logger.info(f"{servers[0]} appended new command")
     h = (await wait_for_cql_and_get_hosts(cql, [servers[1]], time.time() + 60))[0]
     await read_barrier(cql, h)
