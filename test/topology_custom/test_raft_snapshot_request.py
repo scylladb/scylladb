@@ -83,7 +83,7 @@ async def test_raft_snapshot_request(manager: ManagerClient):
     await manager.server_start(s2.server_id)
     logger.info(f"Server {s2} restarted")
     cql = await reconnect_driver(manager)
-    await wait_for_cql_and_get_hosts(cql, [s2], time.time() + 60)
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     async def received_snapshot() -> str | None:
         new_s2_snap_id = await get_raft_snap_id(cql, h2)
         if s2_snap_id != new_s2_snap_id:
@@ -92,6 +92,10 @@ async def test_raft_snapshot_request(manager: ManagerClient):
     new_s2_snap_id = await wait_for(received_snapshot, time.time() + 60)
     logger.info(f"{s2} received new snapshot: {new_s2_snap_id}")
     new_s2_log_size = await get_raft_log_size(cql, h2)
-    # Log size may be 1 because topology coordinator fiber may start and commit an entry
-    # after that last snapshot was created (the two events race with each other).
-    assert new_s2_log_size <= 1
+    # The log size of s1 may be greater than 0 because topology coordinator fiber
+    # may start and commit a few entries after the last snapshot was created.
+    # However, the log size of s1 cannot be greater than the current leader's log
+    # size. The leader's log was truncated, so the assertion below would fail if
+    # s2 didn't truncate its log.
+    current_s1_log_size = await get_raft_log_size(cql, h1)
+    assert new_s2_log_size <= current_s1_log_size
