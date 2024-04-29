@@ -849,6 +849,12 @@ void reader_concurrency_semaphore::inactive_read_handle::abandon() noexcept {
         auto& sem = permit.semaphore();
         sem.close_reader(std::move(permit.aux_data().ir->reader));
         sem.dequeue_permit(permit);
+        // Break the handle <-> inactive read connection, to prevent the inactive
+        // read attempting to detach(). Not only is that unnecessary (the handle
+        // is abandoning the inactive read), but detach() will reset _permit,
+        // which might be the last permit instance alive. Destroying it could
+        // yank out *this from under our feet.
+        permit.aux_data().ir->handle = nullptr;
         permit.aux_data().ir.reset();
     }
 }
