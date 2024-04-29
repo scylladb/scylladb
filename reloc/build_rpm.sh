@@ -45,8 +45,8 @@ if [ ! -e $RELOC_PKG ]; then
     exit 1
 fi
 RELOC_PKG=$(readlink -f $RELOC_PKG)
-RPMBUILD=$(readlink -f $BUILDDIR)
 mkdir -p $BUILDDIR/
+RPMBUILD=$(readlink -f $BUILDDIR)
 tar -C $BUILDDIR/ -xpf $RELOC_PKG scylla/SCYLLA-RELOCATABLE-FILE scylla/SCYLLA-RELEASE-FILE scylla/SCYLLA-VERSION-FILE scylla/SCYLLA-PRODUCT-FILE scylla/dist/redhat
 cd $BUILDDIR/scylla
 
