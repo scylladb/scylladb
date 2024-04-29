@@ -92,6 +92,11 @@ class loaded_endpoint_state;
 
 namespace node_ops {
 class node_ops_virtual_task;
+class bootstrap_streaming_task_impl;
+class replace_streaming_task_impl;
+class rebuild_streaming_task_impl;
+class decommission_streaming_task_impl;
+class remove_streaming_task_impl;
 class task_manager_module;
 }
 
@@ -959,6 +964,11 @@ private:
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;
     friend class node_ops::task_manager_module;
+    friend class node_ops::bootstrap_streaming_task_impl;
+    friend class node_ops::replace_streaming_task_impl;
+    friend class node_ops::rebuild_streaming_task_impl;
+    friend class node_ops::decommission_streaming_task_impl;
+    friend class node_ops::remove_streaming_task_impl;
 };
 
 }

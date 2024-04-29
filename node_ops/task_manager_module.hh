@@ -8,10 +8,12 @@
 
 #pragma once
 
+#include "raft/raft.hh"
 #include "streaming/stream_reason.hh"
 #include "tasks/task_manager.hh"
 
 namespace service {
+class replica_state;
 class storage_service;
 enum class topology_request: uint16_t;
 }
@@ -37,6 +39,84 @@ public:
     virtual future<std::vector<tasks::task_stats>> get_stats() override;
 private:
     future<std::optional<tasks::task_status>> get_status_helper(tasks::task_id id) const;
+};
+
+class node_ops_streaming_task_impl : public tasks::task_manager::task::impl {
+private:
+    streaming::stream_reason _reason;
+    std::optional<shared_future<>>& _result;
+protected:
+    service::storage_service& _ss;
+public:
+    node_ops_streaming_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            streaming::stream_reason reason,
+            std::optional<shared_future<>>& result) noexcept;
+
+    virtual std::string type() const override;
+    virtual tasks::is_internal is_internal() const noexcept override;
+protected:
+    virtual future<> stream() = 0;
+    virtual future<> run() override;
+};
+
+class bootstrap_streaming_task_impl : public node_ops_streaming_task_impl {
+private:
+    const service::replica_state& _rs;
+public:
+    bootstrap_streaming_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            const service::replica_state& rs) noexcept;
+protected:
+    virtual future<> stream() override;
+};
+
+class replace_streaming_task_impl : public node_ops_streaming_task_impl {
+private:
+    const service::replica_state& _rs;
+public:
+    replace_streaming_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            const service::replica_state& rs) noexcept;
+protected:
+    virtual future<> stream() override;
+};
+
+class rebuild_streaming_task_impl : public node_ops_streaming_task_impl {
+private:
+    sstring _source_dc;
+public:
+    rebuild_streaming_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            sstring source_dc) noexcept;
+protected:
+    virtual future<> stream() override;
+};
+
+class decommission_streaming_task_impl : public node_ops_streaming_task_impl {
+public:
+    decommission_streaming_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id parent_id,
+            service::storage_service& ss) noexcept;
+protected:
+    virtual future<> stream() override;
+};
+
+class remove_streaming_task_impl : public node_ops_streaming_task_impl {
+private:
+    gms::inet_address _ip;
+public:
+    remove_streaming_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            gms::inet_address ip,
+            raft::server_id id) noexcept;
+protected:
+    virtual future<> stream() override;
 };
 
 class task_manager_module : public tasks::task_manager::module {
