@@ -374,7 +374,7 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-create_index_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+create_index_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     using namespace cql_transport;
     auto res = build_index_schema(qp.db());
 

@@ -127,7 +127,7 @@ const sstring& drop_type_statement::keyspace() const
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-drop_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+drop_type_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 

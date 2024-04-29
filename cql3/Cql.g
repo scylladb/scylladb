@@ -554,6 +554,10 @@ usingTimeoutClause[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_USING K_TIMEOUT to=term { attrs->timeout = std::move(to); }
     ;
 
+usingTimestampClause[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_USING K_TIMESTAMP ts=intValue { attrs->timestamp = std::move(ts); }
+    ;
+
 /**
  * UPDATE <CF>
  * USING TIMESTAMP <long>
@@ -984,16 +988,17 @@ alterKeyspaceStatement returns [std::unique_ptr<cql3::statements::alter_keyspace
 /**
  * ALTER COLUMN FAMILY <CF> ALTER <column> TYPE <newtype>;
  * ALTER COLUMN FAMILY <CF> ADD <column> <newtype>; | ALTER COLUMN FAMILY <CF> ADD (<column> <newtype>,<column1> <newtype1>..... <column n> <newtype n>)
- * ALTER COLUMN FAMILY <CF> DROP <column>; | ALTER COLUMN FAMILY <CF> DROP ( <column>,<column1>.....<column n>)
+ * ALTER COLUMN FAMILY <CF> DROP <column> [USING TIMESTAMP <ts>]; | ALTER COLUMN FAMILY <CF> DROP ( <column>,<column1>.....<column n>) [USING TIMESTAMP <ts>]
  * ALTER COLUMN FAMILY <CF> WITH <property> = <value>;
  * ALTER COLUMN FAMILY <CF> RENAME <column> TO <column>;
  */
-alterTableStatement returns [std::unique_ptr<alter_table_statement> expr]
+alterTableStatement returns [std::unique_ptr<alter_table_statement::raw_statement> expr]
     @init {
         alter_table_statement::type type;
         auto props = cql3::statements::cf_prop_defs();
         std::vector<alter_table_statement::column_change> column_changes;
         std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>, shared_ptr<cql3::column_identifier::raw>>> renames;
+        auto attrs = std::make_unique<cql3::attributes::raw>();
     }
     : K_ALTER K_COLUMNFAMILY cf=columnFamilyName
           ( K_ALTER id=cident K_TYPE v=comparatorType { type = alter_table_statement::type::alter; column_changes.emplace_back(alter_table_statement::column_change{id, v}); }
@@ -1007,13 +1012,14 @@ alterTableStatement returns [std::unique_ptr<alter_table_statement> expr]
             | '('     id1=cident { column_changes.emplace_back(alter_table_statement::column_change{id1}); }
                  (',' idn=cident { column_changes.emplace_back(alter_table_statement::column_change{idn}); } )* ')'
             )
+            ( usingTimestampClause[attrs] )?
           | K_WITH  properties[props]                 { type = alter_table_statement::type::opts; }
           | K_RENAME                                  { type = alter_table_statement::type::rename; }
                id1=cident K_TO toId1=cident { renames.emplace_back(id1, toId1); }
                ( K_AND idn=cident K_TO toIdn=cident { renames.emplace_back(idn, toIdn); } )*
           )
     {
-        $expr = std::make_unique<alter_table_statement>(std::move(cf), type, std::move(column_changes), std::move(props), std::move(renames));
+        $expr = std::make_unique<alter_table_statement::raw_statement>(std::move(cf), type, std::move(column_changes), std::move(props), std::move(renames), std::move(attrs));
     }
     ;
 

@@ -69,7 +69,7 @@ def testDropListAndAddMapWithSameName(cql, test_keyspace):
         execute(cql, table, "ALTER TABLE %s DROP myCollection")
         assert_invalid(cql, table, "ALTER TABLE %s ADD myCollection map<int, int>")
 
-@pytest.mark.xfail(reason="Issue #9929")
+# Reproduces #9929
 def testDropWithTimestamp(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id int, c1 int, v1 int, todrop int,  PRIMARY KEY (id, c1))") as table:
         for i in range(5):
@@ -101,7 +101,7 @@ def testDropAddWithDifferentKind(cql, test_keyspace):
         assert_invalid_message(cql, table, "Cannot re-add previously dropped column 'd' of kind REGULAR, incompatible with previous kind STATIC",
                          "ALTER TABLE %s ADD d int")
 
-@pytest.mark.xfail(reason="Issue #9929")
+# Reproduces #9929
 def testDropStaticWithTimestamp(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id int, c1 int, v1 int, todrop int static,  PRIMARY KEY (id, c1))") as table:
         for i in range(5):
@@ -122,7 +122,7 @@ def testDropStaticWithTimestamp(cql, test_keyspace):
                [1, 4, 4, 4],
                [1, 100, 100, 4])
 
-@pytest.mark.xfail(reason="Issue #9929")
+# Reproduces #9929
 def testDropMultipleWithTimestamp(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id int, c1 int, v1 int, todrop1 int, todrop2 int,  PRIMARY KEY (id, c1))") as table:
         for i in range(5):
@@ -163,7 +163,8 @@ def testAlterIndexInterval(cql, test_keyspace):
         assert options['max_index_interval'] == 512
 
 # Migrated from cql_tests.py:TestCQL.create_alter_options_test()
-@pytest.mark.xfail(reason="Issue #9929, #9935")
+# Reproduces #9929
+@pytest.mark.xfail(reason="Issue #9935")
 def testCreateAlterKeyspaces(cql, test_keyspace, this_dc):
     assert_invalid_throw(cql, test_keyspace, SyntaxException, "CREATE KEYSPACE ks1")
     assert_invalid_throw(cql, test_keyspace, ConfigurationException, "CREATE KEYSPACE ks1 WITH replication= { 'replication_factor' : 1 }")

@@ -913,8 +913,8 @@ Altering an existing table uses the ``ALTER TABLE`` statement:
 
    alter_table_statement: ALTER TABLE `table_name` `alter_table_instruction`
    alter_table_instruction: ADD `column_name` `cql_type` ( ',' `column_name` `cql_type` )*
-                          : | DROP `column_name`
-                          : | DROP '(' `column_name` ( ',' `column_name` )* ')'
+                          : | DROP `column_name` [ USING TIMESTAMP `timestamp` ]
+                          : | DROP '(' `column_name` ( ',' `column_name` )* ')' [ USING TIMESTAMP `timestamp` ]
                           : | ALTER `column_name` TYPE `cql_type`
                           : | WITH `options`
                           : | scylla_encryption_options: '=' '{'[`cipher_algorithm` : <hash>]','[`secret_key_strength` : <len>]','[`key_provider`: <provider>]'}'
@@ -968,6 +968,19 @@ The ``ALTER TABLE`` statement can:
 
 .. warning:: Once a column is dropped, it is allowed to re-add a column with the same name as the dropped one
    **unless** the type of the dropped column was a (non-frozen) column (due to an internal technical limitation).
+
+It is also possible to drop a column with specified timestamp ``ALTER TABLE ... DROP ... USING TIMESTAMP ...``.
+The purpose of this statement is to be able to safely restore schema (see :doc:`Backup and Restore Procedures </operating-scylla/procedures/backup-restore/index>`) in the case a column was dropped and re-added later.
+The timestamp should be obtained by describing schema with internals ``DESC SCHEMA WITH INTERNALS`` (or other descriptions like ``DESC TABLE ks.cf WITH INTERNALS``)
+
+For example: 
+Let's say you have a table with some data. Then you drop one of the column and re-add it later.
+In the future, when you wish to restore the schema, you **have to** also drop the column with specified timestamp (the same timestamp as the original drop)
+and re-add it again.
+Otherwise, you can resurrect your data (if you skip ``ALTER ... DROP/ADD ...`` entirely) 
+or you can lose data inserted after column re-addition (if you drop the column without the timestamp).
+
+.. warning:: Dropping a column with specified timestamp should only be used to restore schema from description (``DESCRIBE SCHEMA WITH INTERNALS``).
 
 .. _drop-table-statement:
 

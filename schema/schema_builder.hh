@@ -11,6 +11,7 @@
 #include "schema.hh"
 #include "replica/database_fwd.hh"
 #include "cdc/log.hh"
+#include "timestamp.hh"
 #include "tombstone_gc_options.hh"
 
 namespace db {
@@ -238,7 +239,7 @@ public:
     schema_builder& with_column_ordered(const column_definition& c);
     schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column, column_view_virtual view_virtual = column_view_virtual::no);
     schema_builder& with_computed_column(bytes name, data_type type, column_kind kind, column_computation_ptr computation);
-    schema_builder& remove_column(bytes name);
+    schema_builder& remove_column(bytes name, std::optional<api::timestamp_type> timestamp = std::nullopt);
     schema_builder& without_column(sstring name, api::timestamp_type timestamp);
     schema_builder& without_column(sstring name, data_type, api::timestamp_type timestamp);
     schema_builder& rename_column(bytes from, bytes to);
