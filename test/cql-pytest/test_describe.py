@@ -733,6 +733,57 @@ def test_table_options_quoting(cql, test_keyspace):
     finally:
         cql.execute(f"DROP TYPE {test_keyspace}.\"{type_name}\"")
 
+# We need to hide cdc log tables (more precisely, their CREATE statemtns and/or names)
+# but we are attaching `ALTER TABLE <cdc log table name> WITH <all table's properties>` to description of base table
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_hide_cdc_table(scylla_only, cql, test_keyspace):
+    cdc_table_suffix = "_scylla_cdc_log"
+    
+    with new_test_table(cql, test_keyspace, "a int primary key, b int", "WITH cdc = {'enabled': true}") as t:
+        t_name = t.split('.')[1]
+        cdc_log_name = t_name + cdc_table_suffix
+
+        # Check if the log table exists
+        cdc_log_table_entry = cql.execute(f"SELECT * FROM system_schema.tables WHERE keyspace_name='{test_keyspace}' AND table_name='{cdc_log_name}'").all()
+        assert len(cdc_log_table_entry) == 1
+
+        # DESC TABLES
+        desc_tables = cql.execute("DESC TABLES")
+        assert cdc_log_name not in [r.name for r in desc_tables]
+
+        # DESC KEYSPACE ks
+        desc_keyspace = cql.execute(f"DESC KEYSPACE {test_keyspace}").all()
+        for row in desc_keyspace:
+            if row.name == cdc_log_name:
+                assert f"ALTER TABLE {test_keyspace}.{cdc_log_name} WITH" in row.create_statement
+
+        #  DESC SCHEMA
+        desc_schema = cql.execute("DESC SCHEMA")
+        for row in desc_schema:
+            if row.name == cdc_log_name:
+                assert f"ALTER TABLE {test_keyspace}.{cdc_log_name} WITH" in row.create_statement
+
+        # Check 't_scylla_cdc_log' cannot be described directly
+        with pytest.raises(InvalidRequest, match=f"{test_keyspace}.{cdc_log_name} is a cdc log table and it cannot be described directly. Try `DESC TABLE {test_keyspace}.{t_name}` to describe cdc base table and it's log table."):
+            desc_cdc_table = cql.execute(f"DESC TABLE {test_keyspace}.{cdc_log_name}")
+        
+        # Check base table description contains ALTER TABLE statement for cdc log table
+        desc_base_table = cql.execute(f"DESC TABLE {t}").all()
+        assert f"ALTER TABLE {test_keyspace}.{cdc_log_name} WITH" in desc_base_table[1].create_statement
+        
+        # Drop current cdc base table and try to recreate it with describe output
+        cql.execute(f"DROP TABLE {t}")
+        for row in desc_keyspace[1:]: # [1:] because we want to skip first row (keyspace's CREATE STATEMENT)
+            cql.execute(row.create_statement)
+        
+        # Check if base and log tables were recreated
+        ks_tables = cql.execute(f"SELECT * FROM system_schema.tables WHERE keyspace_name='{test_keyspace}'").all()
+        assert len(ks_tables) == 2
+        for row in ks_tables:
+            assert row.table_name == t_name or row.table_name == cdc_log_name
+
 
 ### =========================== UTILITY FUNCTIONS =============================
 
