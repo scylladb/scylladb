@@ -15,7 +15,8 @@ target_link_libraries(scylla_tracing
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    service)
+    service
+    scylla-main)
 
 add_whole_archive(tracing scylla_tracing)
 
