@@ -10,8 +10,8 @@ import time
 import logging
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier
-from test.topology.util import reconnect_driver, trigger_snapshot
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.topology.util import reconnect_driver, trigger_snapshot, get_topology_coordinator
 
 
 logger = logging.getLogger(__name__)
@@ -65,23 +65,21 @@ async def test_raft_snapshot_request(manager: ManagerClient):
     await asyncio.gather(*(manager.server_restart(s.server_id) for s in servers[:2]))
     logger.info(f"Restarted {servers[:2]}")
     cql = await reconnect_driver(manager)
-    # Wait for one server to append the command and do a read_barrier on the other
-    # to make sure both appended
+    # Any of the two restarted servers could have become the leader.
+    # Find the leader and let s1 point to it for simplicity.
+    leader_host_id = await get_topology_coordinator(manager)
+    if leader_host_id != await manager.get_host_id(s1.server_id):
+        s1 = servers[1]
+    h1 = (await wait_for_cql_and_get_hosts(cql, [s1], time.time() + 60))[0]
+    # Wait for the leader to append the command.
     async def appended_command() -> bool | None:
-        await wait_for_cql_and_get_hosts(cql, [s1], time.time() + 60)
         s = await get_raft_log_size(cql, h1)
         return s > 0 or None
     await wait_for(appended_command, time.time() + 60)
-    logger.info(f"{servers[0]} appended new command")
-    h = (await wait_for_cql_and_get_hosts(cql, [servers[1]], time.time() + 60))[0]
-    await read_barrier(cql, h)
-    logger.info(f"Read barrier done on {servers[1]}")
-    # We don't know who the leader is, so trigger a snapshot on both servers.
-    for s in servers[:2]:
-        await trigger_snapshot(manager, s)
-        h = (await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60))[0]
-        snap = await get_raft_snap_id(cql, h)
-        logger.info(f"New snapshot ID on {s}: {snap}")
+    logger.info(f"{s1} appended new command")
+    await trigger_snapshot(manager, s1)
+    snap = await get_raft_snap_id(cql, h1)
+    logger.info(f"New snapshot ID on {s1}: {snap}")
     await manager.server_start(s2.server_id)
     logger.info(f"Server {s2} restarted")
     cql = await reconnect_driver(manager)
