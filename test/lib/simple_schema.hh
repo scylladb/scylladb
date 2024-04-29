@@ -134,6 +134,16 @@ public:
         return t;
     }
 
+    api::timestamp_type add_row_with_dead_cell(mutation& m, const clustering_key& key,
+            api::timestamp_type t = api::missing_timestamp, gc_clock::time_point deletion_time = gc_clock::now()) {
+        if (t == api::missing_timestamp) {
+            t = new_timestamp();
+        }
+        const column_definition& v_def = get_v_def(*_s);
+        m.set_clustered_cell(key, v_def, atomic_cell::make_dead(t, deletion_time));
+        return t;
+    }
+
     api::timestamp_type add_row_with_collection(mutation& m, const clustering_key& ck, const std::map<bytes, bytes>& kv_map, api::timestamp_type t = api::missing_timestamp) {
         if (t == api::missing_timestamp) {
             t = new_timestamp();
