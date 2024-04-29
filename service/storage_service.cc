@@ -6066,11 +6066,11 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
 
                 bool is_pending = transition->pending_replica == me;
                 bool is_leaving = locator::get_leaving_replica(info, *transition) == me;
-                auto s = transition->stage;
+                auto s = transition->reads; // read selector
 
                 return (!is_pending && !is_leaving)
-                       || (is_leaving && s < locator::tablet_transition_stage::cleanup)
-                       || (is_pending && s >= locator::tablet_transition_stage::cleanup);
+                       || (is_leaving && s == locator::read_replica_set_selector::previous)
+                       || (is_pending && s == locator::read_replica_set_selector::next);
             };
 
             load_stats.tables.emplace(id, table->table_load_stats(tablet_filter));
