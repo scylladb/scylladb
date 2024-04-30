@@ -1,7 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import re
 import requests
-import csv
 
 from docutils.parsers.rst import Directive, directives
 from sphinxcontrib.datatemplates.directive import DataTemplateCSV
@@ -20,21 +20,26 @@ class FileDownloader:
         response.raise_for_status()
         return re.findall(rf"<Key>([^<]*\.{extension})</Key>", response.text)
 
+    def download_file(self, link, download_directory):
+        file_url = f"{self.base_url}/{link}"
+        LOGGER.info(f"Downloading {file_url}")
+        file_response = self.session.get(file_url)
+        file_response.raise_for_status()
+
+        with open(os.path.join(download_directory, link.split("/")[-1]), "wb") as file:
+            file.write(file_response.content)
+
+
     def download_files(self, bucket_directory, download_directory, extension="csv"):
         os.makedirs(download_directory, exist_ok=True)
 
         links = self.get_links(bucket_directory, extension)
-        for link in links:
-            file_url = f"{self.base_url}/{link}"
-            print(f"Downloading {file_url}")
-            file_response = self.session.get(file_url)
-            file_response.raise_for_status()
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(self.download_file, link, download_directory) for link in links]
+            for future in as_completed(futures):
+                future.result()  # Handling exceptions can be added here
 
-            with open(os.path.join(download_directory, link.split("/")[-1]), "wb") as file:
-                file.write(file_response.content)
-
-        print(f"Download complete. The {extension.upper()} files are in {download_directory}")
-
+        LOGGER.info(f"Download complete. The {extension.upper()} files are in {download_directory}")
 
 class BaseTemplateDirective(DataTemplateCSV):
     option_spec = DataTemplateCSV.option_spec.copy()
