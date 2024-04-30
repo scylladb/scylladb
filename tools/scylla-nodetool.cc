@@ -655,6 +655,10 @@ void decommission_operation(scylla_rest_client& client, const bpo::variables_map
     client.post("/storage_service/decommission");
 }
 
+void resetlocalschema_operation(scylla_rest_client& client, const bpo::variables_map&) {
+    client.post("/storage_service/relocal_schema");
+}
+
 void describering_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.contains("keyspace")) {
         throw std::invalid_argument("keyspace must be specified");
@@ -3341,6 +3345,18 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
                 },
             },
             repair_operation
+        },
+        {
+            {
+                "resetlocalschema",
+                "Reset node's local schema and resync",
+R"(
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/resetlocalschema.html
+)",
+                { },
+                { },
+            },
+            resetlocalschema_operation
         },
         {
             {
