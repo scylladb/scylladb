@@ -1093,6 +1093,15 @@ def add_param_writer_object(name, base_state, typ, var_type="", var_index=None, 
                 {set_command}
                 return {return_command};
             }}""").format(**locals())
+        ret += reindent(4, """
+            template<typename AsyncSerializer>
+            future<after_{base_state}__{name}<Output>> {name}{var_type}_gently(AsyncSerializer&& f) && {{
+                {set_variant_index}
+                return futurize_invoke(f, writer_of_{typename}<Output>(_out)).then([this] {{
+                    {set_command}
+                    return after_{base_state}__{name}<Output>{return_command};
+                }});
+            }}""").format(**locals())
     return ret
 
 
