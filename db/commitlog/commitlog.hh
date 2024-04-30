@@ -135,7 +135,8 @@ public:
         static inline constexpr uint32_t segment_version_1 = 1u;
         static inline constexpr uint32_t segment_version_2 = 2u;
         static inline constexpr uint32_t segment_version_3 = 3u;
-        static inline constexpr uint32_t current_version = segment_version_3;
+        static inline constexpr uint32_t segment_version_4 = 4u;
+        static inline constexpr uint32_t current_version = segment_version_4;
 
         descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;
@@ -374,7 +375,7 @@ public:
     // be replayed on the next reboot.
     replay_position min_position() const;
 
-    typedef std::function<future<>(buffer_and_replay_position)> commit_load_reader_func;
+    using commit_load_reader_func = std::function<future<>(buffer_and_replay_position)>;
 
     class segment_error : public std::exception {};
 
@@ -420,7 +421,18 @@ public:
         const char* what() const noexcept override;
     };
 
+    class replay_state {
+    public:
+        replay_state();
+        ~replay_state();
+    private:
+        friend class commitlog;
+        class impl;
+        std::unique_ptr<impl> _impl;
+    };
+
     static future<> read_log_file(sstring filename, sstring prefix, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
+    static future<> read_log_file(const replay_state&, sstring filename, sstring prefix, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
 private:
     commitlog(config);
 
