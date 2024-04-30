@@ -69,6 +69,7 @@ function(add_version_library name source)
     scylla-version-gen)
   target_compile_definitions(${name}
     PRIVATE
+      SCYLLA_PRODUCT=\"${Scylla_PRODUCT}\"
       SCYLLA_VERSION=\"${Scylla_VERSION}\"
       SCYLLA_RELEASE=\"${Scylla_RELEASE}\")
   target_link_libraries(${name}

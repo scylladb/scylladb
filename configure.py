@@ -1884,9 +1884,11 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     return cxxflags
 
 
-def get_release_cxxflags(scylla_version,
+def get_release_cxxflags(scylla_product,
+                         scylla_version,
                          scylla_release):
-    definitions = {'SCYLLA_VERSION': scylla_version,
+    definitions = {'SCYLLA_PRODUCT': scylla_product,
+                   'SCYLLA_VERSION': scylla_version,
                    'SCYLLA_RELEASE': scylla_release}
     return [f'-D{name}="\\"{value}\\""' for name, value in definitions.items()]
 
@@ -2494,7 +2496,7 @@ def create_build_system(args):
         extra_cxxflags = ' '.join(get_extra_cxxflags(mode, mode_config, args.cxx, args.debuginfo))
         mode_config['cxxflags'] += f' {extra_cxxflags}'
 
-        mode_config['per_src_extra_cxxflags']['release.cc'] = ' '.join(get_release_cxxflags(scylla_version, scylla_release))
+        mode_config['per_src_extra_cxxflags']['release.cc'] = ' '.join(get_release_cxxflags(scylla_product, scylla_version, scylla_release))
 
     if not args.dist_only:
         global user_cflags, libs
