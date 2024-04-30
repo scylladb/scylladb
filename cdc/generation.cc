@@ -477,11 +477,17 @@ static future<std::optional<cdc::topology_description>> retrieve_generation_data
         db::system_distributed_keyspace& sys_dist_ks) {
     auto cdc_gen = co_await sys_dist_ks.read_cdc_generation(id.id);
 
-    if (!cdc_gen) {
+    if (!cdc_gen && id.id.is_timestamp()) {
         // If we entered legacy mode due to recovery, we (or some other node)
         // might gossip about a generation that was previously propagated
         // through raft. If that's the case, it will sit in
         // the system.cdc_generations_v3 table.
+        //
+        // If the provided id is not a timeuuid, we don't want to query
+        // the system.cdc_generations_v3 table. This table stores generation
+        // ids as timeuuids. If the provided id is not a timeuuid, the
+        // generation cannot be in system.cdc_generations_v3. Also, the query
+        // would fail with a marshaling error.
         cdc_gen = co_await sys_ks.read_cdc_generation_opt(id.id);
     }
 
