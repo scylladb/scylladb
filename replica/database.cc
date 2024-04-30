@@ -976,9 +976,9 @@ future<> database::detach_column_family(table& cf) {
     co_await remove(cf);
     cf.clear_views();
     co_await cf.await_pending_ops();
-    for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
-        co_await sem->evict_inactive_reads_for_table(uuid);
-    }
+    co_await foreach_reader_concurrency_semaphore([uuid] (reader_concurrency_semaphore& sem) -> future<> {
+        co_await sem.evict_inactive_reads_for_table(uuid);
+    });
 }
 
 global_table_ptr::global_table_ptr() {
@@ -1694,6 +1694,12 @@ bool database::is_user_semaphore(const reader_concurrency_semaphore& semaphore) 
     return &semaphore != &_streaming_concurrency_sem
         && &semaphore != &_compaction_concurrency_sem
         && &semaphore != &_system_read_concurrency_sem;
+}
+
+future<> database::foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func) {
+    for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
+        co_await func(*sem);
+    }
 }
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
