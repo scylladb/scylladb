@@ -329,3 +329,38 @@ SEASTAR_TEST_CASE(test_shrinking_and_expansion_involving_chunk_boundary) {
     return make_ready_future<>();
 }
 
+struct push_back_item {
+    std::unique_ptr<int> p;
+    push_back_item() = default;
+    push_back_item(int v) : p(std::make_unique<int>(v)) {}
+    push_back_item(const push_back_item& x) : push_back_item(x.value() + 1) {}
+    push_back_item(push_back_item&& x) noexcept : p(std::exchange(x.p, nullptr)) {}
+
+    int value() const noexcept { return *p; }
+};
+
+template <class VectorType>
+static void do_test_push_back_using_existing_element(std::function<void (VectorType&, const managed_ref<push_back_item>&)> do_push_back) {
+    region region;
+    allocating_section as;
+
+    with_allocator(region.allocator(), [&] {
+        VectorType v;
+        as(region, [&] {
+            v.push_back(make_managed<push_back_item>(0));
+            for (int i = 0; i < 1000; i++) {
+                do_push_back(v, v.back());
+            }
+        });
+        for (int i = 0; i < 1000; i++) {
+            BOOST_REQUIRE_EQUAL(v[i]->value(), i);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_push_back_using_existing_element) {
+    using chunked_managed_vector_type = lsa::chunked_managed_vector<managed_ref<push_back_item>>;
+    do_test_push_back_using_existing_element<chunked_managed_vector_type>([] (chunked_managed_vector_type& v, const managed_ref<push_back_item>& x) { v.push_back(make_managed<push_back_item>(*x)); });
+    do_test_push_back_using_existing_element<chunked_managed_vector_type>([] (chunked_managed_vector_type& v, const managed_ref<push_back_item>& x) { v.emplace_back(make_managed<push_back_item>(*x)); });
+    return make_ready_future<>();
+}
