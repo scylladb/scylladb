@@ -4503,6 +4503,15 @@ future<sstring> storage_service::wait_for_topology_request_completion(utils::UUI
     co_return sstring();
 }
 
+future<> storage_service::wait_for_topology_not_busy() {
+    auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+    while (_topology_state_machine._topology.is_busy()) {
+        release_guard(std::move(guard));
+        co_await _topology_state_machine.event.wait();
+        guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+    }
+}
+
 future<> storage_service::raft_rebuild(sstring source_dc) {
     auto& raft_server = _group0->group0_server();
     utils::UUID request_id;
