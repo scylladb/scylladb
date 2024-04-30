@@ -43,7 +43,8 @@ extensions = [
     "scylladb_azure_images",
     "scylladb_gcp_images",
     "scylladb_include_flag",
-    "scylladb_dynamic_substitutions"
+    "scylladb_dynamic_substitutions",
+    "scylladb_swagger"
 ]
 
 # The suffix(es) of source filenames.
@@ -120,6 +121,11 @@ scylladb_azure_images_download_directory = "_data/opensource/azure"
 scylladb_gcp_images_base_url = "https://s3.amazonaws.com/downloads.scylladb.com"
 scylladb_gcp_images_bucket_directory = "downloads/scylla/gce/"
 scylladb_gcp_images_download_directory = "_data/opensource/gce"
+
+# -- Options for scylladb_swagger extension
+scylladb_swagger_origin_api = "../api"
+scylladb_swagger_template = "swagger.tmpl"
+scylladb_swagger_inc_template = "swagger_inc.tmpl"
 
 # -- Options for HTML output
 
