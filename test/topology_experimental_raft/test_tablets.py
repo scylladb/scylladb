@@ -841,6 +841,10 @@ async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_on
 
     await create_table("test2", 16)
 
+    # Explicitly close the driver to avoid reconnections if scylla fails to update gossiper state on shutdown.
+    # It's a problem until https://github.com/scylladb/scylladb/issues/15356 is fixed.
+    manager.driver_close()
+    cql = None
     await manager.server_stop_gracefully(servers[0].server_id)
 
     table_dir = glob.glob(os.path.join(node_workdir, "data", "test", "test-*"))[0]
