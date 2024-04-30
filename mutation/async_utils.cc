@@ -88,3 +88,20 @@ future<mutation> to_mutation_gently(const canonical_mutation& cm, schema_ptr s) 
     }
     co_return m;
 }
+
+future<frozen_mutation>
+freeze_gently(const mutation& m) {
+    auto fm = frozen_mutation(m.key());
+    mutation_partition_serializer part_ser(*m.schema(), m.partition());
+
+    ser::writer_of_mutation<bytes_ostream> wom(fm.representation());
+    auto wr = co_await std::move(wom).write_table_id(m.schema()->id())
+                .write_schema_version(m.schema()->version())
+                .write_key(m.key())
+                .partition_gently([&] (auto wr) {
+                    return part_ser.write_gently(std::move(wr));
+                });
+    wr.end_mutation();
+    fm.representation().reduce_chunk_count();
+    co_return fm;
+}

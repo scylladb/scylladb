@@ -11,6 +11,7 @@
 #include "mutation_partition.hh"
 #include "mutation.hh"
 #include "canonical_mutation.hh"
+#include "frozen_mutation.hh"
 
 //
 // Applies p to the `target` mutation_partition.
@@ -36,3 +37,5 @@ future<> apply_gently(mutation& target, mutation&& m);
 future<> apply_gently(mutation& target, const mutation& m);
 
 future<mutation> to_mutation_gently(const canonical_mutation& cm, schema_ptr s);
+
+future<frozen_mutation> freeze_gently(const mutation& m);

@@ -165,6 +165,7 @@ private:
     partition_key deserialize_key() const;
     ser::mutation_view mutation_view() const;
 public:
+    explicit frozen_mutation(const partition_key& key) : _pk(key) {}
     explicit frozen_mutation(const mutation& m);
     explicit frozen_mutation(bytes_ostream&& b);
     frozen_mutation(bytes_ostream&& b, partition_key key);
@@ -172,6 +173,7 @@ public:
     frozen_mutation(const frozen_mutation& m) = default;
     frozen_mutation& operator=(frozen_mutation&&) = default;
     frozen_mutation& operator=(const frozen_mutation&) = default;
+    bytes_ostream& representation() { return _bytes; }
     const bytes_ostream& representation() const { return _bytes; }
     table_id column_family_id() const;
     table_schema_version schema_version() const; // FIXME: Should replace column_family_id()
