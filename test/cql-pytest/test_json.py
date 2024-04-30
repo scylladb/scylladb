@@ -14,11 +14,13 @@
 from util import unique_name, new_test_table, unique_key_int
 
 from cassandra.protocol import FunctionFailure, InvalidRequest
+from cassandra.util import Date, Time
 
 import pytest
 import json
 from decimal import Decimal
 from datetime import datetime
+from uuid import UUID
 
 @pytest.fixture(scope="module")
 def type1(cql, test_keyspace):
@@ -30,7 +32,39 @@ def type1(cql, test_keyspace):
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace, type1):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, bigv bigint, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal, tupmap map<frozen<tuple<text, int>>, int>, t1 frozen<{type1}>, \"CaseSensitive\" int, ts timestamp)")
+    cql.execute(f"""CREATE TABLE {table} (p int PRIMARY KEY,
+        v int,
+        bigv bigint,
+        a ascii,
+        b boolean,
+        vi varint,
+        mai map<ascii, int>,
+        tup frozen<tuple<text, int>>,
+        l list<text>,
+        d double,
+        t time,
+        dec decimal,
+        tupmap map<frozen<tuple<text, int>>, int>,
+        t1 frozen<{type1}>,
+        \"CaseSensitive\" int,
+        ts timestamp,
+        timeuuidmap map<timeuuid, int>,
+        uuidmap map<uuid, int>,
+        bigintmap map<bigint, int>,
+        decimalmap map<decimal, int>,
+        doublemap map<double, int>,
+        floatmap map<float, int>,
+        intmap map<int, int>,
+        tinyintmap map<tinyint, int>,
+        smallintmap map<smallint, int>,
+        varintmap map<varint, int>,
+        blobmap map<blob, int>,
+        booleanmap map<boolean, int>,
+        datemap map<date, int>,
+        inetmap map<inet, int>,
+        timemap map<time, int>,
+        timestampmap map<timestamp, int>)
+        """)
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -269,6 +303,81 @@ def test_fromjson_map_ascii_prepared(cql, table1):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, mai) VALUES (?, fromJson(?))")
     cql.execute(stmt, [p, '{"a": 1, "b": 2}'])
     assert list(cql.execute(f"SELECT p, mai from {table1} where p = {p}")) == [(p, {'a': 1, 'b': 2})]
+
+# After the above test for map<ascii,int> was fixed, it turned out (see
+# issue #18477) that we have the same bug for fromJson() or INSERT JSON
+# of map<timeuuid,int>. Let's test that type, and in more tests below -
+# all other types as map keys (except "duration" which isn't allowed as
+# a map key) - so we don't discover these bugs one by one...
+# Test for fromJson() for map<timeuuid, int>:
+# Reproduces #18477:
+def test_fromjson_map_key_timeuuid(cql, table1):
+    p = unique_key_int()
+    cql.execute("INSERT INTO " + table1 + " (p, timeuuidmap) VALUES (" + str(p) + ", fromJson('{\"a4a70900-24e1-11df-8924-001ff3591711\": 3}'))")
+    assert list(cql.execute(f"SELECT p, timeuuidmap from {table1} where p = {p}")) == [(p, {UUID('a4a70900-24e1-11df-8924-001ff3591711'): 3})]
+
+def test_fromjson_map_key_uuid(cql, table1):
+    p = unique_key_int()
+    cql.execute("INSERT INTO " + table1 + " (p, uuidmap) VALUES (" + str(p) + ", fromJson('{\"a4a70900-24e1-11df-8924-001ff3591711\": 3}'))")
+    assert list(cql.execute(f"SELECT p, uuidmap from {table1} where p = {p}")) == [(p, {UUID('a4a70900-24e1-11df-8924-001ff3591711'): 3})]
+
+def test_fromjson_map_key_number(cql, table1):
+    # For all number types, the JSON should contain as a map key a quoted
+    # version of the number, e.g, "17" with the quotes. An unquoted version
+    # is not supported (even though it looks like legal JSON), and generates
+    # a FunctionFailure error:
+    for t in ["bigint", "decimal", "double", "float", "int", "smallint", "tinyint", "varint"]:
+        p = unique_key_int()
+        with pytest.raises(FunctionFailure):
+            cql.execute("INSERT INTO " + table1 + f" (p, {t}map) VALUES (" + str(p) + ", fromJson('{17: 3}'))")
+        cql.execute("INSERT INTO " + table1 + f" (p, {t}map) VALUES (" + str(p) + ", fromJson('{\"17\": 3}'))")
+        assert list(cql.execute(f"SELECT p, {t}map from {table1} where p = {p}")) == [(p, {17: 3})]
+
+# Reproduces #18477:
+def test_fromjson_map_key_blob(cql, table1):
+    p = unique_key_int()
+    # A blob is encoded in JSON as string containing 0x and then hex, e.g.,
+    # "0x12ab3e".
+    cql.execute("INSERT INTO " + table1 + f" (p, blobmap) VALUES (" + str(p) + ", fromJson('{\"0x12ab3e\": 3}'))")
+    assert list(cql.execute(f"SELECT p, blobmap from {table1} where p = {p}")) == [(p, {b'\x12\xab\x3e': 3})]
+
+def test_fromjson_map_key_boolean(cql, table1):
+    # While in general, Cassandra and Scylla allow boolean to be encoded in
+    # JSON as either the unquoted Json constants true/false or as quoted
+    # strings "true"/"false", for map keys only the quoted version is
+    # supported.
+    p = unique_key_int()
+    cql.execute("INSERT INTO " + table1 + f" (p, booleanmap) VALUES (" + str(p) + ", fromJson('{\"true\": 3}'))")
+    assert list(cql.execute(f"SELECT p, booleanmap from {table1} where p = {p}")) == [(p, {True: 3})]
+
+# Reproduces #18477:
+def test_fromjson_map_key_date(cql, table1):
+    p = unique_key_int()
+    cql.execute("INSERT INTO " + table1 + f" (p, datemap) VALUES (" + str(p) + ", fromJson('{\"2011-02-03\": 3}'))")
+    assert list(cql.execute(f"SELECT p, datemap from {table1} where p = {p}")) == [(p, {Date('2011-02-03'): 3})]
+
+# Reproduces #18477:
+def test_fromjson_map_key_inet(cql, table1):
+    p = unique_key_int()
+    cql.execute("INSERT INTO " + table1 + f" (p, inetmap) VALUES (" + str(p) + ", fromJson('{\"1.2.3.4\": 3}'))")
+    assert list(cql.execute(f"SELECT p, inetmap from {table1} where p = {p}")) == [(p, {'1.2.3.4': 3})]
+
+# Reproduces #18477:
+def test_fromjson_map_key_time(cql, table1):
+    p = unique_key_int()
+    cql.execute("INSERT INTO " + table1 + f" (p, timemap) VALUES (" + str(p) + ", fromJson('{\"07:35:07.000111222\": 3}'))")
+    assert list(cql.execute(f"SELECT p, timemap from {table1} where p = {p}")) == [(p, {Time('07:35:07.000111222'): 3})]
+
+# Reproduces #18477:
+def test_fromjson_map_key_timestamp(cql, table1):
+    p = unique_key_int()
+    # The following is just one example of a recognized timestamp format.
+    # We have other tests above for the other allowed formats - here our
+    # goal isn't to check all of them, but just check on in the context
+    # of a map's key.
+    cql.execute("INSERT INTO " + table1 + f" (p, timestampmap) VALUES (" + str(p) + ", fromJson('{\"2014-01-01 12:15:45+0000\": 3}'))")
+    assert list(cql.execute(f"SELECT p, timestampmap from {table1} where p = {p}")) == [(p, {datetime(2014, 1, 1, 12, 15, 45): 3})]
+
 
 # With fromJson() the JSON "null" constant can be used to unset a column,
 # but can also be used to unset a part of a tuple column. In both cases,
