@@ -235,6 +235,9 @@ public:
     // Get information about this node's view update backlog. It combines information from all local shards.
     db::view::update_backlog get_view_update_backlog();
 
+    // Used for gossiping view update backlog information. Must be called on shard 0.
+    future<std::optional<db::view::update_backlog>> get_view_update_backlog_if_changed();
+
     // Get information about a remote node's view update backlog. Information about remote backlogs is constantly updated
     // using gossip and by passing the information in each MUTATION_DONE rpc call response.
     db::view::update_backlog get_backlog_of(gms::inet_address) const;

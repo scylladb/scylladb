@@ -2443,6 +2443,13 @@ db::view::update_backlog storage_proxy::get_view_update_backlog() {
     return _max_view_update_backlog.fetch();
 }
 
+future<std::optional<db::view::update_backlog>> storage_proxy::get_view_update_backlog_if_changed() {
+    if (this_shard_id() != 0) {
+        on_internal_error(slogger, format("getting view update backlog for gossip on a non-gossip shard {}", this_shard_id()));
+    }
+    return _max_view_update_backlog.fetch_if_changed();
+}
+
 db::view::update_backlog storage_proxy::get_backlog_of(gms::inet_address ep) const {
     auto it = _view_update_backlogs.find(ep);
     if (it == _view_update_backlogs.end()) {

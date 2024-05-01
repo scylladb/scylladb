@@ -2630,6 +2630,7 @@ future<> view_builder::wait_until_built(const sstring& ks_name, const sstring& v
 
 void node_update_backlog::add(update_backlog backlog) {
     _backlogs[this_shard_id()].backlog.store(backlog, std::memory_order_relaxed);
+    _backlogs[this_shard_id()].need_publishing = need_publishing::yes;
 }
 
 update_backlog node_update_backlog::fetch() {
@@ -2646,6 +2647,23 @@ update_backlog node_update_backlog::fetch() {
         return new_max;
     }
     return std::max(fetch_shard(this_shard_id()), _max.load(std::memory_order_relaxed));
+}
+
+future<std::optional<update_backlog>> node_update_backlog::fetch_if_changed() {
+    _last_update.store(clock::now(), std::memory_order_relaxed);
+    auto [np, max] = co_await map_reduce(boost::irange(0u, smp::count),
+            [this] (shard_id shard) {
+                return smp::submit_to(shard, [this, shard] {
+                    // Even if the shard's backlog didn't change, we still need to take it into account when calculating the new max.
+                    return std::make_pair(std::exchange(_backlogs[shard].need_publishing, need_publishing::no), fetch_shard(shard));
+                });
+            },
+            std::make_pair(need_publishing::no, db::view::update_backlog()),
+            [] (std::pair<need_publishing, db::view::update_backlog> a, std::pair<need_publishing, db::view::update_backlog> b) {
+                return std::make_pair(a.first || b.first, std::max(a.second, b.second));
+            });
+    _max.store(max, std::memory_order_relaxed);
+    co_return np ? std::make_optional(max) : std::nullopt;
 }
 
 update_backlog node_update_backlog::fetch_shard(unsigned shard) {
