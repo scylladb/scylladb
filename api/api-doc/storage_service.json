@@ -90,7 +90,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Returns a list of the tokens endpoint mapping",
+               "summary":"Returns a list of the tokens endpoint mapping, provide keyspace and cf param to get tablet mapping",
                "type":"array",
                "items":{
                   "type":"mapper"
@@ -100,6 +100,22 @@
                   "application/json"
                ],
                "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to provide the tablet mapping for",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"The table to provide the tablet mapping for",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
                ]
             }
          ]
