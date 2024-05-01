@@ -4,8 +4,9 @@
 
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
+from cassandra.protocol import InvalidRequest
 
-from util import new_test_table
+from util import new_test_table, unique_name
 from nodetool import flush
 import pytest
 import time
@@ -83,3 +84,35 @@ def test_cdc_with_lwt_preimage(scylla_only, cql, test_keyspace):
         # There should be no preimages because no keys were overwritten;
         # `cdc$operation` should only be `2` in all CDC log rows (denoting INSERT)
         assert all(r[0] == 2 for r in rs)
+
+# For a table named "xyz", the CDC table is always named "xyz_scylla_cdc_log".
+# Check what happens if a table called "xyz_scylla_cdc_log" already exists
+# (as a normal table), and we then try to create "xyz" with CDC enabled,
+# or create "xyz" without CDC and then try to enable it.
+# Unlike the secondary-index code which tries to find a different name to
+# use for its backing view, the CDC code doesn't do that, but creating the
+# table with CDC (or enabling CDC) should fail gracefully with a clear
+# error message, and this test verifies that.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_cdc_taken_log_name(scylla_only, cql, test_keyspace):
+    name = test_keyspace + "." + unique_name()
+    cql.execute(f"CREATE TABLE {name}_scylla_cdc_log (p int PRIMARY KEY)")
+    try:
+        schema = "pk int primary key, v int"
+        extra = " with cdc = {'enabled': true}"
+        # We can't create a table {name} with CDC enabled:
+        with pytest.raises(InvalidRequest, match=f"{name}_scylla_cdc_log already exists"):
+            cql.execute(f"CREATE TABLE {name} ({schema}) {extra}")
+            cql.execute(f"DROP TABLE {name}")
+        # We can create a table {name} *without* CDC enabled, but then we
+        # can't enable CDC:
+        try:
+            cql.execute(f"CREATE TABLE {name} ({schema})")
+            with pytest.raises(InvalidRequest, match=f"{name}_scylla_cdc_log already exists"):
+                cql.execute(f"ALTER TABLE {name} {extra}")
+        finally:
+            cql.execute(f"DROP TABLE {name}")
+    finally:
+        cql.execute(f"DROP TABLE {name}_scylla_cdc_log")
