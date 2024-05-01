@@ -10,7 +10,7 @@ import operator
 from socket import getnameinfo
 import pytest
 from rest_api_mock import expected_request
-from utils import format_size
+from utils import format_size, check_nodetool_fails_with
 
 
 null_ownership_error = ("Non-system keyspaces don't have the same replication settings, "
@@ -53,18 +53,28 @@ def format_stat(width, address, rack, status, state, load, owns, token):
     return f"{address:<{width}}  {rack:<12}{status:<7}{state:<8}{load:<16}{owns:<20}{token:<44}\n"
 
 
-@pytest.mark.parametrize("keyspace,resolve_ip,host_status,host_state",
+@pytest.mark.parametrize("keyspace_table,resolve_ip,host_status,host_state",
                          [
                              ('ks', '', 'live', 'joining'),
-                             ('ks', '', 'live', 'normal'),
+                             ('ks.table', '', 'live', 'normal'),
                              ('ks', '', 'live', 'leaving'),
-                             ('ks', '', 'live', 'moving'),
+                             ('ks.table', '', 'live', 'moving'),
                              ('ks', '', 'down', 'n/a'),
                              ('', '', 'live', 'normal'),
                              ('', '-r', 'live', 'normal'),
                              ('', '--resolve-ip', 'live', 'normal'),
                          ])
-def test_ring(request, nodetool, keyspace, resolve_ip, host_status, host_state):
+def test_ring(request, nodetool, keyspace_table, resolve_ip, host_status, host_state):
+    uses_cassandra_nodetool = request.config.getoption("nodetool") == "cassandra"
+
+    if "." in keyspace_table:
+        keyspace, table = keyspace_table.split(".")
+    else:
+        keyspace, table = keyspace_table, None
+
+    if uses_cassandra_nodetool and table is not None:
+        pytest.skip("skipping tablets-related test with Cassandra nodetool")
+
     host = Host('dc0', 'rack0', '127.0.0.1', host_status, host_state,
                 6414780.0, 1.0,
                 ["-9217327499541836964",
@@ -90,8 +100,19 @@ def test_ring(request, nodetool, keyspace, resolve_ip, host_status, host_state):
         (state, hosts_in_state(state)) for state in ['joining', 'leaving', 'moving'])
     load_map = dict((h.endpoint, h.load) for h in all_hosts)
 
-    expected_requests = [
-        expected_request('GET', '/storage_service/tokens_endpoint',
+    expected_requests = []
+
+    if keyspace != '' and table is None and not uses_cassandra_nodetool:
+        expected_requests.append(expected_request("GET", "/storage_service/keyspaces",
+                                                  params={"replication": "tablets"},
+                                                  multiple=expected_request.ONE, response=[]))
+
+    tokens_endpoint_params = {}
+    if table is not None:
+        tokens_endpoint_params["keyspace"] = keyspace
+        tokens_endpoint_params["cf"] = table
+    expected_requests += [
+        expected_request('GET', '/storage_service/tokens_endpoint', params=tokens_endpoint_params,
                          response=map_to_json(token_to_endpoint))
     ]
 
@@ -110,8 +131,11 @@ def test_ring(request, nodetool, keyspace, resolve_ip, host_status, host_state):
                     response_status=500,
                     multiple=expected_request.ANY,
                     response={"message": f"std::runtime_error({null_ownership_error})", "code": 500}))
+        params = {}
+        if table is not None:
+            params["cf"] = table
         expected_requests.append(
-            expected_request('GET', f'/storage_service/ownership/{keyspace}',
+            expected_request('GET', f'/storage_service/ownership/{keyspace}', params=params,
                              response=map_to_json(endpoint_to_ownership, str)))
     expected_requests += [
         expected_request('GET', '/snitch/datacenter',
@@ -138,6 +162,8 @@ def test_ring(request, nodetool, keyspace, resolve_ip, host_status, host_state):
     args = []
     if keyspace:
         args.append(keyspace)
+    if table:
+        args.append(table)
     if resolve_ip:
         args.append(resolve_ip)
     res = nodetool('ring', *args, expected_requests=expected_requests)
@@ -208,3 +234,15 @@ Datacenter: {host.dc}
     expected_output += f'''\
   {warning}'''
     assert actual_output == expected_output
+
+
+def test_ring_tablet_keyspace_no_table(nodetool, scylla_only):
+    keyspace = "ks"
+
+    check_nodetool_fails_with(
+            nodetool,
+            ("ring", keyspace),
+            {"expected_requests": [
+                expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"},
+                                 multiple=expected_request.ONE, response=[keyspace])]},
+            ["error processing arguments: need a table to obtain ring for tablet keyspace"])
