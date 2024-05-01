@@ -1022,6 +1022,9 @@ public:
         auto out = _buffer_ostream.write_substream(overhead);
         out.fill('\0', overhead);
         _segment_manager->totals.buffer_list_bytes += _buffer.size_bytes();
+        // #18488
+        // we should be in a allocate or terminate call. In either case, account for overhead now already.
+        _segment_manager->account_memory_usage(overhead);
 
         assert(buffer_position() == overhead);
     }
@@ -1265,19 +1268,15 @@ public:
             background_cycle();
         }
 
-        size_t buf_memory = s;
         if (_buffer.empty()) {
             new_buffer(s);
-            buf_memory += buffer_position();
         }
 
         if (_closed) {
             throw std::runtime_error("commitlog: Cannot add data to a closed segment");
         }
 
-        buf_memory -= permit.release();
-        _segment_manager->account_memory_usage(buf_memory);
-
+        auto pos = buffer_position();
         auto& out = _buffer_ostream;
 
         std::optional<crc32_nbo> mecrc;
@@ -1321,6 +1320,15 @@ public:
             writer.result(entry, std::move(h));
         }
 
+        auto npos = buffer_position();
+
+        // #18488
+        // When released (notify_memory_written), it will be based on bytes on disk.
+        // Do this account based on "disk bytes" (buffer really), i.e. accounting for
+        // sector boundaries and CRC overhead.
+        auto buf_memory = npos - pos - permit.release(); /* size in permit was already subtracted from sem count - ignore it here */
+        _segment_manager->account_memory_usage(buf_memory);
+
         ++_segment_manager->totals.allocation_count;
         ++_num_allocs;
 
@@ -1330,7 +1338,7 @@ public:
             // If this buffer alone is too big, potentially bigger than the maximum allowed size,
             // then no other request will be allowed in to force the cycle()ing of this buffer. We
             // have to do it ourselves.
-            if ((buffer_position() >= (db::commitlog::segment::default_size))) {
+            if ((npos >= (db::commitlog::segment::default_size))) {
                 background_cycle();
             }
         }
