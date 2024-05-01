@@ -39,3 +39,6 @@ future<> apply_gently(mutation& target, const mutation& m);
 future<mutation> to_mutation_gently(const canonical_mutation& cm, schema_ptr s);
 
 future<frozen_mutation> freeze_gently(const mutation& m);
+future<mutation> unfreeze_gently(const frozen_mutation& fm, schema_ptr schema);
+// Caller is responsible for keeping the argument stable in memory
+future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation>);

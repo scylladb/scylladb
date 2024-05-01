@@ -184,7 +184,6 @@ public:
     // the mutation which was used to create this instance.
     // throws schema_mismatch_error otherwise.
     mutation unfreeze(schema_ptr s) const;
-    future<mutation> unfreeze_gently(schema_ptr s) const;
 
     // Automatically upgrades the stored mutation to the supplied schema with custom column mapping.
     mutation unfreeze_upgrading(schema_ptr schema, const column_mapping& cm) const;
@@ -235,8 +234,6 @@ public:
 frozen_mutation freeze(const mutation& m);
 std::vector<frozen_mutation> freeze(const std::vector<mutation>&);
 std::vector<mutation> unfreeze(const std::vector<frozen_mutation>&);
-// Caller is responsible for keeping the argument stable in memory
-future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation>);
 
 struct frozen_mutation_and_schema {
     frozen_mutation fm;

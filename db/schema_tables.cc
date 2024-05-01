@@ -82,6 +82,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/column_specification.hh"
 #include "types/types.hh"
+#include "mutation/async_utils.hh"
 
 using namespace db;
 using namespace std::chrono_literals;
@@ -800,7 +801,7 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
         auto s = db.local().find_schema(NAME, table);
         std::vector<mutation> mutations;
         for (auto&& p : rs->partitions()) {
-            auto mut = co_await p.mut().unfreeze_gently(s);
+            auto mut = co_await unfreeze_gently(p.mut(), s);
             auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
             if (!accept_keyspace(partition_key)) {
                 continue;
@@ -846,7 +847,7 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
         auto s = db.local().find_schema(NAME, table);
         std::vector<canonical_mutation> results;
         for (auto&& p : rs->partitions()) {
-            auto mut = co_await p.mut().unfreeze_gently(s);
+            auto mut = co_await unfreeze_gently(p.mut(), s);
             auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
             if (is_system_keyspace(partition_key)) {
                 continue;
@@ -898,7 +899,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
     if (partitions.size() == 0) {
         co_return mutation(s, std::move(dk));
     } else if (partitions.size() == 1) {
-        co_return co_await partitions[0].mut().unfreeze_gently(s);
+        co_return co_await unfreeze_gently(partitions[0].mut(), s);
     } else {
         auto&& ex = std::make_exception_ptr(std::invalid_argument("Results must have at most one partition"));
         co_return coroutine::exception(std::move(ex));

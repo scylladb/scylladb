@@ -29,6 +29,7 @@
 #include "mutation_partition_view.hh"
 #include "tombstone_gc.hh"
 #include "utils/unconst.hh"
+#include "mutation/async_utils.hh"
 
 logging::logger mplog("mutation_partition");
 
@@ -2294,7 +2295,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
         }
     } else {
         for (const partition& p : r.partitions()) {
-            auto m = co_await p.mut().unfreeze_gently(s);
+            auto m = co_await unfreeze_gently(p.mut(), s);
             const auto res = co_await std::move(m).consume_gently(consumer, reverse);
             if (res.stop == stop_iteration::yes) {
                 break;

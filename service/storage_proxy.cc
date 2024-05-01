@@ -19,6 +19,7 @@
 #include "unimplemented.hh"
 #include "mutation/mutation.hh"
 #include "mutation/frozen_mutation.hh"
+#include "mutation/async_utils.hh"
 #include "query_result_merger.hh"
 #include <seastar/core/do_with.hh>
 #include "message/messaging_service.hh"
@@ -4789,7 +4790,7 @@ public:
             const mutation& m = z.get<1>().mut;
             for (const version& v : z.get<0>()) {
                 auto diff = v.par
-                          ? m.partition().difference(*schema, (co_await v.par->mut().unfreeze_gently(schema)).partition())
+                          ? m.partition().difference(*schema, (co_await unfreeze_gently(v.par->mut(), schema)).partition())
                           : mutation_partition(*schema, m.partition());
                 std::optional<mutation> mdiff;
                 if (!diff.empty()) {

@@ -51,7 +51,7 @@ SEASTAR_THREAD_TEST_CASE(test_writing_and_reading) {
                 auto frozen = do_freeze_gently ? freeze_gently(m).get() : freeze(m);
                 BOOST_REQUIRE_EQUAL(frozen.schema_version(), m.schema()->version());
                 BOOST_REQUIRE(frozen.decorated_key(*m.schema()).equal(*m.schema(), m.decorated_key()));
-                auto unfrozen = do_unfreeze_gently ? frozen.unfreeze_gently(m.schema()).get() : frozen.unfreeze(m.schema());
+                auto unfrozen = do_unfreeze_gently ? unfreeze_gently(frozen, m.schema()).get() : frozen.unfreeze(m.schema());
                 assert_that(unfrozen).is_equal_to(m);
             });
         }

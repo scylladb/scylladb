@@ -16,6 +16,7 @@
 #include "converting_mutation_partition_applier.hh"
 #include "mutation/mutation_partition_serializer.hh"
 #include "idl/mutation.dist.impl.hh"
+#include "schema/schema_registry.hh"
 
 future<> apply_gently(mutation_partition& target, const schema& s, mutation_partition_view p,
         const schema& p_schema, mutation_application_stats& app_stats) {
@@ -104,4 +105,27 @@ freeze_gently(const mutation& m) {
     wr.end_mutation();
     fm.representation().reduce_chunk_count();
     co_return fm;
+}
+
+future<mutation>
+unfreeze_gently(const frozen_mutation& fm, schema_ptr schema) {
+    check_schema_version(fm.schema_version(), *schema);
+    mutation m(schema, fm.key());
+    partition_builder b(*schema, m.partition());
+    try {
+        co_await fm.partition().accept_gently(*schema, b);
+    } catch (...) {
+        std::throw_with_nested(std::runtime_error(format(
+                "frozen_mutation::unfreeze_gently(): failed unfreezing mutation {} of {}.{}", fm.key(), schema->ks_name(), schema->cf_name())));
+    }
+    co_return m;
+}
+
+future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation> muts) {
+    std::vector<mutation> result;
+    result.reserve(muts.size());
+    for (auto& fm : muts) {
+        result.push_back(co_await unfreeze_gently(fm, local_schema_registry().get(fm.schema_version())));
+    }
+    co_return result;
 }

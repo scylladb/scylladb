@@ -101,20 +101,6 @@ frozen_mutation::unfreeze(schema_ptr schema) const {
     return m;
 }
 
-future<mutation>
-frozen_mutation::unfreeze_gently(schema_ptr schema) const {
-    check_schema_version(schema_version(), *schema);
-    mutation m(schema, key());
-    partition_builder b(*schema, m.partition());
-    try {
-        co_await partition().accept_gently(*schema, b);
-    } catch (...) {
-        std::throw_with_nested(std::runtime_error(format(
-                "frozen_mutation::unfreeze_gently(): failed unfreezing mutation {} of {}.{}", key(), schema->ks_name(), schema->cf_name())));
-    }
-    co_return m;
-}
-
 mutation frozen_mutation::unfreeze_upgrading(schema_ptr schema, const column_mapping& cm) const {
     mutation m(schema, key());
     converting_mutation_partition_applier v(cm, *schema, m.partition());
@@ -143,15 +129,6 @@ std::vector<mutation> unfreeze(const std::vector<frozen_mutation>& muts) {
     }));
 }
 
-
-future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation> muts) {
-    std::vector<mutation> result;
-    result.reserve(muts.size());
-    for (auto& fm : muts) {
-        result.push_back(co_await fm.unfreeze_gently(local_schema_registry().get(fm.schema_version())));
-    }
-    co_return result;
-}
 
 mutation_partition_view frozen_mutation::partition() const {
     return mutation_partition_view::from_view(mutation_view().partition());
