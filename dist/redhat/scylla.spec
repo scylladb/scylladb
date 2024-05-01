@@ -11,9 +11,6 @@ Requires:       %{product}-server = %{version}-%{release}
 Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
 Requires:       %{product}-kernel-conf = %{version}-%{release}
-Requires:       %{product}-jmx = %{version}-%{release}
-Requires:       %{product}-tools = %{version}-%{release}
-Requires:       %{product}-tools-core = %{version}-%{release}
 Requires:       %{product}-node-exporter = %{version}-%{release}
 Requires:       %{product}-cqlsh = %{version}-%{release}
 Obsoletes:      scylla-server < 1.1
@@ -36,7 +33,7 @@ Obsoletes:      scylla-server < 1.1
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
 This package installs all required packages for ScyllaDB,  including
-%{product}-server, %{product}-jmx, %{product}-tools, %{product}-tools-core %{product}-node-exporter.
+%{product}-server, %{product}-node-exporter.
 
 # this is needed to prevent python compilation error on CentOS (#2235)
 %if 0%{?rhel}
