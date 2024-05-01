@@ -51,9 +51,6 @@ Package: %{product}
 Section: metapackages
 Architecture: any
 Depends: %{product}-server (= ${binary:Version})
- , %{product}-jmx (= ${binary:Version})
- , %{product}-tools (= ${binary:Version})
- , %{product}-tools-core (= ${binary:Version})
  , %{product}-kernel-conf (= ${binary:Version})
  , %{product}-node-exporter (= ${binary:Version})
  , %{product}-cqlsh (= ${binary:Version})
