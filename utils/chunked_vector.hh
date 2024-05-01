@@ -455,7 +455,7 @@ std::pair<typename chunked_vector<T, max_contiguous_allocation>::chunk_ptr, size
         // exponential increase when only one chunk to reduce copying
         new_chunk_capacity = _capacity * 2;
     } else {
-        // This case is for expanding the first chunk to max_chunk_capcity, or when adding more chunks, so
+        // This case is for expanding the first chunk to max_chunk_capacity, or when adding more chunks, so
         // add a chunk at a time later, since no copying will take place
         new_chunk_capacity = max_chunk_capacity();
         if (_chunks.capacity() == _chunks.size()) {
@@ -471,7 +471,7 @@ template <typename T, size_t max_contiguous_allocation>
 void chunked_vector<T, max_contiguous_allocation>::set_chunk_after_emplace_back(std::pair<chunk_ptr, size_t> x) noexcept {
     auto new_chunk_ptr = std::move(x.first);
     auto new_chunk_capacity = x.second;
-    // If the new chunk os replacing the first chunk, migrate the existing elements onto it.
+    // If the new chunk is replacing the first chunk, migrate the existing elements onto it.
     // Otherwise, just append it to the _chunks vector.
     // Note that this part must not throw, since we've already emplaced the new element into the
     // vector. If we lose the new_chunk now, we might lose data if we the new element was move-constructed.
@@ -488,7 +488,7 @@ void chunked_vector<T, max_contiguous_allocation>::set_chunk_after_emplace_back(
         // without migrating any existing elements.
         _chunks.emplace_back(std::move(new_chunk_ptr));
     }
-    // `(_chunks.size() - 1) * max_chunk_capacity()` is the capcity of all chunks except the last chunk.
+    // `(_chunks.size() - 1) * max_chunk_capacity()` is the capacity of all chunks except the last chunk.
     // If this is the first chunk - that part would be 0.
     // Add to it the last chunk `new_chunk_capacity`.
     _capacity = (_chunks.size() - 1) * max_chunk_capacity() + new_chunk_capacity;
