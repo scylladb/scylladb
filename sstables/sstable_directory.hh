@@ -144,7 +144,6 @@ private:
     lw_shared_ptr<const data_dictionary::storage_options> _storage_opts;
     sstring _table_dir;
     sstable_state _state;
-    std::filesystem::path _sstable_dir; // FIXME -- remove eventually
     io_error_handler_gen _error_handler_gen;
     std::unique_ptr<storage> _storage;
     std::unique_ptr<components_lister> _lister;
