@@ -3063,10 +3063,6 @@ future<> sstable::destroy() {
     }
 }
 
-std::ostream& operator<<(std::ostream& out, const deletion_time& dt) {
-    return out << "{timestamp=" << dt.marked_for_delete_at << ", deletion_time=" << dt.marked_for_delete_at << "}";
-}
-
 std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_type t) const noexcept {
     if (_large_data_stats) {
         auto it = _large_data_stats->map.find(t);
