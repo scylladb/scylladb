@@ -336,8 +336,6 @@ if __name__ == '__main__':
         verify_package = interactive_ask_service('Do you want to verify the ScyllaDB packages are installed?', 'Yes - runs a script to confirm that ScyllaDB is installed. No - skips the installation check.', verify_package)
         args.no_verify_package = not verify_package
         if verify_package:
-            do_verify_package_and_exit(f'{PRODUCT}-jmx')
-            do_verify_package_and_exit(f'{PRODUCT}-tools')
             do_verify_package_and_exit(f'{PRODUCT}-node-exporter')
 
     enable_service = interactive_ask_service('Do you want the Scylla server service to automatically start when the Scylla node boots?', 'Yes - Scylla server service automatically starts on Scylla node boot. No - skips this step. Note you will have to start the Scylla Server service manually.', enable_service)
