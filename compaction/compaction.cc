@@ -524,9 +524,6 @@ protected:
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
         , _progress_monitor(progress_monitor)
     {
-        for (auto& sst : _sstables) {
-            _stats_collector.update(sst->get_encoding_stats_for_compaction());
-        }
         std::unordered_set<run_id> ssts_run_ids;
         _contains_multi_fragment_runs = std::any_of(_sstables.begin(), _sstables.end(), [&ssts_run_ids] (shared_sstable& sst) {
             return !ssts_run_ids.insert(sst->run_identifier()).second;
@@ -745,6 +742,7 @@ private:
                 log_debug("Fully expired sstable {} will be dropped on compaction completion", sst->get_filename());
                 continue;
             }
+            _stats_collector.update(sst->get_encoding_stats_for_compaction());
 
             _cdata.compaction_size += sst->data_size();
             // We also capture the sstable, so we keep it alive while the read isn't done
