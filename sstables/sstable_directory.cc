@@ -55,7 +55,7 @@ std::unique_ptr<sstable_directory::components_lister>
 sstable_directory::make_components_lister() {
     return std::visit(overloaded_functor {
         [this] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstable_directory::components_lister> {
-            return std::make_unique<sstable_directory::filesystem_components_lister>(_sstable_dir);
+            return std::make_unique<sstable_directory::filesystem_components_lister>(make_path(_table_dir, _state));
         },
         [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
             return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), _table_dir);
