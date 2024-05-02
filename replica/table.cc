@@ -1549,15 +1549,15 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
 
 future<>
 compaction_group::delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove) {
-    return seastar::try_with_gate(_t._sstable_deletion_gate, [this, sstables_to_remove = std::move(sstables_to_remove)] () mutable {
-        return with_semaphore(_t._sstable_deletion_sem, 1, [this, sstables_to_remove = std::move(sstables_to_remove)] () mutable {
-            return _t.get_sstables_manager().delete_atomically(std::move(sstables_to_remove));
-        });
-    }).handle_exception([] (std::exception_ptr ex) {
+    try {
+        auto gh = _t._sstable_deletion_gate.hold();
+        auto units = co_await get_units(_t._sstable_deletion_sem, 1);
+        co_await _t.get_sstables_manager().delete_atomically(std::move(sstables_to_remove));
+    } catch (...) {
         // There is nothing more we can do here.
         // Any remaining SSTables will eventually be re-compacted and re-deleted.
-        tlogger.error("Compacted SSTables deletion failed: {}. Ignored.", std::move(ex));
-    });
+        tlogger.error("Compacted SSTables deletion failed: {}. Ignored.", std::current_exception());
+    }
 }
 
 future<>
