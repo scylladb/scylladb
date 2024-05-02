@@ -3001,6 +3001,14 @@ future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
         return mutate_locally(std::move(mutation), tr_state, timeout, _write_smp_service_group, rate_limit_info);
 }
+
+future<>
+storage_proxy::mutate_locally(std::vector<frozen_mutation_and_schema> mutations, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+    co_await coroutine::parallel_for_each(mutations, [&] (const frozen_mutation_and_schema& x) {
+        return mutate_locally(x.s, x.fm, tr_state, sync, timeout, rate_limit_info);
+    });
+}
+
 future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();

@@ -133,9 +133,8 @@ static future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_addr
         throw std::runtime_error(::format("Error while applying mutations: {}", e));
     }
 
-    co_await coroutine::parallel_for_each(mutations, [&] (const frozen_mutation_and_schema& x) {
-        return proxy.mutate_locally(x.s, x.fm, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
-    });
+    co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+
     if (need_system_topology_flush) {
         slogger.trace("write_mutations_to_database: flushing {}.{}", db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
         co_await proxy.get_db().local().flush(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);

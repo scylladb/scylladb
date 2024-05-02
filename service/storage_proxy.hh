@@ -556,6 +556,9 @@ public:
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate());
+    // Applies a vector of frozen_mutation:s and their schemas on this node, in parallel.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_locally(std::vector<frozen_mutation_and_schema> mutations, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate());
 
     future<> mutate_hint(const schema_ptr&, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout = clock_type::time_point::max());
 
