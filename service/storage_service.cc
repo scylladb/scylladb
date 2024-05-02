@@ -40,6 +40,7 @@
 #include "replica/tablet_mutation_builder.hh"
 #include <seastar/core/smp.hh>
 #include "mutation/canonical_mutation.hh"
+#include "mutation/async_utils.hh"
 #include "seastar/core/on_internal_error.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -781,19 +782,21 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
         // Split big mutations into smaller ones, prepare frozen_muts_to_apply
         std::vector<frozen_mutation> frozen_muts_to_apply;
         {
-            std::vector<mutation> muts_to_apply;
-            muts_to_apply.reserve(std::distance(it, snp.mutations.end()));
+            frozen_muts_to_apply.reserve(std::distance(it, snp.mutations.end()));
             const auto max_size = _db.local().schema_commitlog()->max_record_size() / 2;
             for (auto i = it; i != snp.mutations.end(); i++) {
                 const auto& m = *i;
-                auto mut = m.to_mutation(s);
+                auto mut = co_await to_mutation_gently(m, s);
                 if (m.representation().size() <= max_size) {
-                    muts_to_apply.push_back(std::move(mut));
+                    frozen_muts_to_apply.push_back(co_await freeze_gently(mut));
                 } else {
-                    co_await split_mutation(std::move(mut), muts_to_apply, max_size);
+                    std::vector<mutation> split_muts;
+                    co_await split_mutation(std::move(mut), split_muts, max_size);
+                    for (auto& mut : split_muts) {
+                        frozen_muts_to_apply.push_back(co_await freeze_gently(mut));
+                    }
                 }
             }
-            frozen_muts_to_apply = freeze(muts_to_apply);
         }
 
         // Apply non-atomically so as not to hit the commitlog size limit.
@@ -6402,8 +6405,7 @@ future<std::vector<canonical_mutation>> storage_service::get_system_mutations(sc
     auto rs = co_await db::system_keyspace::query_mutations(_db, schema);
     result.reserve(rs->partitions().size());
     for (const auto& p : rs->partitions()) {
-        result.emplace_back(canonical_mutation{p.mut().unfreeze(schema)});
-        co_await coroutine::maybe_yield();
+        result.emplace_back(co_await make_canonical_mutation_gently(co_await unfreeze_gently(p.mut(), schema)));
     }
     co_return result;
 }

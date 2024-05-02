@@ -1346,12 +1346,6 @@ public:
     // same instance each time until stop_iteration::yes is returned.
     stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker*,
             mutation_application_stats& app_stats, is_preemptible, apply_resume&);
-    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
-            mutation_application_stats& app_stats, is_preemptible, apply_resume&);
-    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker,
-            mutation_application_stats& app_stats);
-    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
-            mutation_application_stats& app_stats);
 
     // Converts partition to the new schema. When succeeds the partition should only be accessed
     // using the new schema.

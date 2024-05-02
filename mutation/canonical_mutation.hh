@@ -19,6 +19,7 @@
 class canonical_mutation {
     bytes_ostream _data;
 public:
+    canonical_mutation() = default;
     explicit canonical_mutation(bytes_ostream);
     explicit canonical_mutation(const mutation&);
 
@@ -37,6 +38,7 @@ public:
     table_id column_family_id() const;
 
     const bytes_ostream& representation() const { return _data; }
+    bytes_ostream& representation() { return _data; }
 
     friend fmt::formatter<canonical_mutation>;
 };

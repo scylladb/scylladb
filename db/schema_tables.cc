@@ -82,6 +82,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/column_specification.hh"
 #include "types/types.hh"
+#include "mutation/async_utils.hh"
 
 using namespace db;
 using namespace std::chrono_literals;
@@ -774,18 +775,18 @@ schema_ptr scylla_table_schema_history() {
 
 static
 mutation
-redact_columns_for_missing_features(mutation m, schema_features features) {
+redact_columns_for_missing_features(mutation&& m, schema_features features) {
     if (features.contains(schema_feature::CDC_OPTIONS) && features.contains(schema_feature::PER_TABLE_PARTITIONERS)) {
-        return m;
+        return std::move(m);
     }
     if (m.schema()->cf_name() != SCYLLA_TABLES) {
-        return m;
+        return std::move(m);
     }
     slogger.debug("adjusting schema_tables mutation due to possible in-progress cluster upgrade");
     // The global schema ptr make sure it will be registered in the schema registry.
     global_schema_ptr redacted_schema{scylla_tables(features)};
     m.upgrade(redacted_schema);
-    return m;
+    return std::move(m);
 }
 
 /**
@@ -800,7 +801,7 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
         auto s = db.local().find_schema(NAME, table);
         std::vector<mutation> mutations;
         for (auto&& p : rs->partitions()) {
-            auto mut = co_await p.mut().unfreeze_gently(s);
+            auto mut = co_await unfreeze_gently(p.mut(), s);
             auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
             if (!accept_keyspace(partition_key)) {
                 continue;
@@ -845,14 +846,15 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
         auto rs = co_await db::system_keyspace::query_mutations(db, NAME, table);
         auto s = db.local().find_schema(NAME, table);
         std::vector<canonical_mutation> results;
+        results.reserve(rs->partitions().size());
         for (auto&& p : rs->partitions()) {
-            auto mut = co_await p.mut().unfreeze_gently(s);
+            auto mut = co_await unfreeze_gently(p.mut(), s);
             auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
             if (is_system_keyspace(partition_key)) {
                 continue;
             }
             mut = redact_columns_for_missing_features(std::move(mut), features);
-            results.emplace_back(mut);
+            results.emplace_back(co_await make_canonical_mutation_gently(mut));
         }
         co_return results;
     };
@@ -866,7 +868,7 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
 std::vector<mutation>
 adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features) {
     for (auto& m : schema) {
-        m = redact_columns_for_missing_features(m, features);
+        m = redact_columns_for_missing_features(std::move(m), features);
     }
     return schema;
 }
@@ -898,7 +900,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
     if (partitions.size() == 0) {
         co_return mutation(s, std::move(dk));
     } else if (partitions.size() == 1) {
-        co_return co_await partitions[0].mut().unfreeze_gently(s);
+        co_return co_await unfreeze_gently(partitions[0].mut(), s);
     } else {
         auto&& ex = std::make_exception_ptr(std::invalid_argument("Results must have at most one partition"));
         co_return coroutine::exception(std::move(ex));

@@ -14,6 +14,7 @@
 #include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "frozen_mutation.hh"
+#include "seastar/coroutine/maybe_yield.hh"
 
 using namespace db;
 
@@ -182,6 +183,25 @@ void mutation_partition_serializer::write_serialized(Writer&& writer, const sche
     std::move(clustering_rows).end_rows().end_mutation_partition();
 }
 
+template<typename Writer>
+future<> mutation_partition_serializer::write_serialized_gently(Writer&& writer, const schema& s, const mutation_partition& mp)
+{
+    auto srow_writer = std::move(writer).write_tomb(mp.partition_tombstone()).start_static_row();
+    auto row_tombstones = write_row_cells(std::move(srow_writer), mp.static_row().get(), s, column_kind::static_column).end_static_row().start_range_tombstones();
+    for (auto&& rte : mp.row_tombstones()) {
+        co_await coroutine::maybe_yield();
+        auto& rt = rte.tombstone();
+        row_tombstones.add().write_start(rt.start).write_tomb(rt.tomb).write_start_kind(rt.start_kind)
+            .write_end(rt.end).write_end_kind(rt.end_kind).end_range_tombstone();
+    }
+    auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
+    for (auto&& cr : mp.non_dummy_rows()) {
+        co_await coroutine::maybe_yield();
+        write_row(clustering_rows.add(), s, cr.key(), cr.row().cells(), cr.row().marker(), cr.row().deleted_at()).end_deletable_row();
+    }
+    std::move(clustering_rows).end_rows().end_mutation_partition();
+}
+
 mutation_partition_serializer::mutation_partition_serializer(const schema& schema, const mutation_partition& p)
     : _schema(schema), _p(p)
 { }
@@ -194,6 +214,15 @@ mutation_partition_serializer::write(bytes_ostream& out) const {
 void mutation_partition_serializer::write(ser::writer_of_mutation_partition<bytes_ostream>&& wr) const
 {
     write_serialized(std::move(wr), _schema, _p);
+}
+
+future<> mutation_partition_serializer::write_gently(bytes_ostream& out) const {
+    return write_gently(ser::writer_of_mutation_partition<bytes_ostream>(out));
+}
+
+future<> mutation_partition_serializer::write_gently(ser::writer_of_mutation_partition<bytes_ostream>&& wr) const
+{
+    return write_serialized_gently(std::move(wr), _schema, _p);
 }
 
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,

@@ -21,6 +21,7 @@
 #include "replica/tablet_mutation_builder.hh"
 #include "sstables/sstable_set.hh"
 #include "dht/token.hh"
+#include "mutation/async_utils.hh"
 
 namespace replica {
 
@@ -342,7 +343,7 @@ future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<r
     std::vector<canonical_mutation> result;
     result.reserve(rs->partitions().size());
     for (auto& p: rs->partitions()) {
-        result.emplace_back(canonical_mutation(co_await p.mut().unfreeze_gently(s)));
+        result.emplace_back(co_await make_canonical_mutation_gently(co_await unfreeze_gently(p.mut(), s)));
     }
     co_return std::move(result);
 }

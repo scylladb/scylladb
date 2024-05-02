@@ -50,6 +50,7 @@ void time_it(Func func, int iterations = 5, int iterations_between_clock_reading
 struct executor_shard_stats {
     uint64_t invocations = 0;
     uint64_t allocations = 0;
+    uint64_t log_allocations = 0;
     uint64_t tasks_executed = 0;
     uint64_t instructions_retired = 0;
     uint64_t errors = 0;
@@ -60,6 +61,7 @@ executor_shard_stats
 operator+(executor_shard_stats a, executor_shard_stats b) {
     a.invocations += b.invocations;
     a.allocations += b.allocations;
+    a.log_allocations += b.log_allocations;
     a.tasks_executed += b.tasks_executed;
     a.instructions_retired += b.instructions_retired;
     a.errors += b.errors;
@@ -71,6 +73,7 @@ executor_shard_stats
 operator-(executor_shard_stats a, executor_shard_stats b) {
     a.invocations -= b.invocations;
     a.allocations -= b.allocations;
+    a.log_allocations -= b.log_allocations;
     a.tasks_executed -= b.tasks_executed;
     a.instructions_retired -= b.instructions_retired;
     a.errors -= b.errors;
@@ -79,6 +82,7 @@ operator-(executor_shard_stats a, executor_shard_stats b) {
 
 uint64_t perf_tasks_processed();
 uint64_t perf_mallocs();
+uint64_t perf_logallocs();
 
 // Drives concurrent and continuous execution of given asynchronous action
 // until a deadline. Counts invocations and collects statistics.
@@ -143,6 +147,7 @@ executor<Func>::executor_shard_stats_snapshot() {
     return executor_shard_stats{
         .invocations = _count,
         .allocations = perf_mallocs(),
+        .log_allocations = perf_logallocs(),
         .tasks_executed = perf_tasks_processed(),
         .instructions_retired = _instructions_retired_counter.read(),
         .errors = _errors,
@@ -152,6 +157,7 @@ executor<Func>::executor_shard_stats_snapshot() {
 struct perf_result {
     double throughput;
     double mallocs_per_op;
+    double logallocs_per_op;
     double tasks_per_op;
     double instructions_per_op;
     uint64_t errors;
@@ -207,6 +213,7 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
 
         result.throughput = static_cast<double>(stats.invocations) / duration;
         result.mallocs_per_op = double(stats.allocations) / stats.invocations;
+        result.logallocs_per_op = double(stats.log_allocations) / stats.invocations;
         result.tasks_per_op = double(stats.tasks_executed) / stats.invocations;
         result.instructions_per_op = double(stats.instructions_retired) / stats.invocations;
         result.errors = stats.errors;

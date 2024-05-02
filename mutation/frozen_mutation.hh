@@ -165,6 +165,7 @@ private:
     partition_key deserialize_key() const;
     ser::mutation_view mutation_view() const;
 public:
+    explicit frozen_mutation(const partition_key& key) : _pk(key) {}
     explicit frozen_mutation(const mutation& m);
     explicit frozen_mutation(bytes_ostream&& b);
     frozen_mutation(bytes_ostream&& b, partition_key key);
@@ -172,6 +173,7 @@ public:
     frozen_mutation(const frozen_mutation& m) = default;
     frozen_mutation& operator=(frozen_mutation&&) = default;
     frozen_mutation& operator=(const frozen_mutation&) = default;
+    bytes_ostream& representation() { return _bytes; }
     const bytes_ostream& representation() const { return _bytes; }
     table_id column_family_id() const;
     table_schema_version schema_version() const; // FIXME: Should replace column_family_id()
@@ -182,7 +184,6 @@ public:
     // the mutation which was used to create this instance.
     // throws schema_mismatch_error otherwise.
     mutation unfreeze(schema_ptr s) const;
-    future<mutation> unfreeze_gently(schema_ptr s) const;
 
     // Automatically upgrades the stored mutation to the supplied schema with custom column mapping.
     mutation unfreeze_upgrading(schema_ptr schema, const column_mapping& cm) const;
@@ -233,8 +234,6 @@ public:
 frozen_mutation freeze(const mutation& m);
 std::vector<frozen_mutation> freeze(const std::vector<mutation>&);
 std::vector<mutation> unfreeze(const std::vector<frozen_mutation>&);
-// Caller is responsible for keeping the argument stable in memory
-future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation>);
 
 struct frozen_mutation_and_schema {
     frozen_mutation fm;

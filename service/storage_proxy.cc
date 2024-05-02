@@ -19,6 +19,7 @@
 #include "unimplemented.hh"
 #include "mutation/mutation.hh"
 #include "mutation/frozen_mutation.hh"
+#include "mutation/async_utils.hh"
 #include "query_result_merger.hh"
 #include <seastar/core/do_with.hh>
 #include "message/messaging_service.hh"
@@ -3000,6 +3001,14 @@ future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
         return mutate_locally(std::move(mutation), tr_state, timeout, _write_smp_service_group, rate_limit_info);
 }
+
+future<>
+storage_proxy::mutate_locally(std::vector<frozen_mutation_and_schema> mutations, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+    co_await coroutine::parallel_for_each(mutations, [&] (const frozen_mutation_and_schema& x) {
+        return mutate_locally(x.s, x.fm, tr_state, sync, timeout, rate_limit_info);
+    });
+}
+
 future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
@@ -4789,7 +4798,7 @@ public:
             const mutation& m = z.get<1>().mut;
             for (const version& v : z.get<0>()) {
                 auto diff = v.par
-                          ? m.partition().difference(*schema, (co_await v.par->mut().unfreeze_gently(schema)).partition())
+                          ? m.partition().difference(*schema, (co_await unfreeze_gently(v.par->mut(), schema)).partition())
                           : mutation_partition(*schema, m.partition());
                 std::optional<mutation> mdiff;
                 if (!diff.empty()) {

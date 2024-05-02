@@ -39,6 +39,7 @@
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/container/static_vector.hpp>
 #include "mutation/frozen_mutation.hh"
+#include "mutation/async_utils.hh"
 #include <seastar/core/do_with.hh>
 #include "service/migration_listener.hh"
 #include "cell_locking.hh"
@@ -1807,6 +1808,14 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
     auto& cf = find_column_family(m.column_family_id());
 
     data_listeners().on_write(m_schema, m);
+
+    if (m.representation().size() > 128*1024) {
+        return unfreeze_gently(m, std::move(m_schema)).then([&cf, h = std::move(h), timeout] (auto m) mutable {
+            return do_with(std::move(m), [&cf, h = std::move(h), timeout] (auto& m) mutable {
+                return cf.apply(m, std::move(h), timeout);
+            });
+        });
+    }
 
     return cf.apply(m, std::move(m_schema), std::move(h), timeout);
 }

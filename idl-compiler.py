@@ -1093,6 +1093,15 @@ def add_param_writer_object(name, base_state, typ, var_type="", var_index=None, 
                 {set_command}
                 return {return_command};
             }}""").format(**locals())
+        ret += reindent(4, """
+            template<typename AsyncSerializer>
+            future<after_{base_state}__{name}<Output>> {name}{var_type}_gently(AsyncSerializer&& f) && {{
+                {set_variant_index}
+                return futurize_invoke(f, writer_of_{typename}<Output>(_out)).then([this] {{
+                    {set_command}
+                    return after_{base_state}__{name}<Output>{return_command};
+                }});
+            }}""").format(**locals())
     return ret
 
 
@@ -1699,12 +1708,10 @@ def setup_additional_metadata(tree, ns_context = [], parent_template_params=[]):
 
 
 def load_file(name):
-    if config.o:
-        cout = open(config.o.replace('.hh', '.impl.hh'), "w+")
-        hout = open(config.o, "w+")
-    else:
-        cout = open(name.replace(EXTENSION, '.dist.impl.hh'), "w+")
-        hout = open(name.replace(EXTENSION, '.dist.hh'), "w+")
+    cname = config.o.replace('.hh', '.impl.hh') if config.o else name.replace(EXTENSION, '.dist.impl.hh')
+    hname = config.o or name.replace(EXTENSION, '.dist.hh')
+    cout = open(cname, "w+")
+    hout = open(hname, "w+")
     print_cw(hout)
     fprintln(hout, """
  /*
@@ -1712,8 +1719,10 @@ def load_file(name):
   * The object definition
   */
     """)
-    print_cw(cout)
     fprintln(hout, "#include \"serializer.hh\"\n")
+
+    print_cw(cout)
+    fprintln(cout, f"#include \"{os.path.basename(hname)}\"")
     fprintln(cout, "#include \"serializer_impl.hh\"")
     fprintln(cout, "#include \"serialization_visitors.hh\"")
 

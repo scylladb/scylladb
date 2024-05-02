@@ -14,6 +14,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "mutation/frozen_mutation.hh"
+#include "mutation/async_utils.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -42,32 +43,19 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment::printer& p) 
     return os;
 }
 
-template <typename UnfreezeFunc>
-requires std::same_as<std::invoke_result_t<UnfreezeFunc, const frozen_mutation&, schema_ptr>, mutation>
-static future<> _test_freeze_unfreeze(UnfreezeFunc&& unfreeze_func) {
-    return seastar::async([unfreeze_func = std::move(unfreeze_func)] {
-        for_each_mutation([&unfreeze_func](const mutation &m) {
-            auto frozen = freeze(m);
-            BOOST_REQUIRE_EQUAL(frozen.schema_version(), m.schema()->version());
-            assert_that(unfreeze_func(frozen, m.schema())).is_equal_to(m);
-            BOOST_REQUIRE(frozen.decorated_key(*m.schema()).equal(*m.schema(), m.decorated_key()));
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_writing_and_reading) {
-    return _test_freeze_unfreeze([] (const frozen_mutation& fm, schema_ptr s) {
-        return fm.unfreeze(std::move(s));
-    });
-}
-
-SEASTAR_TEST_CASE(test_writing_and_reading_gently) {
-    return _test_freeze_unfreeze([] (const frozen_mutation& fm, schema_ptr s) {
-        return fm.unfreeze_gently(std::move(s)).handle_exception([] (std::exception_ptr ex) {
-            testlog.error("test_writing_and_reading_gently: {}", ex);
-            return make_exception_future<mutation>(std::move(ex));
-        }).get();
-    });
+SEASTAR_THREAD_TEST_CASE(test_writing_and_reading) {
+    for (auto do_freeze_gently : {false, true}) {
+        for (auto do_unfreeze_gently : {false, true}) {
+            testlog.debug("test_writing_and_reading: freeze_gently={} unfreeze_gently={}", do_freeze_gently, do_unfreeze_gently);
+            for_each_mutation([&](const mutation &m) {
+                auto frozen = do_freeze_gently ? freeze_gently(m).get() : freeze(m);
+                BOOST_REQUIRE_EQUAL(frozen.schema_version(), m.schema()->version());
+                BOOST_REQUIRE(frozen.decorated_key(*m.schema()).equal(*m.schema(), m.decorated_key()));
+                auto unfrozen = do_unfreeze_gently ? unfreeze_gently(frozen, m.schema()).get() : frozen.unfreeze(m.schema());
+                assert_that(unfrozen).is_equal_to(m);
+            });
+        }
+    }
 }
 
 SEASTAR_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_applying_regular_mutation) {

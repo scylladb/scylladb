@@ -1441,6 +1441,7 @@ inline void segment_pool::on_segment_compaction(size_t used_size) noexcept {
 
 inline void segment_pool::on_memory_allocation(size_t size) noexcept {
     _stats.memory_allocated += size;
+    ++_stats.num_allocations;
 }
 
 inline void segment_pool::on_memory_deallocation(size_t size) noexcept {
