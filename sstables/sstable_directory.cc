@@ -55,7 +55,7 @@ std::unique_ptr<sstable_directory::components_lister>
 sstable_directory::make_components_lister() {
     return std::visit(overloaded_functor {
         [this] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstable_directory::components_lister> {
-            return std::make_unique<sstable_directory::filesystem_components_lister>(_sstable_dir);
+            return std::make_unique<sstable_directory::filesystem_components_lister>(make_path(_table_dir, _state));
         },
         [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
             return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), _table_dir);
@@ -109,7 +109,6 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _storage_opts(std::move(storage_opts))
     , _table_dir(std::move(table_dir))
     , _state(state)
-    , _sstable_dir(make_path(_table_dir, _state))
     , _error_handler_gen(error_handler_gen)
     , _storage(make_storage(_manager, *_storage_opts, _table_dir, _state))
     , _lister(make_components_lister())
@@ -227,7 +226,7 @@ sstable_directory::sort_sstable(sstables::entry_descriptor desc, process_flags f
 }
 
 sstring sstable_directory::sstable_filename(const sstables::entry_descriptor& desc) const {
-    return sstable::filename(_sstable_dir.native(), _schema->ks_name(), _schema->cf_name(), desc.version, desc.generation, desc.format, component_type::Data);
+    return sstable::filename(make_path(_table_dir, _state).native(), _schema->ks_name(), _schema->cf_name(), desc.version, desc.generation, desc.format, component_type::Data);
 }
 
 generation_type
@@ -274,7 +273,6 @@ future<> sstable_directory::sstables_registry_components_lister::prepare(sstable
 }
 
 future<> sstable_directory::process_sstable_dir(process_flags flags) {
-    dirlog.debug("Start processing directory {} for SSTables (storage {})", _sstable_dir, _storage_opts->type_string());
     return _lister->process(*this, flags);
 }
 
@@ -285,6 +283,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
         }
     }
 
+    dirlog.debug("Start processing directory {} for SSTables", _directory);
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
     // However, we still want to open the files and especially call process_dir() in a distributed
     // fashion not to overload any shard. Also in the common case the SSTables will all be
@@ -374,6 +373,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
 }
 
 future<> sstable_directory::sstables_registry_components_lister::process(sstable_directory& directory, process_flags flags) {
+    dirlog.debug("Start processing registry entry {} (state {})", _location, directory._state);
     return _sstables_registry.sstables_registry_list(_location, [this, flags, &directory] (sstring status, sstable_state state, entry_descriptor desc) {
         if (state != directory._state) {
             return make_ready_future<>();
