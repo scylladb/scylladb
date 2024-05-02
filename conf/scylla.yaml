@@ -550,9 +550,19 @@ murmur3_partitioner_ignore_msb_bits: 12
 # Set to `false` to fall-back to the old algorithm.
 # enable_parallelized_aggregation: true
 
+<<<<<<< HEAD
 # When enabled, the node will start using separate commit log for schema changes
 # right from the boot. Without this, it only happens following a restart after
 # all nodes in the cluster were upgraded.
+=======
+# Time for which task manager task is kept in memory after it completes.
+# task_ttl_in_seconds: 0
+
+# In materialized views, restrictions are allowed only on the view's primary key columns.
+# In old versions Scylla mistakenly allowed IS NOT NULL restrictions on columns which were not part
+# of the view's primary key. These invalid restrictions were ignored.
+# This option controls the behavior when someone tries to create a view with such invalid IS NOT NULL restrictions.
+>>>>>>> 6d382a9063 (tasks: use default task_ttl in scylla.yaml)
 #
 # Having this option ensures that new installations don't need a rolling restart
 # to use the feature, but upgrades do.
