@@ -3722,6 +3722,11 @@ std::vector<char*> massage_argv(int argc, char** argv) {
 
 } // anonymous namespace
 
+#if FMT_VERSION == 100000
+template <>
+struct fmt::formatter<char*> : fmt::formatter<const char*> {};
+#endif
+
 namespace tools {
 
 int scylla_nodetool_main(int argc, char** argv) {
