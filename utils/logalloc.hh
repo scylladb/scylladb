@@ -73,6 +73,7 @@ public:
         uint64_t memory_freed;
         uint64_t memory_compacted;
         uint64_t memory_evicted;
+        uint64_t num_allocations;
 
         friend stats operator+(const stats& s1, const stats& s2) {
             stats result(s1);
@@ -91,6 +92,7 @@ public:
             memory_freed += other.memory_freed;
             memory_compacted += other.memory_compacted;
             memory_evicted += other.memory_evicted;
+            num_allocations += other.num_allocations;
             return *this;
         }
         stats& operator-=(const stats& other) {
@@ -100,6 +102,7 @@ public:
             memory_freed -= other.memory_freed;
             memory_compacted -= other.memory_compacted;
             memory_evicted -= other.memory_evicted;
+            num_allocations -= other.num_allocations;
             return *this;
         }
     };
