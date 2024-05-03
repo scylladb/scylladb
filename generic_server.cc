@@ -145,10 +145,10 @@ future<> server::shutdown() {
 }
 
 future<>
-server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions) {
+server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions) {
     auto f = make_ready_future<shared_ptr<seastar::tls::server_credentials>>(nullptr);
-    if (creds) {
-        f = creds->build_reloadable_server_credentials([this](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
+    if (builder) {
+        f = builder->build_reloadable_server_credentials([this](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
             if (ep) {
                 _logger.warn("Exception loading {}: {}", files, ep);
             } else {
