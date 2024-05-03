@@ -37,7 +37,11 @@ Launching ScyllaDB on GCP
    
         gcloud compute instances create scylla-node1 --image scylladb-5-2-1 --image-project scylla-images --local-ssd interface=nvme --machine-type=n1-highmem-8
    
+<<<<<<< HEAD
    To add more storage to the VM, add multipe ``--local-ssd interface=nvm`` options to the command. For example, the following 
+=======
+   To add more storage to the VM, add multiple ``--local-ssd interface=nvme`` options to the command. For example, the following 
+>>>>>>> 35b9d1bd16 (Update launch-on-gcp.rst)
    command will launch a VM with 4 SSD, and 1.5TB of data (4 * `375 GB <https://cloud.google.com/compute/docs/disks/local-ssd>`_):
 
    .. code-block:: console
