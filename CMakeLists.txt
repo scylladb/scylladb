@@ -69,7 +69,7 @@ set(ABSL_DEFAULT_LINKOPTS
     $<$<IN_LIST:$<CONFIG>,Debug;Sanitize>:$<TARGET_PROPERTY:Sanitizers::address,INTERFACE_LINK_LIBRARIES>;$<TARGET_PROPERTY:Sanitizers::undefined_behavior,INTERFACE_LINK_LIBRARIES>>)
 add_subdirectory(abseil)
 add_library(absl-headers INTERFACE)
-target_include_directories(absl-headers INTERFACE
+target_include_directories(absl-headers SYSTEM INTERFACE
     "${PROJECT_SOURCE_DIR}/abseil")
 add_library(absl::headers ALIAS absl-headers)
 
