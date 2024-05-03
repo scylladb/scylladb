@@ -11,6 +11,7 @@ target_include_directories(cdc
     ${CMAKE_SOURCE_DIR})
 target_link_libraries(cdc
   PUBLIC
+    absl::headers
     Seastar::seastar
     xxHash::xxhash
   PRIVATE

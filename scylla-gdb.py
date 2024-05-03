@@ -589,8 +589,52 @@ class flat_hash_map:
         return self.__nonzero__()
 
 
+class absl_container:
+    # absl_container is the underlying type for flat_hash_map and flat_hash_set
+    # if we need to print flat_hash_set, we should yield the element of set
+    # instead of <key, value> tuple in `__iter__()`
+    def __init__(self, ref):
+        self.val = ref
+        HasInfozShift = 1
+        self.size = ref["settings_"]["value"]["size_"] >> HasInfozShift
+
+    def __len__(self):
+        return self.size
+
+    def __iter__(self):
+        if self.size == 0:
+            return
+        capacity = int(self.val["settings_"]["value"]["capacity_"])
+        control = self.val["settings_"]["value"]["control_"]
+        # for the map the slot_type is std::pair<K, V>
+        slot_type = gdb.lookup_type(str(self.val.type.strip_typedefs()) + "::slot_type")
+        slots = self.val["settings_"]["value"]["slots_"].cast(slot_type.pointer())
+        for i in range(capacity):
+            ctrl_t = int(control[i])
+            # if the control is empty or deleted, its value is less than -1, see
+            # https://github.com/abseil/abseil-cpp/blob/c1e1b47d989978cde8c5a2a219df425b785a0c47/absl/container/internal/raw_hash_set.h#L487-L503
+            if ctrl_t == -1:
+                break
+            if ctrl_t >= 0:
+                # NOTE: this only works for flat_hash_map
+                yield slots[i]['key'], slots[i]['value']
+
+    def __nonzero__(self):
+        return self.size > 0
+
+    def __bool__(self):
+        return self.size > 0
+
+
 def unordered_map(ref):
-    return flat_hash_map(ref) if ref.type.name.startswith('flat_hash_map') else std_unordered_map(ref)
+    if ref.type.name.startswith('flat_hash_map'):
+        try:
+            return flat_hash_map(ref)
+        except gdb.error:
+            # newer absl container uses a different memory layout
+            return absl_container(ref)
+    else:
+        return std_unordered_map(ref)
 
 
 def std_priority_queue(ref):

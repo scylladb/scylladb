@@ -72,7 +72,8 @@ target_link_libraries(api
   idl
   wasmtime_bindings
   Seastar::seastar
-  xxHash::xxhash)
+  xxHash::xxhash
+  absl::headers)
 
 check_headers(check-headers api
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

@@ -282,7 +282,7 @@ def generate_compdb(compdb, ninja, buildfile, modes):
         # build mode-specific compdbs
         for mode in modes:
             mode_out = outdir + '/' + mode
-            submodule_compdbs = [mode_out + '/' + submodule + '/' + compdb for submodule in ['seastar']]
+            submodule_compdbs = [mode_out + '/' + submodule + '/' + compdb for submodule in ['seastar', 'abseil']]
             with open(mode_out + '/' + compdb, 'w+b') as combined_mode_specific_compdb:
                 subprocess.run(['./scripts/merge-compdb.py', outdir + '/' + mode,
                                 ninja_compdb.name] + submodule_compdbs, stdout=combined_mode_specific_compdb)
@@ -1750,6 +1750,58 @@ def configure_seastar(build_dir, mode, mode_config):
     subprocess.check_call(seastar_cmd, shell=False, cwd=cmake_dir)
 
 
+def configure_abseil(build_dir, mode, mode_config):
+    # for sanitizer cflags
+    seastar_flags = query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',
+                                        mode_config['build_seastar_shared_libs'],
+                                        args.staticcxx)
+    seastar_cflags = seastar_flags['seastar_cflags']
+
+    abseil_build_dir = os.path.join(build_dir, mode, 'abseil')
+
+    abseil_cflags = seastar_cflags + ' ' + modes[mode]['cxx_ld_flags']
+    cmake_mode = mode_config['cmake_build_type']
+    abseil_cmake_args = [
+        '-DCMAKE_BUILD_TYPE={}'.format(cmake_mode),
+        '-DCMAKE_INSTALL_PREFIX={}'.format(build_dir + '/inst'), # just to avoid a warning from absl
+        '-DCMAKE_C_COMPILER={}'.format(args.cc),
+        '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
+        '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), abseil_cflags),
+        '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
+        '-DCMAKE_CXX_STANDARD=20',
+        '-DABSL_PROPAGATE_CXX_STD=ON',
+    ]
+
+    abseil_cmd = ['cmake', '-G', 'Ninja', real_relpath('abseil', abseil_build_dir)] + abseil_cmake_args
+
+    os.makedirs(abseil_build_dir, exist_ok=True)
+    subprocess.check_call(abseil_cmd, shell=False, cwd=abseil_build_dir)
+
+abseil_libs = ['absl/' + lib for lib in [
+    'container/libabsl_hashtablez_sampler.a',
+    'container/libabsl_raw_hash_set.a',
+    'synchronization/libabsl_synchronization.a',
+    'synchronization/libabsl_graphcycles_internal.a',
+    'debugging/libabsl_stacktrace.a',
+    'debugging/libabsl_symbolize.a',
+    'debugging/libabsl_debugging_internal.a',
+    'debugging/libabsl_demangle_internal.a',
+    'time/libabsl_time.a',
+    'time/libabsl_time_zone.a',
+    'numeric/libabsl_int128.a',
+    'hash/libabsl_hash.a',
+    'hash/libabsl_city.a',
+    'hash/libabsl_low_level_hash.a',
+    'base/libabsl_malloc_internal.a',
+    'base/libabsl_spinlock_wait.a',
+    'base/libabsl_base.a',
+    'base/libabsl_raw_logging_internal.a',
+    'profiling/libabsl_exponential_biased.a',
+    'strings/libabsl_strings.a',
+    'strings/libabsl_strings_internal.a',
+    'base/libabsl_throw_delegate.a']]
+
+
 def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):
     if use_shared_libs:
         opt = '--shared'
@@ -1769,9 +1821,7 @@ def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):
             'seastar_testing_libs': testing_libs}
 
 pkgs = ['libsystemd',
-        'jsoncpp',
-        'absl_raw_hash_set',
-        'absl_hash']
+        'jsoncpp']
 # Lua can be provided by lua53 package on Debian-like
 # systems and by Lua on others.
 pkgs.append('lua53' if have_pkg('lua53') else 'lua')
@@ -2057,6 +2107,9 @@ def write_build_file(f,
             if has_thrift:
                 local_libs += ' ' + maybe_static(args.staticthrift, '-lthrift')
                 local_libs += ' ' + maybe_static(args.staticboost, '-lboost_system')
+            objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
+                'abseil/' + x for x in abseil_libs
+            ]])
             if binary in tests:
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
@@ -2265,6 +2318,12 @@ def write_build_file(f,
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
 
+        for lib in abseil_libs:
+            f.write('build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja\n'.format(**locals()))
+            f.write('  pool = submodule_pool\n')
+            f.write('  subdir = $builddir/{mode}/abseil\n'.format(**locals()))
+            f.write('  target = {lib}\n'.format(**locals()))
+
     checkheaders_mode = 'dev' if 'dev' in modes else modes.keys()[0]
     f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(checkheaders_mode, hh) for hh in headers])))
 
@@ -2394,7 +2453,7 @@ def write_build_file(f,
             description = List configured modes
         build mode_list: mode_list
         default {modes_list}
-        ''').format(modes_list=' '.join(default_modes), build_ninja_list=' '.join([f'{outdir}/{mode}/{dir}/build.ninja' for mode in build_modes for dir in ['seastar']]), **globals()))
+        ''').format(modes_list=' '.join(default_modes), build_ninja_list=' '.join([f'{outdir}/{mode}/{dir}/build.ninja' for mode in build_modes for dir in ['seastar', 'abseil']]), **globals()))
     unit_test_list = set(test for test in build_artifacts if test in set(tests))
     f.write(textwrap.dedent('''\
         rule unit_test_list
@@ -2438,11 +2497,14 @@ def create_build_system(args):
         mode_config['per_src_extra_cxxflags']['release.cc'] = ' '.join(get_release_cxxflags(scylla_version, scylla_release))
 
     if not args.dist_only:
+        global user_cflags, libs
         # args.buildfile builds seastar with the rules of
         # {outdir}/{mode}/seastar/build.ninja, and
         # {outdir}/{mode}/seastar/seastar.pc is queried for building flags
         for mode, mode_config in build_modes.items():
             configure_seastar(outdir, mode, mode_config)
+            configure_abseil(outdir, mode, mode_config)
+        user_cflags += ' -isystem abseil'
 
     for mode, mode_config in build_modes.items():
         mode_config.update(query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',
@@ -2495,7 +2557,6 @@ def configure_using_cmake(args):
         settings['Scylla_DATE_STAMP'] = args.date_stamp
     if args.staticboost:
         settings['Boost_USE_STATIC_LIBS'] = 'ON'
-
 
     source_dir = os.path.realpath(os.path.dirname(__file__))
     build_dir = os.path.join(source_dir, 'build')

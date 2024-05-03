@@ -20,7 +20,8 @@ target_link_libraries(gms
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    db)
+    db
+    absl::headers)
 
 check_headers(check-headers gms
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

@@ -10,6 +10,7 @@ target_link_libraries(message
   PUBLIC
     gms
     Seastar::seastar
+    absl::headers
   PRIVATE
     idl)
 

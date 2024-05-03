@@ -21,7 +21,9 @@ target_link_libraries(mutation
   PUBLIC
     idl
     Seastar::seastar
-    xxHash::xxhash)
+    xxHash::xxhash
+  PRIVATE
+    absl::headers)
 
 check_headers(check-headers mutation
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

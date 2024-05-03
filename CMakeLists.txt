@@ -55,6 +55,33 @@ set(Seastar_EXCLUDE_APPS_FROM_ALL ON CACHE BOOL "" FORCE)
 set(Seastar_EXCLUDE_TESTS_FROM_ALL ON CACHE BOOL "" FORCE)
 set(Seastar_UNUSED_RESULT_ERROR ON CACHE BOOL "" FORCE)
 add_subdirectory(seastar)
+set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+
+find_package(Sanitizers QUIET)
+set(sanitizer_cxx_flags
+    $<$<IN_LIST:$<CONFIG>,Debug;Sanitize>:$<TARGET_PROPERTY:Sanitizers::address,INTERFACE_COMPILE_OPTIONS>;$<TARGET_PROPERTY:Sanitizers::undefined_behavior,INTERFACE_COMPILE_OPTIONS>>)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(ABSL_GCC_FLAGS ${sanitizer_cxx_flags})
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set(ABSL_LLVM_FLAGS ${sanitizer_cxx_flags})
+endif()
+set(ABSL_DEFAULT_LINKOPTS
+    $<$<IN_LIST:$<CONFIG>,Debug;Sanitize>:$<TARGET_PROPERTY:Sanitizers::address,INTERFACE_LINK_LIBRARIES>;$<TARGET_PROPERTY:Sanitizers::undefined_behavior,INTERFACE_LINK_LIBRARIES>>)
+add_subdirectory(abseil)
+add_library(absl-headers INTERFACE)
+target_include_directories(absl-headers INTERFACE
+    "${PROJECT_SOURCE_DIR}/abseil")
+add_library(absl::headers ALIAS absl-headers)
+
+# Exclude absl::strerror from the default "all" target since it's not
+# used in Scylla build and, moreover, makes use of deprecated glibc APIs,
+# such as sys_nerr, which are not exposed from "stdio.h" since glibc 2.32,
+# which happens to be the case for recent Fedora distribution versions.
+#
+# Need to use the internal "absl_strerror" target name instead of namespaced
+# variant because `set_target_properties` does not understand the latter form,
+# unfortunately.
+set_target_properties(absl_strerror PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 # System libraries dependencies
 find_package(Boost REQUIRED
@@ -66,7 +93,6 @@ target_link_libraries(Boost::regex
 find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc i18n REQUIRED)
-find_package(absl COMPONENTS hash raw_hash_set REQUIRED)
 find_package(fmt 9.0.0 REQUIRED)
 find_package(libdeflate REQUIRED)
 find_package(libxcrypt REQUIRED)
@@ -124,6 +150,8 @@ target_sources(scylla-main
 target_link_libraries(scylla-main
   PRIVATE
     db
+    absl::headers
+    absl::btree
     absl::hash
     absl::raw_hash_set
     Seastar::seastar
@@ -236,6 +264,7 @@ target_link_libraries(scylla PRIVATE
 
 target_link_libraries(scylla PRIVATE
     seastar
+    absl::headers
     Boost::program_options)
 
 target_include_directories(scylla PRIVATE
