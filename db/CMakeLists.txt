@@ -45,6 +45,7 @@ target_link_libraries(db
     mutation
     Seastar::seastar
     xxHash::xxhash
+    absl::headers
   PRIVATE
     data_dictionary
     cql3)

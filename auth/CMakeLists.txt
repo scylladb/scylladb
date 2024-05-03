@@ -30,6 +30,7 @@ target_link_libraries(scylla_auth
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
+    absl::headers
     cql3
     idl
     wasmtime_bindings

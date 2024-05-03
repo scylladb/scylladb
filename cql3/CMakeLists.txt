@@ -131,6 +131,7 @@ target_link_libraries(cql3
     idl
     wasmtime_bindings
     Seastar::seastar
+    absl::headers
     xxHash::xxhash
     ANTLR3::antlr3
   PRIVATE

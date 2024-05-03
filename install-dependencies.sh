@@ -48,7 +48,6 @@ debian_base_packages=(
     libunistring-dev
     libzstd-dev
     libdeflate-dev
-    libabsl-dev
     librapidxml-dev
     libcrypto++-dev
     libxxhash-dev
@@ -70,7 +69,6 @@ fedora_packages=(
     snappy-devel
     libdeflate-devel
     systemd-devel
-    abseil-cpp-devel
     cryptopp-devel
     git
     python

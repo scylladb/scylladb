@@ -37,6 +37,7 @@ target_include_directories(service
 target_link_libraries(service
   PUBLIC
     db
+    absl::headers
     Seastar::seastar
     xxHash::xxhash
   PRIVATE

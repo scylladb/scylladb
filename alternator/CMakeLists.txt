@@ -27,7 +27,8 @@ target_link_libraries(alternator
   cql3
   idl
   Seastar::seastar
-  xxHash::xxhash)
+  xxHash::xxhash
+  absl::headers)
 
 check_headers(check-headers alternator
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

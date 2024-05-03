@@ -16,6 +16,7 @@ target_link_libraries(lang
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
+    absl::headers
     ${LUA_LIBRARIES})
 
 check_headers(check-headers lang

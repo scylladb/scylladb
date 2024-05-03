@@ -31,6 +31,7 @@ target_link_libraries(sstables
   PRIVATE
     readers
     tracing
+    absl::headers
     libdeflate::libdeflate
     ZLIB::ZLIB)
 
