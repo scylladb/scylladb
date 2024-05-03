@@ -24,7 +24,7 @@
 
 // Scylla includes.
 #include "db/hints/internal/hint_logger.hh"
-#include "seastar/core/future.hh"
+#include <seastar/core/future.hh>
 #include "utils/disk-error-handler.hh"
 #include "utils/lister.hh"
 

@@ -10,7 +10,7 @@
 
 #include "auth/resource.hh"
 #include "auth/role_manager.hh"
-#include "seastar/core/future.hh"
+#include <seastar/core/future.hh>
 
 namespace cql3 {
 class query_processor;

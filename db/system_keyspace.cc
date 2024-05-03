@@ -15,7 +15,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include "seastar/core/on_internal_error.hh"
+#include <seastar/core/on_internal_error.hh>
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/system_auth_keyspace.hh"

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "seastar/core/timer.hh"
+#include <seastar/core/timer.hh>
 #include "seastarx.hh"
 #include "auth/role_manager.hh"
 #include <seastar/core/sstring.hh>
