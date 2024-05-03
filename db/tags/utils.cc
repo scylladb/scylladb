@@ -11,7 +11,7 @@
 #include "db/tags/extension.hh"
 #include "schema/schema_builder.hh"
 #include "schema/schema_registry.hh"
-#include "seastar/core/on_internal_error.hh"
+#include <seastar/core/on_internal_error.hh>
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
 

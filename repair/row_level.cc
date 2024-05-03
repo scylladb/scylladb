@@ -13,7 +13,7 @@
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
 #include "repair/task_manager_module.hh"
-#include "seastar/coroutine/exception.hh"
+#include <seastar/coroutine/exception.hh>
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "mutation/mutation_fragment.hh"

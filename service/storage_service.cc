@@ -32,7 +32,7 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/consistency_level.hh"
-#include "seastar/core/when_all.hh"
+#include <seastar/core/when_all.hh>
 #include "service/tablet_allocator.hh"
 #include "locator/types.hh"
 #include "locator/tablets.hh"
@@ -41,7 +41,7 @@
 #include <seastar/core/smp.hh>
 #include "mutation/canonical_mutation.hh"
 #include "mutation/async_utils.hh"
-#include "seastar/core/on_internal_error.hh"
+#include <seastar/core/on_internal_error.hh>
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/topology_state_machine.hh"

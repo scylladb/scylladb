@@ -31,7 +31,7 @@
 #include "db/system_auth_keyspace.hh"
 #include "log.hh"
 #include "schema/schema_fwd.hh"
-#include "seastar/core/future.hh"
+#include <seastar/core/future.hh>
 #include "service/migration_manager.hh"
 #include "timestamp.hh"
 #include "utils/class_registrator.hh"

@@ -10,7 +10,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
 
-#include "seastar/core/abort_source.hh"
+#include <seastar/core/abort_source.hh>
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
 #include "utils/UUID_gen.hh"

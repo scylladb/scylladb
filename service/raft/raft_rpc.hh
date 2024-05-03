@@ -8,7 +8,7 @@
 #pragma once
 
 #include <seastar/core/gate.hh>
-#include "seastar/util/std-compat.hh"
+#include <seastar/util/std-compat.hh>
 #include "raft/raft.hh"
 #include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"

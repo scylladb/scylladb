@@ -1,4 +1,4 @@
-#include "seastar/core/abort_source.hh"
+#include <seastar/core/abort_source.hh>
 #include "utils/small_vector.hh"
 #include "seastarx.hh"
 
