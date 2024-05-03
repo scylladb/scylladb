@@ -146,9 +146,9 @@ future<> server::shutdown() {
 
 future<>
 server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions) {
-    auto f = make_ready_future<shared_ptr<seastar::tls::server_credentials>>(nullptr);
+    shared_ptr<seastar::tls::server_credentials> creds = nullptr;
     if (builder) {
-        f = builder->build_reloadable_server_credentials([this](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
+        creds = co_await builder->build_reloadable_server_credentials([this](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
             if (ep) {
                 _logger.warn("Exception loading {}: {}", files, ep);
             } else {
@@ -156,7 +156,6 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
             }
         });
     }
-    return f.then([this, addr, is_shard_aware, keepalive, unix_domain_socket_permissions](shared_ptr<seastar::tls::server_credentials> creds) {
         listen_options lo;
         lo.reuse_address = true;
         lo.unix_domain_socket_permissions = unix_domain_socket_permissions;
@@ -173,7 +172,6 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
         }
         _listeners.emplace_back(std::move(ss));
         _listeners_stopped = when_all(std::move(_listeners_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
-    });
 }
 
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
