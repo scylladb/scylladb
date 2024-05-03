@@ -156,22 +156,22 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
             }
         });
     }
-        listen_options lo;
-        lo.reuse_address = true;
-        lo.unix_domain_socket_permissions = unix_domain_socket_permissions;
-        if (is_shard_aware) {
-            lo.lba = server_socket::load_balancing_algorithm::port;
-        }
-        server_socket ss;
-        try {
-            ss = creds
-                ? seastar::tls::listen(std::move(creds), addr, lo)
-                : seastar::listen(addr, lo);
-        } catch (...) {
-            throw std::runtime_error(format("{} error while listening on {} -> {}", _server_name, addr, std::current_exception()));
-        }
-        _listeners.emplace_back(std::move(ss));
-        _listeners_stopped = when_all(std::move(_listeners_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
+    listen_options lo;
+    lo.reuse_address = true;
+    lo.unix_domain_socket_permissions = unix_domain_socket_permissions;
+    if (is_shard_aware) {
+        lo.lba = server_socket::load_balancing_algorithm::port;
+    }
+    server_socket ss;
+    try {
+        ss = creds
+            ? seastar::tls::listen(std::move(creds), addr, lo)
+            : seastar::listen(addr, lo);
+    } catch (...) {
+        throw std::runtime_error(format("{} error while listening on {} -> {}", _server_name, addr, std::current_exception()));
+    }
+    _listeners.emplace_back(std::move(ss));
+    _listeners_stopped = when_all(std::move(_listeners_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
 }
 
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
