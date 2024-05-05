@@ -2234,11 +2234,6 @@ struct fmt::formatter<service::paxos_response_handler> : fmt::formatter<string_v
 
 namespace service {
 
-std::ostream& operator<<(std::ostream& os, const paxos_response_handler& h) {
-    fmt::print(os, "{}", h);
-    return os;
-}
-
 // This function implements learning stage of Paxos protocol
 future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> decision, bool allow_hints) {
     tracing::trace(tr_state, "learn_decision: committing {} with cl={}", *decision, _cl_for_learn);
