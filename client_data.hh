@@ -33,7 +33,7 @@ sstring to_string(client_connection_stage ct);
 struct client_data {
     net::inet_address ip;
     int32_t port;
-    client_type ct;
+    client_type ct = client_type::cql;
     client_connection_stage connection_stage = client_connection_stage::established;
     int32_t shard_id;  /// ID of server-side shard which is processing the connection.
 
