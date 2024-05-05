@@ -259,7 +259,7 @@ private:
 
     bool _in_shadow_round = false;
 
-    service::topology_state_machine* topo_sm = nullptr;
+    service::topology_state_machine* _topo_sm = nullptr;
 
     // Must be called on shard 0.
     future<semaphore_units<>> lock_endpoint_update_semaphore();
@@ -332,7 +332,7 @@ public:
     version_type get_max_endpoint_state_version(const endpoint_state& state) const noexcept;
 
     void set_topology_state_machine(service::topology_state_machine* m) {
-        topo_sm = m;
+        _topo_sm = m;
         // In raft topology mode the coodinator maintains banned nodes list
         _just_removed_endpoints.clear();
     }
