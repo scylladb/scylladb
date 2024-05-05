@@ -569,7 +569,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
     // If there is a generation tie, attempt to break it by heartbeat version.
     auto permit = co_await this->lock_endpoint(node, null_permit_id);
     auto es = this->get_endpoint_state_ptr(node);
-    if (!es && topo_sm) {
+    if (!es && _topo_sm) {
         // Even if there is no endpoint for the given IP the message can still belong to existing endpoint that
         // was restarted with different IP, so lets try to locate the endpoint by host id as well. Do it in raft
         // topology mode only to not have impact on gossiper mode.
@@ -664,13 +664,13 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
         if (ep == this->get_broadcast_address() && !this->is_in_shadow_round()) {
             return make_ready_future<>();
         }
-        if (topo_sm) {
+        if (_topo_sm) {
             locator::host_id hid = map[ep].get_host_id();
             if (hid == locator::host_id::create_null_id()) {
                 // If there is no host id in the new state there should be one locally
                 hid = get_host_id(ep);
             }
-            if (topo_sm->_topology.left_nodes.contains(raft::server_id(hid.uuid()))) {
+            if (_topo_sm->_topology.left_nodes.contains(raft::server_id(hid.uuid()))) {
                 logger.trace("Ignoring gossip for {} because it left", ep);
                 return make_ready_future<>();
             }
@@ -1151,7 +1151,7 @@ void gossiper::run() {
                         logger.trace("Failed to send gossip to unreachable members: {}", ep);
                     });
                 });
-                if (!topo_sm) {
+                if (!_topo_sm) {
                     do_status_check().get();
                 }
             }
@@ -1287,7 +1287,7 @@ void gossiper::quarantine_endpoint(inet_address endpoint) {
 }
 
 void gossiper::quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_start) {
-    if (!topo_sm) {
+    if (!_topo_sm) {
         // In raft topology mode the coodinator maintains banned nodes list
         _just_removed_endpoints[endpoint] = quarantine_start;
     }
