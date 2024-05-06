@@ -14,6 +14,7 @@
 #include "Cassandra.h"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/coroutine.hh>
+#include "dht/i_partitioner_fwd.hh"
 #include "replica/database.hh" // for database::get_version()
 #include "data_dictionary/data_dictionary.hh"
 #include <seastar/core/sstring.hh>
@@ -459,8 +460,8 @@ public:
             if (columns == 0 || columns == column_limit || (slices.size() < cmd->partition_limit && columns < cmd->get_row_limit())) {
                 if (!output.empty() || !start_key) {
                     if (range.size() > 1 && columns < column_limit) {
-                        range.erase(range.begin());
-                        return do_get_paged_slice(proxy, std::move(schema), column_limit - columns, std::move(range), nullptr, consistency_level, timeout_config, output, qs, std::move(permit));
+                        auto new_range = dht::partition_range_vector(range.begin() + 1, range.end());
+                        return do_get_paged_slice(proxy, std::move(schema), column_limit - columns, std::move(new_range), nullptr, consistency_level, timeout_config, output, qs, std::move(permit));
                     }
                     return make_ready_future();
                 }
