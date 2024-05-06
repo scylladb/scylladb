@@ -402,30 +402,31 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
 
     std::vector<future<>> sys_ks_futures;
 
-    auto remove_ip = [&](inet_address ip, bool notify) -> future<> {
+    auto remove_ip = [&](inet_address ip, locator::host_id host_id, bool notify) -> future<> {
         sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(ip));
 
         if (_gossiper.get_endpoint_state_ptr(ip) && !get_used_ips().contains(ip)) {
             co_await _gossiper.force_remove_endpoint(ip, gms::null_permit_id);
             if (notify) {
-                co_await notify_left(ip);
+                co_await notify_left(ip, host_id);
             }
         }
     };
 
     auto process_left_node = [&] (raft::server_id id) -> future<> {
+        locator::host_id host_id{id.uuid()};
+
         if (const auto ip = am.find(id)) {
-            co_await remove_ip(*ip, true);
+            co_await remove_ip(*ip, host_id, true);
         }
 
-        locator::host_id host_id{id.uuid()};
         if (t.left_nodes_rs.find(id) != t.left_nodes_rs.end()) {
             update_topology(host_id, std::nullopt, t.left_nodes_rs.at(id));
         }
 
         _group0->modifiable_address_map().set_expiring(id);
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
-        co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
+        co_await _messaging.local().ban_host(host_id);
     };
 
     auto process_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
@@ -474,7 +475,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
                     _exit(1);
                 });
                 // IP change is not expected to emit REMOVED_NODE notifications
-                co_await remove_ip(it->second, false);
+                co_await remove_ip(it->second, host_id, false);
             }
         }
         update_topology(host_id, ip, rs);
@@ -1709,7 +1710,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             return local_proxy.start_hints_manager(gossiper.local().shared_from_this());
         });
     }
-    
+
     if (!raft_topology_change_enabled()) {
         co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local(), *this);
     }
@@ -2454,7 +2455,7 @@ future<> storage_service::handle_state_left(inet_address endpoint, std::vector<s
         slogger.warn("handle_state_left: Get tokens from token_metadata, node={}/{}, tokens={}", endpoint, host_id, tokens_from_tm);
         tokens = std::unordered_set<dht::token>(tokens_from_tm.begin(), tokens_from_tm.end());
     }
-    co_await excise(tokens, endpoint, extract_expire_time(pieces), pid);
+    co_await excise(tokens, endpoint, host_id, extract_expire_time(pieces), pid);
 }
 
 future<> storage_service::handle_state_removed(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id pid) {
@@ -2475,7 +2476,7 @@ future<> storage_service::handle_state_removed(inet_address endpoint, std::vecto
         auto state = pieces[0];
         auto remove_tokens = get_token_metadata().get_tokens(host_id);
         std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
-        co_await excise(std::move(tmp), endpoint, extract_expire_time(pieces), pid);
+        co_await excise(std::move(tmp), endpoint, host_id, extract_expire_time(pieces), pid);
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
         add_expire_time_if_found(endpoint, extract_expire_time(pieces));
         co_await remove_endpoint(endpoint, pid);
@@ -3971,7 +3972,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                     const auto& pid = permit.id();
                     ss._gossiper.advertise_token_removed(endpoint, host_id, pid).get();
                     std::unordered_set<token> tmp(tokens.begin(), tokens.end());
-                    ss.excise(std::move(tmp), endpoint, pid).get();
+                    ss.excise(std::move(tmp), endpoint, host_id, pid).get();
                     removed_from_token_ring = true;
                     slogger.info("removenode[{}]: Finished removing the node from the ring", uuid);
                 } catch (...) {
@@ -4797,27 +4798,27 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
     });
 }
 
-future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, gms::permit_id pid) {
-    slogger.info("Removing tokens {} for {}", tokens, endpoint);
+future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint_ip,
+        locator::host_id endpoint_hid, gms::permit_id pid) {
+    slogger.info("Removing tokens {} for {}", tokens, endpoint_ip);
     // FIXME: HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
-    co_await remove_endpoint(endpoint, pid);
+    co_await remove_endpoint(endpoint_ip, pid);
     auto tmlock = std::make_optional(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    if (const auto host_id = tmptr->get_host_id_if_known(endpoint); host_id) {
-        tmptr->remove_endpoint(*host_id);
-    }
+    tmptr->remove_endpoint(endpoint_hid);
     tmptr->remove_bootstrap_tokens(tokens);
 
-    co_await update_topology_change_info(tmptr, ::format("excise {}", endpoint));
+    co_await update_topology_change_info(tmptr, ::format("excise {}", endpoint_ip));
     co_await replicate_to_all_cores(std::move(tmptr));
     tmlock.reset();
 
-    co_await notify_left(endpoint);
+    co_await notify_left(endpoint_ip, endpoint_hid);
 }
 
-future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, int64_t expire_time, gms::permit_id pid) {
-    add_expire_time_if_found(endpoint, expire_time);
-    return excise(tokens, endpoint, pid);
+future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint_ip,
+        locator::host_id endpoint_hid, int64_t expire_time, gms::permit_id pid) {
+    add_expire_time_if_found(endpoint_ip, expire_time);
+    return excise(tokens, endpoint_ip, endpoint_hid, pid);
 }
 
 future<> storage_service::leave_ring() {
@@ -6618,7 +6619,7 @@ future<> storage_service::force_remove_completion() {
                     const auto& pid = permit.id();
                     co_await ss._gossiper.advertise_token_removed(*endpoint, host_id, pid);
                     std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
-                    co_await ss.excise(tokens_set, *endpoint, pid);
+                    co_await ss.excise(tokens_set, *endpoint, host_id, pid);
 
                     slogger.info("force_remove_completion: removing endpoint {} from group 0", *endpoint);
                     assert(ss._group0);
@@ -6758,11 +6759,11 @@ future<> storage_service::notify_down(inet_address endpoint) {
     slogger.debug("Notify node {} has been down", endpoint);
 }
 
-future<> endpoint_lifecycle_notifier::notify_left(gms::inet_address endpoint) {
-    return seastar::async([this, endpoint] {
-        _subscribers.thread_for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
+future<> endpoint_lifecycle_notifier::notify_left(gms::inet_address endpoint, locator::host_id hid) {
+    return seastar::async([this, endpoint, hid] {
+        _subscribers.thread_for_each([endpoint, hid] (endpoint_lifecycle_subscriber* subscriber) {
             try {
-                subscriber->on_leave_cluster(endpoint);
+                subscriber->on_leave_cluster(endpoint, hid);
             } catch (...) {
                 slogger.warn("Leave cluster notification failed {}: {}", endpoint, std::current_exception());
             }
@@ -6770,9 +6771,9 @@ future<> endpoint_lifecycle_notifier::notify_left(gms::inet_address endpoint) {
     });
 }
 
-future<> storage_service::notify_left(inet_address endpoint) {
-    co_await container().invoke_on_all([endpoint] (auto&& ss) {
-        return ss._lifecycle_notifier.notify_left(endpoint);
+future<> storage_service::notify_left(inet_address endpoint, locator::host_id hid) {
+    co_await container().invoke_on_all([endpoint, hid] (auto&& ss) {
+        return ss._lifecycle_notifier.notify_left(endpoint, hid);
     });
     slogger.debug("Notify node {} has left the cluster", endpoint);
 }

@@ -14,6 +14,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_mutex.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -26,6 +27,7 @@
 #include "db/hints/resource_manager.hh"
 #include "db/hints/host_filter.hh"
 #include "db/hints/sync_point.hh"
+#include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
 
 // STD.
@@ -78,8 +80,13 @@ private:
     using hint_endpoint_manager = internal::hint_endpoint_manager;
     using node_to_hint_store_factory_type = internal::node_to_hint_store_factory_type;
 
+    using hint_directory_manager = internal::hint_directory_manager;
+
     enum class state {
         started,        // Hinting is currently allowed (start() has completed).
+        migrating,      // The hint manager is being migrated from using IPs to name
+                        // hint directories to using host IDs for that purpose. No new
+                        // incoming hints will be accepted as long as this is the state.
         replay_allowed, // Replaying (sending) hints is allowed.
         draining_all,   // Accepting new hints is not allowed. All endpoint managers
                         // are being drained because the node is leaving the cluster.
@@ -89,6 +96,7 @@ private:
 
     using state_set = enum_set<super_enum<state,
         state::started,
+        state::migrating,
         state::replay_allowed,
         state::draining_all,
         state::stopping>>;
@@ -118,21 +126,48 @@ private:
     resource_manager& _resource_manager;
 
     std::unordered_map<endpoint_id, hint_endpoint_manager> _ep_managers;
+
+    // This is ONLY used when `_uses_host_id` is false. Otherwise, this map should stay EMPTY.
+    //
+    // Invariants:
+    //   (1) there is an endpoint manager in `_ep_managers` identified by host ID `H` if an only if
+    //       there is a mapping corresponding to `H` in `_hint_directory_manager`,
+    //   (2) a hint directory representing an IP address `I` is managed by an endpoint manager
+    //       if and only if there is a mapping corresponding to `I` in `_hint_directory_manager`.
+    hint_directory_manager _hint_directory_manager;
+
     hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
-    std::unordered_set<endpoint_id> _eps_with_pending_hints;
+
+    // We need to keep a variant here. Before migrating hinted handoff to using host ID, hint directories will
+    // still represent IP addresses. But after the migration, they will start representing host IDs.
+    // We need to handle either case.
+    //
+    // It's especially important when dealing with the scenario when there is an IP directory, but there is
+    // no mapping for in locator::token_metadata. Since we sometimes have to save a directory like that
+    // in this set as well, this variant is necessary.
+    std::unordered_set<std::variant<locator::host_id, gms::inet_address>> _eps_with_pending_hints;
+
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
+
+    bool _uses_host_id = false;
+    std::any _migration_callback = std::nullopt;
+    future<> _migrating_done = make_ready_future();
+
+    // Unique lock if and only if there is an ongoing migration to the host-ID-based hinted handoff.
+    // Shared lock if and only if there is a fiber already executing `manager::wait_for_sync_point`.
+    seastar::shared_mutex _migration_mutex{};
 
 public:
     manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter,
             int64_t max_hint_window_ms, resource_manager& res_manager, sharded<replica::database>& db);
-    
+
     manager(const manager&) = delete;
     manager& operator=(const manager&) = delete;
 
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;
-    
+
     ~manager() noexcept {
         assert(_ep_managers.empty());
     }
@@ -141,7 +176,8 @@ public:
     void register_metrics(const sstring& group_name);
     future<> start(shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
-    bool store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
+    bool store_hint(endpoint_id host_id, gms::inet_address ip, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
+            tracing::trace_state_ptr tr_state) noexcept;
 
     /// \brief Changes the host_filter currently used, stopping and starting endpoint_managers relevant to the new host_filter.
     /// \param filter the new host_filter
@@ -185,7 +221,8 @@ public:
     ///
     /// \param ep endpoint whose file update mutex should be locked
     /// \param func functor to be executed
-    future<> with_file_update_mutex_for(endpoint_id ep, noncopyable_function<future<> ()> func);
+    future<> with_file_update_mutex_for(const std::variant<locator::host_id, gms::inet_address>& ep,
+            noncopyable_function<future<> ()> func);
 
     /// \brief Checks if hints are disabled for all endpoints
     /// \return TRUE if hints are disabled.
@@ -209,7 +246,7 @@ public:
         return it->second.hints_in_progress();
     }
 
-    void add_ep_with_pending_hints(endpoint_id key) {
+    void add_ep_with_pending_hints(const std::variant<locator::host_id, gms::inet_address>& key) {
         _eps_with_pending_hints.insert(key);
     }
 
@@ -218,7 +255,7 @@ public:
         _eps_with_pending_hints.reserve(_ep_managers.size());
     }
 
-    bool has_ep_with_pending_hints(endpoint_id key) const {
+    bool has_ep_with_pending_hints(const std::variant<locator::host_id, gms::inet_address>& key) const {
         return _eps_with_pending_hints.contains(key);
     }
 
@@ -243,7 +280,7 @@ public:
     }
 
     /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_eps`.
-    sync_point::shard_rps calculate_current_sync_point(std::span<const endpoint_id> target_eps) const;
+    sync_point::shard_rps calculate_current_sync_point(std::span<const gms::inet_address> target_eps) const;
 
     /// \brief Waits until hint replay reach replay positions described in `rps`.
     future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
@@ -267,10 +304,10 @@ private:
         return _local_db;
     }
 
-    hint_endpoint_manager& get_ep_manager(endpoint_id ep);
+    hint_endpoint_manager& get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip);
 
 public:
-    bool have_ep_manager(endpoint_id ep) const noexcept;
+    bool have_ep_manager(const std::variant<locator::host_id, gms::inet_address>& ep) const noexcept;
 
 public:
     /// \brief Initiate the draining when we detect that the node has left the cluster.
@@ -316,6 +353,30 @@ private:
     bool draining_all() noexcept {
         return _state.contains(state::draining_all);
     }
+
+    /// Iterates over existing hint directories and for each, if the corresponding endpoint is present
+    /// in locator::topology, creates an endpoint manager.
+    future<> initialize_endpoint_managers();
+
+    /// Renames host directories named after IPs to host IDs.
+    ///
+    /// In the past, hosts were identified by their IPs. Now we use host IDs for that purpose,
+    /// but we want to ensure that old hints don't get lost if possible. This function serves
+    /// this purpose. It's only necessary when upgrading Scylla.
+    ///
+    /// This function should ONLY be called by `manager::start()` and `manager::perform_migration()`.
+    ///
+    /// Calling this function again while the previous call has not yet finished
+    /// is undefined behavior.
+    future<> migrate_ip_directories();
+
+    /// Migrates this hint manager to using host IDs, i.e. when a call to this function ends,
+    /// the names of hint directories will start being represented by host IDs instead of IPs.
+    ///
+    /// This function suspends hinted handoff throughout its execution. Among other consequences,
+    /// ALL requested sync points will be canceled, i.e. an exception will be issued
+    /// in the corresponding futures.
+    future<> perform_migration();
 };
 
 } // namespace db::hints

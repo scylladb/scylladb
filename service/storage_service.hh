@@ -546,8 +546,10 @@ private:
     future<> handle_state_removed(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id);
 
 private:
-    future<> excise(std::unordered_set<token> tokens, inet_address endpoint, gms::permit_id);
-    future<> excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time, gms::permit_id);
+    future<> excise(std::unordered_set<token> tokens, inet_address endpoint_ip, locator::host_id endpoint_hid,
+            gms::permit_id);
+    future<> excise(std::unordered_set<token> tokens, inet_address endpoint_ip, locator::host_id endpoint_hid,
+            long expire_time, gms::permit_id);
 
     /** unlike excise we just need this endpoint gone without going through any notifications **/
     future<> remove_endpoint(inet_address endpoint, gms::permit_id pid);
@@ -739,7 +741,7 @@ private:
     future<> isolate();
 
     future<> notify_down(inet_address endpoint);
-    future<> notify_left(inet_address endpoint);
+    future<> notify_left(inet_address endpoint, locator::host_id hid);
     future<> notify_up(inet_address endpoint);
     future<> notify_joined(inet_address endpoint);
     future<> notify_cql_change(inet_address endpoint, bool ready);

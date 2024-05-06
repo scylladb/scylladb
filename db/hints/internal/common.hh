@@ -12,7 +12,7 @@
 #include <seastar/util/bool_class.hh>
 
 // Scylla includes.
-#include "gms/inet_address.hh"
+#include "locator/host_id.hh"
 
 // STD.
 #include <cstdint>
@@ -21,7 +21,7 @@ namespace db::hints {
 namespace internal {
 
 /// Type identifying the host a specific subset of hints should be sent to.
-using endpoint_id = gms::inet_address;
+using endpoint_id = locator::host_id;
 
 /// Tag specifying if hint sending should enter the so-called "drain mode".
 /// If it should, that means that if a failure while sending a hint occurs,

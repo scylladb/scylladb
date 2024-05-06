@@ -2305,7 +2305,7 @@ public:
     future<> run();
 
     virtual void on_join_cluster(const gms::inet_address& endpoint) {}
-    virtual void on_leave_cluster(const gms::inet_address& endpoint) {};
+    virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {};
     virtual void on_up(const gms::inet_address& endpoint) {};
     virtual void on_down(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
 };
@@ -2506,7 +2506,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     auto get_application_state = [&] (locator::host_id host_id, gms::inet_address ep, const gms::application_state_map& epmap, gms::application_state app_state) -> sstring {
         const auto it = epmap.find(app_state);
         if (it == epmap.end()) {
-            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{}: application state {} is missing in gossip", 
+            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{}: application state {} is missing in gossip",
                     host_id, ep, app_state));
         }
         // it's versioned_value::value(), not std::optional::value() - it does not throw
@@ -2579,7 +2579,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
                 .set("cleanup_status", cleanup_status::clean)
                 .set("request_id", utils::UUID())
                 .set("supported_features", supported_features);
-        
+
         rtlogger.debug("node {} will contain the following parameters: "
                 "datacenter={}, rack={}, tokens={}, shard_count={}, ignore_msb={}, supported_features={}",
                 host_id, datacenter, rack, tokens, shard_count, ignore_msb, supported_features);
