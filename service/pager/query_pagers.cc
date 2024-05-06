@@ -9,6 +9,7 @@
  */
 
 #include "query_pagers.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "query_pager.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/query_options.hh"
@@ -122,6 +123,8 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
             typedef typename range_type::bound bound_type;
             bool found = false;
 
+            dht::partition_range_vector modified;
+            modified.reserve(ranges.size());
             auto i = ranges.begin();
             while (i != ranges.end()) {
                 bool contains = i->contains(lo, cmp);
@@ -138,19 +141,19 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
 
                 if (remove) {
                     qlogger.trace("Remove range {}", *i);
-                    i = ranges.erase(i);
-                    continue;
-                }
-                if (contains) {
+                } else if (contains) {
                     auto r = reversed && !i->is_singular()
                             ? range_type(i->start(), bound_type{ lo, inclusive })
                             : range_type( bound_type{ lo, inclusive }, i->end(), i->is_singular())
                             ;
                     qlogger.trace("Modify range {} -> {}", *i, r);
-                    *i = std::move(r);
+                    modified.emplace_back(std::move(r));
+                } else {
+                    modified.emplace_back(std::move(*i));
                 }
                 ++i;
             }
+            ranges = std::move(modified);
             qlogger.trace("Result ranges {}", ranges);
         };
 
