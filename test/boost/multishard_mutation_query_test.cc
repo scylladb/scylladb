@@ -298,11 +298,11 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
         // Force freeing the vector to avoid hiding any bugs related to storing
         // references to the ranges vector (which is not alive between pages in
         // real life).
-        ranges = std::make_unique<dht::partition_range_vector>(original_ranges);
-
-        while (!ranges->front().contains(res_builder.last_pkey(), cmp)) {
-            ranges->erase(ranges->begin());
+        auto it = original_ranges.begin();
+        while (it != original_ranges.end() && !it->contains(res_builder.last_pkey(), cmp)) {
+            ++it;
         }
+        ranges = std::make_unique<dht::partition_range_vector>(it, original_ranges.end());
         assert(!ranges->empty());
 
         const auto pkrange_begin_inclusive = res_builder.last_ckey() && res_builder.last_pkey_rows() < slice.partition_row_limit();
@@ -311,7 +311,7 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
         if (range_opt) {
             ranges->front() = std::move(*range_opt);
         } else {
-            ranges->erase(ranges->begin());
+            ranges = std::make_unique<dht::partition_range_vector>(ranges->begin() + 1, ranges->end());
             if (ranges->empty()) {
                 break;
             }
