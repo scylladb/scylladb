@@ -55,8 +55,10 @@ def signed(number, bits):
 # numbers.
 def test_cast_from_large_varint(cql, table1):
     p = unique_key_int()
+    p_negative = unique_key_int()
     v = 32767456456456456456545678943512357658768763546575675
     cql.execute(f'INSERT INTO {table1} (p, cVarint) VALUES ({p}, {v})')
+    cql.execute(f'INSERT INTO {table1} (p, cVarint) VALUES ({p_negative}, {-v})')
     # We can read back the original number without a cast, or with a cast
     # to the same type. The "decimal" type can also hold a varint and return
     # the same number.
@@ -71,6 +73,7 @@ def test_cast_from_large_varint(cql, table1):
     # Casting to a 32-bit floating point, which only supports numbers up
     # to 1e38, results in infinity
     assert [(math.inf,)] == list(cql.execute(f"SELECT CAST(cVarint AS float) FROM {table1} WHERE p={p}"))
+    assert [(-math.inf,)] == list(cql.execute(f"SELECT CAST(cVarint AS float) FROM {table1} WHERE p={p_negative}"))
     # Casting to a 64-bit floating point, which supports the range of our
     # given number (though not its full precision!) is allowed, and some
     # precision is lost. Confusingly, Python's 64-bit floating point is
