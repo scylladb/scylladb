@@ -52,8 +52,8 @@ public:
         assert(_key.size() == 1 && query::is_single_partition(_key.front()));
     }
 
-    dht::partition_range_vector key() const {
-        return dht::partition_range_vector(_key);
+    const dht::partition_range_vector& key() const {
+        return _key;
     }
 
     const update_parameters::prefetch_data& rows() const {
