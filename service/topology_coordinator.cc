@@ -576,7 +576,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     // Deletes obsolete CDC generations. These are the published generations that stopped operating
-    // more than 24 hours ago.
+    // sufficiently long ago (see comment below).
     //
     // Appends necessary mutations to `updates` and updates the `reason` string.
     future<> clean_obsolete_cdc_generations(
@@ -592,18 +592,21 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // A request coordinator accepts a write to one of the previous generations (the ones that stopped
         // operating before `now`) if the write's timestamp is higher than `now - 5s` where `now` is
         // provided by the coordinator's local clock. So, we can safely delete a generation if it
-        // stopped operating more than 5 s ago on all nodes. Since their clocks can be desynchronized,
-        // we delete only generations that stopped operating more than 24 hours ago, which is a safe and
-        // sufficient choice.
-        auto ts_upper_bound = db_clock::now() - std::chrono::days(1);
+        // stopped operating more than 5s ago on all nodes. But since their clocks can be desynchronized,
+        // we have to account for that. We assume that the max clock difference is within `ring_delay`.
+        // So we delete only generations that stopped operating more than `5s + ring_delay` ago.
+        auto ts_upper_bound = db_clock::now() - (cdc::get_generation_leeway() + _ring_delay);
         utils::get_local_injector().inject("clean_obsolete_cdc_generations_change_ts_ub", [&] {
             ts_upper_bound = db_clock::now();
         });
 
-        // Theoretically, some generations might not be published within 24 hours after creation. If that happens,
-        // we reduce `ts_upper_bound` to ensure they aren't deleted.
+        // Theoretically, some generations might not be published within `5s + ring_delay` after creation.
+        // If that happens, we reduce `ts_upper_bound` to ensure they aren't deleted.
         if (!_topo_sm._topology.unpublished_cdc_generations.empty()) {
-            ts_upper_bound = std::min(ts_upper_bound, _topo_sm._topology.unpublished_cdc_generations.front().ts);
+            auto first_unpublished_ts = _topo_sm._topology.unpublished_cdc_generations.front().ts;
+            if (first_unpublished_ts < ts_upper_bound) {
+                ts_upper_bound = first_unpublished_ts;
+            }
         }
 
         std::optional<std::vector<cdc::generation_id_v2>::const_iterator> first_nonobsolete_gen_it;
