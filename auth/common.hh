@@ -70,7 +70,7 @@ future<> once_among_shards(Task&& f) {
 // Func must support being invoked more than once.
 future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_function<future<>()> func);
 
-future<> create_metadata_table_if_missing(
+future<> create_legacy_metadata_table_if_missing(
         std::string_view table_name,
         cql3::query_processor&,
         std::string_view cql,

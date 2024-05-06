@@ -60,6 +60,8 @@ public:
     virtual const resource_set& protected_resources() const override;
 
 private:
+    future<> start_legacy();
+
     bool legacy_metadata_exists() const;
 
     future<> revoke_all_legacy(const resource&);
