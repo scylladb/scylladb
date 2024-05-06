@@ -72,6 +72,7 @@ using request_param = std::variant<join_param, rebuild_param, replace_param>;
 enum class global_topology_request: uint16_t {
     new_cdc_generation,
     cleanup,
+    keyspace_rf_change,
 };
 
 struct ring_slice {

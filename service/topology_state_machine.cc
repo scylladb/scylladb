@@ -192,6 +192,7 @@ topology_request topology_request_from_string(const sstring& s) {
 static std::unordered_map<global_topology_request, sstring> global_topology_request_to_name_map = {
     {global_topology_request::new_cdc_generation, "new_cdc_generation"},
     {global_topology_request::cleanup, "cleanup"},
+    {global_topology_request::keyspace_rf_change, "keyspace_rf_change"},
 };
 
 global_topology_request global_topology_request_from_string(const sstring& s) {
