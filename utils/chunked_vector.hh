@@ -220,10 +220,17 @@ public:
         pointer addr() const {
             return &_chunks[_i / max_chunk_capacity()][_i % max_chunk_capacity()];
         }
-        iterator_type(const chunk_ptr* chunks, size_t i) : _chunks(chunks), _i(i) {}
+        iterator_type(const chunk_ptr* chunks, size_t i) noexcept : _chunks(chunks), _i(i) {}
     public:
         iterator_type() = default;
-        iterator_type(const iterator_type<std::remove_const_t<ValueType>>& x) : _chunks(x._chunks), _i(x._i) {} // needed for iterator->const_iterator conversion
+        iterator_type(const iterator_type& x) = default;
+
+        iterator_type& operator=(const iterator_type& x) = default;
+
+        template <typename U>
+        requires std::same_as<U, iterator_type<std::remove_const_t<ValueType>>>
+        iterator_type(const U& x) noexcept : iterator_type(x._chunks, x._i) {} // needed for iterator->const_iterator conversion
+
         reference operator*() const {
             return *addr();
         }
