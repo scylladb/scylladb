@@ -150,7 +150,7 @@ static bool validate_unchecked_tombstone_compaction(const std::map<sstring, sstr
     auto tmp_value = compaction_strategy_impl::get_value(options, compaction_strategy_impl::UNCHECKED_TOMBSTONE_COMPACTION_OPTION);
     if (tmp_value.has_value()) {
         if (tmp_value != "true" && tmp_value != "false") {
-            throw exceptions::configuration_exception(fmt::format("{} value ({}) must be \"true\" or \"false\"", compaction_strategy_impl::UNCHECKED_TOMBSTONE_COMPACTION_OPTION, tmp_value));
+            throw exceptions::configuration_exception(fmt::format("{} value ({}) must be \"true\" or \"false\"", compaction_strategy_impl::UNCHECKED_TOMBSTONE_COMPACTION_OPTION, *tmp_value));
         }
         unchecked_tombstone_compaction = tmp_value == "true";
     }
