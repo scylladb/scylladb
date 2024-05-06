@@ -37,6 +37,13 @@ You need to run the tool **on every node in the cluster**.
 
       sudo ./scylla_doctor.pyz --save-vitals <unique-host-id>.vitals.json
  
+   If ScyllaDB is installed under a user without root privileges, you need to 
+   additionally provide the path to the ``python3`` binary under ``scylladb``:
+
+   .. code:: shell
+
+      sudo ~/scylladb/python3/bin/python3 ./scylla_doctor.pyz --save-vitals <unique-host-id>.vitals.json
+   
    Make sure you provide a unique host identifier in the filename, such as 
    the host IP. Scylla Doctor will generate:
    
