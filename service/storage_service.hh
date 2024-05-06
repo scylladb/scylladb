@@ -728,6 +728,12 @@ public:
             return func(ss);
         });
     }
+
+    template <typename Func>
+    auto run_with_api_lock_conditionally(sstring operation, bool lock, Func&& func) {
+        return lock ? run_with_api_lock(std::move(operation), std::forward<Func>(func)) : run_with_no_api_lock(std::forward<Func>(func));
+    }
+
 private:
     void do_isolate_on_error(disk_error type);
     future<> isolate();

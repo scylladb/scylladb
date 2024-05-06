@@ -39,7 +39,7 @@ class ScyllaLogFile():
             await self._run_in_executor(f.seek, 0, os.SEEK_END)
             return await self._run_in_executor(f.tell)
 
-    async def wait_for(self, pattern: str | re.Pattern, from_mark: Optional[int] = None, timeout: int = 600) -> None:
+    async def wait_for(self, pattern: str | re.Pattern, from_mark: Optional[int] = None, timeout: int = 600) -> int:
         """
         wait_for() checks if the log contains the given message.
         Because it may take time for the log message to be flushed, and sometimes
@@ -67,7 +67,7 @@ class ScyllaLogFile():
                     if line:
                         if prog.search(line):
                             logger.debug("Found log message: %s", line)
-                            return
+                            return await self._run_in_executor(f.tell)
                         elif line[-1] != '\n':
                             continue
                         line = ""
