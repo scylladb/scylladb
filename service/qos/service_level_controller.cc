@@ -285,7 +285,7 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
     auto sl_it = _service_levels_db.find(name);
     if (sl_it != _service_levels_db.end()) {
         _service_levels_db.erase(sl_it);
-        return seastar::async( [this, name] {
+        co_return co_await seastar::async( [this, name] {
             _subscribers.thread_for_each([name] (qos_configuration_change_subscriber* subscriber) {
                 try {
                     subscriber->on_after_service_level_remove({name}).get();
@@ -295,7 +295,7 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
             });
         });
     }
-    return make_ready_future<>();
+    co_return;
 }
 
 void service_level_controller::update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f) {
