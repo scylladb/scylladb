@@ -1,6 +1,7 @@
 add_library(mutation STATIC)
 target_sources(mutation
   PRIVATE
+    async_utils.cc
     atomic_cell.cc
     canonical_mutation.cc
     frozen_mutation.cc
