@@ -90,6 +90,7 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     res.serialize({sc::change_type::CREATED, sc::target_type::TYPE, "foo", "bar"}, version);
     res.serialize({sc::change_type::CREATED, sc::target_type::FUNCTION, "foo", "bar", "zed"}, version);
     res.serialize({sc::change_type::CREATED, sc::target_type::AGGREGATE, "foo", "bar", "zed"}, version);
+    res.serialize({sc::change_type::CREATED, sc::target_type::TABLET_KEYSPACE, "foo"}, version);
 
     auto msg = res.make_message(version, cql_transport::cql_compression::none).release();
     auto total_length = msg.len();
