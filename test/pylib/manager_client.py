@@ -191,10 +191,8 @@ class ManagerClient():
     async def server_restart(self, server_id: ServerNum, wait_others: int = 0,
                              wait_interval: float = 45) -> None:
         """Restart specified server and optionally wait for it to learn of other servers"""
-        logger.debug("ManagerClient restarting %s", server_id)
-        await self.client.put_json(f"/cluster/server/{server_id}/restart")
-        await self.server_sees_others(server_id, wait_others, interval = wait_interval)
-        self._driver_update()
+        await self.server_stop_gracefully(server_id)
+        await self.server_start(server_id=server_id, wait_others=wait_others, wait_interval=wait_interval)
 
     async def rolling_restart(self, servers: List[ServerInfo], with_down: Optional[Callable[[ServerInfo], Awaitable[Any]]] = None):
         for idx, s in enumerate(servers):

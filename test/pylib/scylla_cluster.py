@@ -978,12 +978,6 @@ class ScyllaCluster:
             self.running.pop(server_id)
             self.stopped[server_id] = server
 
-    async def server_restart(self, server_id: ServerNum) -> None:
-        """Restart a running server"""
-        self.logger.info("Cluster %s restarting server %s", self, server_id)
-        await self.server_stop(server_id, gracefully=True)
-        await self.server_start(server_id)
-
     def server_pause(self, server_id: ServerNum) -> None:
         """Pause a running server process."""
         self.logger.info("Cluster %s pausing server %s", self.name, server_id)
@@ -1186,7 +1180,6 @@ class ScyllaClusterManager:
         add_put('/cluster/server/{server_id}/stop', self._cluster_server_stop)
         add_put('/cluster/server/{server_id}/stop_gracefully', self._cluster_server_stop_gracefully)
         add_put('/cluster/server/{server_id}/start', self._cluster_server_start)
-        add_put('/cluster/server/{server_id}/restart', self._cluster_server_restart)
         add_put('/cluster/server/{server_id}/pause', self._cluster_server_pause)
         add_put('/cluster/server/{server_id}/unpause', self._cluster_server_unpause)
         add_put('/cluster/addserver', self._cluster_server_add)
@@ -1282,12 +1275,6 @@ class ScyllaClusterManager:
         data = await request.json()
         expected_error = data["expected_error"]
         await self.cluster.server_start(server_id, expected_error)
-
-    async def _cluster_server_restart(self, request) -> None:
-        """Restart a specified server (must be already started)"""
-        assert self.cluster
-        server_id = ServerNum(int(request.match_info["server_id"]))
-        await self.cluster.server_restart(server_id)
 
     async def _cluster_server_pause(self, request) -> None:
         """Pause the specified server."""
