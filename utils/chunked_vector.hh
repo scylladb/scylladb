@@ -105,6 +105,8 @@ public:
     chunked_vector(chunked_vector&& x) noexcept;
     template <typename Iterator>
     chunked_vector(Iterator begin, Iterator end);
+    chunked_vector(std::initializer_list<T> x);
+    chunked_vector(const T& v) : chunked_vector(1, v) {}
     explicit chunked_vector(size_t n, const T& value = T());
     ~chunked_vector();
     chunked_vector& operator=(const chunked_vector& x);
@@ -359,6 +361,13 @@ chunked_vector<T, max_contiguous_allocation>::chunked_vector(Iterator begin, Ite
     if (!is_random_access) {
         shrink_to_fit();
     }
+}
+
+template <typename T, size_t max_contiguous_allocation>
+chunked_vector<T, max_contiguous_allocation>::chunked_vector(std::initializer_list<T> x)
+        : chunked_vector() {
+    reserve(x.size());
+    std::move(std::move(x).begin(), std::move(x).end(), std::back_inserter(*this));
 }
 
 template <typename T, size_t max_contiguous_allocation>
