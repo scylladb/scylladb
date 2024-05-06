@@ -13,6 +13,7 @@
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
 #include "utils/fragment_range.hh"
+#include "utils/chunked_vector.hh"
 #include <seastar/util/alloc_failure_injector.hh>
 #include <type_traits>
 #include <utility>
@@ -627,3 +628,10 @@ template <> struct fmt::formatter<managed_bytes_opt> : fmt::formatter<string_vie
         return fmt::format_to(ctx.out(), "null");
     }
 };
+
+// Splits a serialized collection into a vector of elements, but does not recursively deserialize the elements.
+// Does not perform validation.
+template <FragmentedView View>
+utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(View in);
+template <FragmentedView View>
+std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in);
