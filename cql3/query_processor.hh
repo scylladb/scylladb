@@ -151,7 +151,8 @@ public:
 
     ~query_processor();
 
-    void start_remote(service::migration_manager&, service::forward_service&, service::raft_group0_client&);
+    void start_remote(service::migration_manager&, service::forward_service&,
+                      service::storage_service& ss, service::raft_group0_client&);
     future<> stop_remote();
 
     data_dictionary::database db() {

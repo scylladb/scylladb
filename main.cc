@@ -1435,13 +1435,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 raft_gr.stop().get();
             });
 
-            supervisor::notify("initializing query processor remote part");
-            // TODO: do this together with proxy.start_remote(...)
-            qp.invoke_on_all(&cql3::query_processor::start_remote, std::ref(mm), std::ref(forward_service), std::ref(group0_client)).get();
-            auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [&qp] {
-                qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
-            });
-
             supervisor::notify("initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1453,6 +1446,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
+            });
+
+            supervisor::notify("initializing query processor remote part");
+            // TODO: do this together with proxy.start_remote(...)
+            qp.invoke_on_all(&cql3::query_processor::start_remote, std::ref(mm), std::ref(forward_service),
+                             std::ref(ss), std::ref(group0_client)).get();
+            auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [&qp] {
+                qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
             });
 
             api::set_server_storage_service(ctx, ss, group0_client).get();
