@@ -471,19 +471,118 @@ public:
 };
 
 class partition_ranges_view {
-    const dht::partition_range* _data = nullptr;
+    using chunk_ptr = const dht::partition_range*;
+
+    class iterator_type {
+        using chunk_ptr = partition_ranges_view::chunk_ptr;
+
+        const chunk_ptr* _chunks = nullptr;
+        size_t _i = 0;
+
+        static constexpr size_t max_chunk_capacity() {
+            return partition_range_vector::max_chunk_capacity();
+        }
+    public:
+        using iterator_category = std::random_access_iterator_tag;
+        using value_type = const dht::partition_range;
+        using difference_type = ssize_t;
+        using pointer = value_type*;
+        using reference = value_type&;
+
+        pointer addr() const {
+            return &_chunks[_i / max_chunk_capacity()][_i % max_chunk_capacity()];
+        }
+        iterator_type(const chunk_ptr* chunks, size_t i) : _chunks(chunks), _i(i) {}
+
+        friend class dht::partition_ranges_view;
+    public:
+        iterator_type() = default;
+
+        reference operator*() const {
+            return *addr();
+        }
+        pointer operator->() const {
+            return addr();
+        }
+        reference operator[](ssize_t n) const {
+            return *(*this + n);
+        }
+        iterator_type& operator++() {
+            ++_i;
+            return *this;
+        }
+        iterator_type operator++(int) {
+            auto x = *this;
+            ++_i;
+            return x;
+        }
+        iterator_type& operator--() {
+            --_i;
+            return *this;
+        }
+        iterator_type operator--(int) {
+            auto x = *this;
+            --_i;
+            return x;
+        }
+        iterator_type& operator+=(ssize_t n) {
+            _i += n;
+            return *this;
+        }
+        iterator_type& operator-=(ssize_t n) {
+            _i -= n;
+            return *this;
+        }
+        iterator_type operator+(ssize_t n) const {
+            auto x = *this;
+            return x += n;
+        }
+        iterator_type operator-(ssize_t n) const {
+            auto x = *this;
+            return x -= n;
+        }
+        friend iterator_type operator+(ssize_t n, iterator_type a) {
+            return a + n;
+        }
+        friend ssize_t operator-(iterator_type a, iterator_type b) {
+            return a._i - b._i;
+        }
+        bool operator==(iterator_type x) const {
+            return _i == x._i;
+        }
+        bool operator<(iterator_type x) const {
+            return _i < x._i;
+        }
+        bool operator<=(iterator_type x) const {
+            return _i <= x._i;
+        }
+        bool operator>(iterator_type x) const {
+            return _i > x._i;
+        }
+        bool operator>=(iterator_type x) const {
+            return _i >= x._i;
+        }
+    };
+
+private:
+    utils::small_vector<chunk_ptr, 1> _chunks;
     size_t _size = 0;
 
 public:
     partition_ranges_view() = default;
-    partition_ranges_view(const dht::partition_range& range) : _data(&range), _size(1) {}
-    partition_ranges_view(const dht::partition_range_vector& ranges) : _data(ranges.data()), _size(ranges.size()) {}
+    partition_ranges_view(const dht::partition_range& range) : _chunks({&range}), _size(1) {}
+    partition_ranges_view(const dht::partition_range_vector& ranges) {
+        for (const auto& cp : ranges.chunks()) {
+            _chunks.emplace_back(cp.get());
+        }
+        _size = ranges.size();
+    }
     bool empty() const { return _size == 0; }
     size_t size() const { return _size; }
-    const dht::partition_range& front() const { return *_data; }
-    const dht::partition_range& back() const { return *(_data + _size - 1); }
-    const dht::partition_range* begin() const { return _data; }
-    const dht::partition_range* end() const { return _data + _size; }
+    const dht::partition_range& front() const { return *begin(); }
+    const dht::partition_range& back() const { return *(end() - 1); }
+    iterator_type begin() const { return iterator_type(_chunks.data(), 0); }
+    iterator_type end() const { return iterator_type(_chunks.data(), _size); }
 };
 
 } // namespace dht

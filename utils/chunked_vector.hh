@@ -53,6 +53,10 @@
 #include <malloc.h>
 #include <fmt/ostream.h>
 
+namespace dht {
+class partition_ranges_view;
+}
+
 namespace utils {
 
 struct chunked_vector_free_deleter {
@@ -67,6 +71,11 @@ class chunked_vector {
     utils::small_vector<chunk_ptr, 1> _chunks;
     size_t _size = 0;
     size_t _capacity = 0;
+
+    utils::small_vector<chunk_ptr, 1>& chunks() noexcept { return _chunks; };
+    const utils::small_vector<chunk_ptr, 1>& chunks() const noexcept { return _chunks; };
+
+    friend class dht::partition_ranges_view;
 public:
     // Maximum number of T elements fitting in a single chunk.
     static constexpr size_t max_chunk_capacity() {

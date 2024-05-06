@@ -10,6 +10,7 @@
 #pragma once
 #include <vector>
 #include "interval.hh"
+#include "utils/chunked_vector.hh"
 
 namespace sstables {
 
@@ -28,7 +29,7 @@ class sharder;
 using partition_range = interval<ring_position>;
 using token_range = interval<token>;
 
-using partition_range_vector = std::vector<partition_range>;
+using partition_range_vector = utils::chunked_vector<partition_range>;
 using token_range_vector = std::vector<token_range>;
 
 class decorated_key;
