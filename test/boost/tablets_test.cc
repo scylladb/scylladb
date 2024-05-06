@@ -1978,7 +1978,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter) {
     using bound = dht::partition_range::bound;
 
     std::vector<result> included_ranges;
-    std::vector<dht::partition_range> excluded_ranges;
+    dht::partition_range_vector excluded_ranges;
     for (auto tid = std::optional(tmap.first_tablet()); tid; tid = tmap.next_tablet(*tid)) {
         const auto& tablet_info = tmap.get_tablet_info(*tid);
         auto replica_it = std::ranges::find_if(tablet_info.replicas, [&] (auto&& r) { return r.host == h1; });

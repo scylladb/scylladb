@@ -199,7 +199,7 @@ public:
     // of mutations, one per partition key, for statements which affect multiple partition keys,
     // e.g. DELETE FROM table WHERE pk  IN (1, 2, 3).
     std::vector<mutation> apply_updates(
-            const std::vector<dht::partition_range>& keys,
+            const dht::partition_range_vector& keys,
             const std::vector<query::clustering_range>& ranges,
             const update_parameters& params,
             const json_cache_opt& json_cache) const;
@@ -234,7 +234,7 @@ public:
 
 private:
     future<exceptions::coordinator_result<>>
-    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const;
+    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, dht::partition_range_vector keys) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
@@ -250,7 +250,7 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const;
+    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, dht::partition_range_vector keys) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 

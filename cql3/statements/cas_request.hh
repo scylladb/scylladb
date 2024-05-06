@@ -40,11 +40,11 @@ private:
     schema_ptr _schema;
     // A single partition key. Represented as a vector of partition ranges
     // since this is the conventional format for storage_proxy.
-    std::vector<dht::partition_range> _key;
+    dht::partition_range_vector _key;
     update_parameters::prefetch_data _rows;
 
 public:
-    cas_request(schema_ptr schema_arg, std::vector<dht::partition_range> key_arg)
+    cas_request(schema_ptr schema_arg, dht::partition_range_vector key_arg)
           : _schema(schema_arg)
           , _key(std::move(key_arg))
           , _rows(schema_arg)

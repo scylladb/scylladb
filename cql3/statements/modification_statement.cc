@@ -110,7 +110,7 @@ future<> modification_statement::check_access(query_processor& qp, const service
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const {
+modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, dht::partition_range_vector keys) const {
     auto cl = options.get_consistency();
     auto ranges = create_clustering_ranges(options, json_cache);
     auto f = make_ready_future<update_parameters::prefetch_data>(s);
@@ -189,7 +189,7 @@ bool modification_statement::applies_to(const selection::selection* selection,
 }
 
 std::vector<mutation> modification_statement::apply_updates(
-        const std::vector<dht::partition_range>& keys,
+        const dht::partition_range_vector& keys,
         const std::vector<query::clustering_range>& ranges,
         const update_parameters& params,
         const json_cache_opt& json_cache) const {
@@ -270,7 +270,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     }
 
     json_cache_opt json_cache = maybe_prepare_json_cache(options);
-    std::vector<dht::partition_range> keys = build_partition_keys(options, json_cache);
+    auto keys = build_partition_keys(options, json_cache);
 
     bool keys_size_one = keys.size() == 1;
     auto token = dht::token();
@@ -300,7 +300,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
 }
 
 future<coordinator_result<>>
-modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const {
+modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, dht::partition_range_vector keys) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
     return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, json_cache, std::move(keys)).then([this, cl, timeout, &qp, &qs] (auto mutations) {
@@ -325,7 +325,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     auto read_timeout = now + cfg.read_timeout;       // When to give up on query.
 
     json_cache_opt json_cache = maybe_prepare_json_cache(options);
-    std::vector<dht::partition_range> keys = build_partition_keys(options, json_cache);
+    auto keys = build_partition_keys(options, json_cache);
     std::vector<query::clustering_range> ranges = create_clustering_ranges(options, json_cache);
 
     if (keys.empty()) {

@@ -57,12 +57,12 @@ namespace {
 
 // Helper class for testing mutation_reader::fast_forward_to(dht::partition_range).
 class partition_range_walker {
-    std::vector<dht::partition_range> _ranges;
+    dht::partition_range_vector _ranges;
     size_t _current_position = 0;
 private:
     const dht::partition_range& current_range() const { return _ranges[_current_position]; }
 public:
-    explicit partition_range_walker(std::vector<dht::partition_range> ranges) : _ranges(ranges) { }
+    explicit partition_range_walker(dht::partition_range_vector ranges) : _ranges(ranges) { }
     const dht::partition_range& initial_range() const { return _ranges[0]; }
     void fast_forward_if_needed(flat_reader_assertions_v2& mr, const mutation& expected, bool verify_eos = true) {
         while (!current_range().contains(expected.decorated_key(), dht::ring_position_comparator(*expected.schema()))) {
@@ -159,7 +159,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
 
     mutation_source ms = populate(s.schema(), mutations, gc_clock::now());
 
-    auto test_ckey = [&] (std::vector<dht::partition_range> pranges, std::vector<mutation> mutations, mutation_reader::forwarding fwd_mr) {
+    auto test_ckey = [&] (dht::partition_range_vector pranges, std::vector<mutation> mutations, mutation_reader::forwarding fwd_mr) {
         for (auto range_size = 1u; range_size <= ckey_count + 1; range_size++) {
             for (auto start = 0u; start <= ckey_count; start++) {
                 auto range = range_size == 1
@@ -332,7 +332,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
             }
 
             {
-                auto pranges = std::vector<dht::partition_range>();
+                auto pranges = dht::partition_range_vector();
                 for (auto current = pstart; current < pstart + prange_size; current++) {
                     pranges.emplace_back(dht::partition_range::make_singular(mutations[current].decorated_key()));
                 }
@@ -340,7 +340,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
             }
 
             if (prange_size > 1) {
-                auto pranges = std::vector<dht::partition_range>();
+                auto pranges = dht::partition_range_vector();
                 for (auto current = pstart; current < pstart + prange_size;) {
                     if (current + 1 < pstart + prange_size) {
                         pranges.emplace_back(dht::partition_range::make({mutations[current].decorated_key()}, {mutations[current + 1].decorated_key()}));

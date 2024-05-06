@@ -453,7 +453,7 @@ do_test_split_range_to_single_shard(const schema& s, const dht::sharder& sharder
         auto sharder = dht::ring_position_range_sharder(sharder_, pr);
         auto x = sharder.next(s);
         auto cmp = dht::ring_position_comparator(s);
-        auto reference_ranges = std::vector<dht::partition_range>();
+        auto reference_ranges = dht::partition_range_vector();
         while (x) {
             if (x->shard == shard) {
                 reference_ranges.push_back(std::move(x->ring_range));

@@ -931,7 +931,7 @@ SEASTAR_THREAD_TEST_CASE(read_max_size) {
             e.execute_prepared(id, {cql3_pk, cql3_ck, cql3_value}).get();
         }
 
-        const auto partition_ranges = std::vector<dht::partition_range>{query::full_partition_range};
+        const auto partition_ranges = dht::partition_range_vector{query::full_partition_range};
 
         const std::vector<std::pair<sstring, std::function<future<size_t>(schema_ptr, const query::read_command&)>>> query_methods{
                 {"query_mutations()", [&db, &partition_ranges] (schema_ptr s, const query::read_command& cmd) -> future<size_t> {
@@ -1021,7 +1021,7 @@ SEASTAR_THREAD_TEST_CASE(unpaged_mutation_read_global_limit) {
             e.execute_prepared(id, {cql3_pk, cql3_ck, cql3_value}).get();
         }
 
-        const auto partition_ranges = std::vector<dht::partition_range>{query::full_partition_range};
+        const auto partition_ranges = dht::partition_range_vector{query::full_partition_range};
 
         const std::vector<std::pair<sstring, std::function<future<size_t>(schema_ptr, const query::read_command&)>>> query_methods{
                 {"query_mutations()", [&db, &partition_ranges] (schema_ptr s, const query::read_command& cmd) -> future<size_t> {

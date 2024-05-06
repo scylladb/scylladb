@@ -169,7 +169,7 @@ future<std::vector<mutation>> batch_statement::get_mutations(query_processor& qp
         auto&& statement_options = options.for_statement(i);
         auto timestamp = _attrs->get_timestamp(now, statement_options);
         modification_statement::json_cache_opt json_cache = statement->maybe_prepare_json_cache(statement_options);
-        std::vector<dht::partition_range> keys = statement->build_partition_keys(statement_options, json_cache);
+        auto keys = statement->build_partition_keys(statement_options, json_cache);
         auto more = co_await statement->get_mutations(qp, statement_options, timeout, local, timestamp, query_state, json_cache, std::move(keys));
 
         for (auto&& m : more) {
@@ -349,7 +349,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         statement.inc_cql_stats(qs.get_client_state().is_internal());
         modification_statement::json_cache_opt json_cache = statement.maybe_prepare_json_cache(statement_options);
         // At most one key
-        std::vector<dht::partition_range> keys = statement.build_partition_keys(statement_options, json_cache);
+        auto keys = statement.build_partition_keys(statement_options, json_cache);
         if (keys.empty()) {
             continue;
         }
