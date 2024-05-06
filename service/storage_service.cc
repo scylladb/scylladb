@@ -1113,7 +1113,7 @@ std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(
             }
         }
         if (!_topology_state_machine._topology.find(*id)) {
-            throw std::runtime_error(::format("Node {} is not found in the cluster", id));
+            throw std::runtime_error(::format("Node {} is not found in the cluster", *id));
         }
         ids.insert(*id);
     }
