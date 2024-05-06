@@ -10,6 +10,7 @@
 
 #include <stdexcept>
 #include <optional>
+#include <variant>
 #include <fmt/format.h>
 
 #include <boost/test/included/unit_test.hpp>
@@ -412,4 +413,17 @@ BOOST_AUTO_TEST_CASE(tests_copy_constructor_exception_safety) {
         src.clear();
         BOOST_REQUIRE_EQUAL(checker.live_objects(), 0);
     }
+}
+
+BOOST_AUTO_TEST_CASE(test_initializer_list_ctor) {
+    using value_t = std::variant<int, double, std::string>;
+    constexpr size_t chunk_size = 2;
+    auto vec = utils::chunked_vector<value_t, chunk_size>({1, "two", 3.0});
+    auto expected = std::vector<value_t>({1, "two", 3.0});
+    BOOST_REQUIRE_EQUAL(vec.size(), expected.size());
+    auto vit = vec.begin();
+    for (auto it = expected.begin(); it != expected.end(); ++it, ++vit) {
+        BOOST_REQUIRE(*it == *vit);
+    }
+    BOOST_REQUIRE(vit == vec.end());
 }
