@@ -205,6 +205,7 @@ private:
     void increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst);
     // Fiber to reload reclaimed components back into memory when memory becomes available.
     future<> components_reloader_fiber();
+    size_t get_memory_available_for_reclaimable_components();
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;
