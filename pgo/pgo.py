@@ -263,7 +263,7 @@ async def run(command: list[str], cpuset: Optional[str] = None, **kwargs) -> Pro
         kwargs.setdefault("stdout", asyncio.subprocess.DEVNULL)
         kwargs.setdefault("stderr", asyncio.subprocess.DEVNULL)
 
-    process_logger.debug(f"Running a process: {orig_cmd}")
+    process_logger.info(f"Running a process: {orig_cmd}")
     p = await asyncio.create_subprocess_exec(*cmd, **kwargs)
 
     logfile = f"{logdir}/{p.pid}.log" if logdir else None
@@ -408,11 +408,14 @@ async def start_node(executable: PathLike, cluster_workdir: PathLike, addr: str,
         f"--api-address={addr}",
         f"--rpc-address={addr}",
         f"--prometheus-address={addr}",
+        f"--alternator-address={addr}",
         f"--cluster-name={cluster_name}",
         f"--endpoint-snitch=GossipingPropertyFileSnitch",
         f"--read-request-timeout-in-ms=60000",
         f"--write-request-timeout-in-ms=60000",
         f"--cas-contention-timeout-in-ms=60000",
+        f"--alternator-port=8000",
+        f"--alternator-write-isolation=only_rmw_uses_lwt",
     ] + list(extra_opts)
     return await run(['bash', '-c', fr"""exec {shlex.join(command)} >{q(logfile)} 2>&1"""], cwd=cluster_workdir)
 
@@ -618,6 +621,44 @@ async def train_basic(executable: PathLike, workdir: PathLike) -> None:
 # and exactly the same as we use for our performance tests
 #trainers["basic"] = ("basic_dataset", train_basic)
 populators["basic_dataset"] = populate_basic
+
+# ALTERNATOR ==================================================
+
+async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
+    os.makedirs(workdir, exist_ok=True)
+    async with with_cluster(executable=executable, workdir=workdir) as (addrs, procs):
+        await asyncio.sleep(5) # FIXME: artificial gossip sleep, get rid of it.
+
+        workloads = [
+            ["write", 250_000],
+            ["read", 250_000],
+            ["scan", 1_000],
+            ["write_gsi", 250_000],
+            ["write_rmw", 250_000],
+        ]
+        for workload in workloads:
+            # the tool doesn't yet support load balancing so we
+            # run one process per node
+            await clean_gather(*[run_checked([executable,
+                "perf-alternator",
+                "--smp", "1",
+                "--workload", f"{workload[0]}",
+                "--partitions", "100000",
+                # we reuse cluster data so don't need to pre-populate
+                "--prepopulate-partitions", "0",
+                "--operations-per-shard", f"{workload[1]}",
+                "--cpuset", f'{CS_CPUSET.get()}',
+                "--remote-host", addr,
+            ]) for addr in addrs])
+
+    await merge_profraw(workdir)
+
+async def populate_alternator(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_populate(executable=executable, workdir=workdir) as server:
+        pass # this avoids profiling cluster bootstrap code
+
+trainers["alternator"] = ("alternator_dataset", train_alternator)
+populators["alternator_dataset"] = populate_alternator
 
 # CLUSTERING  ==================================================
 
