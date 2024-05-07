@@ -1720,6 +1720,13 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     if (raft_server) { // Raft is enabled. Check if we need to bootstrap ourself using raft
         rtlogger.info("topology changes are using raft");
 
+        // Prevent shutdown hangs. We cannot count on wait_for_group0_stop while we are
+        // joining group 0.
+        auto sub = _abort_source.subscribe([this] () noexcept {
+            _group0_as.request_abort();
+            _topology_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
+        });
+
         // Nodes that are not discovery leaders have their join request inserted
         // on their behalf by an existing node in the cluster during the handshake.
         // Discovery leaders on the other need to insert the join request themselves,
