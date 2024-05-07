@@ -62,7 +62,11 @@ using frozen_sstable_run = lw_shared_ptr<const sstable_run>;
 class incremental_selector_impl {
 public:
     virtual ~incremental_selector_impl() {}
-    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const dht::ring_position_view&) = 0;
+    struct selector_pos {
+        const dht::ring_position_view& pos;
+        const dht::partition_range* range = nullptr;
+    };
+    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const selector_pos&) = 0;
 };
 
 using sstable_predicate = noncopyable_function<bool(const sstable&)>;
@@ -177,6 +181,8 @@ public:
             dht::ring_position_view next_position;
         };
 
+        using selector_pos = incremental_selector_impl::selector_pos;
+
         // Return the sstables that intersect with `pos` and the next
         // position where the intersecting sstables change.
         // To walk through the token range incrementally call `select()`
@@ -190,7 +196,10 @@ public:
         // NOTE: both `selection.sstables` and `selection.next_position`
         // are only guaranteed to be valid until the next call to
         // `select()`.
-        selection select(const dht::ring_position_view& pos) const;
+        selection select(selector_pos pos) const;
+        selection select(const dht::ring_position_view& pos) const {
+            return select(selector_pos{pos});
+        }
     };
     incremental_selector make_incremental_selector() const;
 

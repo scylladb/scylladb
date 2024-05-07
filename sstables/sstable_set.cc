@@ -206,9 +206,9 @@ sstable_set::incremental_selector::~incremental_selector() = default;
 sstable_set::incremental_selector::incremental_selector(sstable_set::incremental_selector&&) noexcept = default;
 
 sstable_set::incremental_selector::selection
-sstable_set::incremental_selector::select(const dht::ring_position_view& pos) const {
-    if (!_current_range_view || !_current_range_view->contains(pos, _cmp)) {
-        std::tie(_current_range, _current_sstables, _current_next_position) = _impl->select(pos);
+sstable_set::incremental_selector::select(selector_pos s) const {
+    if (!_current_range_view || !_current_range_view->contains(s.pos, _cmp)) {
+        std::tie(_current_range, _current_sstables, _current_next_position) = _impl->select(s);
         _current_range_view = _current_range->transform([] (const dht::ring_position& rp) { return dht::ring_position_view(rp); });
     }
     return {_current_sstables, _current_next_position};
@@ -461,7 +461,8 @@ public:
         , _last_known_leveled_sstables_change_cnt(leveled_sstables_change_cnt)
         , _it(leveled_sstables.begin()) {
     }
-    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const dht::ring_position_view& pos) override {
+    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const selector_pos& s) override {
+        const dht::ring_position_view& pos = s.pos;
         auto crp = dht::compatible_ring_position_or_view(*_schema, pos);
         auto ssts = _unleveled_sstables;
         using namespace dht;
@@ -581,7 +582,7 @@ sstable_set_impl::selector_and_schema_t time_series_sstable_set::make_incrementa
         selector(const time_series_sstable_set& set) : _set(set) {}
 
         virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext>
-        select(const dht::ring_position_view&) override {
+        select(const selector_pos&) override {
             return std::make_tuple(dht::partition_range::make_open_ended_both_sides(), _set.select(), dht::ring_position_view::max());
         }
     };
@@ -788,7 +789,6 @@ class incremental_reader_selector : public reader_selector {
         tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
         return _fn(sst, *_pr);
     }
-
 public:
     explicit incremental_reader_selector(schema_ptr s,
             lw_shared_ptr<const sstable_set> sstables,
@@ -820,7 +820,7 @@ public:
         auto readers = std::vector<flat_mutation_reader_v2>();
 
         do {
-            auto selection = _selector->select(_selector_position);
+            auto selection = _selector->select({_selector_position, _pr});
             _selector_position = selection.next_position;
 
             irclogger.trace("{}: {} sstables to consider, advancing selector to {}", fmt::ptr(this), selection.sstables.size(),
@@ -1172,7 +1172,7 @@ public:
             , _selectors(make_selectors(sets)) {
     }
 
-    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const dht::ring_position_view& pos) override {
+    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const selector_pos& pos) override {
         // Return all sstables selected on the requested position from all selectors.
         std::vector<shared_sstable> sstables;
         // Return the lowest next position from all selectors, such that this function will be called again to select the
