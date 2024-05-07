@@ -276,17 +276,19 @@ future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::
         const char* start_bound = value.value().data();
         char* end_bound;
         for (auto* ptr : {&current, &max}) {
+            errno = 0;
             *ptr = std::strtoull(start_bound, &end_bound, 10);
-            if (*ptr == ULLONG_MAX) {
-                return make_ready_future();;
+            if (errno == ERANGE) {
+                return make_ready_future();
             }
             start_bound = end_bound + 1;
         }
         if (max == 0) {
             return make_ready_future();
         }
+        errno = 0;
         ticks = std::strtoll(start_bound, &end_bound, 10);
-        if (ticks == 0 || ticks == LLONG_MAX || end_bound != value.value().data() + value.value().size()) {
+        if (ticks == 0 || errno == ERANGE || end_bound != value.value().data() + value.value().size()) {
             return make_ready_future();
         }
         auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, ticks};
