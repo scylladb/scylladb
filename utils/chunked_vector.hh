@@ -101,12 +101,14 @@ public:
 public:
     chunked_vector() = default;
     chunked_vector(const chunked_vector& x);
+    // Moving a chunked_vector invalidates all iterators to it
     chunked_vector(chunked_vector&& x) noexcept;
     template <typename Iterator>
     chunked_vector(Iterator begin, Iterator end);
     explicit chunked_vector(size_t n, const T& value = T());
     ~chunked_vector();
     chunked_vector& operator=(const chunked_vector& x);
+    // Moving a chunked_vector invalidates all iterators to it
     chunked_vector& operator=(chunked_vector&& x) noexcept;
 
     bool empty() const {
@@ -208,8 +210,10 @@ public:
 public:
     template <class ValueType>
     class iterator_type {
-        const chunk_ptr* _chunks;
-        size_t _i;
+        // Note that _chunks points to the chunked_vector::_chunks data
+        // and therefore it is invalidated when the chunked_vector is moved
+        const chunk_ptr* _chunks = nullptr;
+        size_t _i = 0;
     public:
         using iterator_category = std::random_access_iterator_tag;
         using value_type = ValueType;
