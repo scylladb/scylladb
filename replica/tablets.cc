@@ -556,17 +556,21 @@ public:
             : _tset(tset)
     {}
 
-    virtual std::tuple<dht::partition_range, std::vector<sstables::shared_sstable>, dht::ring_position_ext> select(const dht::ring_position_view& pos) override {
+    virtual std::tuple<dht::partition_range, std::vector<sstables::shared_sstable>, dht::ring_position_ext> select(const selector_pos& s) override {
         // Always return minimum singular range, such that incremental_selector::select() will always call this function,
         // which in turn will find the next sstable set to select sstables from.
         const dht::partition_range current_range = dht::partition_range::make_singular(dht::ring_position::min());
 
         // pos must be monotonically increasing in the weak sense
         // but caller can skip to a position outside the current set
+        const dht::ring_position_view& pos = s.pos;
         auto token = pos.token();
         if (!_cur_set || pos.token() >= _lowest_next_token) {
             auto idx = _tset.group_of(token);
-            if (!token.is_maximum() && _tset._sstable_set_ids.contains(idx)) {
+            auto pr_end = s.range ? dht::ring_position_view::for_range_end(*s.range) : dht::ring_position_view::max();
+            // End of stream is reached when pos is past the end of the read range (i.e. exclude tablets
+            // that doesn't intersect with the range).
+            if (dht::ring_position_tri_compare(*_tset.schema(), pos, pr_end) <= 0 && _tset._sstable_set_ids.contains(idx)) {
                 _cur_set = _tset.find_sstable_set(idx);
             }
             // Set the next token to point to the next engaged storage group.
@@ -585,7 +589,7 @@ public:
 
         _cur_selector.emplace(_cur_set->make_incremental_selector());
 
-        auto res = _cur_selector->select(pos);
+        auto res = _cur_selector->select(s);
         // Return all sstables selected on the requested position from the first matching sstable set.
         // This assumes that the underlying sstable sets are disjoint in their token ranges so
         // only one of them contain any given token.
