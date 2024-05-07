@@ -912,11 +912,11 @@ future<> manager::perform_migration() {
 
     // Step 6. Make resource manager scan the hint directory again.
     resource_manager_lock.return_all();
-    // Step 7. Once resource manager is working again, endpoint managers can be safely recreated.
+    // Step 7. Start accepting incoming hints again.
+    _state.remove(state::migrating);
+    // Step 8. Once resource manager is working again, endpoint managers can be safely recreated.
     //         We won't modify the contents of the hint directory anymore.
     co_await initialize_endpoint_managers();
-    // Step 8. Start accepting incoming hints again.
-    _state.remove(state::migrating);
     manager_logger.info("Migration of hinted handoff to host ID has finished successfully");
 }
 
