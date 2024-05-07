@@ -10,6 +10,7 @@
 import os
 import re
 from scylla_util import *
+import resource
 import subprocess
 import argparse
 import yaml
@@ -102,6 +103,34 @@ class scylla_cpuinfo:
         else:
             return len(self._cpu_data["system"])
 
+def configure_iotune_open_fd_limit(shards_count):
+    try:
+        fd_limits = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (OSError, ValueError) as e:
+        logging.warning("Could not get the limit of count of open file descriptors!")
+        logging.warning("iotune will proceed with the default limit. This may cause problems.")
+        return
+
+    precalculated_fds_count = (10 * shards_count) + 500
+    soft_limit, hard_limit = fd_limits
+
+    if hard_limit == resource.RLIM_INFINITY:
+        # If there is no hard limit, then ensure that soft limit allows enough FDs.
+        soft_limit = max(soft_limit, precalculated_fds_count)
+    else:
+        # If hard_limit is greater than precalculated_fds_count, then set it as soft and as hard limit.
+        required_fds_count = max(hard_limit, precalculated_fds_count)
+        soft_limit = max(soft_limit, required_fds_count)
+        hard_limit = max(hard_limit, required_fds_count)
+
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft_limit, hard_limit))
+    except (OSError, ValueError) as e:
+        logging.error(e)
+        logging.error("Could not set the limit of open file descriptors for iotune!")
+        logging.error(f"Required FDs count: {precalculated_fds_count}, default limit: {fd_limits}!")
+        sys.exit(1)
+
 def run_iotune():
             if "SCYLLA_CONF" in os.environ:
                 conf_dir = os.environ["SCYLLA_CONF"]
@@ -141,6 +170,8 @@ def run_iotune():
                 iotune_args += [ "--cpuset", ",".join(map(str, cpudata.cpuset())) ]
             elif cpudata.smp():
                 iotune_args += [ "--smp", str(cpudata.smp()) ]
+
+            configure_iotune_open_fd_limit(cpudata.nr_shards())
 
             try:
                 subprocess.check_call([bindir() + "/iotune",
