@@ -738,9 +738,20 @@ future<> manager::initialize_endpoint_managers() {
             co_return co_await maybe_create_ep_mgr(maybe_host_id_or_ep->id(), gms::inet_address{});
         }
 
-        // If we have got to this line, hinted handoff is still IP-based.
-        const locator::host_id host_id = maybe_host_id_or_ep->resolve_id(*tmptr);
-        co_await maybe_create_ep_mgr(host_id, maybe_host_id_or_ep->endpoint());
+        // If we have got to this line, hinted handoff is still IP-based and we need to map the IP.
+        const auto maybe_host_id = std::invoke([&] () -> std::optional<locator::host_id> {
+            try {
+                return maybe_host_id_or_ep->resolve_id(*tmptr);
+            } catch (...) {
+                return std::nullopt;
+            }
+        });
+
+        if (!maybe_host_id) {
+            co_return;
+        }
+
+        co_await maybe_create_ep_mgr(*maybe_host_id, maybe_host_id_or_ep->endpoint());
     });
 }
 
