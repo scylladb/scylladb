@@ -49,7 +49,8 @@ async def test_change_two(manager, random_tables, mode):
             ip = server.rpc_address
             host = hosts[ip]
             host_id = host_ids[server.server_id]
-            expected_peers = {uuid.UUID(host_ids[s.server_id]): s.rpc_address for s in servers if s.server_id != server.server_id}
+            expected_peers = [(uuid.UUID(host_ids[s.server_id]), s.rpc_address) for s in servers if s.server_id != server.server_id]
+            expected_peers.sort()
             logger.info(f"waiting for {ip}/{host_id} to see the proper ips, expected peers {expected_peers}")
 
             async def see_proper_ips():
@@ -64,7 +65,8 @@ async def test_change_two(manager, random_tables, mode):
                     logger.info(f"local vals {local_vals} doesn't match expected vals {local_expected_vals}")
                     return None
 
-                current_peers = {r.host_id: r.peer for r in await manager.get_cql().run_async("select peer, host_id from system.peers", host=host)}
+                current_peers = [(r.host_id, r.peer) for r in await manager.get_cql().run_async("select peer, host_id from system.peers", host=host)]
+                current_peers.sort()
                 if current_peers != expected_peers:
                     logger.info(f"host {host} current peers {current_peers} doesn't match the expected_peers {expected_peers}, continue waiting")
                     return None

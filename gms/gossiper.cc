@@ -569,6 +569,17 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
     // If there is a generation tie, attempt to break it by heartbeat version.
     auto permit = co_await this->lock_endpoint(node, null_permit_id);
     auto es = this->get_endpoint_state_ptr(node);
+    if (!es && topo_sm) {
+        // Even if there is no endpoint for the given IP the message can still belong to existing endpoint that
+        // was restarted with different IP, so lets try to locate the endpoint by host id as well. Do it in raft
+        // topology mode only to not have impact on gossiper mode.
+        auto hid = remote_state.get_host_id();
+        for (auto&& s : _endpoint_state_map) {
+            if (s.second->get_host_id() == hid) {
+                es = s.second;
+            }
+        }
+    }
     if (es) {
         endpoint_state local_state = *es;
         auto local_generation = local_state.get_heart_beat_state().get_generation();
