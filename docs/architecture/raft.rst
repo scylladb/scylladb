@@ -235,26 +235,23 @@ In summary, Raft makes schema changes safe, but it requires that a quorum of nod
 
 .. _raft-topology-changes:
 
-.. only:: opensource
+Consistent Topology with Raft
+-----------------------------------------------------------------
 
-    Consistent Topology with Raft
-    -----------------------------------------------------------------
+ScyllaDB can use Raft to manage cluster topology. With Raft-managed topology 
+enabled, all topology operations are internally sequenced in a consistent 
+way. A centralized coordination process ensures that topology metadata is 
+synchronized across the nodes on each step of a topology change procedure. 
+This makes topology updates fast and safe, as the cluster administrator can 
+trigger many topology operations concurrently, and the coordination process 
+will safely drive all of them to completion. For example, multiple nodes can 
+be bootstrapped concurrently, which couldn't be done with the old 
+gossip-based topology.
 
-    ScyllaDB can use Raft to manage cluster topology. With Raft-managed topology 
-    enabled, all topology operations are internally sequenced in a consistent 
-    way. A centralized coordination process ensures that topology metadata is 
-    synchronized across the nodes on each step of a topology change procedure. 
-    This makes topology updates fast and safe, as the cluster administrator can 
-    trigger many topology operations concurrently, and the coordination process 
-    will safely drive all of them to completion. For example, multiple nodes can 
-    be bootstrapped concurrently, which couldn't be done with the old 
-    gossip-based topology.
+The feature is automatically enabled in new clusters.
 
-    Raft-managed topology is enabled by default in new cluster installations
-    starting from 6.0. After upgrading from 5.4 to 6.0, the cluster will
-    continue using the old gossip-based topology. You must perform manual action
-    to enable the Raft-based topology. See :doc:`the guide for enabling consistent topology changes</upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology>`
-    for more details.
+.. scylladb_include_flag:: consistent-topology-with-raft-upgrade-info.rst
+
 
 .. _raft-handling-failures:
 
