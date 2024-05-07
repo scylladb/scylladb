@@ -35,6 +35,7 @@ struct test_config {
     int port;
     unsigned partitions;
     unsigned duration_in_seconds;
+    unsigned operations_per_shard;
     unsigned concurrency;
     unsigned scan_total_segments;
     bool flush;
@@ -47,6 +48,7 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << ", partitions=" << cfg.partitions
            << ", concurrency=" << cfg.concurrency
            << ", duration_in_seconds=" << cfg.duration_in_seconds
+           << ", operations-per-shard=" << cfg.operations_per_shard
            << ", flush=" << cfg.flush
            << "}";
 }
@@ -407,7 +409,7 @@ void workload_main(const test_config& c) {
         static thread_local auto cli_iter = -1;
         auto seq = tests::random::get_int<uint64_t>(c.partitions - 1);
         return fun(c, sharded_cli_pool[++cli_iter % c.concurrency], seq);
-    }, c.concurrency, c.duration_in_seconds, 0, !c.continue_after_error);
+    }, c.concurrency, c.duration_in_seconds, c.operations_per_shard, !c.continue_after_error);
 
     std::cout << aggregated_perf_results(results) << std::endl;
 }
@@ -432,6 +434,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("workload", bpo::value<std::string>()->default_value(""), "which workload type to run")
             ("partitions", bpo::value<unsigned>()->default_value(10000), "number of partitions")
             ("duration", bpo::value<unsigned>()->default_value(5), "test duration in seconds")
+            ("operations-per-shard", bpo::value<unsigned>()->default_value(0), "run this many operations per shard (overrides duration)")
             ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
             ("flush", bpo::value<bool>()->default_value(true), "flush memtables before test")
             ("remote-host", bpo::value<std::string>()->default_value(""), "address of remote alternator service, use localhost by default")
@@ -444,6 +447,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         c.workload = opts["workload"].as<std::string>();
         c.partitions = opts["partitions"].as<unsigned>();
         c.duration_in_seconds = opts["duration"].as<unsigned>();
+        c.operations_per_shard = opts["operations-per-shard"].as<unsigned>();
         c.concurrency = opts["concurrency"].as<unsigned>();
         c.flush = opts["flush"].as<bool>();
         c.remote_host = opts["remote-host"].as<std::string>();
