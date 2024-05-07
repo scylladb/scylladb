@@ -1,6 +1,15 @@
 
 How to Switch Snitches
 **********************
+.. REMOVE IN FUTURE VERSIONS - when the limitation in the note is no longer valid
+
+.. note::
+
+    Switching from one type of snitch to another is NOT supported for clusters 
+    where one or more keyspaces have tablets enabled. 
+    
+    NOTE: If you :ref:`create a new keyspace <create-keyspace-statement>`, 
+    it has tablets enabled by default.
 
 This procedure describes the steps that need to be done when switching from one type of snitch to another.
 Such a scenario can be when increasing the cluster and adding more data-centers in different locations. 
