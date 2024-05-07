@@ -146,6 +146,7 @@ html_theme_options = {
     "hide_feedback_buttons": 'false',
     "github_issues_repository": "scylladb/scylladb",
     "github_repository": "scylladb/scylladb",
+    "github_label": "type/documentation",
     "versions_unstable": UNSTABLE_VERSIONS,
     "versions_deprecated": DEPRECATED_VERSIONS,
     'banner_button_text': 'Register for Free',
