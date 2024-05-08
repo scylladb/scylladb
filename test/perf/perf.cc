@@ -60,6 +60,28 @@ auto fmt::formatter<perf_result>::format(const perf_result& result, fmt::format_
             result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.errors);
 }
 
+aggregated_perf_results::aggregated_perf_results(std::vector<perf_result>& results) {
+    auto compare_throughput = [] (perf_result a, perf_result b) { return a.throughput < b.throughput; };
+    std::sort(results.begin(), results.end(), compare_throughput);
+    median_by_throughput = results[results.size() / 2];
+    throughput.median = median_by_throughput.throughput;
+    throughput.min = results[0].throughput;
+    throughput.max = results[results.size() - 1].throughput;
+    auto absolute_deviations = boost::copy_range<std::vector<double>>(
+            results
+            | boost::adaptors::transformed(std::mem_fn(&perf_result::throughput))
+            | boost::adaptors::transformed([&] (double r) { return abs(r - throughput.median); }));
+    std::sort(absolute_deviations.begin(), absolute_deviations.end());
+    throughput.median_absolute_deviation = absolute_deviations[results.size() / 2];
+}
+
+std::ostream&
+operator<<(std::ostream& os, const aggregated_perf_results& result) {
+    auto& t = result.throughput;
+    fmt::print(os, "\nmedian {}\nmedian absolute deviation: {:.2f}\nmaximum: {:.2f}\nminimum: {:.2f}", t.median, t.median_absolute_deviation, t.max, t.min);
+    return os;
+}
+
 aio_writes_result_mixin::aio_writes_result_mixin()
     : aio_writes(engine().get_io_stats().aio_writes)
     , aio_write_bytes(engine().get_io_stats().aio_write_bytes)
