@@ -56,8 +56,8 @@ endpoints:
     port: 443
     https: true
     aws_region: us-east-2
-    aws_access_key_id: AKIAIOSFODNN7EXAMPLE
-    aws_secret_access_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    aws_access_key_id: EXAMPLE_ACCESS_KEY_ID
+    aws_secret_access_key: EXAMPLE_SECRET_ACCESS_KEY
 ```
 
 and when creating the keyspace:
