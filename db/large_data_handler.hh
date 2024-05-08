@@ -94,7 +94,7 @@ public:
         bool rows = false;
     };
     future<partition_above_threshold> maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key,
-            uint64_t partition_size, uint64_t rows, uint64_t range_tombstones);
+            uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows);
 
     future<bool> maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
@@ -139,14 +139,17 @@ protected:
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const = 0;
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const = 0;
     virtual future<> delete_large_data_entries(const schema& s, sstring sstable_name, std::string_view large_table_name) const = 0;
-    virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones) const = 0;
+    virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) const = 0;
 };
 
 class cql_table_large_data_handler : public large_data_handler {
     gms::feature_service& _feat;
     std::function<future<> (const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements)> _record_large_cells;
-    std::optional<std::any> _feat_listener;
+    std::function<future<> (const sstables::sstable& sst, const sstables::key& partition_key,
+            uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows)> _record_large_partitions;
+    std::optional<std::any> _large_collection_detection_listener;
+    std::optional<std::any> _range_tombstone_and_dead_rows_detection_listener;
 
     static constexpr uint64_t MB = 1024 * 1024;
 
@@ -165,7 +168,7 @@ public:
             utils::updateable_value<uint32_t> collection_elements_count_threshold);
 
 protected:
-    virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones) const override;
+    virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) const override;
     virtual future<> delete_large_data_entries(const schema& s, sstring sstable_name, std::string_view large_table_name) const override;
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const override;
@@ -176,6 +179,9 @@ private:
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const;
     future<> internal_record_large_cells_and_collections(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const;
+    future<> internal_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows) const;
+    future<> internal_record_large_partitions_all_data(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows,
+            uint64_t dead_rows, uint64_t range_tombstones) const;
 
 private:
     template <typename... Args>
@@ -186,7 +192,7 @@ private:
 class nop_large_data_handler : public large_data_handler {
 public:
     nop_large_data_handler();
-    virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones) const override {
+    virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) const override {
         return make_ready_future<>();
     }
 

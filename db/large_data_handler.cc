@@ -35,14 +35,14 @@ large_data_handler::large_data_handler(uint64_t partition_threshold_bytes, uint6
         partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold, _collection_elements_count_threshold);
 }
 
-future<large_data_handler::partition_above_threshold> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones) {
+future<large_data_handler::partition_above_threshold> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) {
     assert(running());
     partition_above_threshold above_threshold{partition_size > _partition_threshold_bytes, rows > _rows_count_threshold};
     static_assert(std::is_same_v<decltype(above_threshold.size), bool>);
     _stats.partitions_bigger_than_threshold += above_threshold.size; // increment if true
     if (above_threshold.size || above_threshold.rows) [[unlikely]] {
-        return with_sem([&sst, &key, partition_size, rows, range_tombstones, this] {
-            return record_large_partitions(sst, key, partition_size, rows, range_tombstones);
+        return with_sem([&sst, &key, partition_size, rows, range_tombstones, dead_rows, this] {
+            return record_large_partitions(sst, key, partition_size, rows, range_tombstones, dead_rows);
         }).then([above_threshold] {
             return above_threshold;
         });
@@ -120,10 +120,19 @@ cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service&
     , _record_large_cells([this] (const sstables::sstable& sst, const sstables::key& pk, const clustering_key_prefix* ck, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
         return internal_record_large_cells(sst, pk, ck, cdef, cell_size, collection_elements);
     })
-    , _feat_listener(_feat.large_collection_detection.when_enabled([this] {
+    , _record_large_partitions([this] (const sstables::sstable& sst, const sstables::key& pk, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) {
+        return internal_record_large_partitions(sst, pk, partition_size, rows);
+    })
+    , _large_collection_detection_listener(_feat.large_collection_detection.when_enabled([this] {
         large_data_logger.debug("Enabled large_collection detection");
         _record_large_cells = [this] (const sstables::sstable& sst, const sstables::key& pk, const clustering_key_prefix* ck, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
             return internal_record_large_cells_and_collections(sst, pk, ck, cdef, cell_size, collection_elements);
+        };
+    }))
+    , _range_tombstone_and_dead_rows_detection_listener(_feat.range_tombstone_and_dead_rows_detection.when_enabled([this] {
+        large_data_logger.debug("Enabled detection or range tombstones and dead rows");
+        _record_large_partitions = [this] (const sstables::sstable& sst, const sstables::key& pk, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) {
+            return internal_record_large_partitions_all_data(sst, pk, partition_size, rows, range_tombstones, dead_rows);
         };
     }))
     , _partition_threshold_mb_updater(_partition_threshold_bytes, std::move(partition_threshold_mb), [] (uint32_t threshold_mb) { return uint64_t(threshold_mb) * MB; })
@@ -164,8 +173,20 @@ future<> cql_table_large_data_handler::try_record(std::string_view large_table, 
             .finally([ p = _sys_ks ] {});
 }
 
-future<> cql_table_large_data_handler::record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones) const {
-    return try_record("partition", sst, key, int64_t(partition_size), "partition", "", {"rows", "range_tombstones"}, data_value((int64_t)rows), data_value((int64_t)range_tombstones));
+future<> cql_table_large_data_handler::record_large_partitions(const sstables::sstable& sst, const sstables::key& key,
+        uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) const {
+    return _record_large_partitions(sst, key, partition_size, rows, range_tombstones, dead_rows);
+}
+
+future<> cql_table_large_data_handler::internal_record_large_partitions(const sstables::sstable& sst, const sstables::key& key,
+        uint64_t partition_size, uint64_t rows) const {
+    return try_record("partition", sst, key, int64_t(partition_size), "partition", "", {"rows"}, data_value((int64_t)rows));
+}
+
+future<> cql_table_large_data_handler::internal_record_large_partitions_all_data(const sstables::sstable& sst, const sstables::key& key,
+        uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) const {
+    return try_record("partition", sst, key, int64_t(partition_size), "partition", "", {"rows", "range_tombstones", "dead_rows"},
+                data_value((int64_t)rows), data_value((int64_t)range_tombstones), data_value((int64_t)dead_rows));
 }
 
 future<> cql_table_large_data_handler::record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,

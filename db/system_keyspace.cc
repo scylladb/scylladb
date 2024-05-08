@@ -668,7 +668,8 @@ schema_ptr system_keyspace::size_estimates() {
         {
             {"rows", long_type},
             {"compaction_time", timestamp_type},
-            {"range_tombstones", long_type}
+            {"range_tombstones", long_type},
+            {"dead_rows", long_type}
         },
         // static columns
         {},
