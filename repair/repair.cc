@@ -2316,10 +2316,8 @@ future<> repair::tablet_repair_task_impl::run() {
                 auto nr = idx.fetch_add(1);
                 rlogger.info("repair[{}] Repair {} out of {} tablets: table={}.{} range={} replicas={}",
                     id.uuid(), nr, metas.size(), m.keyspace_name, m.table_name, m.range, m.replicas);
-                lw_shared_ptr<replica::table> t;
-                try {
-                    t = rs._db.local().find_column_family(m.tid).shared_from_this();
-                } catch (replica::no_such_column_family& e) {
+                lw_shared_ptr<replica::table> t = rs._db.local().get_tables_metadata().get_table_if_exists(m.tid);
+                if (!t) {
                     rlogger.debug("repair[{}] Table {}.{} does not exist anymore", id.uuid(), m.keyspace_name, m.table_name);
                     continue;
                 }
