@@ -1954,6 +1954,7 @@ future<> view_builder::drain() {
     _as.request_abort();
     co_await std::move(_started);
     co_await _mnotifier.unregister_listener(this);
+    co_await _vug.drain();
     co_await _sem.wait();
     _sem.broken();
     co_await _build_step.join();
@@ -2565,6 +2566,20 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     }).get();
 }
 
+future<> view_builder::mark_as_built(view_ptr view) {
+    return seastar::when_all_succeed(
+            _sys_ks.mark_view_as_built(view->ks_name(), view->cf_name()),
+            _sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name())).discard_result();
+}
+
+future<> view_builder::mark_existing_views_as_built() {
+    assert(this_shard_id() == 0);
+    auto views = _db.get_views();
+    co_await coroutine::parallel_for_each(views, [this] (view_ptr& view) {
+        return mark_as_built(view);
+    });
+}
+
 future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_token) {
     _built_views.emplace(view->id());
     vlogger.debug("Shard finished building view {}.{}", view->ks_name(), view->cf_name());
@@ -2584,9 +2599,7 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
                 }
                 auto view = builder._db.find_schema(view_id);
                 vlogger.info("Finished building view {}.{}", view->ks_name(), view->cf_name());
-                return seastar::when_all_succeed(
-                        builder._sys_ks.mark_view_as_built(view->ks_name(), view->cf_name()),
-                        builder._sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name())).then_unpack([&builder, view] {
+                return builder.mark_as_built(view_ptr(view)).then([&builder, view] {
                     // The view is built, so shard 0 can remove the entry in the build progress system table on
                     // behalf of all shards. It is guaranteed to have a higher timestamp than the per-shard entries.
                     return builder._sys_ks.remove_view_build_progress_across_all_shards(view->ks_name(), view->cf_name());
