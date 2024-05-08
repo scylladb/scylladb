@@ -2984,13 +2984,24 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
     return r;
 }
 
+// Invokes "apply" on every shard that is responsible for the given token, according to sharder::shard_for_writes
+// Caller must keep the effective_replication_map alive around the apply operation.
+template <typename Applier>
+requires std::invocable<Applier, shard_id>
+future<> apply_on_shards(const locator::effective_replication_map_ptr& erm, const schema& s, dht::token tok, Applier&& apply) {
+    auto shards = erm->get_sharder(s).shard_for_writes(tok);
+    if (shards.empty()) {
+        return make_exception_future<>(std::runtime_error(format("No local shards for token {} of {}.{}", tok, s.ks_name(), s.cf_name())));
+    }
+    if (shards.size() == 1) [[likely]] {
+        return apply(shards[0]);
+    }
+    return seastar::parallel_for_each(shards, std::move(apply));
+}
+
 future<>
 storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto erm = _db.local().find_column_family(m.schema()).get_effective_replication_map();
-    auto shards = erm->get_sharder(*m.schema()).shard_for_writes(m.token());
-    if (shards.empty()) {
-        throw std::runtime_error(format("No local shards for token {} of {}.{}", m.token(), m.schema()->ks_name(), m.schema()->cf_name()));
-    }
     auto apply = [this, erm, &m, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         auto shard_rate_limit = rate_limit_info;
@@ -3008,20 +3019,13 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
             return db.apply(s, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
-    if (shards.size() == 1) [[likely]] {
-        return apply(shards[0]);
-    }
-    return seastar::parallel_for_each(shards, std::move(apply));
+    return apply_on_shards(erm, *m.schema(), m.token(), std::move(apply));
 }
 
 future<>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
         smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
-    auto shards = erm->get_sharder(*s).shard_for_writes(m.token(*s));
-    if (shards.empty()) {
-        throw std::runtime_error(format("No local shards for token {} of {}.{}", m.token(*s), s->ks_name(), s->cf_name()));
-    }
     auto apply = [this, erm, s, &m, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         auto shard_rate_limit = rate_limit_info;
@@ -3033,10 +3037,7 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
             return db.apply(gs, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
-    if (shards.size() == 1) [[likely]] {
-        return apply(shards[0]);
-    }
-    return seastar::parallel_for_each(shards, std::move(apply));
+    return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
 }
 
 future<>
@@ -3061,20 +3062,13 @@ storage_proxy::mutate_locally(std::vector<frozen_mutation_and_schema> mutations,
 future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
-    auto shards = erm->get_sharder(*s).shard_for_writes(m.token(*s));
-    if (shards.empty()) {
-        throw std::runtime_error(format("No local shards for token {} of {}.{}", m.token(*s), s->ks_name(), s->cf_name()));
-    }
     auto apply = [&, erm] (unsigned shard) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state, timeout, erm] (replica::database& db) mutable -> future<> {
             return db.apply_hint(gs, m, tr_state, timeout);
         });
     };
-    if (shards.size() == 1) [[likely]] {
-        return apply(shards[0]);
-    }
-    return seastar::parallel_for_each(shards, std::move(apply));
+    return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
 }
 
 std::optional<replica::stale_topology_exception>
