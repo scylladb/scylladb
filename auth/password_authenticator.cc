@@ -132,14 +132,12 @@ future<> password_authenticator::create_default_if_missing() {
             db::consistency_level::QUORUM,
             internal_distributed_query_state(),
             {salted_pwd, _superuser},
-            cql3::query_processor::cache_internal::no).then([](auto&&) {
-            plogger.info("Created default superuser authentication record.");
-        });
+            cql3::query_processor::cache_internal::no);
+        plogger.info("Created default superuser authentication record.");
     } else {
         co_await announce_mutations(_qp, _group0_client, query,
-            {salted_pwd, _superuser}, &_as, ::service::raft_timeout{}).then([]() {
-            plogger.info("Created default superuser authentication record.");
-        });
+            {salted_pwd, _superuser}, &_as, ::service::raft_timeout{});
+        plogger.info("Created default superuser authentication record.");
     }
 }
 
