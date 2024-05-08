@@ -34,6 +34,7 @@ struct test_config {
     std::string workload;
     int port;
     unsigned partitions;
+    bool prepopulate_partitions;
     unsigned duration_in_seconds;
     unsigned operations_per_shard;
     unsigned concurrency;
@@ -394,7 +395,7 @@ void workload_main(const test_config& c) {
         {"write_rmw", update_item_rmw},
     };
 
-    if (c.workload == "read" || c.workload == "scan") {
+    if (c.prepopulate_partitions && (c.workload == "read" || c.workload == "scan")) {
         create_partitions(c, cli);
     }
 
@@ -433,6 +434,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         opts_desc.add_options()
             ("workload", bpo::value<std::string>()->default_value(""), "which workload type to run")
             ("partitions", bpo::value<unsigned>()->default_value(10000), "number of partitions")
+            ("prepopulate-partitions", bpo::value<bool>()->default_value(true), "relevant for read workloads, can be disabled when data is prepopulated externally")
             ("duration", bpo::value<unsigned>()->default_value(5), "test duration in seconds")
             ("operations-per-shard", bpo::value<unsigned>()->default_value(0), "run this many operations per shard (overrides duration)")
             ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
@@ -446,6 +448,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
 
         c.workload = opts["workload"].as<std::string>();
         c.partitions = opts["partitions"].as<unsigned>();
+        c.prepopulate_partitions = opts["prepopulate-partitions"].as<bool>();
         c.duration_in_seconds = opts["duration"].as<unsigned>();
         c.operations_per_shard = opts["operations-per-shard"].as<unsigned>();
         c.concurrency = opts["concurrency"].as<unsigned>();
