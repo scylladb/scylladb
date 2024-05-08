@@ -3138,7 +3138,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
         }
         // We need this additional check because even after removing the mapping IP-host ID corresponding
         // to this node from `locator::token_metadata` while decommissioning, we still perform mutations
-        // targetting the local node.
+        // targeting the local node.
         if (tm.get_topology().is_me(ep)) {
             return tm.get_topology().my_host_id();
         }
