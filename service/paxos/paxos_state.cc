@@ -193,7 +193,9 @@ future<std::optional<db::view::update_backlog>> paxos_state::learn(storage_proxy
     lc.start();
 
     return do_with(std::move(decision), [&sp, &sys_ks, tr_state = std::move(tr_state), schema, timeout] (proposal& decision) {
-        auto f = utils::get_local_injector().inject("paxos_state_learn_timeout", timeout);
+        auto f = utils::get_local_injector().inject("paxos_state_learn_timeout", timeout).then([] {
+            return make_ready_future<std::optional<db::view::update_backlog>>(std::nullopt);
+        });
 
         replica::table& cf = sp.get_db().local().find_column_family(schema);
         db_clock::time_point t = cf.get_truncation_time();
@@ -209,7 +211,7 @@ future<std::optional<db::view::update_backlog>> paxos_state::learn(storage_proxy
         // The table may have been truncated since the proposal was initiated. In that case, we
         // don't want to perform the mutation and potentially resurrect truncated data.
         if (utils::UUID_gen::unix_timestamp(decision.ballot) >= truncated_at) {
-            f = f.then([&sp, schema, &decision, timeout, tr_state] {
+            f = f.then([&sp, schema, &decision, timeout, tr_state] (std::optional<db::view::update_backlog>) {
                 logger.debug("Committing decision {}", decision);
                 tracing::trace(tr_state, "Committing decision {}", decision);
 
@@ -223,18 +225,18 @@ future<std::optional<db::view::update_backlog>> paxos_state::learn(storage_proxy
                     on_internal_error(logger, format("schema version in learn does not match current schema"));
                 }
 
-                return sp.mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout).discard_result();
+                return sp.mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);
             });
         } else {
             logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);
             tracing::trace(tr_state, "Not committing decision {} as ballot timestamp predates last truncation time", decision);
         }
-        return f.then([&sys_ks, &decision, schema, timeout] {
+        return f.then([&sys_ks, &decision, schema, timeout] (std::optional<db::view::update_backlog> backlog) {
             // We don't need to lock the partition key if there is no gap between loading paxos
             // state and saving it, and here we're just blindly updating.
-            return utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout, [&sys_ks, &decision, schema, timeout] {
-                return sys_ks.save_paxos_decision(*schema, decision, timeout).then([] {
-                    return make_ready_future<std::optional<db::view::update_backlog>>(std::nullopt);
+            return utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout, [&sys_ks, &decision, schema, timeout, backlog] {
+                return sys_ks.save_paxos_decision(*schema, decision, timeout).then([backlog] {
+                    return make_ready_future<std::optional<db::view::update_backlog>>(backlog);
                 });
             });
         });

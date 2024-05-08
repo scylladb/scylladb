@@ -385,7 +385,7 @@ future<> view_update_generator::populate_views(const replica::table& table,
  * but has simply some updated values.
  * @return a future resolving to the mutations to apply to the views, which can be empty.
  */
-future<std::optional<update_backlog>> view_update_generator::generate_and_propagate_view_updates(const replica::table& table,
+future<update_backlog> view_update_generator::generate_and_propagate_view_updates(const replica::table& table,
         const schema_ptr& base,
         reader_permit permit,
         std::vector<view_and_base>&& views,
@@ -465,7 +465,7 @@ future<std::optional<update_backlog>> view_update_generator::generate_and_propag
     if (err) {
         std::rethrow_exception(err);
     }
-    co_return std::nullopt;
+    co_return _proxy.local().get_view_update_backlog();
 }
 
 }

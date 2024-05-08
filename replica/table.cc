@@ -3200,10 +3200,10 @@ future<std::pair<row_locker::lock_holder, std::optional<db::view::update_backlog
     const bool need_static = db::view::needs_static_row(m.partition(), views);
     if (!need_regular && !need_static) {
         tracing::trace(tr_state, "View updates do not require read-before-write");
-        co_await gen->generate_and_propagate_view_updates(*this, base, sem.make_tracking_only_permit(s, "push-view-updates-1", timeout, tr_state), std::move(views), std::move(m), { }, tr_state, now, timeout).discard_result();
+        auto backlog = co_await gen->generate_and_propagate_view_updates(*this, base, sem.make_tracking_only_permit(s, "push-view-updates-1", timeout, tr_state), std::move(views), std::move(m), { }, tr_state, now, timeout);
         // In this case we are not doing a read-before-write, just a
         // write, so no lock is needed.
-        co_return std::make_pair(row_locker::lock_holder(), std::nullopt);
+        co_return std::make_pair(row_locker::lock_holder(), backlog);
     }
     // We read whole sets of regular and/or static columns in case the update now causes a base row to pass
     // a view's filters, and a view happens to include columns that have no value in this update.
@@ -3235,12 +3235,12 @@ future<std::pair<row_locker::lock_holder, std::optional<db::view::update_backlog
     auto pk = dht::partition_range::make_singular(m.decorated_key());
     auto permit = sem.make_tracking_only_permit(base, "push-view-updates-2", timeout, tr_state);
     auto reader = source.make_reader_v2(base, permit, pk, slice, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-    co_await gen->generate_and_propagate_view_updates(*this, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now, timeout).discard_result();
+    auto backlog = co_await gen->generate_and_propagate_view_updates(*this, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now, timeout);
     tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());
     // return the local partition/row lock we have taken so it
     // remains locked until the caller is done modifying this
     // partition/row and destroys the lock object.
-    co_return std::make_pair(std::move(lock), std::nullopt);
+    co_return std::make_pair(std::move(lock), backlog);
 
 }
 

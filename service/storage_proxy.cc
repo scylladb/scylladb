@@ -536,14 +536,14 @@ private:
                         // FIXME: get_schema_for_write() doesn't timeout
                         schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard}, timeout);
                         // Note: blocks due to execution_stage in replica::database::apply()
-                        co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout, fence);
+                        auto backlog = co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout, fence);
                         // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
                         // lots of unsent responses, which can OOM our shard.
                         //
                         // Usually we will return immediately, since this work only involves appending data to the connection
                         // send buffer.
                         auto f = co_await coroutine::as_future(send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
-                                shard, response_id, p->get_view_update_backlog()));
+                                shard, response_id, backlog.value_or(db::view::update_backlog::no_backlog())));
                         f.ignore_ready_future();
                     } catch (...) {
                         std::exception_ptr eptr = std::current_exception();
@@ -2980,11 +2980,16 @@ future<std::optional<db::view::update_backlog>> apply_on_shards(const locator::e
     if (shards.size() == 1) [[likely]] {
         return apply(shards[0]);
     }
-    auto apply_without_backlog = [apply = std::move(apply)] (shard_id shard) {
-        return apply(shard).discard_result();
+    std::optional<db::view::update_backlog> max_backlog;
+    auto apply_with_max_backlog = [apply = std::move(apply), &max_backlog] (shard_id shard) {
+        return apply(shard).then([&max_backlog] (std::optional<db::view::update_backlog> shard_backlog) {
+            if (shard_backlog && (!max_backlog || *shard_backlog > *max_backlog)) {
+                max_backlog = shard_backlog;
+            }
+        });
     };
-    return seastar::parallel_for_each(shards, std::move(apply_without_backlog)).then([] {
-        return std::make_optional<db::view::update_backlog>();
+    return seastar::parallel_for_each(shards, std::move(apply_with_max_backlog)).then([&max_backlog] {
+        return max_backlog;
     });
 }
 
@@ -3035,6 +3040,7 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_st
     co_await coroutine::parallel_for_each(mutations, [&] (const mutation& m) mutable {
             return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info).discard_result();
     });
+    // This variant of mutate_locally is not used for handling write requests, so we don't need to return the update_backlog
     co_return std::nullopt;
 }
 
@@ -3048,6 +3054,7 @@ storage_proxy::mutate_locally(std::vector<frozen_mutation_and_schema> mutations,
     co_await coroutine::parallel_for_each(mutations, [&] (const frozen_mutation_and_schema& x) {
         return mutate_locally(x.s, x.fm, tr_state, sync, timeout, rate_limit_info).discard_result();
     });
+    // This variant of mutate_locally is not used for handling write requests, so we don't need to return the update_backlog
     co_return std::nullopt;
 }
 
@@ -4093,10 +4100,10 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     // lambda for applying mutation locally
     auto lmutate = [handler_ptr, response_id, this, my_address, timeout] () mutable {
         return handler_ptr->apply_locally(timeout, handler_ptr->get_trace_state())
-                .then([response_id, this, my_address, h = std::move(handler_ptr), p = shared_from_this()] (std::optional<db::view::update_backlog>) {
+                .then([response_id, this, my_address, h = std::move(handler_ptr), p = shared_from_this()] (std::optional<db::view::update_backlog> b) {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
-            got_response(response_id, my_address, get_view_update_backlog());
+            got_response(response_id, my_address, b);
         });
     };
 

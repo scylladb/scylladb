@@ -12,6 +12,7 @@
 #include "replica/database_fwd.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
+#include <optional>
 #include <seastar/core/future-util.hh>
 #include "db/system_auth_keyspace.hh"
 #include "db/system_keyspace.hh"
@@ -2002,21 +2003,22 @@ future<std::optional<db::view::update_backlog>> database::do_apply(schema_ptr s,
     // so it knows when new writes start being sent to a new view.
     auto op = cf.write_in_progress();
 
+    std::optional<db::view::update_backlog> backlog;
     row_locker::lock_holder lock;
     if (!cf.views().empty()) {
         if (!_view_update_generator) {
             co_await coroutine::return_exception(std::runtime_error("view update generator not plugged to push updates"));
         }
 
-        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), get_reader_concurrency_semaphore()));
-        if (lock_f.failed()) {
-            auto ex = lock_f.get_exception();
+        auto lock_backlog_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), get_reader_concurrency_semaphore()));
+        if (lock_backlog_f.failed()) {
+            auto ex = lock_backlog_f.get_exception();
             if (is_timeout_exception(ex)) {
                 ++_stats->total_writes_timedout;
             }
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        lock = lock_f.get().first;
+        std::tie(lock, backlog) = lock_backlog_f.get();
     }
 
     // purposefully manually "inlined" apply_with_commitlog call here to reduce # coroutine
@@ -2052,7 +2054,7 @@ future<std::optional<db::view::update_backlog>> database::do_apply(schema_ptr s,
       if (try_catch<mutation_reordered_with_truncate_exception>(ex)) {
         // This mutation raced with a truncate, so we can just drop it.
         dblog.debug("replay_position reordering detected");
-        co_return std::nullopt;
+        co_return backlog;
       } else if (is_timeout_exception(ex)) {
         ++_stats->total_writes_timedout;
       }
@@ -2060,7 +2062,7 @@ future<std::optional<db::view::update_backlog>> database::do_apply(schema_ptr s,
     }
     // Success, prevent incrementing failure counter
     update_writes_failed.cancel();
-    co_return std::nullopt;
+    co_return backlog;
 }
 
 template<typename Future>
