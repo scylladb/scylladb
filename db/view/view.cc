@@ -2646,7 +2646,7 @@ update_backlog node_update_backlog::fetch() {
         _max.store(new_max, std::memory_order_relaxed);
         return new_max;
     }
-    return std::max(fetch_shard(this_shard_id()), _max.load(std::memory_order_relaxed));
+    return _max.load(std::memory_order_relaxed);
 }
 
 future<std::optional<update_backlog>> node_update_backlog::fetch_if_changed() {

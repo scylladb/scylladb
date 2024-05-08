@@ -162,6 +162,14 @@ bool storage_proxy::only_me(const inet_address_vector_replica_set& replicas) con
     return replicas.size() == 1 && is_me(replicas[0]);
 }
 
+static dht::token get_token_for_view_updates(const paxos::proposal& p, schema_ptr s) {
+    return p.update.token(*s);
+}
+
+static dht::token get_token_for_view_updates(const frozen_mutation& m, schema_ptr s) {
+    return m.token(*s);
+}
+
 enum class storage_proxy_remote_read_verb {
     read_data,
     read_mutation_data,
@@ -535,15 +543,21 @@ private:
                         auto op = _sp.start_write();
                         // FIXME: get_schema_for_write() doesn't timeout
                         schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard}, timeout);
+                        auto erm = _sp._db.local().find_column_family(s).get_effective_replication_map();
+                        auto shards = erm->get_sharder(*s).shard_for_writes(get_token_for_view_updates(m, s));
                         // Note: blocks due to execution_stage in replica::database::apply()
                         co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout, fence);
+                        auto backlog = _sp.get_view_update_backlog();
+                        for (auto& shard : shards) {
+                            backlog = std::max(backlog, _sp.get_view_update_backlog_for_shard(shard));
+                        }
                         // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
                         // lots of unsent responses, which can OOM our shard.
                         //
                         // Usually we will return immediately, since this work only involves appending data to the connection
                         // send buffer.
                         auto f = co_await coroutine::as_future(send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
-                                shard, response_id, p->get_view_update_backlog()));
+                                shard, response_id, backlog));
                         f.ignore_ready_future();
                     } catch (...) {
                         std::exception_ptr eptr = std::current_exception();
@@ -580,6 +594,7 @@ private:
         }
         // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
         if (errors.count) {
+            // FIXME: get the view update backlog from the shard that was actually perfoming the write
             auto f = co_await coroutine::as_future(send_mutation_failed(
                     netw::messaging_service::msg_addr{reply_to, shard},
                     trace_state_ptr,
@@ -1034,6 +1049,7 @@ public:
     const schema_ptr& schema() {
         return _schema;
     }
+    virtual dht::token token() = 0;
     // called only when all replicas replied
     virtual void release_mutation() = 0;
     // called when reply is received
@@ -1095,15 +1111,15 @@ public:
     virtual bool is_shared() override {
         return false;
     }
+    virtual dht::token token() override {
+        return _token;
+    }
     virtual void release_mutation() override {
         for (auto&& m : _mutations) {
             if (m.second) {
                 m.second.release();
             }
         }
-    }
-    dht::token& token() {
-        return _token;
     }
 };
 
@@ -1141,6 +1157,9 @@ public:
     }
     virtual bool is_shared() override {
         return true;
+    }
+    virtual dht::token token() override {
+        return _mutation->token(*_schema);
     }
     virtual void release_mutation() override {
         _mutation.release();
@@ -1299,6 +1318,9 @@ public:
     }
     virtual bool is_shared() override {
         return true;
+    }
+    virtual dht::token token() override {
+        return _proposal->update.token(*_schema);
     }
     virtual void release_mutation() override {
         _proposal.release();
@@ -1593,6 +1615,9 @@ public:
     }
     const schema_ptr& get_schema() const {
         return _mutation_holder->schema();
+    }
+    dht::token get_token() const {
+        return _mutation_holder->token();
     }
     size_t get_mutation_size() const {
         return _mutation_holder->size();
@@ -2446,6 +2471,10 @@ future<std::optional<db::view::update_backlog>> storage_proxy::get_view_update_b
         on_internal_error(slogger, format("getting view update backlog for gossip on a non-gossip shard {}", this_shard_id()));
     }
     return _max_view_update_backlog.fetch_if_changed();
+}
+
+db::view::update_backlog storage_proxy::get_view_update_backlog_for_shard(shard_id shard) {
+    return _max_view_update_backlog.fetch_shard(shard);
 }
 
 db::view::update_backlog storage_proxy::get_backlog_of(gms::inet_address ep) const {
@@ -4092,7 +4121,13 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
                 .then([response_id, this, my_address, h = std::move(handler_ptr), p = shared_from_this()] {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
-            got_response(response_id, my_address, get_view_update_backlog());
+            auto erm = _db.local().find_column_family(h->get_schema()).get_effective_replication_map();
+            auto shards = erm->get_sharder(*h->get_schema()).shard_for_writes(h->get_token());
+            auto backlog = get_view_update_backlog();
+            for (auto& shard : shards) {
+                backlog = std::max(backlog, get_view_update_backlog_for_shard(shard));
+            }
+            got_response(response_id, my_address, backlog);
         });
     };
 
