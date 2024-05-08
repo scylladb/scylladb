@@ -26,6 +26,7 @@
 #include "db/config.hh"
 #include "db/system_auth_keyspace.hh"
 #include "utils/error_injection.hh"
+#include "mutation/async_utils.hh"
 
 namespace auth {
 
@@ -199,7 +200,7 @@ future<> announce_mutations(
             internal_distributed_query_state(),
             timestamp,
             std::move(values));
-    canonical_mutation_vector cmuts = {muts.begin(), muts.end()};
+    auto cmuts = co_await make_canonical_mutations_gently(std::move(muts));
     co_await announce_mutations_with_guard(group0_client, std::move(cmuts), std::move(group0_guard), as, timeout);
 }
 

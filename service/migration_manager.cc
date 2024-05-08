@@ -13,6 +13,8 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "auth/resource.hh"
+#include "mutation/async_utils.hh"
+#include "mutation/mutation_fwd.hh"
 #include "schema/schema_registry.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
@@ -953,9 +955,9 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 {
     netw::messaging_service::msg_addr id{endpoint, 0};
     auto schema_features = _feat.cluster_schema_features();
-    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
-    auto cm = canonical_mutation_vector(adjusted_schema.begin(), adjusted_schema.end());
-    return _messaging.send_definitions_update(id, frozen_mutation_vector{}, std::move(cm));
+    auto muts = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
+    auto cm = co_await make_canonical_mutations_gently(std::move(muts));
+    co_return co_await _messaging.send_definitions_update(id, frozen_mutation_vector{}, std::move(cm));
 }
 
 future<> migration_manager::announce_with_raft(mutation_vector schema, group0_guard guard, std::string_view description) {
@@ -965,7 +967,7 @@ future<> migration_manager::announce_with_raft(mutation_vector schema, group0_gu
 
     auto group0_cmd = _group0_client.prepare_command(
         schema_change{
-            .mutations{adjusted_schema.begin(), adjusted_schema.end()},
+            .mutations = co_await make_canonical_mutations_gently(std::move(adjusted_schema)),
         },
         guard, std::move(description));
 

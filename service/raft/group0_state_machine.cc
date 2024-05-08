@@ -83,7 +83,12 @@ static mutation extract_history_mutation(canonical_mutation_vector& muts, const 
         on_internal_error(slogger, "group0 history table mutation not found");
     }
     auto res = it->to_mutation(s);
-    muts.erase(it);
+    canonical_mutation_vector remaining;
+    remaining.reserve(muts.size() - 1);
+    // chunked_vector doesn't support muts.erase(it)
+    std::move(muts.begin(), it, std::back_inserter(remaining));
+    std::move(++it, muts.end(), std::back_inserter(remaining));
+    muts = std::move(remaining);
     return res;
 }
 

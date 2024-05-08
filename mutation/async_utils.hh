@@ -38,6 +38,7 @@ future<> apply_gently(mutation& target, const mutation& m);
 
 future<mutation> to_mutation_gently(const canonical_mutation& cm, schema_ptr s);
 future<canonical_mutation> make_canonical_mutation_gently(const mutation& m);
+future<canonical_mutation_vector> make_canonical_mutations_gently(mutation_vector&& muts);
 
 future<frozen_mutation> freeze_gently(const mutation& m);
 future<mutation> unfreeze_gently(const frozen_mutation& fm, schema_ptr schema);

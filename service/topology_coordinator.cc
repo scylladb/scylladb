@@ -43,6 +43,7 @@
 #include "utils/error_injection.hh"
 #include "utils/to_string.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include "mutation/async_utils.hh"
 
 #include "idl/join_node.dist.hh"
 #include "idl/storage_service.dist.hh"
@@ -554,7 +555,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             on_internal_error(rtlogger, "cdc_generation_data: gen_mutations is empty");
         }
 
-        canonical_mutation_vector updates{gen_mutations.begin(), gen_mutations.end()};
+        auto updates = co_await make_canonical_mutations_gently(std::move(gen_mutations));
 
         if (updates.size() > 1) {
             release_guard(std::move(guard));

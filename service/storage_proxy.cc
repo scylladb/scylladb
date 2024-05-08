@@ -3854,9 +3854,9 @@ mutation storage_proxy::do_get_batchlog_mutation_for(schema_ptr schema, const mu
     auto key = partition_key::from_singular(*schema, id);
     auto timestamp = api::new_timestamp();
     auto data = [&mutations] {
-        canonical_mutation_vector fm(mutations.begin(), mutations.end());
         bytes_ostream out;
-        for (auto& m : fm) {
+        for (auto& mut : mutations) {
+            auto m = canonical_mutation(mut);
             ser::serialize(out, m);
         }
         return to_bytes(out.linearize());

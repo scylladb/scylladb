@@ -107,6 +107,16 @@ future<canonical_mutation> make_canonical_mutation_gently(const mutation& m)
     co_return res;
 }
 
+future<canonical_mutation_vector> make_canonical_mutations_gently(mutation_vector&& muts) {
+    canonical_mutation_vector res;
+    res.reserve(muts.size());
+    for (auto&& mut : muts) {
+        auto m = std::move(mut);
+        res.emplace_back(co_await make_canonical_mutation_gently(m));
+    }
+    co_return res;
+}
+
 future<frozen_mutation>
 freeze_gently(const mutation& m) {
     auto fm = frozen_mutation(m.key());
