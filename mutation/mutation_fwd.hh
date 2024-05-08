@@ -17,5 +17,5 @@ class frozen_mutation;
 class canonical_mutation;
 
 using mutation_vector = utils::chunked_vector<mutation>;
-using frozen_mutation_vector = std::vector<frozen_mutation>;
+using frozen_mutation_vector = utils::chunked_vector<frozen_mutation>;
 using canonical_mutation_vector = std::vector<canonical_mutation>;

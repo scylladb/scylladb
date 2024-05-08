@@ -138,7 +138,7 @@ unfreeze_gently(const frozen_mutation& fm, schema_ptr schema) {
     co_return m;
 }
 
-future<mutation_vector> unfreeze_gently(std::span<frozen_mutation> muts) {
+future<mutation_vector> unfreeze_gently(const frozen_mutation_vector& muts) {
     mutation_vector result;
     result.reserve(muts.size());
     for (auto& fm : muts) {

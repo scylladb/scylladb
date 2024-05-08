@@ -281,9 +281,8 @@ SEASTAR_THREAD_TEST_CASE(test_fragmenting_and_freezing) {
                 return make_ready_future<stop_iteration>(stop_iteration::no);
             }, 1).get();
             mutation_vector unfrozen;
-            while (!frozen.empty()) {
-                auto m = frozen.front().unfreeze(s);
-                frozen.erase(frozen.begin());
+            for (auto& fm : frozen) {
+                auto m = fm.unfreeze(s);
                 if (unfrozen.empty() || !unfrozen.back().decorated_key().equal(*s, m.decorated_key())) {
                     unfrozen.emplace_back(std::move(m));
                 } else {
