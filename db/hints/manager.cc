@@ -862,11 +862,11 @@ future<> manager::perform_migration() {
     const auto lock = co_await seastar::get_units(_drain_lock, 1);
 
     using lock_type = std::unique_lock<seastar::shared_mutex>;
-    // We're taking this lock because we're about to stop endpoint managers here, wheras
+    // We're taking this lock because we're about to stop endpoint managers here, whereas
     // `manager::wait_for_sync_point` browses them and awaits their corresponding sync points.
     // If we stop them during that process, that function will get exceptions.
     //
-    // Although in the current implemenation there is no danger of race conditions
+    // Although in the current implementation there is no danger of race conditions
     // (or at least race conditions that could be harmful in any way), it's better
     // to avoid them anyway. Hence this lock.
     const auto unique_lock = co_await std::invoke(coroutine::lambda([&] () -> future<lock_type> {
