@@ -243,8 +243,8 @@ SEASTAR_TEST_CASE(test_sort_type_in_update) {
         auto muts2 = db::schema_tables::make_create_type_mutations(keyspace, type2, ts);
 
         auto muts = muts2;
-        muts.insert(muts.end(), muts1.begin(), muts1.end());
-        muts.insert(muts.end(), muts3.begin(), muts3.end());
+        std::move(muts1.begin(), muts1.end(), std::back_inserter(muts));
+        std::move(muts3.begin(), muts3.end(), std::back_inserter(muts));
         mm.announce(std::move(muts), std::move(group0_guard), "").get();
     });
 }
@@ -620,7 +620,7 @@ SEASTAR_TEST_CASE(test_nested_type_mutation_in_update) {
         auto muts2 = db::schema_tables::make_create_type_mutations(keyspace, type2, ts);
 
         auto muts = muts1;
-        muts.insert(muts.end(), muts2.begin(), muts2.end());
+        std::move(muts2.begin(), muts2.end(), std::back_inserter(muts));
         mm.announce(std::move(muts), std::move(group0_guard), "").get();
 
         BOOST_REQUIRE_EQUAL(listener.create_user_type_count, 2);

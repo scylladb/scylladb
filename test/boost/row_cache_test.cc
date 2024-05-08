@@ -372,10 +372,12 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
         require_no_token_duplicates(partitions);
 
         dht::decorated_key key_before_all = partitions.front().decorated_key();
-        partitions.erase(partitions.begin());
-
         dht::decorated_key key_after_all = partitions.back().decorated_key();
-        partitions.pop_back();
+
+        // Drop the first and last partitions
+        mutation_vector tmp;
+        std::move(partitions.begin() + 1, partitions.begin() + partitions.size() - 1, std::back_inserter(tmp));
+        partitions = std::move(tmp);
 
         cache_tracker tracker;
         auto mt = make_memtable(s, partitions);

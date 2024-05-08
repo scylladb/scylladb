@@ -108,6 +108,13 @@ static size_t count_fragments(mutation m) {
     return res;
 }
 
+static void require_mutation_vectors_equal(const mutation_vector& m1, const mutation_vector& m2) {
+    BOOST_REQUIRE_EQUAL(m1.size(), m2.size());
+    for (size_t i = 0; i < m1.size(); i++) {
+        BOOST_REQUIRE_EQUAL(m1[i], m2[i]);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     for_each_mutation([&] (const mutation& m) {
@@ -283,7 +290,7 @@ SEASTAR_THREAD_TEST_CASE(test_fragmenting_and_freezing) {
                     unfrozen.back().apply(std::move(m));
                 }
             }
-            BOOST_REQUIRE_EQUAL(muts, unfrozen);
+            require_mutation_vectors_equal(muts, unfrozen);
         }
     };
 
@@ -589,7 +596,7 @@ void test_flat_stream(schema_ptr s, mutation_vector muts, reversed_partitions re
     auto fmr = make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_permit(), muts);
     auto close_fmr = deferred_close(fmr);
     auto muts2 = consume_fn(fmr, flat_stream_consumer(s, semaphore.make_permit(), reversed));
-    BOOST_REQUIRE_EQUAL(muts, muts2);
+    require_mutation_vectors_equal(muts, muts2);
   }
 
   {

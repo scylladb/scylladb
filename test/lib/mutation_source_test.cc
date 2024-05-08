@@ -841,10 +841,12 @@ static void test_range_queries(tests::reader_concurrency_semaphore_wrapper& sema
     require_no_token_duplicates(partitions);
 
     dht::decorated_key key_before_all = partitions.front().decorated_key();
-    partitions.erase(partitions.begin());
-
     dht::decorated_key key_after_all = partitions.back().decorated_key();
-    partitions.pop_back();
+
+    // Drop the first and last partitions
+    mutation_vector tmp;
+    std::move(partitions.begin() + 1, partitions.begin() + partitions.size() - 1, std::back_inserter(tmp));
+    partitions = std::move(tmp);
 
     auto ds = populate(s, partitions, gc_clock::now());
 

@@ -170,7 +170,7 @@ public:
 
             auto log_mut = db::schema_tables::make_create_table_mutations(log_schema, timestamp);
 
-            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+            std::move(log_mut.begin(), log_mut.end(), std::back_inserter(mutations));
         }
     }
 
@@ -211,7 +211,7 @@ public:
                 : db::schema_tables::make_create_table_mutations(new_log_schema, timestamp)
                 ;
 
-            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+            std::move(log_mut.begin(), log_mut.end(), std::back_inserter(mutations));
         }
     }
 
@@ -226,7 +226,7 @@ public:
             }
             auto& keyspace = db.find_keyspace(schema.ks_name());
             auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
-            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+            std::move(log_mut.begin(), log_mut.end(), std::back_inserter(mutations));
         }
     }
 
@@ -1842,7 +1842,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 }
                 auto [log_mut, touched_parts] = std::move(trans).finish();
                 const int generated_count = log_mut.size();
-                mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+                std::move(log_mut.begin(), log_mut.end(), std::back_inserter(mutations));
 
                 // `m` might be invalidated at this point because of the push_back to the vector
                 tracing::trace(tr_state, "CDC: Generated {} log mutations from {}", generated_count, mutations[idx].decorated_key());

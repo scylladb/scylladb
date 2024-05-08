@@ -1198,8 +1198,9 @@ future<mutation_vector> generate_random_mutations(
     auto range = boost::unique(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
             return a.decorated_key().equal(*s, b.decorated_key());
             });
-    muts.erase(range.end(), muts.end());
-    co_return std::move(muts);
+    mutation_vector res;
+    std::move(range.begin(), range.end(), std::back_inserter(res));
+    co_return res;
 }
 
 future<mutation_vector> generate_random_mutations(

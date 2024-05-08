@@ -2267,11 +2267,11 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
         auto cdc = _proxy->get_cdc_service();
         if (cdc && cdc->needs_cdc_augmentation(update_mut_vec)) {
             auto cdc_shared = cdc->shared_from_this(); // keep CDC service alive
-            auto [mutations, tracker] = co_await cdc->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state, _cl_for_learn);
+            auto [all_mutations, tracker] = co_await cdc->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state, _cl_for_learn);
             // Pick only the CDC ("augmenting") mutations
-            std::erase_if(mutations, [base_tbl_id = std::move(base_tbl_id)] (const mutation& v) {
-                return v.schema()->id() == base_tbl_id;
-            });
+            auto mutations = boost::copy_range<mutation_vector>(all_mutations | boost::adaptors::filtered([base_tbl_id = std::move(base_tbl_id)] (const mutation& v) {
+                return v.schema()->id() != base_tbl_id;
+            }));
             if (!mutations.empty()) {
                 f_cdc = _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker))
                         .then(utils::result_into_future<result<>>);

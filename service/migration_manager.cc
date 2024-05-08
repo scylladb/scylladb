@@ -843,12 +843,12 @@ future<mutation_vector> prepare_column_family_drop_announcement(storage_proxy& s
             drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), ts, false);
         }
         auto mutations = db::schema_tables::make_drop_table_mutations(keyspace, schema, ts);
-        mutations.insert(mutations.end(), std::make_move_iterator(drop_si_mutations.begin()), std::make_move_iterator(drop_si_mutations.end()));
+        std::move(drop_si_mutations.begin(), drop_si_mutations.end(), std::back_inserter(mutations));
         for (auto& v : views) {
             if (!old_cfm.get_index_manager().is_index(v)) {
                 mlogger.info("Drop view '{}.{}' of table '{}'", v->ks_name(), v->cf_name(), schema->cf_name());
                 auto m = db::schema_tables::make_drop_view_mutations(keyspace, v, ts);
-                mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
+                std::move(m.begin(), m.end(), std::back_inserter(mutations));
             }
         }
 
