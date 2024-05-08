@@ -32,21 +32,21 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
     });
 
     httpd::gossiper_json::get_endpoint_downtime.set(r, [&g] (std::unique_ptr<request> req) -> future<json::json_return_type> {
-        gms::inet_address ep(req->param["addr"]);
+        gms::inet_address ep(req->get_path_param("addr"));
         // synchronize unreachable_members on all shards
         co_await g.get_unreachable_members_synchronized();
         co_return g.get_endpoint_downtime(ep);
     });
 
     httpd::gossiper_json::get_current_generation_number.set(r, [&g] (std::unique_ptr<http::request> req) {
-        gms::inet_address ep(req->param["addr"]);
+        gms::inet_address ep(req->get_path_param("addr"));
         return g.get_current_generation_number(ep).then([] (gms::generation_type res) {
             return make_ready_future<json::json_return_type>(res.value());
         });
     });
 
     httpd::gossiper_json::get_current_heart_beat_version.set(r, [&g] (std::unique_ptr<http::request> req) {
-        gms::inet_address ep(req->param["addr"]);
+        gms::inet_address ep(req->get_path_param("addr"));
         return g.get_current_heart_beat_version(ep).then([] (gms::version_type res) {
             return make_ready_future<json::json_return_type>(res.value());
         });
@@ -54,17 +54,17 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
 
     httpd::gossiper_json::assassinate_endpoint.set(r, [&g](std::unique_ptr<http::request> req) {
         if (req->get_query_param("unsafe") != "True") {
-            return g.assassinate_endpoint(req->param["addr"]).then([] {
+            return g.assassinate_endpoint(req->get_path_param("addr")).then([] {
                 return make_ready_future<json::json_return_type>(json_void());
             });
         }
-        return g.unsafe_assassinate_endpoint(req->param["addr"]).then([] {
+        return g.unsafe_assassinate_endpoint(req->get_path_param("addr")).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
     httpd::gossiper_json::force_remove_endpoint.set(r, [&g](std::unique_ptr<http::request> req) {
-        gms::inet_address ep(req->param["addr"]);
+        gms::inet_address ep(req->get_path_param("addr"));
         return g.force_remove_endpoint(ep, gms::null_permit_id).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });

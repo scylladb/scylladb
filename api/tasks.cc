@@ -30,7 +30,7 @@ using ks_cf_func = std::function<future<json::json_return_type>(http_context&, s
 
 static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     return [&ctx, f = std::move(f)](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         return f(ctx, std::move(req), std::move(keyspace), std::move(table_infos));
     };
@@ -62,7 +62,7 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
 
     t::force_keyspace_cleanup_async.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
-        auto keyspace = validate_keyspace(ctx, req->param);
+        auto keyspace = validate_keyspace(ctx, req);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         apilog.info("force_keyspace_cleanup_async: keyspace={} tables={}", keyspace, table_infos);
         if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
