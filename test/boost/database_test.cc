@@ -70,7 +70,7 @@ static future<> apply_mutation(sharded<replica::database>& sharded_db, table_id 
     auto shard = t.shard_for_reads(m.token());
     return sharded_db.invoke_on(shard, [uuid, fm = freeze(m), do_flush, fs, timeout] (replica::database& db) {
         auto& t = db.find_column_family(uuid);
-        return db.apply(t.schema(), fm, tracing::trace_state_ptr(), fs, timeout).then([do_flush, &t] {
+        return db.apply(t.schema(), fm, tracing::trace_state_ptr(), fs, timeout).then([do_flush, &t] (std::optional<db::view::update_backlog>) {
             return do_flush ? t.flush() : make_ready_future<>();
         });
     });

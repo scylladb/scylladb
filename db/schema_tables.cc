@@ -227,7 +227,7 @@ static future<> save_system_schema_to_keyspace(cql3::query_processor& qp, const 
     });
     {
         auto mvec  = make_create_keyspace_mutations(qp.db().features().cluster_schema_features(), ksm, system_keyspace::schema_creation_timestamp(), true);
-        co_await qp.proxy().mutate_locally(std::move(mvec), tracing::trace_state_ptr());
+        co_await qp.proxy().mutate_locally(std::move(mvec), tracing::trace_state_ptr()).discard_result();
     }
 }
 
@@ -1239,7 +1239,7 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
         fill_column_info(*s, ckey, cdef, ts, ttl, m);
         muts.emplace_back(std::move(m));
     }
-    co_await proxy.local().mutate_locally(std::move(muts), tracing::trace_state_ptr());
+    co_await proxy.local().mutate_locally(std::move(muts), tracing::trace_state_ptr()).discard_result();
 }
 
 // Limit concurrency of user tables to prevent stalls.

@@ -91,7 +91,7 @@ static future<> mutate_locally(utils::chunked_vector<canonical_mutation> muts, s
     auto db = sp.data_dictionary();
     co_await max_concurrent_for_each(muts, 128, [&sp, &db] (const canonical_mutation& cmut) -> future<> {
         auto schema = db.find_schema(cmut.column_family_id());
-        return sp.mutate_locally(cmut.to_mutation(schema), nullptr, db::commitlog::force_sync::yes);
+        return sp.mutate_locally(cmut.to_mutation(schema), nullptr, db::commitlog::force_sync::yes).discard_result();
     });
 }
 
@@ -133,7 +133,7 @@ static future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_addr
         throw std::runtime_error(::format("Error while applying mutations: {}", e));
     }
 
-    co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+    co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr(), db::commitlog::force_sync::no).discard_result();
 
     if (need_system_topology_flush) {
         slogger.trace("write_mutations_to_database: flushing {}.{}", db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
@@ -174,7 +174,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     }
     ), cmd.change);
 
-    co_await _sp.mutate_locally({std::move(history)}, nullptr);
+    co_await _sp.mutate_locally({std::move(history)}, nullptr).discard_result();
 }
 
 future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
@@ -314,7 +314,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         co_await mutate_locally(std::move(raft_snp->mutations), _sp);
     }
 
-    co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
+    co_await _sp.mutate_locally({std::move(history_mut)}, nullptr).discard_result();
   } catch (const abort_requested_exception&) {
     throw raft::request_aborted();
   }

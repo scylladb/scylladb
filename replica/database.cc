@@ -1975,7 +1975,7 @@ future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::t
     }
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info) {
+future<std::optional<db::view::update_backlog>> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info) {
     ++_stats->total_writes;
     // assume failure until proven otherwise
     auto update_writes_failed = defer([&] { ++_stats->total_writes_failed; });
@@ -2016,7 +2016,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
             }
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        lock = lock_f.get();
+        lock = lock_f.get().first;
     }
 
     // purposefully manually "inlined" apply_with_commitlog call here to reduce # coroutine
@@ -2052,7 +2052,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
       if (try_catch<mutation_reordered_with_truncate_exception>(ex)) {
         // This mutation raced with a truncate, so we can just drop it.
         dblog.debug("replay_position reordering detected");
-        co_return;
+        co_return std::nullopt;
       } else if (is_timeout_exception(ex)) {
         ++_stats->total_writes_timedout;
       }
@@ -2060,6 +2060,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     }
     // Success, prevent incrementing failure counter
     update_writes_failed.cancel();
+    co_return std::nullopt;
 }
 
 template<typename Future>
@@ -2086,13 +2087,13 @@ void database::update_write_metrics_for_timed_out_write() {
     ++_stats->total_writes_timedout;
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+future<std::optional<db::view::update_backlog>> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
-        return make_exception_future<>(timed_out_error{});
+        return make_exception_future<std::optional<db::view::update_backlog>>(timed_out_error{});
     }
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply mutation using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
@@ -2100,7 +2101,7 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_
     return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, sync, rate_limit_info);
 }
 
-future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
+future<std::optional<db::view::update_backlog>> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply hint {}", m.pretty_printer(s));
     }

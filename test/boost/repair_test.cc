@@ -164,7 +164,7 @@ SEASTAR_TEST_CASE(test_reader_with_different_strategies) {
                 max_token = std::max(max_token, t);
             }
             auto& storage_proxy = e.get_storage_proxy().local();
-            co_await storage_proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
+            co_await storage_proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr()).discard_result();
         }
 
         auto do_check = [&](const dht::static_sharder& remote_sharder,

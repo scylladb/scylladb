@@ -1777,7 +1777,7 @@ future<> view_update_generator::mutate_MV(
                     mut.s->ks_name(), mut.s->cf_name(), base_token, view_token);
             local_view_update = _proxy.local().mutate_mv_locally(mut.s, *mut_ptr, tr_state, db::commitlog::force_sync::no).then_wrapped(
                     [s = mut.s, &stats, &cf_stats, tr_state, base_token, view_token, my_address, mut_ptr = std::move(mut_ptr),
-                            sem_units] (future<>&& f) {
+                            sem_units] (future<std::optional<db::view::update_backlog>>&& f) {
                 --stats.writes;
                 if (f.failed()) {
                     ++stats.view_updates_failed_local;

@@ -51,6 +51,7 @@ using allow_hints = bool_class<allow_hints_tag>;
 namespace db::view {
 
 class stats;
+class update_backlog;
 struct view_and_base;
 struct wait_for_all_updates_tag {};
 using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
@@ -109,7 +110,7 @@ public:
             flat_mutation_reader_v2&&,
             gc_clock::time_point);
 
-    future<> generate_and_propagate_view_updates(const replica::table& table,
+    future<std::optional<update_backlog>> generate_and_propagate_view_updates(const replica::table& table,
             const schema_ptr& base,
             reader_permit permit,
             std::vector<view_and_base>&& views,

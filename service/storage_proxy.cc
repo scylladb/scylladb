@@ -1026,7 +1026,8 @@ public:
     virtual ~mutation_holder() {}
     virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, locator::effective_replication_map_ptr ermptr,
             tracing::trace_state_ptr tr_state) = 0;
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+    // returns std::optional<db::view::update_backlog> to avoid pulling the backlog from another shard separately
+    virtual future<std::optional<db::view::update_backlog>> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) = 0;
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, const inet_address_vector_replica_set& forward,
@@ -1074,7 +1075,7 @@ public:
             return false;
         }
     }
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+    virtual future<std::optional<db::view::update_backlog>> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) override {
         const auto my_ip = sp.my_address();
@@ -1083,7 +1084,7 @@ public:
             tracing::trace(tr_state, "Executing a mutation locally");
             return sp.apply_fence(sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, my_ip);
         }
-        return make_ready_future<>();
+        return make_ready_future<std::optional<db::view::update_backlog>>(std::nullopt);
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, const inet_address_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1130,7 +1131,7 @@ public:
         const auto hid = ermptr->get_token_metadata().get_host_id(ep);
         return hm.store_hint(hid, ep, _schema, _mutation, tr_state);
     }
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+    virtual future<std::optional<db::view::update_backlog>> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) override {
         tracing::trace(tr_state, "Executing a mutation locally");
@@ -1161,7 +1162,7 @@ public:
             tracing::trace_state_ptr tr_state) override {
         throw std::runtime_error("Attempted to store a hint for a hint");
     }
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+    virtual future<std::optional<db::view::update_backlog>> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) override {
         // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
@@ -1287,7 +1288,7 @@ public:
             tracing::trace_state_ptr tr_state) override {
         return false; // CAS does not save hints yet
     }
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+    virtual future<std::optional<db::view::update_backlog>> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token) override {
         tracing::trace(tr_state, "Executing a learn locally");
@@ -1584,7 +1585,7 @@ public:
             tracing::trace_state_ptr tr_state) {
         return _mutation_holder->store_hint(hm, ep, std::move(ermptr), tr_state);
     }
-    future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
+    future<std::optional<db::view::update_backlog>> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
         auto op = _proxy->start_write();
         return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
             _rate_limit_info,
@@ -2971,18 +2972,23 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
 // Caller must keep the effective_replication_map alive around the apply operation.
 template <typename Applier>
 requires std::invocable<Applier, shard_id>
-future<> apply_on_shards(const locator::effective_replication_map_ptr& erm, const schema& s, dht::token tok, Applier&& apply) {
+future<std::optional<db::view::update_backlog>> apply_on_shards(const locator::effective_replication_map_ptr& erm, const schema& s, dht::token tok, Applier&& apply) {
     auto shards = erm->get_sharder(s).shard_for_writes(tok);
     if (shards.empty()) {
-        return make_exception_future<>(std::runtime_error(format("No local shards for token {} of {}.{}", tok, s.ks_name(), s.cf_name())));
+        return make_exception_future<std::optional<db::view::update_backlog>>(std::runtime_error(format("No local shards for token {} of {}.{}", tok, s.ks_name(), s.cf_name())));
     }
     if (shards.size() == 1) [[likely]] {
         return apply(shards[0]);
     }
-    return seastar::parallel_for_each(shards, std::move(apply));
+    auto apply_without_backlog = [apply = std::move(apply)] (shard_id shard) {
+        return apply(shard).discard_result();
+    };
+    return seastar::parallel_for_each(shards, std::move(apply_without_backlog)).then([] {
+        return std::make_optional<db::view::update_backlog>();
+    });
 }
 
-future<>
+future<std::optional<db::view::update_backlog>>
 storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto erm = _db.local().find_column_family(m.schema()).get_effective_replication_map();
     auto apply = [this, erm, &m, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
@@ -2998,14 +3004,15 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
                  erm,
                  timeout,
                  sync,
-                 shard_rate_limit] (replica::database& db) mutable -> future<> {
+                 shard_rate_limit] (replica::database& db) mutable -> future<std::optional<db::view::update_backlog>> {
             return db.apply(s, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
     return apply_on_shards(erm, *m.schema(), m.token(), std::move(apply));
+
 }
 
-future<>
+future<std::optional<db::view::update_backlog>>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
         smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
@@ -3016,38 +3023,40 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
             shard_rate_limit = adjust_rate_limit_for_local_operation(shard_rate_limit);
         }
         return _db.invoke_on(shard, {smp_grp, timeout},
-                [&m, erm, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, shard_rate_limit] (replica::database& db) mutable -> future<> {
+                [&m, erm, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, shard_rate_limit] (replica::database& db) mutable -> future<std::optional<db::view::update_backlog>> {
             return db.apply(gs, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
     return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
 }
 
-future<>
+future<std::optional<db::view::update_backlog>>
 storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     co_await coroutine::parallel_for_each(mutations, [&] (const mutation& m) mutable {
-            return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
+            return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info).discard_result();
     });
+    co_return std::nullopt;
 }
 
-future<>
+future<std::optional<db::view::update_backlog>>
 storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
         return mutate_locally(std::move(mutation), tr_state, timeout, _write_smp_service_group, rate_limit_info);
 }
 
-future<>
+future<std::optional<db::view::update_backlog>>
 storage_proxy::mutate_locally(std::vector<frozen_mutation_and_schema> mutations, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     co_await coroutine::parallel_for_each(mutations, [&] (const frozen_mutation_and_schema& x) {
-        return mutate_locally(x.s, x.fm, tr_state, sync, timeout, rate_limit_info);
+        return mutate_locally(x.s, x.fm, tr_state, sync, timeout, rate_limit_info).discard_result();
     });
+    co_return std::nullopt;
 }
 
-future<>
+future<std::optional<db::view::update_backlog>>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
     auto apply = [&, erm] (unsigned shard) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state, timeout, erm] (replica::database& db) mutable -> future<> {
+        return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state, timeout, erm] (replica::database& db) mutable -> future<std::optional<db::view::update_backlog>> {
             return db.apply_hint(gs, m, tr_state, timeout);
         });
     };
@@ -4084,7 +4093,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     // lambda for applying mutation locally
     auto lmutate = [handler_ptr, response_id, this, my_address, timeout] () mutable {
         return handler_ptr->apply_locally(timeout, handler_ptr->get_trace_state())
-                .then([response_id, this, my_address, h = std::move(handler_ptr), p = shared_from_this()] {
+                .then([response_id, this, my_address, h = std::move(handler_ptr), p = shared_from_this()] (std::optional<db::view::update_backlog>) {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
             got_response(response_id, my_address, get_view_update_backlog());

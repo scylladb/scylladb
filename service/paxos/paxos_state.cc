@@ -183,10 +183,10 @@ future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks,
     });
 }
 
-future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, schema_ptr schema, proposal decision, clock_type::time_point timeout,
+future<std::optional<db::view::update_backlog>> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, schema_ptr schema, proposal decision, clock_type::time_point timeout,
         tracing::trace_state_ptr tr_state) {
     if (utils::get_local_injector().enter("paxos_error_before_learn")) {
-        return make_exception_future<>(utils::injected_error("injected_error_before_learn"));
+        return make_exception_future<std::optional<db::view::update_backlog>>(utils::injected_error("injected_error_before_learn"));
     }
 
     utils::latency_counter lc;
@@ -223,7 +223,7 @@ future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, sche
                     on_internal_error(logger, format("schema version in learn does not match current schema"));
                 }
 
-                return sp.mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);
+                return sp.mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout).discard_result();
             });
         } else {
             logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);
@@ -233,7 +233,9 @@ future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, sche
             // We don't need to lock the partition key if there is no gap between loading paxos
             // state and saving it, and here we're just blindly updating.
             return utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout, [&sys_ks, &decision, schema, timeout] {
-                return sys_ks.save_paxos_decision(*schema, decision, timeout);
+                return sys_ks.save_paxos_decision(*schema, decision, timeout).then([] {
+                    return make_ready_future<std::optional<db::view::update_backlog>>(std::nullopt);
+                });
             });
         });
     }).finally([&sp, schema, lc] () mutable {

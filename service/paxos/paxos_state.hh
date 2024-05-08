@@ -20,6 +20,10 @@ class storage_proxy;
 }
 namespace db { class system_keyspace; }
 
+namespace db::view {
+class update_backlog;
+}
+
 namespace service::paxos {
 
 using clock_type = db::timeout_clock;
@@ -119,7 +123,7 @@ public:
     static future<bool> accept(storage_proxy& sp, db::system_keyspace& sys_ks, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
             clock_type::time_point timeout);
     // Replica RPC endpoint for Paxos "learn".
-    static future<> learn(storage_proxy& sp, db::system_keyspace& sys_ks, schema_ptr schema, proposal decision, clock_type::time_point timeout, tracing::trace_state_ptr tr_state);
+    static future<std::optional<db::view::update_backlog>> learn(storage_proxy& sp, db::system_keyspace& sys_ks, schema_ptr schema, proposal decision, clock_type::time_point timeout, tracing::trace_state_ptr tr_state);
     // Replica RPC endpoint for pruning Paxos table
     static future<> prune(db::system_keyspace& sys_ks, schema_ptr schema, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state);

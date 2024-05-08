@@ -298,7 +298,7 @@ static mutation make_discovery_mutation(discovery::peer_list peers) {
 }
 
 static future<> store_discovered_peers(cql3::query_processor& qp, discovery::peer_list peers) {
-    return qp.proxy().mutate_locally({make_discovery_mutation(std::move(peers))}, tracing::trace_state_ptr{});
+    return qp.proxy().mutate_locally({make_discovery_mutation(std::move(peers))}, tracing::trace_state_ptr{}).discard_result();
 }
 
 future<group0_info> persistent_discovery::run(

@@ -826,7 +826,7 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
         // By applying the cdc_generations_v3 mutations before topology mutations
         // we ensure that the lack of atomicity isn't a problem here.
         co_await max_concurrent_for_each(frozen_muts_to_apply, 128, [&] (const frozen_mutation& m) -> future<> {
-            return _db.local().apply(s, m, {}, db::commitlog::force_sync::yes, db::no_timeout);
+            return _db.local().apply(s, m, {}, db::commitlog::force_sync::yes, db::no_timeout).discard_result();
         });
     }
 
