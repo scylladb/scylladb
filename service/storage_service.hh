@@ -867,7 +867,7 @@ private:
     future<> _upgrade_to_topology_coordinator_fiber = make_ready_future<>();
     future<> track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
 
-    future<> transit_tablet(table_id, dht::token, noncopyable_function<std::tuple<std::vector<canonical_mutation>, sstring>(const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
+    future<> transit_tablet(table_id, dht::token, noncopyable_function<std::tuple<canonical_mutation_vector, sstring>(const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
 public:
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
@@ -883,8 +883,8 @@ public:
     future<> start_maintenance_mode();
 
 private:
-    future<std::vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
-    future<std::vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
+    future<canonical_mutation_vector> get_system_mutations(schema_ptr schema);
+    future<canonical_mutation_vector> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
 
     struct nodes_to_notify_after_sync {
         std::vector<std::pair<gms::inet_address, locator::host_id>> left;
@@ -906,7 +906,7 @@ private:
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_snapshot snp);
 
-    std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard);
+    canonical_mutation_vector build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard);
     std::unordered_set<raft::server_id> ignored_nodes_from_join_params(const join_node_request_params& params);
 
     future<join_node_request_result> join_node_request_handler(join_node_request_params params);

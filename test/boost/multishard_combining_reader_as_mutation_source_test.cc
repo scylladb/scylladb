@@ -27,9 +27,9 @@
 static std::list<dummy_sharder> keep_alive_sharder;
 
 static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer) {
-    return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) mutable {
+    return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const mutation_vector& mutations, gc_clock::time_point) mutable {
         // We need to group mutations that have the same token so they land on the same shard.
-        std::map<dht::token, std::vector<frozen_mutation>> mutations_by_token;
+        std::map<dht::token, frozen_mutation_vector> mutations_by_token;
 
         for (const auto& mut : mutations) {
             mutations_by_token[mut.token()].push_back(freeze(mut));
@@ -37,7 +37,7 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
 
         dummy_sharder sharder(s->get_sharder(), mutations_by_token);
 
-        auto merged_mutations = boost::copy_range<std::vector<std::vector<frozen_mutation>>>(mutations_by_token | boost::adaptors::map_values);
+        auto merged_mutations = boost::copy_range<std::vector<frozen_mutation_vector>>(mutations_by_token | boost::adaptors::map_values);
 
         auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<replica::memtable>>>>();
         for (unsigned shard = 0; shard < sharder.shard_count(); ++shard) {

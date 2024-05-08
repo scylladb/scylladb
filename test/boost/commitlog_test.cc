@@ -986,7 +986,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entry) {
             constexpr auto n = 10;
             for (auto fs : { force_sync(false), force_sync(true) }) {
                 std::vector<commitlog_entry_writer> writers;
-                std::vector<frozen_mutation> mutations;
+                frozen_mutation_vector mutations;
                 std::vector<replay_position> rps;
 
                 writers.reserve(n);
@@ -1049,7 +1049,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
             constexpr auto n = 10;
             for (auto fs : { force_sync(false), force_sync(true) }) {
                 std::vector<commitlog_entry_writer> writers;
-                std::vector<frozen_mutation> mutations;
+                frozen_mutation_vector mutations;
                 std::vector<replay_position> rps;
 
                 writers.reserve(n);

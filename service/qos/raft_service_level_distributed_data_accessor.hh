@@ -33,7 +33,7 @@ private:
     future<> do_raft_command(
             service::group0_guard guard, 
             abort_source& as,
-            std::vector<mutation> mutations,
+            mutation_vector mutations,
             std::string_view description) const;
 
 public:

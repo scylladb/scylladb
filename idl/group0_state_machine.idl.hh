@@ -16,7 +16,7 @@
 namespace service {
 
 struct schema_change {
-    std::vector<canonical_mutation> mutations;
+    canonical_mutation_vector mutations;
 };
 
 struct broadcast_table_query {
@@ -24,11 +24,11 @@ struct broadcast_table_query {
 };
 
 struct topology_change {
-    std::vector<canonical_mutation> mutations;
+    canonical_mutation_vector mutations;
 };
 
 struct write_mutations {
-    std::vector<canonical_mutation> mutations;
+    canonical_mutation_vector mutations;
 };
 
 struct group0_command {

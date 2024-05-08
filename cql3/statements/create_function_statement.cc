@@ -65,10 +65,10 @@ std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dict
     return std::make_unique<prepared_statement>(make_shared<create_function_statement>(*this));
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, mutation_vector, cql3::cql_warnings_vec>>
 create_function_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
-    std::vector<mutation> m;
+    mutation_vector m;
 
     auto func = dynamic_pointer_cast<functions::user_function>(co_await validate_while_executing(qp));
 

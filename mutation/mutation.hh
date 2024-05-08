@@ -10,6 +10,7 @@
 
 #include <iosfwd>
 
+#include "mutation/mutation_fwd.hh"
 #include "mutation_partition.hh"
 #include "keys.hh"
 #include "schema/schema_fwd.hh"
@@ -187,8 +188,8 @@ public:
     size_t memory_usage(const ::schema& s) const;
 };
 
-inline std::vector<mutation> make_mutation_vector(mutation&& m) {
-    std::vector<mutation> ret;
+inline mutation_vector make_mutation_vector(mutation&& m) {
+    mutation_vector ret;
     ret.emplace_back(std::move(m));
     return ret;
 }
@@ -454,8 +455,8 @@ void apply(mutation& dst, const mutation_opt& src) {
 // Returns a range into partitions containing mutations covered by the range.
 // partitions must be sorted according to decorated key.
 // range must not wrap around.
-boost::iterator_range<std::vector<mutation>::const_iterator> slice(
-    const std::vector<mutation>& partitions,
+boost::iterator_range<mutation_vector::const_iterator> slice(
+    const mutation_vector& partitions,
     const dht::partition_range&);
 
 // Reverses the mutation as if it was created with a schema with reverse
@@ -478,4 +479,4 @@ std::ostream& operator<<(std::ostream& os, const mutation& m);
 // the actual size of the output mutation may be larger than max_size. It is recommended
 // to pass half of the required value as max_size; such a margin should ensure
 // that the condition is met.
-future<> split_mutation(mutation source, std::vector<mutation>& target, size_t max_size);
+future<> split_mutation(mutation source, mutation_vector& target, size_t max_size);

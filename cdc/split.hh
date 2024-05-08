@@ -10,10 +10,9 @@
 
 #include <boost/dynamic_bitset.hpp>
 #include "replica/database_fwd.hh"
+#include "mutation/mutation_fwd.hh"
 #include "timestamp.hh"
 #include <seastar/util/noncopyable_function.hh>
-
-class mutation;
 
 namespace cdc {
 

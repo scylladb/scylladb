@@ -131,7 +131,7 @@ public:
         cql3::prepared_cache_key_type id,
         std::unique_ptr<cql3::query_options> qo) = 0;
 
-    virtual future<std::vector<mutation>> get_modification_mutations(const sstring& text) = 0;
+    virtual future<mutation_vector> get_modification_mutations(const sstring& text) = 0;
 
     virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) = 0;
 

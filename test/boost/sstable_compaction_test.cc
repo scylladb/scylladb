@@ -1496,7 +1496,7 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
         auto num_sstables = 40;
         for (int r = 5; r < num_sstables; r++) {
             auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(r))});
-            std::vector<mutation> mutations;
+            mutation_vector mutations;
             for (int i = 0 ; i < r ; i++) {
                 mutations.push_back(make_insert(key, tstamp + r));
             }
@@ -1929,7 +1929,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             auto local_keys = tests::generate_partition_keys(total_partitions, s);
             dht::decorated_key::less_comparator cmp(s);
             std::sort(local_keys.begin(), local_keys.end(), cmp);
-            std::vector<mutation> mutations;
+            mutation_vector mutations;
             for (auto i = 0U; i < total_partitions; i++) {
                 mutations.push_back(make_insert(local_keys.at(i)));
             }
@@ -1980,7 +1980,7 @@ future<> foreach_table_state_with_thread(table_for_tests& table, std::function<v
     });
 }
 
-static std::deque<mutation_fragment_v2> explode(reader_permit permit, std::vector<mutation> muts) {
+static std::deque<mutation_fragment_v2> explode(reader_permit permit, mutation_vector muts) {
     if (muts.empty()) {
         return {};
     }
@@ -2102,7 +2102,7 @@ public:
         BOOST_REQUIRE(found_sstable);
     }
 
-    void run(schema_ptr schema, std::vector<mutation> muts, test_func func) {
+    void run(schema_ptr schema, mutation_vector muts, test_func func) {
         run(std::move(schema), explode(env().make_reader_permit(), std::move(muts)), std::move(func));
     }
 };
@@ -2316,7 +2316,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
     std::swap(cr1, cr2);
 
     // prepare the expected post-scrub version of "corrupt_fragments"
-    std::vector<mutation> scrubbed_muts;
+    mutation_vector scrubbed_muts;
     scrubbed_muts.push_back(corrupt_muts.front());
     std::copy(corrupt_muts.begin() + 2, corrupt_muts.end(), std::back_inserter(scrubbed_muts));
     auto scrubbed_fragments = explode(test.env().make_reader_permit(), std::move(scrubbed_muts));
@@ -3357,7 +3357,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
         cf->start();
 
         // Make 100 expiring cells which belong to different time windows
-        std::vector<mutation> muts;
+        mutation_vector muts;
         muts.reserve(101);
         for (auto i = 1; i < 101; i++) {
             muts.push_back(make_expiring_cell(std::chrono::hours(i)));
@@ -3832,10 +3832,10 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             // create set of 64 files which size is either small or big. as STCS reshape logic reused by TWCS favor compaction of smaller files
             // first, verify that only 32 small (similar-sized) files are returned
 
-            std::vector<mutation> mutations_for_small_files;
+            mutation_vector mutations_for_small_files;
             mutations_for_small_files.push_back(make_row(0, std::chrono::hours(1)));
 
-            std::vector<mutation> mutations_for_big_files;
+            mutation_vector mutations_for_big_files;
             for (unsigned i = 0; i < keys.size(); i++) {
                 mutations_for_big_files.push_back(make_row(i, std::chrono::hours(1)));
             }
@@ -4618,7 +4618,7 @@ SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
             return m;
         }();
 
-        std::vector<mutation> mutations;
+        mutation_vector mutations;
         static constexpr size_t rows = 20;
         mutations.reserve(1 + rows);
         mutations.push_back(std::move(deletion_mut));
@@ -5197,7 +5197,7 @@ SEASTAR_TEST_CASE(produces_optimal_filter_by_estimating_correctly_partitions_per
 
         const sstring shared_key_prefix = "832193982198319823hsdjahdashjdsa81923189381931829sdajidjkas812938219jdsalljdadsajk319820";
 
-        std::vector<mutation> muts;
+        mutation_vector muts;
         constexpr int keys = 200;
         muts.reserve(keys);
         for (auto i = 0; i < keys; i++) {
@@ -5247,7 +5247,7 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
         };
 
         auto keys = tests::generate_partition_keys(100, s);
-        std::vector<mutation> muts;
+        mutation_vector muts;
 
         muts.reserve(keys.size() * 2);
         for (auto& k : keys) {

@@ -131,7 +131,7 @@ private:
 
     schema_ptr build_schema() const;
 
-    std::vector<mutation> build_mutations(schema_ptr s) const;
+    mutation_vector build_mutations(schema_ptr s) const;
 public:
     explicit table_description(std::vector<column> partition_key, std::vector<column> clustering_key);
 
@@ -159,7 +159,7 @@ public:
     struct table {
         sstring schema_changes_log;
         schema_ptr schema;
-        std::vector<mutation> mutations;
+        mutation_vector mutations;
     };
     table build() const;
 };

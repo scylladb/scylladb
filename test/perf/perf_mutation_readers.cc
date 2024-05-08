@@ -28,29 +28,29 @@ class combined {
     mutable simple_schema _schema;
     perf::reader_concurrency_semaphore_wrapper _semaphore;
     reader_permit _permit;
-    std::vector<mutation> _one_row;
-    std::vector<mutation> _single;
-    std::vector<std::vector<mutation>> _disjoint_interleaved;
-    std::vector<std::vector<mutation>> _disjoint_ranges;
-    std::vector<std::vector<mutation>> _overlapping_partitions_disjoint_rows;
+    mutation_vector _one_row;
+    mutation_vector _single;
+    std::vector<mutation_vector> _disjoint_interleaved;
+    std::vector<mutation_vector> _disjoint_ranges;
+    std::vector<mutation_vector> _overlapping_partitions_disjoint_rows;
 private:
-    static std::vector<mutation> create_one_row(simple_schema&, reader_permit);
-    static std::vector<mutation> create_single_stream(simple_schema&, reader_permit);
-    static std::vector<std::vector<mutation>> create_disjoint_interleaved_streams(simple_schema&, reader_permit);
-    static std::vector<std::vector<mutation>> create_disjoint_ranges_streams(simple_schema&, reader_permit);
-    static std::vector<std::vector<mutation>> create_overlapping_partitions_disjoint_rows_streams(simple_schema&, reader_permit);
+    static mutation_vector create_one_row(simple_schema&, reader_permit);
+    static mutation_vector create_single_stream(simple_schema&, reader_permit);
+    static std::vector<mutation_vector> create_disjoint_interleaved_streams(simple_schema&, reader_permit);
+    static std::vector<mutation_vector> create_disjoint_ranges_streams(simple_schema&, reader_permit);
+    static std::vector<mutation_vector> create_overlapping_partitions_disjoint_rows_streams(simple_schema&, reader_permit);
 protected:
     simple_schema& schema() const { return _schema; }
     reader_permit permit() const { return _permit; }
-    const std::vector<mutation>& one_row_stream() const { return _one_row; }
-    const std::vector<mutation>& single_stream() const { return _single; }
-    const std::vector<std::vector<mutation>>& disjoint_interleaved_streams() const {
+    const mutation_vector& one_row_stream() const { return _one_row; }
+    const mutation_vector& single_stream() const { return _single; }
+    const std::vector<mutation_vector>& disjoint_interleaved_streams() const {
         return _disjoint_interleaved;
     }
-    const std::vector<std::vector<mutation>>& disjoint_ranges_streams() const {
+    const std::vector<mutation_vector>& disjoint_ranges_streams() const {
         return _disjoint_ranges;
     }
-    const std::vector<std::vector<mutation>>& overlapping_partitions_disjoint_rows_streams() const {
+    const std::vector<mutation_vector>& overlapping_partitions_disjoint_rows_streams() const {
         return _overlapping_partitions_disjoint_rows;
     }
     future<> consume_all(flat_mutation_reader_v2 mr) const;
@@ -66,9 +66,9 @@ public:
     { }
 };
 
-std::vector<mutation> combined::create_one_row(simple_schema& s, reader_permit permit)
+mutation_vector combined::create_one_row(simple_schema& s, reader_permit permit)
 {
-    return boost::copy_range<std::vector<mutation>>(
+    return boost::copy_range<mutation_vector>(
         s.make_pkeys(1)
         | boost::adaptors::transformed([&] (auto& dkey) {
             auto m = mutation(s.schema(), dkey);
@@ -78,9 +78,9 @@ std::vector<mutation> combined::create_one_row(simple_schema& s, reader_permit p
     );
 }
 
-std::vector<mutation> combined::create_single_stream(simple_schema& s, reader_permit permit)
+mutation_vector combined::create_single_stream(simple_schema& s, reader_permit permit)
 {
-    return boost::copy_range<std::vector<mutation>>(
+    return boost::copy_range<mutation_vector>(
         s.make_pkeys(32)
         | boost::adaptors::transformed([&] (auto& dkey) {
             auto m = mutation(s.schema(), dkey);
@@ -92,12 +92,12 @@ std::vector<mutation> combined::create_single_stream(simple_schema& s, reader_pe
     );
 }
 
-std::vector<std::vector<mutation>> combined::create_disjoint_interleaved_streams(simple_schema& s, reader_permit permit)
+std::vector<mutation_vector> combined::create_disjoint_interleaved_streams(simple_schema& s, reader_permit permit)
 {
     auto base = create_single_stream(s, permit);
-    std::vector<std::vector<mutation>> mss;
+    std::vector<mutation_vector> mss;
     for (auto i = 0; i < 4; i++) {
-        mss.emplace_back(boost::copy_range<std::vector<mutation>>(
+        mss.emplace_back(boost::copy_range<mutation_vector>(
             base
             | boost::adaptors::sliced(i, base.size())
             | boost::adaptors::strided(4)
@@ -106,13 +106,13 @@ std::vector<std::vector<mutation>> combined::create_disjoint_interleaved_streams
     return mss;
 }
 
-std::vector<std::vector<mutation>> combined::create_disjoint_ranges_streams(simple_schema& s, reader_permit permit)
+std::vector<mutation_vector> combined::create_disjoint_ranges_streams(simple_schema& s, reader_permit permit)
 {
     auto base = create_single_stream(s, permit);
-    std::vector<std::vector<mutation>> mss;
+    std::vector<mutation_vector> mss;
     auto slice = base.size() / 4;
     for (auto i = 0; i < 4; i++) {
-        mss.emplace_back(boost::copy_range<std::vector<mutation>>(
+        mss.emplace_back(boost::copy_range<mutation_vector>(
             base
             | boost::adaptors::sliced(i * slice, std::min((i + 1) * slice, base.size()))
         ));
@@ -120,11 +120,11 @@ std::vector<std::vector<mutation>> combined::create_disjoint_ranges_streams(simp
     return mss;
 }
 
-std::vector<std::vector<mutation>> combined::create_overlapping_partitions_disjoint_rows_streams(simple_schema& s, reader_permit permit) {
+std::vector<mutation_vector> combined::create_overlapping_partitions_disjoint_rows_streams(simple_schema& s, reader_permit permit) {
     auto keys = s.make_pkeys(4);
-    std::vector<std::vector<mutation>> mss;
+    std::vector<mutation_vector> mss;
     for (int i = 0; i < 4; i++) {
-        mss.emplace_back(boost::copy_range<std::vector<mutation>>(
+        mss.emplace_back(boost::copy_range<mutation_vector>(
             keys
             | boost::adaptors::transformed([&] (auto& dkey) {
                 auto m = mutation(s.schema(), dkey);

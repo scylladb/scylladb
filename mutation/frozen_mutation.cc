@@ -117,14 +117,14 @@ frozen_mutation freeze(const mutation& m) {
     return frozen_mutation{ m };
 }
 
-std::vector<frozen_mutation> freeze(const std::vector<mutation>& muts) {
-    return boost::copy_range<std::vector<frozen_mutation>>(muts | boost::adaptors::transformed([] (const mutation& m) {
+frozen_mutation_vector freeze(const mutation_vector& muts) {
+    return boost::copy_range<frozen_mutation_vector>(muts | boost::adaptors::transformed([] (const mutation& m) {
         return freeze(m);
     }));
 }
 
-std::vector<mutation> unfreeze(const std::vector<frozen_mutation>& muts) {
-    return boost::copy_range<std::vector<mutation>>(muts | boost::adaptors::transformed([] (const frozen_mutation& fm) {
+mutation_vector unfreeze(const frozen_mutation_vector& muts) {
+    return boost::copy_range<mutation_vector>(muts | boost::adaptors::transformed([] (const frozen_mutation& fm) {
         return fm.unfreeze(local_schema_registry().get(fm.schema_version()));
     }));
 }

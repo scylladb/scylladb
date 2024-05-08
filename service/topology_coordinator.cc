@@ -328,7 +328,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> update_topology_state(
-            group0_guard guard, std::vector<canonical_mutation>&& updates, const sstring& reason) {
+            group0_guard guard, canonical_mutation_vector&& updates, const sstring& reason) {
         try {
             rtlogger.info("updating topology state: {}", reason);
             rtlogger.trace("update_topology_state mutations: {}", updates);
@@ -554,7 +554,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             on_internal_error(rtlogger, "cdc_generation_data: gen_mutations is empty");
         }
 
-        std::vector<canonical_mutation> updates{gen_mutations.begin(), gen_mutations.end()};
+        canonical_mutation_vector updates{gen_mutations.begin(), gen_mutations.end()};
 
         if (updates.size() > 1) {
             release_guard(std::move(guard));
@@ -581,7 +581,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Appends necessary mutations to `updates` and updates the `reason` string.
     future<> clean_obsolete_cdc_generations(
             const group0_guard& guard,
-            std::vector<canonical_mutation>& updates,
+            canonical_mutation_vector& updates,
             sstring& reason) {
         const auto& committed_gens = _topo_sm._topology.committed_cdc_generations;
         if (committed_gens.empty()) {
@@ -645,7 +645,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Appends necessary mutations to `updates` and updates the `reason` string.
     future<> publish_oldest_cdc_generation(
             const group0_guard& guard,
-            std::vector<canonical_mutation>& updates,
+            canonical_mutation_vector& updates,
             sstring& reason) {
         const auto& unpublished_gens = _topo_sm._topology.unpublished_cdc_generations;
         if (unpublished_gens.empty()) {
@@ -685,7 +685,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             bool sleep = false;
             try {
                 auto guard = co_await start_operation();
-                std::vector<canonical_mutation> updates;
+                canonical_mutation_vector updates;
                 sstring reason;
 
                 co_await publish_oldest_cdc_generation(guard, updates, reason);
@@ -928,7 +928,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return _topo_sm._topology.get_excluded_nodes().contains(server_id);
     }
 
-    void generate_migration_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
+    void generate_migration_update(canonical_mutation_vector& out, const group0_guard& guard, const tablet_migration_info& mig) {
         auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(mig.tablet.table);
         auto last_token = tmap.get_last_token(mig.tablet.tablet);
         if (tmap.get_tablet_transition_info(mig.tablet.tablet)) {
@@ -943,7 +943,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .build());
     }
 
-    void generate_resize_update(std::vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, locator::resize_decision resize_decision) {
+    void generate_resize_update(canonical_mutation_vector& out, const group0_guard& guard, table_id table_id, locator::resize_decision resize_decision) {
             // FIXME: indent.
             auto s = _db.find_schema(table_id);
             auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
@@ -957,7 +957,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     .build());
     }
 
-    future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
+    future<> generate_migration_updates(canonical_mutation_vector& out, const group0_guard& guard, const migration_plan& plan) {
         for (const tablet_migration_info& mig : plan.migrations()) {
             co_await coroutine::maybe_yield();
             generate_migration_update(out, guard, mig);
@@ -980,7 +980,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // and wait for notification.
 
         rtlogger.debug("handle_tablet_migration()");
-        std::vector<canonical_mutation> updates;
+        canonical_mutation_vector updates;
         bool needs_barrier = false;
         bool has_transitions = false;
 
@@ -1289,7 +1289,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         auto tm = get_token_metadata_ptr();
         auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats, get_dead_nodes());
 
-        std::vector<canonical_mutation> updates;
+        canonical_mutation_vector updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
 
         for (auto& table_id : plan.resize_plan().finalize_resize) {
@@ -1355,7 +1355,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> cancel_all_requests(group0_guard guard, std::unordered_set<raft::server_id> dead_nodes) {
-        std::vector<canonical_mutation> muts;
+        canonical_mutation_vector muts;
         std::vector<raft::server_id> reject_join;
         if (_topo_sm._topology.requests.empty()) {
             co_return;
@@ -1750,7 +1750,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 rtbuilder.done();
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
-                    std::vector<canonical_mutation> muts;
+                    canonical_mutation_vector muts;
                     // Since after bootstrapping a new node some nodes lost some ranges they need to cleanup
                     muts = mark_nodes_as_cleanup_needed(node, false);
                     topology_mutation_builder builder(node.guard.write_timestamp());
@@ -1769,7 +1769,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 case node_state::decommissioning: {
                     topology_mutation_builder builder(node.guard.write_timestamp());
                     node_state next_state;
-                    std::vector<canonical_mutation> muts;
+                    canonical_mutation_vector muts;
                     muts.reserve(2);
                     if (node.rs->state == node_state::decommissioning) {
                         next_state = node.rs->state;
@@ -2213,9 +2213,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         );
     }
 
-    std::vector<canonical_mutation> mark_nodes_as_cleanup_needed(node_to_work_on& node, bool rollback) {
+    canonical_mutation_vector mark_nodes_as_cleanup_needed(node_to_work_on& node, bool rollback) {
         auto& topo = _topo_sm._topology;
-        std::vector<canonical_mutation> muts;
+        canonical_mutation_vector muts;
         muts.reserve(topo.normal_nodes.size());
         std::unordered_set<locator::host_id> dirty_nodes;
 
@@ -2239,7 +2239,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<> start_cleanup_on_dirty_nodes(group0_guard guard, bool global_request) {
         auto& topo = _topo_sm._topology;
-        std::vector<canonical_mutation> muts;
+        canonical_mutation_vector muts;
         muts.reserve(topo.normal_nodes.size() + size_t(global_request));
 
         if (global_request) {
@@ -2327,7 +2327,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
         co_return false;
     }
 
-    std::vector<canonical_mutation> updates;
+    canonical_mutation_vector updates;
 
     co_await generate_migration_updates(updates, guard, plan);
 
@@ -2352,7 +2352,7 @@ future<bool> topology_coordinator::maybe_start_tablet_split_finalization(group0_
         co_return false;
     }
 
-    std::vector<canonical_mutation> updates;
+    canonical_mutation_vector updates;
 
     updates.emplace_back(
         topology_mutation_builder(guard.write_timestamp())
@@ -2688,7 +2688,7 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
            .set_version(_topo_sm._topology.version + 1);
     rtbuilder.set("error", fmt::format("Rolled back: {}", *_rollback));
 
-    std::vector<canonical_mutation> muts;
+    canonical_mutation_vector muts;
     // We are in the process of aborting remove or decommission which may have streamed some
     // ranges to other nodes. Cleanup is needed.
     muts = mark_nodes_as_cleanup_needed(node, true);

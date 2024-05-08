@@ -24,6 +24,7 @@
 #include "locator/host_id.hh"
 #include "service/session.hh"
 #include "service/maintenance_mode.hh"
+#include "mutation/mutation_fwd.hh"
 
 #include <list>
 #include <vector>
@@ -59,9 +60,7 @@ namespace locator {
 class shared_token_metadata;
 }
 
-class frozen_mutation;
 class frozen_schema;
-class canonical_mutation;
 
 namespace dht {
     class token;
@@ -501,18 +500,18 @@ public:
     future<gms::gossip_get_endpoint_states_response> send_gossip_get_endpoint_states(msg_addr id, std::chrono::milliseconds timeout, gms::gossip_get_endpoint_states_request request);
 
     // Wrapper for DEFINITIONS_UPDATE
-    void register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,
-                rpc::optional<std::vector<canonical_mutation>> cm)>&& func);
+    void register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, frozen_mutation_vector fm,
+                rpc::optional<canonical_mutation_vector> cm)>&& func);
     future<> unregister_definitions_update();
-    future<> send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm, std::vector<canonical_mutation> cm);
+    future<> send_definitions_update(msg_addr id, frozen_mutation_vector fm, canonical_mutation_vector cm);
 
     // Wrapper for MIGRATION_REQUEST
-    void register_migration_request(std::function<future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> (
+    void register_migration_request(std::function<future<rpc::tuple<frozen_mutation_vector, canonical_mutation_vector>> (
                 const rpc::client_info&, rpc::optional<schema_pull_options>)>&& func);
     future<> unregister_migration_request();
-    future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(msg_addr id,
+    future<rpc::tuple<frozen_mutation_vector, rpc::optional<canonical_mutation_vector>>> send_migration_request(msg_addr id,
             schema_pull_options options);
-    future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(msg_addr id,
+    future<rpc::tuple<frozen_mutation_vector, rpc::optional<canonical_mutation_vector>>> send_migration_request(msg_addr id,
             abort_source& as, schema_pull_options options);
 
     // Wrapper for GET_SCHEMA_VERSION

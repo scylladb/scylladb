@@ -32,10 +32,10 @@ future<> drop_table_statement::check_access(query_processor& qp, const service::
     return state.has_column_family_access(keyspace(), column_family(), auth::permission::DROP);
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, mutation_vector, cql3::cql_warnings_vec>>
 drop_table_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
-    std::vector<mutation> m;
+    mutation_vector m;
 
     if (cdc::is_log_for_some_table(qp.db().real_database(), keyspace(), column_family())) {
         // we should really throw invalid_request_exception but for legacy reasons

@@ -1182,7 +1182,7 @@ public:
         co_return co_await lb.make_plan();
     }
 
-    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, mutation_vector& muts, api::timestamp_type ts) override {
         locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
         auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
@@ -1193,7 +1193,7 @@ public:
         }
     }
 
-    void on_before_drop_column_family(const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_drop_column_family(const schema& s, mutation_vector& muts, api::timestamp_type ts) override {
         keyspace& ks = _db.find_keyspace(s.ks_name());
         auto&& rs = ks.get_replication_strategy();
         if (rs.uses_tablets()) {
@@ -1203,7 +1203,7 @@ public:
         }
     }
 
-    void on_before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_drop_keyspace(const sstring& keyspace_name, mutation_vector& muts, api::timestamp_type ts) override {
         keyspace& ks = _db.find_keyspace(keyspace_name);
         auto&& rs = ks.get_replication_strategy();
         if (rs.uses_tablets()) {

@@ -67,18 +67,18 @@ void group0_state_machine_merger::add(group0_command&& cmd, size_t added_size) {
     }
 }
 
-std::vector<canonical_mutation>& group0_state_machine_merger::get_command_mutations(group0_command& cmd) {
+canonical_mutation_vector& group0_state_machine_merger::get_command_mutations(group0_command& cmd) {
     return std::visit(make_visitor(
-        [] (schema_change& chng) -> std::vector<canonical_mutation>& {
+        [] (schema_change& chng) -> canonical_mutation_vector& {
             return chng.mutations;
         },
-        [] (broadcast_table_query& query) -> std::vector<canonical_mutation>& {
+        [] (broadcast_table_query& query) -> canonical_mutation_vector& {
             on_internal_error(slogger, "trying to merge broadcast table command");
         },
-        [] (topology_change& chng) -> std::vector<canonical_mutation>& {
+        [] (topology_change& chng) -> canonical_mutation_vector& {
             return chng.mutations;
         },
-        [] (write_mutations& muts) -> std::vector<canonical_mutation>& {
+        [] (write_mutations& muts) -> canonical_mutation_vector& {
             return muts.mutations;
         }
     ), cmd.change);
@@ -106,7 +106,7 @@ std::pair<group0_command, mutation> group0_state_machine_merger::merge() {
             }
         }
 
-        std::vector<canonical_mutation> ms;
+        canonical_mutation_vector ms;
         for (auto&& tables : mutations) {
             for (auto&& partitions : tables.second) {
                 ms.push_back(canonical_mutation(partitions));

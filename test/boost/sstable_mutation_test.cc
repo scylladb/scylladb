@@ -391,7 +391,7 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
 }
 
 static
-mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations,
+mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, mutation_vector mutations,
         sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
     return make_sstable_easy(env, make_memtable(s, mutations), env.manager().configure_writer(), version, mutations.size(), query_time)->as_mutation_source();
 }
@@ -1551,7 +1551,7 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
             m2.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v2"),
                 atomic_cell::make_live(*int32_type, 1511270919978347, int32_type->decompose(6), {}));
 
-            std::vector<mutation> muts = {m1, m2};
+            mutation_vector muts = {m1, m2};
             boost::sort(muts, mutation_decorated_key_less_comparator{});
 
             auto ms = make_sstable_mutation_source(env, s, muts, version);

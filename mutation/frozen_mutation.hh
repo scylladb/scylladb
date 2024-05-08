@@ -9,6 +9,7 @@
 #pragma once
 
 #include "dht/i_partitioner.hh"
+#include "mutation/mutation_fwd.hh"
 #include "replica/database_fwd.hh"
 #include "mutation_fragment.hh"
 #include "mutation_fragment_v2.hh"
@@ -19,7 +20,6 @@
 
 #include <span>
 
-class mutation;
 class flat_mutation_reader_v2;
 
 namespace ser {
@@ -232,8 +232,8 @@ public:
 };
 
 frozen_mutation freeze(const mutation& m);
-std::vector<frozen_mutation> freeze(const std::vector<mutation>&);
-std::vector<mutation> unfreeze(const std::vector<frozen_mutation>&);
+frozen_mutation_vector freeze(const mutation_vector&);
+mutation_vector unfreeze(const frozen_mutation_vector&);
 
 struct frozen_mutation_and_schema {
     frozen_mutation fm;

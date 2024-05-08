@@ -288,8 +288,8 @@ static mutation slice_mutation(schema_ptr schema, mutation&& m, const query::par
     return mutation(schema, m.decorated_key(), std::move(mp));
 }
 
-static std::vector<mutation> slice_mutations(schema_ptr schema, std::vector<mutation> ms, const query::partition_slice& slice) {
-    std::vector<mutation> sliced_ms;
+static mutation_vector slice_mutations(schema_ptr schema, mutation_vector ms, const query::partition_slice& slice) {
+    mutation_vector sliced_ms;
     sliced_ms.reserve(ms.size());
     for (auto& m : ms) {
         sliced_ms.emplace_back(slice_mutation(schema, std::move(m), slice));
@@ -915,16 +915,16 @@ make_flat_mutation_reader_from_mutations_v2(
 }
 
 flat_mutation_reader_v2
-make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr,
+make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, mutation_vector mutations, const dht::partition_range& pr,
         const query::partition_slice& query_slice, streamed_mutation::forwarding fwd) {
     class reader final : public reader_from_mutation_base {
-        std::vector<mutation> _mutations;
+        mutation_vector _mutations;
         const dht::partition_range* _pr;
         bool _reversed;
         std::optional<mutation_consume_cookie> _cookie;
 
     public:
-        reader(schema_ptr schema, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, bool reversed)
+        reader(schema_ptr schema, reader_permit permit, mutation_vector mutations, const dht::partition_range& pr, bool reversed)
             : reader_from_mutation_base(std::move(schema), std::move(permit))
             , _mutations(std::move(mutations))
             , _pr(&pr)
@@ -983,7 +983,7 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
         return make_empty_flat_reader_v2(std::move(s), std::move(permit));
     }
     const auto reversed = query_slice.is_reversed();
-    std::vector<mutation> sliced_mutations;
+    mutation_vector sliced_mutations;
     if (reversed) {
         sliced_mutations = slice_mutations(s->make_reversed(), std::move(mutations), query::half_reverse_slice(*s, query_slice));
     } else {
@@ -997,7 +997,7 @@ make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, 
 }
 
 flat_mutation_reader_v2
-make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, streamed_mutation::forwarding fwd) {
+make_flat_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, mutation_vector mutations, const dht::partition_range& pr, streamed_mutation::forwarding fwd) {
     if (mutations.size() == 1) {
         dht::ring_position_comparator cmp{*s};
         auto& m = mutations.back();

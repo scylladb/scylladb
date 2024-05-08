@@ -1907,7 +1907,7 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
     }
 }
 
-future<> database::apply(const std::vector<frozen_mutation>& muts, db::timeout_clock::time_point timeout) {
+future<> database::apply(const frozen_mutation_vector& muts, db::timeout_clock::time_point timeout) {
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<>(timed_out_error{});
@@ -1915,7 +1915,7 @@ future<> database::apply(const std::vector<frozen_mutation>& muts, db::timeout_c
     return update_write_metrics(do_apply_many(muts, timeout));
 }
 
-future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::timeout_clock::time_point timeout) {
+future<> database::do_apply_many(const frozen_mutation_vector& muts, db::timeout_clock::time_point timeout) {
     std::vector<commitlog_entry_writer> writers;
     db::commitlog* cl = nullptr;
     std::optional<shard_id> shard;

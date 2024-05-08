@@ -24,6 +24,7 @@
 #include "timestamp.hh"
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
+#include "mutation/mutation_fwd.hh"
 
 class schema;
 using schema_ptr = seastar::lw_shared_ptr<const schema>;
@@ -42,7 +43,6 @@ class query_state;
 
 } // namespace service
 
-class mutation;
 class partition_key;
 
 namespace replica {
@@ -75,13 +75,13 @@ public:
     // appropriate augments to set the log entries.
     // Iff post-image is enabled for any of these, a non-empty callback is also
     // returned to be invoked post the mutation query.
-    future<std::tuple<std::vector<mutation>, lw_shared_ptr<operation_result_tracker>>> augment_mutation_call(
+    future<std::tuple<mutation_vector, lw_shared_ptr<operation_result_tracker>>> augment_mutation_call(
         lowres_clock::time_point timeout,
-        std::vector<mutation>&& mutations,
+        mutation_vector&& mutations,
         tracing::trace_state_ptr tr_state,
         db::consistency_level write_cl
         );
-    bool needs_cdc_augmentation(const std::vector<mutation>&) const;
+    bool needs_cdc_augmentation(const mutation_vector&) const;
 };
 
 struct db_context final {

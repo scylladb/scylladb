@@ -181,7 +181,7 @@ class test_bucket_writer {
     schema_ptr _schema;
     reader_permit _permit;
     classify_by_var_t _classify;
-    std::unordered_map<int64_t, std::vector<mutation>>& _buckets;
+    std::unordered_map<int64_t, mutation_vector>& _buckets;
 
     std::optional<int64_t> _bucket_id;
     mutation_opt _current_mutation;
@@ -271,7 +271,7 @@ private:
 
 public:
     test_bucket_writer(schema_ptr schema, reader_permit permit, classify_by_var_t classify, std::unordered_map<int64_t,
-            std::vector<mutation>>& buckets, size_t throw_after = std::numeric_limits<size_t>::max())
+            mutation_vector>& buckets, size_t throw_after = std::numeric_limits<size_t>::max())
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _classify(std::move(classify))
@@ -339,10 +339,10 @@ public:
 
 } // anonymous namespace
 
-using bucket_map_t = std::unordered_map<int64_t, std::vector<mutation>>;
+using bucket_map_t = std::unordered_map<int64_t, mutation_vector>;
 
 // requires seastar thread.
-static void assert_that_segregator_produces_correct_data(const bucket_map_t& buckets, std::vector<mutation>& muts, reader_permit permit, tests::random_schema& random_schema);
+static void assert_that_segregator_produces_correct_data(const bucket_map_t& buckets, mutation_vector& muts, reader_permit permit, tests::random_schema& random_schema);
 
 SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
@@ -375,7 +375,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
         return int64_t(ts % 2);
     };
 
-    std::unordered_map<int64_t, std::vector<mutation>> buckets;
+    std::unordered_map<int64_t, mutation_vector> buckets;
 
     auto consumer = [&] (flat_mutation_reader_v2 bucket_reader) {
         return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader_v2& rd) {
@@ -390,9 +390,9 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
     assert_that_segregator_produces_correct_data(buckets, muts, semaphore.make_permit(), random_schema);
 }
 
-static void assert_that_segregator_produces_correct_data(const bucket_map_t& buckets, std::vector<mutation>& muts, reader_permit permit, tests::random_schema& random_schema) {
+static void assert_that_segregator_produces_correct_data(const bucket_map_t& buckets, mutation_vector& muts, reader_permit permit, tests::random_schema& random_schema) {
     auto bucket_readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(buckets | boost::adaptors::map_values |
-            boost::adaptors::transformed([&random_schema, &permit] (std::vector<mutation> muts) { return make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), permit, std::move(muts)); }));
+            boost::adaptors::transformed([&random_schema, &permit] (mutation_vector muts) { return make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), permit, std::move(muts)); }));
     auto reader = make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no);
     auto close_reader = deferred_close(reader);
@@ -402,7 +402,7 @@ static void assert_that_segregator_produces_correct_data(const bucket_map_t& buc
         m.partition().compact_for_compaction(*random_schema.schema(), always_gc, m.decorated_key(), now, tombstone_gc_state(nullptr));
     }
 
-    std::vector<mutation> combined_mutations;
+    mutation_vector combined_mutations;
     while (auto m = read_mutation_from_flat_mutation_reader(reader).get()) {
         m->partition().compact_for_compaction(*random_schema.schema(), always_gc, m->decorated_key(), now, tombstone_gc_state(nullptr));
         combined_mutations.emplace_back(std::move(*m));
@@ -446,7 +446,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
         return int64_t(ts % 2);
     };
 
-    std::unordered_map<int64_t, std::vector<mutation>> buckets;
+    std::unordered_map<int64_t, mutation_vector> buckets;
 
     int throw_after = tests::random::get_int(muts.size() - 1);
     testlog.info("Will raise exception after {}/{} mutations", throw_after, muts.size());
@@ -492,7 +492,7 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
 
     testlog.info("input_mutations.size()={}", input_mutations.size());
 
-    std::vector<std::vector<mutation>> output_mutations;
+    std::vector<mutation_vector> output_mutations;
     size_t next_index = 0;
 
     auto consumer = [&] (flat_mutation_reader_v2 rd) {
@@ -574,7 +574,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_group_based_splitting_mutation_writer) {
         return dht::compaction_group_of(1, t);
     };
 
-    std::unordered_map<int64_t, std::vector<mutation>> buckets;
+    std::unordered_map<int64_t, mutation_vector> buckets;
 
     auto consumer = [&] (flat_mutation_reader_v2 bucket_reader) {
         return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader_v2& rd) {

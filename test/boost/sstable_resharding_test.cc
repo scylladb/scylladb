@@ -49,7 +49,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
     auto cf = env.make_table_for_tests(s);
     auto close_cf = deferred_stop(cf);
     auto sst_gen = cf.make_sst_factory(version);
-    std::unordered_map<shard_id, std::vector<mutation>> muts;
+    std::unordered_map<shard_id, mutation_vector> muts;
     static constexpr auto keys_per_shard = 1000u;
 
     // create sst shared by all shards
@@ -170,7 +170,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             auto sst_gen = env.make_sst_factory(s, version);
 
             const auto keys = tests::generate_partition_keys(smp::count * 10, s);
-            std::vector<mutation> muts;
+            mutation_vector muts;
             for (auto& k : keys) {
                 muts.push_back(get_mutation(s, k, 0));
             }
@@ -187,7 +187,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             auto single_sharded_s = get_schema(1, cfg->murmur3_partitioner_ignore_msb_bits());
             auto sst_gen = env.make_sst_factory(single_sharded_s, version);
 
-            std::vector<mutation> muts;
+            mutation_vector muts;
             for (shard_id shard : boost::irange(0u, smp::count)) {
                 const auto keys = tests::generate_partition_keys(10, key_s, shard);
                 for (auto& k : keys) {

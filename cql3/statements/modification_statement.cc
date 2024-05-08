@@ -109,7 +109,7 @@ future<> modification_statement::check_access(query_processor& qp, const service
     return f;
 }
 
-future<std::vector<mutation>>
+future<mutation_vector>
 modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const {
     auto cl = options.get_consistency();
     auto ranges = create_clustering_ranges(options, json_cache);
@@ -139,9 +139,9 @@ modification_statement::get_mutations(query_processor& qp, const query_options& 
         update_parameters params(s, options, this->get_timestamp(now, options),
                 this->get_time_to_live(options), std::move(rows));
 
-        std::vector<mutation> mutations = apply_updates(keys, ranges, params, json_cache);
+        mutation_vector mutations = apply_updates(keys, ranges, params, json_cache);
 
-        return make_ready_future<std::vector<mutation>>(std::move(mutations));
+        return make_ready_future<mutation_vector>(std::move(mutations));
     });
 }
 
@@ -188,13 +188,13 @@ bool modification_statement::applies_to(const selection::selection* selection,
     return expr::evaluate(_condition, inputs) == true_value;
 }
 
-std::vector<mutation> modification_statement::apply_updates(
+mutation_vector modification_statement::apply_updates(
         const std::vector<dht::partition_range>& keys,
         const std::vector<query::clustering_range>& ranges,
         const update_parameters& params,
         const json_cache_opt& json_cache) const {
 
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     mutations.reserve(keys.size());
     for (auto key : keys) {
         // We know key.start() must be defined since we only allow EQ relations on the partition key.

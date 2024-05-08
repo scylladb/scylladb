@@ -334,7 +334,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_range_open) {
 }
 
 // partitions must be sorted by decorated key
-static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
+static void require_no_token_duplicates(const mutation_vector& partitions) {
     std::optional<dht::token> last_token;
     for (auto&& p : partitions) {
         const dht::decorated_key& key = p.decorated_key();
@@ -362,7 +362,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
 
         int partition_count = 5;
 
-        std::vector<mutation> partitions;
+        mutation_vector partitions;
         for (int i = 0; i < partition_count; ++i) {
             partitions.emplace_back(
                 make_partition_mutation(to_bytes(format("key_{:d}", i))));
@@ -534,8 +534,8 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
     });
 }
 
-static std::vector<mutation> make_ring(schema_ptr s, int n_mutations) {
-    std::vector<mutation> mutations;
+static mutation_vector make_ring(schema_ptr s, int n_mutations) {
+    mutation_vector mutations;
     for (int i = 0; i < n_mutations; ++i) {
         mutations.push_back(make_new_mutation(s));
     }
@@ -548,7 +548,7 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        std::vector<mutation> mutations = make_ring(s, 3);
+        mutation_vector mutations = make_ring(s, 3);
 
         auto mt = make_memtable(s, mutations);
 
@@ -595,7 +595,7 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        std::vector<mutation> mutations = make_ring(s, 3);
+        mutation_vector mutations = make_ring(s, 3);
         auto mt = make_memtable(s, mutations);
 
         cache_tracker tracker;
@@ -631,7 +631,7 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        std::vector<mutation> mutations = make_ring(s, 3);
+        mutation_vector mutations = make_ring(s, 3);
         auto mt = make_memtable(s, mutations);
 
         cache_tracker tracker;
@@ -686,7 +686,7 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
     return seastar::async([] {
         cache_tracker tracker;
 
-        run_mutation_source_tests([&tracker](schema_ptr s, const std::vector<mutation>& mutations) -> mutation_source {
+        run_mutation_source_tests([&tracker](schema_ptr s, const mutation_vector& mutations) -> mutation_source {
             auto mt = make_memtable(s, mutations);
             auto cache = make_lw_shared<row_cache>(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
             return mutation_source([cache] (schema_ptr s,
@@ -1082,7 +1082,7 @@ SEASTAR_TEST_CASE(test_update) {
 
         auto mt3 = make_lw_shared<replica::memtable>(s);
 
-        std::vector<mutation> new_mutations;
+        mutation_vector new_mutations;
         for (auto&& key : keys_in_cache) {
             auto m = make_new_mutation(s, key.key());
             new_mutations.push_back(m);
@@ -1254,8 +1254,8 @@ public:
         });
     }
 };
-static std::vector<mutation> updated_ring(std::vector<mutation>& mutations) {
-    std::vector<mutation> result;
+static mutation_vector updated_ring(mutation_vector& mutations) {
+    mutation_vector result;
     for (auto&& m : mutations) {
         result.push_back(make_new_mutation(m.schema(), m.key()));
     }
@@ -1726,7 +1726,7 @@ SEASTAR_TEST_CASE(test_lru) {
 
         int partition_count = 10;
 
-        std::vector<mutation> partitions = make_ring(s, partition_count);
+        mutation_vector partitions = make_ring(s, partition_count);
         for (auto&& m : partitions) {
             cache.populate(m);
         }
@@ -2462,8 +2462,8 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
         auto pkeys = s.make_pkeys(5);
         auto population_range = dht::partition_range::make_ending_with({pkeys[3]});
 
-        std::vector<mutation> muts;
-        std::vector<mutation> muts2;
+        mutation_vector muts;
+        mutation_vector muts2;
 
         for (auto&& pk : pkeys) {
             mutation mut(s.schema(), pk);
@@ -2473,7 +2473,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
             muts2.push_back(mut);
         }
 
-        std::vector<mutation> orig;
+        mutation_vector orig;
         orig.push_back(muts[0]);
         orig.push_back(muts[3]);
         orig.push_back(muts[4]);
@@ -2677,7 +2677,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_scan) {
         memtable_snapshot_source underlying(s.schema());
 
         auto pkeys = s.make_pkeys(7);
-        std::vector<mutation> muts;
+        mutation_vector muts;
 
         for (auto&& pk : pkeys) {
             mutation mut(s.schema(), pk);
@@ -2800,7 +2800,7 @@ SEASTAR_TEST_CASE(test_concurrent_populating_partition_range_reads) {
         memtable_snapshot_source underlying(s.schema());
 
         auto keys = s.make_pkeys(10);
-        std::vector<mutation> muts;
+        mutation_vector muts;
 
         for (auto&& k : keys) {
             mutation m(s.schema(), k);
@@ -4737,7 +4737,7 @@ SEASTAR_THREAD_TEST_CASE(test_preempt_cache_update) {
     // Create a few mutations with multiple rows.
     simple_schema s;
     auto keys = s.make_pkeys(3);
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     for (const auto& pk : keys) {
         mutation m(s.schema(), pk);
         for (int j = 0; j < 3; ++j) {

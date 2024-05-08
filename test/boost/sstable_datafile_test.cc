@@ -1708,7 +1708,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         }
         std::sort(keys.begin(), keys.end(), dht::decorated_key::less_comparator(table.schema()));
 
-        std::vector<mutation> partitions;
+        mutation_vector partitions;
         uint32_t row_id = 0;
         for (auto&& key : keys) {
             mutation m(table.schema(), key);
@@ -1994,7 +1994,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
                 return m;
             };
 
-            std::vector<mutation> mutations;
+            mutation_vector mutations;
             for (auto i = 0; i < sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE * 2; i++) {
                 auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
                 mutations.push_back(make_delete(key));
@@ -2044,7 +2044,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             auto mut = [&] (auto shard) {
                 return make_insert(tests::generate_partition_key(key_schema, shard));
             };
-            auto muts = boost::copy_range<std::vector<mutation>>(shards
+            auto muts = boost::copy_range<mutation_vector>(shards
                 | boost::adaptors::transformed([&] (auto shard) { return mut(shard); }));
             auto sst_gen = [&] () mutable {
                 auto schema = schema_builder(s).with_sharder(1, ignore_msb).build();
@@ -2094,7 +2094,7 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
             {{"p1", int32_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
-        std::vector<mutation> mutations;
+        mutation_vector mutations;
         auto keys_written = 0;
         for (auto i = 0; i < s->min_index_interval()*1.5; i++) {
             auto key = partition_key::from_exploded(*s, {int32_type->decompose(i)});
@@ -2298,7 +2298,7 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
             return m;
         };
 
-        std::vector<mutation> mutations;
+        mutation_vector mutations;
         for (auto i = 0; i < s->min_index_interval()*2; i++) {
             auto key = to_bytes("key" + to_sstring(i));
             mutations.push_back(make_insert(partition_key::from_exploded(*s, {std::move(key)})));
@@ -2347,7 +2347,7 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
         {
             auto total_partitions = s->min_index_interval()*2;
 
-            std::vector<mutation> mutations;
+            mutation_vector mutations;
             for (auto i = 0; i < total_partitions; i++) {
                 auto key = to_bytes("key" + to_sstring(i));
                 mutations.push_back(make_large_partition(partition_key::from_exploded(*s, {std::move(key)})));
@@ -2360,7 +2360,7 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
         {
             auto total_partitions = s->min_index_interval()*2;
 
-            std::vector<mutation> mutations;
+            mutation_vector mutations;
             for (auto i = 0; i < total_partitions; i++) {
                 auto key = to_bytes("key" + to_sstring(i));
                 mutations.push_back(make_small_partition(partition_key::from_exploded(*s, {std::move(key)})));
@@ -2459,7 +2459,7 @@ SEASTAR_TEST_CASE(sstable_run_clustering_disjoint_invariant_test) {
         auto pks = ss.make_pkeys(1);
 
         auto make_sstable = [&] (int first_ckey_idx, int last_ckey_idx) {
-            std::vector<mutation> muts;
+            mutation_vector muts;
             auto mut = mutation(s, pks[0]);
 
             auto first_ckey_prefix = ss.make_ckey(first_ckey_idx);
@@ -2983,7 +2983,7 @@ SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
             auto pks = ss.make_pkeys(partitions);
             auto tmp = env.tempdir().make_sweeper();
 
-            std::vector<mutation> muts;
+            mutation_vector muts;
             std::optional<position_in_partition> first_position, last_position;
 
             static constexpr size_t ckeys_per_partition = 10;

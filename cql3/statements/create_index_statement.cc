@@ -373,13 +373,13 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
     return base_schema_with_new_index{builder.build(), index};
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, mutation_vector, cql3::cql_warnings_vec>>
 create_index_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     using namespace cql_transport;
     auto res = build_index_schema(qp.db());
 
     ::shared_ptr<event::schema_change> ret;
-    std::vector<mutation> m;
+    mutation_vector m;
 
     if (res) {
         m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), false, {}, ts);

@@ -272,8 +272,8 @@ schema_ptr table_description::build_schema() const {
     return sb.build();
 }
 
-std::vector<mutation> table_description::build_mutations(schema_ptr s) const {
-    auto ms = boost::copy_range<std::vector<mutation>>(
+mutation_vector table_description::build_mutations(schema_ptr s) const {
+    auto ms = boost::copy_range<mutation_vector>(
         _mutations | boost::adaptors::transformed([&] (const mutation_description& md) {
             return md.build(s);
         })

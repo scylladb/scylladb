@@ -168,7 +168,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after);
 static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, schema_result scylla_before, schema_result scylla_after);
 
-static future<> do_merge_schema(distributed<service::storage_proxy>&, sharded<db::system_keyspace>& sys_ks, std::vector<mutation>, bool do_flush, bool reload);
+static future<> do_merge_schema(distributed<service::storage_proxy>&, sharded<db::system_keyspace>& sys_ks, mutation_vector, bool do_flush, bool reload);
 
 using computed_columns_map = std::unordered_map<bytes, column_computation_ptr>;
 static computed_columns_map get_computed_columns(const schema_mutations& sm);
@@ -199,11 +199,11 @@ static void add_index_to_schema_mutation(schema_ptr table,
 
 static void drop_column_from_schema_mutation(schema_ptr schema_table, schema_ptr table,
                 const sstring& column_name, long timestamp,
-                std::vector<mutation>&);
+                mutation_vector&);
 
 static void drop_index_from_schema_mutation(schema_ptr table,
                 const index_metadata& column, long timestamp,
-                std::vector<mutation>& mutations);
+                mutation_vector& mutations);
 
 static future<schema_ptr> create_table_from_table_row(
                 distributed<service::storage_proxy>&,
@@ -795,11 +795,11 @@ redact_columns_for_missing_features(mutation&& m, schema_features features) {
  */
 future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features, noncopyable_function<bool(std::string_view)> accept_keyspace)
 {
-    auto map = [&proxy, features, accept_keyspace = std::move(accept_keyspace)] (sstring table) mutable -> future<std::vector<mutation>> {
+    auto map = [&proxy, features, accept_keyspace = std::move(accept_keyspace)] (sstring table) mutable -> future<mutation_vector> {
         auto& db = proxy.local().get_db();
         auto rs = co_await db::system_keyspace::query_mutations(db, NAME, table);
         auto s = db.local().find_schema(NAME, table);
-        std::vector<mutation> mutations;
+        mutation_vector mutations;
         for (auto&& p : rs->partitions()) {
             auto mut = co_await unfreeze_gently(p.mut(), s);
             auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
@@ -839,13 +839,13 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
     return calculate_schema_digest(proxy, features, std::not_fn(&is_system_keyspace));
 }
 
-future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features features)
+future<canonical_mutation_vector> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features features)
 {
-    auto map = [&proxy, features] (sstring table) -> future<std::vector<canonical_mutation>> {
+    auto map = [&proxy, features] (sstring table) -> future<canonical_mutation_vector> {
         auto& db = proxy.local().get_db();
         auto rs = co_await db::system_keyspace::query_mutations(db, NAME, table);
         auto s = db.local().find_schema(NAME, table);
-        std::vector<canonical_mutation> results;
+        canonical_mutation_vector results;
         results.reserve(rs->partitions().size());
         for (auto&& p : rs->partitions()) {
             auto mut = co_await unfreeze_gently(p.mut(), s);
@@ -862,11 +862,11 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
         std::move(mutations.begin(), mutations.end(), std::back_inserter(result));
         return std::move(result);
     };
-    co_return co_await map_reduce(all_table_names(features), map, std::vector<canonical_mutation>{}, reduce);
+    co_return co_await map_reduce(all_table_names(features), map, canonical_mutation_vector{}, reduce);
 }
 
-std::vector<mutation>
-adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features) {
+mutation_vector
+adjust_schema_for_schema_features(mutation_vector schema, schema_features features) {
     for (auto& m : schema) {
         m = redact_columns_for_missing_features(std::move(m), features);
     }
@@ -1007,7 +1007,7 @@ static future<std::optional<table_schema_version>> get_group0_schema_version(db:
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload)
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, mutation_vector mutations, bool reload)
 {
     if (this_shard_id() != 0) {
         // mutations must be applied on the owning shard (0).
@@ -1225,7 +1225,7 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
     schema_ptr history_tbl = scylla_table_schema_history();
 
     // Insert the new column mapping for a given schema version (without TTL)
-    std::vector<mutation> muts;
+    mutation_vector muts;
     partition_key pk = partition_key::from_exploded(*history_tbl, {uuid_type->decompose(s->id().uuid())});
 
     ttl_opt ttl;
@@ -1292,7 +1292,7 @@ table_selector get_affected_tables(const sstring& keyspace_name, const mutation&
     return result;
 }
 
-static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool do_flush, bool reload)
+static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, mutation_vector mutations, bool do_flush, bool reload)
 {
     slogger.trace("do_merge_schema: {}", mutations);
     schema_ptr s = keyspaces();
@@ -2141,9 +2141,9 @@ static void store_map(mutation& m, const K& ckey, const bytes& name, api::timest
  * Keyspace metadata serialization/deserialization.
  */
 
-std::vector<mutation> make_create_keyspace_mutations(schema_features features, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
+mutation_vector make_create_keyspace_mutations(schema_features features, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
 {
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     schema_ptr s = keyspaces();
     auto pkey = partition_key::from_singular(*s, keyspace->name());
     mutation m(s, pkey);
@@ -2184,9 +2184,9 @@ std::vector<mutation> make_create_keyspace_mutations(schema_features features, l
     return mutations;
 }
 
-std::vector<mutation> make_drop_keyspace_mutations(schema_features features, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp)
+mutation_vector make_drop_keyspace_mutations(schema_features features, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp)
 {
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     for (auto&& schema_table : all_tables(schema_features::full())) {
         auto pkey = partition_key::from_exploded(*schema_table, {utf8_type->decompose(keyspace->name())});
         mutation m{schema_table, pkey};
@@ -2339,7 +2339,7 @@ make_list_mutation(const std::vector<T, Args...>& values,
     }
 }
 
-void add_type_to_schema_mutation(user_type type, api::timestamp_type timestamp, std::vector<mutation>& mutations)
+void add_type_to_schema_mutation(user_type type, api::timestamp_type timestamp, mutation_vector& mutations)
 {
     schema_ptr s = types();
     auto pkey = partition_key::from_singular(*s, type->_keyspace);
@@ -2361,16 +2361,16 @@ void add_type_to_schema_mutation(user_type type, api::timestamp_type timestamp, 
     mutations.emplace_back(std::move(m));
 }
 
-std::vector<mutation> make_create_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp)
+mutation_vector make_create_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp)
 {
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     add_type_to_schema_mutation(type, timestamp, mutations);
     return mutations;
 }
 
-std::vector<mutation> make_drop_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp)
+mutation_vector make_drop_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp)
 {
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     schema_ptr s = types();
     auto pkey = partition_key::from_singular(*s, type->_keyspace);
     auto ckey = clustering_key::from_singular(*s, type->get_name_as_string());
@@ -2401,7 +2401,7 @@ static std::pair<mutation, clustering_key> get_mutation(schema_ptr s, const cql3
     return {std::move(m), std::move(ckey)};
 }
 
-std::vector<mutation> make_create_function_mutations(shared_ptr<cql3::functions::user_function> func,
+mutation_vector make_create_function_mutations(shared_ptr<cql3::functions::user_function> func,
         api::timestamp_type timestamp) {
     schema_ptr s = functions();
     auto p = get_mutation(s, *func);
@@ -2419,7 +2419,7 @@ std::vector<mutation> make_create_function_mutations(shared_ptr<cql3::functions:
     return make_mutation_vector(std::move(m));
 }
 
-std::vector<mutation> make_drop_function_mutations(schema_ptr s, const cql3::functions::function& func, api::timestamp_type timestamp) {
+mutation_vector make_drop_function_mutations(schema_ptr s, const cql3::functions::function& func, api::timestamp_type timestamp) {
     auto p = get_mutation(s, func);
     mutation& m = p.first;
     clustering_key& ckey = p.second;
@@ -2427,7 +2427,7 @@ std::vector<mutation> make_drop_function_mutations(schema_ptr s, const cql3::fun
     return make_mutation_vector(std::move(m));
 }
 
-std::vector<mutation> make_drop_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp) {
+mutation_vector make_drop_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp) {
     return make_drop_function_mutations(functions(), *func, timestamp);
 }
 
@@ -2451,12 +2451,12 @@ static std::pair<mutation, clustering_key> get_mutation(schema_ptr s, const cql3
     return {std::move(m), std::move(ckey)};
 }
 
-std::vector<mutation> make_create_aggregate_mutations(schema_features features, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp) {
+mutation_vector make_create_aggregate_mutations(schema_features features, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp) {
     schema_ptr s = aggregates();
     auto p = get_mutation(s, *aggregate);
     mutation& m = p.first;
     clustering_key& ckey = p.second;
-    std::vector<mutation> muts;
+    mutation_vector muts;
 
     data_type state_type = aggregate->sfunc()->arg_types()[0];
     if (aggregate->has_finalfunc()) {
@@ -2484,7 +2484,7 @@ std::vector<mutation> make_create_aggregate_mutations(schema_features features, 
     return muts;
 }
 
-std::vector<mutation> make_drop_aggregate_mutations(schema_features features, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp) {
+mutation_vector make_drop_aggregate_mutations(schema_features features, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp) {
     auto muts = make_drop_function_mutations(aggregates(), *aggregate, timestamp);
     if (features.contains<schema_feature::SCYLLA_AGGREGATES>() && aggregate->is_reducible()) {
         auto scylla_muts = make_drop_function_mutations(scylla_aggregates(), *aggregate, timestamp);
@@ -2540,9 +2540,9 @@ static schema_mutations make_table_deleting_mutations(const sstring& ks, const s
     );
 }
 
-std::vector<mutation> make_create_table_mutations(schema_ptr table, api::timestamp_type timestamp)
+mutation_vector make_create_table_mutations(schema_ptr table, api::timestamp_type timestamp)
 {
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     add_table_or_view_to_schema_mutation(table, timestamp, true, mutations);
     make_table_deleting_mutations(table->ks_name(), table->cf_name(), table->is_view(), timestamp)
         .copy_to(mutations);
@@ -2741,20 +2741,20 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
                             std::move(scylla_tables_mutation)};
 }
 
-void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type timestamp, bool with_columns, std::vector<mutation>& mutations)
+void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type timestamp, bool with_columns, mutation_vector& mutations)
 {
     make_schema_mutations(s, timestamp, with_columns).copy_to(mutations);
 }
 
 static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type timestamp, bool with_columns);
-static void make_drop_table_or_view_mutations(schema_ptr schema_table, schema_ptr table_or_view, api::timestamp_type timestamp, std::vector<mutation>& mutations);
+static void make_drop_table_or_view_mutations(schema_ptr schema_table, schema_ptr table_or_view, api::timestamp_type timestamp, mutation_vector& mutations);
 
 static void make_update_indices_mutations(
         replica::database& db,
         schema_ptr old_table,
         schema_ptr new_table,
         api::timestamp_type timestamp,
-        std::vector<mutation>& mutations)
+        mutation_vector& mutations)
 {
     mutation indices_mutation(indexes(), partition_key::from_singular(*indexes(), old_table->ks_name()));
 
@@ -2806,7 +2806,7 @@ static void make_update_indices_mutations(
     mutations.emplace_back(std::move(indices_mutation));
 }
 
-static void add_drop_column_to_mutations(schema_ptr table, const sstring& name, const schema::dropped_column& dc, api::timestamp_type timestamp, std::vector<mutation>& mutations) {
+static void add_drop_column_to_mutations(schema_ptr table, const sstring& name, const schema::dropped_column& dc, api::timestamp_type timestamp, mutation_vector& mutations) {
     schema_ptr s = dropped_columns();
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), utf8_type->decompose(name)});
@@ -2819,7 +2819,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
         schema_ptr new_table,
         api::timestamp_type timestamp,
         bool from_thrift,
-        std::vector<mutation>& mutations) {
+        mutation_vector& mutations) {
     mutation columns_mutation(columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
     mutation view_virtual_columns_mutation(view_virtual_columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
     mutation computed_columns_mutation(computed_columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
@@ -2871,14 +2871,14 @@ static void make_update_columns_mutations(schema_ptr old_table,
     }
 }
 
-std::vector<mutation> make_update_table_mutations(replica::database& db,
+mutation_vector make_update_table_mutations(replica::database& db,
     lw_shared_ptr<keyspace_metadata> keyspace,
     schema_ptr old_table,
     schema_ptr new_table,
     api::timestamp_type timestamp,
     bool from_thrift)
 {
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     add_table_or_view_to_schema_mutation(new_table, timestamp, false, mutations);
     make_update_indices_mutations(db, old_table, new_table, timestamp, mutations);
     make_update_columns_mutations(std::move(old_table), std::move(new_table), timestamp, from_thrift, mutations);
@@ -2902,7 +2902,7 @@ std::vector<mutation> make_update_table_mutations(replica::database& db,
 static void make_drop_table_or_view_mutations(schema_ptr schema_table,
             schema_ptr table_or_view,
             api::timestamp_type timestamp,
-            std::vector<mutation>& mutations) {
+            mutation_vector& mutations) {
     auto pkey = partition_key::from_singular(*schema_table, table_or_view->ks_name());
     mutation m{schema_table, pkey};
     auto ckey = clustering_key::from_singular(*schema_table, table_or_view->cf_name());
@@ -2926,9 +2926,9 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
     mutations.emplace_back(m1);
 }
 
-std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp)
+mutation_vector make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp)
 {
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     make_drop_table_or_view_mutations(tables(), std::move(table), timestamp, mutations);
 
 #if 0
@@ -3299,7 +3299,7 @@ static void add_index_to_schema_mutation(schema_ptr table,
     store_map(m, ckey, "options", timestamp, index.options());
 }
 
-static void drop_index_from_schema_mutation(schema_ptr table, const index_metadata& index, long timestamp, std::vector<mutation>& mutations)
+static void drop_index_from_schema_mutation(schema_ptr table, const index_metadata& index, long timestamp, mutation_vector& mutations)
 {
     schema_ptr s = indexes();
     auto pkey = partition_key::from_singular(*s, table->ks_name());
@@ -3314,7 +3314,7 @@ static void drop_column_from_schema_mutation(
         schema_ptr table,
         const sstring& column_name,
         long timestamp,
-        std::vector<mutation>& mutations)
+        mutation_vector& mutations)
 {
     auto pkey = partition_key::from_singular(*schema_table, table->ks_name());
     auto ckey = clustering_key::from_exploded(*schema_table, {utf8_type->decompose(table->cf_name()),
@@ -3524,9 +3524,9 @@ schema_mutations make_schema_mutations(schema_ptr s, api::timestamp_type timesta
     return s->is_view() ? make_view_mutations(view_ptr(s), timestamp, with_columns) : make_table_mutations(s, timestamp, with_columns);
 }
 
-std::vector<mutation> make_create_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp)
+mutation_vector make_create_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp)
 {
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     // Include the serialized base table mutations in case the target node is missing them.
     auto base = keyspace->cf_meta_data().at(view->view_info()->base_name());
     // Use a smaller timestamp for the included base mutations.
@@ -3547,13 +3547,13 @@ std::vector<mutation> make_create_view_mutations(lw_shared_ptr<keyspace_metadata
  * case, the new base schema isn't yet loaded, thus can't be accessed from this
  * function.
  */
-std::vector<mutation> make_update_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace,
+mutation_vector make_update_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace,
                                                  view_ptr old_view,
                                                  view_ptr new_view,
                                                  api::timestamp_type timestamp,
                                                  bool include_base)
 {
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     if (include_base) {
         // Include the serialized base table mutations in case the target node is missing them.
         auto base = keyspace->cf_meta_data().at(new_view->view_info()->base_name());
@@ -3570,8 +3570,8 @@ std::vector<mutation> make_update_view_mutations(lw_shared_ptr<keyspace_metadata
     return mutations;
 }
 
-std::vector<mutation> make_drop_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp) {
-    std::vector<mutation> mutations;
+mutation_vector make_drop_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp) {
+    mutation_vector mutations;
     make_drop_table_or_view_mutations(views(), view, timestamp, mutations);
     return mutations;
 }

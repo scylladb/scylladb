@@ -40,7 +40,6 @@
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
-class frozen_mutation;
 class cache_temperature;
 class query_ranges_to_vnodes_generator;
 
@@ -270,7 +269,7 @@ private:
     inheriting_concrete_execution_stage<
             future<result<>>,
             storage_proxy*,
-            std::vector<mutation>,
+            mutation_vector,
             db::consistency_level,
             clock_type::time_point,
             tracing::trace_state_ptr,
@@ -425,7 +424,7 @@ private:
 
     gms::inet_address find_leader_for_counter_update(const mutation& m, const locator::effective_replication_map& erm, db::consistency_level cl);
 
-    future<result<>> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker);
+    future<result<>> do_mutate(mutation_vector mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker);
 
     future<> send_to_endpoint(
             std::unique_ptr<mutation_holder> m,
@@ -521,7 +520,7 @@ private:
             smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
+    future<> mutate_locally(mutation_vector mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
     // Confirm whether the topology version from the token is greater than or equal
     // to the current fencing_version sourced from shared_token_metadata.
     // If it is not, the function will return an engaged optional.
@@ -537,7 +536,7 @@ private:
         return _pending_writes_phaser.start();
     }
 
-    mutation do_get_batchlog_mutation_for(schema_ptr schema, const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
+    mutation do_get_batchlog_mutation_for(schema_ptr schema, const mutation_vector& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
 public:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
@@ -556,7 +555,7 @@ public:
     }
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate());
+    future<> mutate_locally(mutation_vector mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate());
     // Applies a vector of frozen_mutation:s and their schemas on this node, in parallel.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(std::vector<frozen_mutation_and_schema> mutations, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate());
@@ -573,14 +572,14 @@ public:
     * @param consistency_level the consistency level for the operation
     * @param tr_state trace state handle
     */
-    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
+    future<> mutate(mutation_vector mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
 
     /**
     * See mutate. Does the same, but returns some exceptions
     * through the result<>, which allows for efficient inspection
     * of the exception on the exception handling path.
     */
-    future<result<>> mutate_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
+    future<result<>> mutate_result(mutation_vector mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
 
     paxos_participants
     get_paxos_participants(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token, db::consistency_level consistency_for_paxos);
@@ -588,7 +587,7 @@ public:
     future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                            clock_type::time_point timeout, service_permit permit);
 
-    future<result<>> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout,
+    future<result<>> mutate_with_triggers(mutation_vector mutations, db::consistency_level cl, clock_type::time_point timeout,
                                           bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit,
                                           db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
 
@@ -602,14 +601,14 @@ public:
     * @param consistency_level the consistency level for the operation
     * @param tr_state trace state handle
     */
-    future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit);
+    future<> mutate_atomically(mutation_vector mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit);
 
     /**
     * See mutate_atomically. Does the same, but returns some exceptions
     * through the result<>, which allows for efficient inspection
     * of the exception on the exception handling path.
     */
-    future<result<>> mutate_atomically_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit);
+    future<result<>> mutate_atomically_result(mutation_vector mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit);
 
     future<> send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s);
 
@@ -682,7 +681,7 @@ public:
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
 
-    mutation get_batchlog_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
+    mutation get_batchlog_mutation_for(const mutation_vector& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
 
     future<> stop();
     future<> start_hints_manager(shared_ptr<gms::gossiper>);

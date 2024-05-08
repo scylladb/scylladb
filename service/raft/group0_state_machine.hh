@@ -35,7 +35,7 @@ using raft_address_map = raft_address_map_t<seastar::lowres_clock>;
 struct schema_change {
     // Mutations of schema tables (such as `system_schema.keyspaces`, `system_schema.tables` etc.)
     // e.g. computed from a DDL statement (keyspace/table/type create/drop/alter etc.)
-    std::vector<canonical_mutation> mutations;
+    canonical_mutation_vector mutations;
 };
 
 struct broadcast_table_query {
@@ -43,13 +43,13 @@ struct broadcast_table_query {
 };
 
 struct topology_change {
-    std::vector<canonical_mutation> mutations;
+    canonical_mutation_vector mutations;
 };
 
 // This command is used to write data to tables other than topology or
 // schema tables and it doesn't update any in-memory data structures.
 struct write_mutations {
-    std::vector<canonical_mutation> mutations;
+    canonical_mutation_vector mutations;
 };
 
 struct group0_command {

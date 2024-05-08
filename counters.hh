@@ -15,8 +15,8 @@
 #include "mutation/atomic_cell.hh"
 #include "types/types.hh"
 #include "locator/host_id.hh"
+#include "mutation/mutation_fwd.hh"
 
-class mutation;
 class atomic_cell_or_collection;
 
 using counter_id = utils::tagged_uuid<struct counter_id_tag>;

@@ -105,8 +105,8 @@ mutation_decorated_key_less_comparator::operator()(const mutation& m1, const mut
     return m1.decorated_key().less_compare(*m1.schema(), m2.decorated_key());
 }
 
-boost::iterator_range<std::vector<mutation>::const_iterator>
-slice(const std::vector<mutation>& partitions, const dht::partition_range& r) {
+boost::iterator_range<mutation_vector::const_iterator>
+slice(const mutation_vector& partitions, const dht::partition_range& r) {
     struct cmp {
         bool operator()(const dht::ring_position& pos, const mutation& m) const {
             return m.decorated_key().tri_compare(*m.schema(), pos) > 0;
@@ -210,7 +210,7 @@ class mutation_by_size_splitter {
         }
     };
     const schema_ptr _schema;
-    std::vector<mutation>& _target;
+    mutation_vector& _target;
     const size_t _max_size;
     std::optional<partition_state> _state;
     template <typename T>
@@ -232,7 +232,7 @@ class mutation_by_size_splitter {
         return stop_iteration::no;
     }
 public:
-    mutation_by_size_splitter(schema_ptr schema, std::vector<mutation>& target, size_t max_size)
+    mutation_by_size_splitter(schema_ptr schema, mutation_vector& target, size_t max_size)
         : _schema(std::move(schema))
         , _target(target)
         , _max_size(max_size)
@@ -276,7 +276,7 @@ public:
 };
 }
 
-future<> split_mutation(mutation source, std::vector<mutation>& target, size_t max_size) {
+future<> split_mutation(mutation source, mutation_vector& target, size_t max_size) {
     reader_concurrency_semaphore sem(reader_concurrency_semaphore::no_limits{}, "split_mutation",
         reader_concurrency_semaphore::register_metrics::no);
     {

@@ -40,7 +40,7 @@ static sstables::shared_sstable generate_sstable(schema_ptr s, std::function<sha
     };
 
     auto keys = tests::generate_partition_keys(100, s);
-    std::vector<mutation> muts;
+    mutation_vector muts;
 
     muts.reserve(keys.size());
     for (auto& k : keys) {

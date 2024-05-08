@@ -37,7 +37,7 @@
 #include "utils/UUID_gen.hh"
 
 // partitions must be sorted by decorated key
-static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
+static void require_no_token_duplicates(const mutation_vector& partitions) {
     std::optional<dht::token> last_token;
     for (auto&& p : partitions) {
         const dht::decorated_key& key = p.decorated_key();
@@ -88,7 +88,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
 
     auto dkeys = s.make_pkeys(128);
     auto dkeys_pos = 0;
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
 
     {   // All clustered rows and a static row, range tombstones covering each row
         auto m = mutation(s.schema(), dkeys.at(dkeys_pos++));
@@ -159,7 +159,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
 
     mutation_source ms = populate(s.schema(), mutations, gc_clock::now());
 
-    auto test_ckey = [&] (std::vector<dht::partition_range> pranges, std::vector<mutation> mutations, mutation_reader::forwarding fwd_mr) {
+    auto test_ckey = [&] (std::vector<dht::partition_range> pranges, mutation_vector mutations, mutation_reader::forwarding fwd_mr) {
         for (auto range_size = 1u; range_size <= ckey_count + 1; range_size++) {
             for (auto start = 0u; start <= ckey_count; start++) {
                 auto range = range_size == 1
@@ -320,7 +320,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
 
     for (auto prange_size = 1u; prange_size < mutations.size(); prange_size += 2) {
         for (auto pstart = 0u; pstart + prange_size <= mutations.size(); pstart++) {
-            auto ms = boost::copy_range<std::vector<mutation>>(
+            auto ms = boost::copy_range<mutation_vector>(
                 mutations | boost::adaptors::sliced(pstart, pstart + prange_size)
             );
             if (prange_size == 1) {
@@ -422,7 +422,7 @@ static void test_streamed_mutation_forwarding_guarantees(tests::reader_concurren
 
     table.add_static_row(m, "static_value");
 
-    mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
+    mutation_source ms = populate(s, mutation_vector({m}), gc_clock::now());
 
     auto new_stream = [&ms, s, &semaphore, &m] () -> flat_reader_assertions_v2 {
         testlog.info("Creating new streamed_mutation");
@@ -535,7 +535,7 @@ static void test_fast_forwarding_across_partitions_to_empty_range(tests::reader_
     simple_schema table;
     schema_ptr s = table.schema();
 
-    std::vector<mutation> partitions;
+    mutation_vector partitions;
 
     const unsigned ckeys_per_part = 100;
     auto keys = table.make_pkeys(10);
@@ -649,7 +649,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(test
     table.add_row(m, keys[10], "value");
 
     auto pr = dht::partition_range::make_singular(m.decorated_key());
-    mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
+    mutation_source ms = populate(s, mutation_vector({m}), gc_clock::now());
 
     {
         auto slice = partition_slice_builder(*s)
@@ -749,7 +749,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
     );
     auto rt5 = table.delete_range(m, rt5_range);
 
-    mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
+    mutation_source ms = populate(s, mutation_vector({m}), gc_clock::now());
     auto rd = assert_that(ms.make_reader_v2(s,
         semaphore.make_permit(),
         query::full_partition_range,
@@ -831,7 +831,7 @@ static void test_range_queries(tests::reader_concurrency_semaphore_wrapper& sema
 
     auto keys = tests::generate_partition_keys(partition_count, s);
 
-    std::vector<mutation> partitions;
+    mutation_vector partitions;
     for (int i = 0; i < partition_count; ++i) {
         partitions.emplace_back(
             make_partition_mutation(keys[i]));
@@ -1370,7 +1370,7 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
     simple_schema s;
     auto pkey = s.make_pkey();
 
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
 
     mutation m(s.schema(), pkey);
     s.add_row(m, s.make_ckey(0), "v1");
@@ -1569,7 +1569,7 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
     testlog.info(__PRETTY_FUNCTION__);
 
     for_each_mutation([&] (const mutation& m) mutable {
-        std::vector<mutation> mutations = { m };
+        mutation_vector mutations = { m };
         auto ms = populate(m.schema(), mutations, gc_clock::now());
 
         // Query time must be fetched after populate. If compaction is executed
@@ -1637,7 +1637,7 @@ void test_next_partition(tests::reader_concurrency_semaphore_wrapper& semaphore,
     simple_schema s;
     auto pkeys = s.make_pkeys(4);
 
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     for (auto key : pkeys) {
         mutation m(s.schema(), key);
         s.add_static_row(m, "s1");
@@ -1667,7 +1667,7 @@ void test_next_partition(tests::reader_concurrency_semaphore_wrapper& semaphore,
 }
 
 void run_mutation_source_tests(populate_fn populate, bool with_partition_range_forwarding) {
-    auto populate_ex = [populate = std::move(populate)] (schema_ptr s, const std::vector<mutation>& muts, gc_clock::time_point) {
+    auto populate_ex = [populate = std::move(populate)] (schema_ptr s, const mutation_vector& muts, gc_clock::time_point) {
         return populate(std::move(s), muts);
     };
     run_mutation_source_tests(std::move(populate_ex), with_partition_range_forwarding);
@@ -1711,10 +1711,10 @@ void run_mutation_source_tests_plain_read_back(populate_fn_ex populate, bool wit
 
 // read in reverse
 static mutation_source make_mutation_source(populate_fn_ex populate, schema_ptr s,
-        const std::vector<mutation>& m, gc_clock::time_point t) {
+        const mutation_vector& m, gc_clock::time_point t) {
     auto table_schema = s->make_reversed();
 
-    std::vector<mutation> reversed_mutations;
+    mutation_vector reversed_mutations;
     reversed_mutations.reserve(m.size());
     for (const auto& mut : m) {
         reversed_mutations.emplace_back(reverse(mut));
@@ -1738,7 +1738,7 @@ static mutation_source make_mutation_source(populate_fn_ex populate, schema_ptr 
 
 void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partition_range_forwarding) {
     testlog.info(__PRETTY_FUNCTION__);
-    run_mutation_reader_tests_all([&populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
+    run_mutation_reader_tests_all([&populate] (schema_ptr s, const mutation_vector& m, gc_clock::time_point t) -> mutation_source {
         return make_mutation_source(populate, s, m, t);
     }, false); // FIXME: pass with_partition_range_forwarding after all natively reversing sources have fast-forwarding support
 }
@@ -1746,7 +1746,7 @@ void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partit
 void run_mutation_source_tests_reverse_basic(populate_fn_ex populate, bool with_partition_range_forwarding) {
     testlog.info(__PRETTY_FUNCTION__);
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    run_mutation_reader_tests_basic(semaphore, [&populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
+    run_mutation_reader_tests_basic(semaphore, [&populate] (schema_ptr s, const mutation_vector& m, gc_clock::time_point t) -> mutation_source {
         return make_mutation_source(populate, s, m, t);
     }, false); // FIXME: pass with_partition_range_forwarding after all natively reversing sources have fast-forwarding support
 }
@@ -1754,7 +1754,7 @@ void run_mutation_source_tests_reverse_basic(populate_fn_ex populate, bool with_
 void run_mutation_source_tests_reverse_reader_conversion(populate_fn_ex populate, bool with_partition_range_forwarding) {
     testlog.info(__PRETTY_FUNCTION__);
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    test_reader_conversions(semaphore, [&populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
+    test_reader_conversions(semaphore, [&populate] (schema_ptr s, const mutation_vector& m, gc_clock::time_point t) -> mutation_source {
         return make_mutation_source(populate, s, m, t);
     });
 }
@@ -1762,7 +1762,7 @@ void run_mutation_source_tests_reverse_reader_conversion(populate_fn_ex populate
 void run_mutation_source_tests_reverse_fragments_monotonic(populate_fn_ex populate, bool with_partition_range_forwarding) {
     testlog.info(__PRETTY_FUNCTION__);
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    test_mutation_reader_fragments_have_monotonic_positions(semaphore, [&populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
+    test_mutation_reader_fragments_have_monotonic_positions(semaphore, [&populate] (schema_ptr s, const mutation_vector& m, gc_clock::time_point t) -> mutation_source {
         return make_mutation_source(populate, s, m, t);
     });
 }
@@ -1770,14 +1770,14 @@ void run_mutation_source_tests_reverse_fragments_monotonic(populate_fn_ex popula
 void run_mutation_source_tests_reverse_read_back(populate_fn_ex populate, bool with_partition_range_forwarding) {
     testlog.info(__PRETTY_FUNCTION__);
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    test_all_data_is_read_back(semaphore, [&populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
+    test_all_data_is_read_back(semaphore, [&populate] (schema_ptr s, const mutation_vector& m, gc_clock::time_point t) -> mutation_source {
         return make_mutation_source(populate, s, m, t);
     });
 }
 
 struct mutation_sets {
-    std::vector<std::vector<mutation>> equal;
-    std::vector<std::vector<mutation>> unequal;
+    std::vector<mutation_vector> equal;
+    std::vector<mutation_vector> unequal;
     mutation_sets(){}
 };
 
@@ -1786,7 +1786,7 @@ static tombstone new_tombstone() {
 }
 
 static mutation_sets generate_mutation_sets() {
-    using mutations = std::vector<mutation>;
+    using mutations = mutation_vector;
     mutation_sets result;
 
     {
@@ -2385,9 +2385,9 @@ public:
         return tests::generate_partition_keys(n, _schema, _local_shard_only);
     }
 
-    std::vector<mutation> operator()(size_t n) {
+    mutation_vector operator()(size_t n) {
         auto keys = make_partition_keys(n);
-        std::vector<mutation> mutations;
+        mutation_vector mutations;
         for (auto&& dkey : keys) {
             auto m = operator()();
             mutations.emplace_back(_schema, std::move(dkey), std::move(m.partition()));
@@ -2406,7 +2406,7 @@ mutation random_mutation_generator::operator()() {
     return (*_impl)();
 }
 
-std::vector<mutation> random_mutation_generator::operator()(size_t n) {
+mutation_vector random_mutation_generator::operator()(size_t n) {
     return (*_impl)(n);
 }
 
@@ -2434,8 +2434,8 @@ void random_mutation_generator::set_key_cardinality(size_t n_keys) {
     _impl->set_key_cardinality(n_keys);
 }
 
-void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mutation>&,
-                                               schema_ptr, const std::vector<mutation>&)> fn) {
+void for_each_schema_change(std::function<void(schema_ptr, const mutation_vector&,
+                                               schema_ptr, const mutation_vector&)> fn) {
     auto map_of_int_to_int = map_type_impl::get_instance(int32_type, int32_type, true);
     auto map_of_int_to_bytes = map_type_impl::get_instance(int32_type, bytes_type, true);
     auto frozen_map_of_int_to_int = map_type_impl::get_instance(int32_type, int32_type, false);
@@ -2817,7 +2817,7 @@ mutation forwardable_reader_to_mutation(flat_mutation_reader_v2 r, const std::ve
     return std::move(*m);
 }
 
-std::vector<mutation> squash_mutations(std::vector<mutation> mutations) {
+mutation_vector squash_mutations(mutation_vector mutations) {
     if (mutations.empty()) {
         return {};
     }
@@ -2829,5 +2829,5 @@ std::vector<mutation> squash_mutations(std::vector<mutation> mutations) {
             it->second.apply(mut);
         }
     }
-    return boost::copy_range<std::vector<mutation>>(merged_muts | boost::adaptors::map_values);
+    return boost::copy_range<mutation_vector>(merged_muts | boost::adaptors::map_values);
 }

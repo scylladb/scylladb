@@ -11,8 +11,8 @@
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "test/lib/simple_schema.hh"
 
-using populate_fn = std::function<mutation_source(schema_ptr s, const std::vector<mutation>&)>;
-using populate_fn_ex = std::function<mutation_source(schema_ptr s, const std::vector<mutation>&, gc_clock::time_point)>;
+using populate_fn = std::function<mutation_source(schema_ptr s, const mutation_vector&)>;
+using populate_fn_ex = std::function<mutation_source(schema_ptr s, const mutation_vector&, gc_clock::time_point)>;
 
 // Must be run in a seastar thread
 void run_mutation_source_tests(populate_fn populate, bool with_partition_range_forwarding = true);
@@ -46,7 +46,7 @@ inline bool can_upgrade_schema(schema_ptr from, schema_ptr to) {
 // The returned vector has mutations with unique keys.
 // run_mutation_source_tests() might pass in multiple mutations for the same key.
 // Some tests need these deduplicated, which is what this method does.
-std::vector<mutation> squash_mutations(std::vector<mutation> mutations);
+mutation_vector squash_mutations(mutation_vector mutations);
 
 class random_mutation_generator {
     class impl;
@@ -67,7 +67,7 @@ public:
     ~random_mutation_generator();
     mutation operator()();
     // Generates n mutations sharing the same schema nad sorted by their decorated keys.
-    std::vector<mutation> operator()(size_t n);
+    mutation_vector operator()(size_t n);
     schema_ptr schema() const;
     clustering_key make_random_key();
     range_tombstone make_random_range_tombstone();
@@ -79,8 +79,8 @@ public:
 
 bytes make_blob(size_t blob_size);
 
-void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mutation>&,
-                                               schema_ptr, const std::vector<mutation>&)>);
+void for_each_schema_change(std::function<void(schema_ptr, const mutation_vector&,
+                                               schema_ptr, const mutation_vector&)>);
 
 void compare_readers(const schema&, flat_mutation_reader_v2 authority, flat_mutation_reader_v2 tested, bool exact = false);
 void compare_readers(const schema&, flat_mutation_reader_v2 authority, flat_mutation_reader_v2 tested, const std::vector<position_range>& fwd_ranges);

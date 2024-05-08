@@ -288,7 +288,7 @@ static future<> expire_item(service::storage_proxy& proxy,
         auto ck = clustering_key::from_exploded(exploded_ck);
         m.partition().clustered_row(*schema, ck).apply(tombstone(ts, gc_clock::now()));
     }
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     mutations.push_back(std::move(m));
     return proxy.mutate(std::move(mutations),
         db::consistency_level::LOCAL_QUORUM,

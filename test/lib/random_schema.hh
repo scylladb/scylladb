@@ -251,7 +251,7 @@ public:
 /// ignored if the schema has no clustering columns.
 /// Mutations are returned in ring order. Does not contain duplicate partitions.
 /// Futurized to avoid stalls.
-future<std::vector<mutation>> generate_random_mutations(
+future<mutation_vector> generate_random_mutations(
         uint32_t seed,
         tests::random_schema& random_schema,
         timestamp_generator ts_gen = default_timestamp_generator(),
@@ -260,7 +260,7 @@ future<std::vector<mutation>> generate_random_mutations(
         std::uniform_int_distribution<size_t> clustering_row_count_dist = std::uniform_int_distribution<size_t>(16, 128),
         std::uniform_int_distribution<size_t> range_tombstone_count_dist = std::uniform_int_distribution<size_t>(4, 16));
 
-future<std::vector<mutation>> generate_random_mutations(
+future<mutation_vector> generate_random_mutations(
         tests::random_schema& random_schema,
         timestamp_generator ts_gen = default_timestamp_generator(),
         expiry_generator exp_gen = no_expiry_expiry_generator(),
@@ -269,6 +269,6 @@ future<std::vector<mutation>> generate_random_mutations(
         std::uniform_int_distribution<size_t> range_tombstone_count_dist = std::uniform_int_distribution<size_t>(4, 16));
 
 /// Generate exactly partition_count partitions. See the more general overload above.
-future<std::vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count);
+future<mutation_vector> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count);
 
 } // namespace tests

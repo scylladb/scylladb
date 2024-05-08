@@ -461,7 +461,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
         auto keys = generate_keys(s, 7);
         auto ring = to_ring_positions(keys);
 
-        std::vector<std::vector<mutation>> mutations {
+        std::vector<mutation_vector> mutations {
             {
                 make_mutation_with_key(s, keys[0]),
                 make_mutation_with_key(s, keys[1]),
@@ -529,7 +529,7 @@ SEASTAR_THREAD_TEST_CASE(test_fast_forwarding_combining_reader_with_galloping) {
     auto ring = to_ring_positions(pkeys);
 
     auto make_n_mutations = [&] (auto ckeys, int n) {
-        std::vector<mutation> ret;
+        mutation_vector ret;
         for (int i = 0; i < n; i++) {
             ret.push_back(make_partition_with_clustering_rows(s, pkeys[i], ckeys));
         }
@@ -581,7 +581,7 @@ SEASTAR_TEST_CASE(test_sm_fast_forwarding_combining_reader) {
             return m;
         };
 
-        std::vector<std::vector<mutation>> readers_mutations{
+        std::vector<mutation_vector> readers_mutations{
             {make_mutation(0), make_mutation(1), make_mutation(2), make_mutation(3)},
             {make_mutation(0)},
             {make_mutation(2)},
@@ -627,7 +627,7 @@ SEASTAR_THREAD_TEST_CASE(test_sm_fast_forwarding_combining_reader_with_galloping
     auto ring = to_ring_positions(pkeys);
 
     auto make_n_mutations = [&] (auto ckeys, int n) {
-        std::vector<mutation> ret;
+        mutation_vector ret;
         for (int i = 0; i < n; i++) {
             ret.push_back(make_partition_with_clustering_rows(s, pkeys[i], ckeys));
         }
@@ -728,7 +728,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
     });
 
     auto make_sstable_mutations = [&] (sstring value_prefix, unsigned ckey_index, bool static_row, std::vector<unsigned> pkey_indexes) {
-        std::vector<mutation> muts;
+        mutation_vector muts;
 
         for (auto pkey_index : pkey_indexes) {
             muts.emplace_back(s.schema(), pkeys[pkey_index]);
@@ -743,11 +743,11 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
         return muts;
     };
 
-    std::vector<mutation> sstable_level_0_0_mutations = make_sstable_mutations("level_0_0", 0, true,  {0, 1,       4   });
-    std::vector<mutation> sstable_level_1_0_mutations = make_sstable_mutations("level_1_0", 1, false, {0, 1            });
-    std::vector<mutation> sstable_level_1_1_mutations = make_sstable_mutations("level_1_1", 1, false, {      2, 3      });
-    std::vector<mutation> sstable_level_2_0_mutations = make_sstable_mutations("level_2_0", 2, false, {   1,       4   });
-    std::vector<mutation> sstable_level_2_1_mutations = make_sstable_mutations("level_2_1", 2, false, {               5});
+    mutation_vector sstable_level_0_0_mutations = make_sstable_mutations("level_0_0", 0, true,  {0, 1,       4   });
+    mutation_vector sstable_level_1_0_mutations = make_sstable_mutations("level_1_0", 1, false, {0, 1            });
+    mutation_vector sstable_level_1_1_mutations = make_sstable_mutations("level_1_1", 1, false, {      2, 3      });
+    mutation_vector sstable_level_2_0_mutations = make_sstable_mutations("level_2_0", 2, false, {   1,       4   });
+    mutation_vector sstable_level_2_1_mutations = make_sstable_mutations("level_2_1", 2, false, {               5});
 
     const mutation expexted_mutation_0 = sstable_level_0_0_mutations[0] + sstable_level_1_0_mutations[0];
     const mutation expexted_mutation_1 = sstable_level_0_0_mutations[1] + sstable_level_1_0_mutations[1] + sstable_level_2_0_mutations[0];
@@ -835,7 +835,7 @@ class dummy_incremental_selector : public reader_selector {
     schema_ptr _schema;
     reader_permit _permit;
     dht::ring_position _position;
-    std::vector<std::vector<mutation>> _readers_mutations;
+    std::vector<mutation_vector> _readers_mutations;
     streamed_mutation::forwarding _fwd;
     dht::partition_range _pr;
 
@@ -853,7 +853,7 @@ public:
     //  of its first mutation.
     dummy_incremental_selector(schema_ptr s,
             reader_permit permit,
-            std::vector<std::vector<mutation>> reader_mutations,
+            std::vector<mutation_vector> reader_mutations,
             dht::partition_range pr = query::full_partition_range,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
         : reader_selector(s, dht::ring_position_view::min())
@@ -903,7 +903,7 @@ SEASTAR_TEST_CASE(reader_selector_gap_between_readers_test) {
         auto mut2a = make_mutation_with_key(s, pkeys[1]);
         auto mut2b = make_mutation_with_key(s, pkeys[1]);
         auto mut3 = make_mutation_with_key(s, pkeys[2]);
-        std::vector<std::vector<mutation>> readers_mutations{
+        std::vector<mutation_vector> readers_mutations{
             {mut1},
             {mut2a},
             {mut2b},
@@ -956,7 +956,7 @@ SEASTAR_TEST_CASE(reader_selector_overlapping_readers_test) {
         s.add_row(mut4a, s.make_ckey(1), "a");
         s.add_row(mut4b, s.make_ckey(2), "b");
 
-        std::vector<std::vector<mutation>> readers_mutations{
+        std::vector<mutation_vector> readers_mutations{
             {mut1, mut2a, mut3a},
             {mut2b, mut3b},
             {mut3c, mut4a},
@@ -996,7 +996,7 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
         auto mut3d = make_mutation_with_key(s, pkeys[2]);
         auto mut4b = make_mutation_with_key(s, pkeys[3]);
         auto mut5b = make_mutation_with_key(s, pkeys[4]);
-        std::vector<std::vector<mutation>> readers_mutations{
+        std::vector<mutation_vector> readers_mutations{
             {mut1a, mut2a, mut3a},
             {mut1b, mut4b, mut5b},
             {mut2c},
@@ -1036,11 +1036,11 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
 
         const int n_readers = 10;
         auto keys = gen.make_partition_keys(3);
-        std::vector<mutation> combined;
+        mutation_vector combined;
         std::list<dht::partition_range> reader_ranges;
         std::vector<flat_mutation_reader_v2> readers;
         for (int i = 0; i < n_readers; ++i) {
-            std::vector<mutation> muts;
+            mutation_vector muts;
             for (auto&& key : keys) {
                 mutation m = compacted(gen());
                 muts.push_back(mutation(s, key, std::move(m.partition())));
@@ -1203,7 +1203,7 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
         // Creates a mutation source which combines N mutation sources with mutation fragments spread
         // among them in a round robin fashion.
         auto make_combined_populator = [&semaphore] (int n_sources) mutable {
-            return [=, &semaphore] (schema_ptr s, const std::vector<mutation>& muts) mutable {
+            return [=, &semaphore] (schema_ptr s, const mutation_vector& muts) mutable {
                 std::vector<lw_shared_ptr<replica::memtable>> memtables;
                 for (int i = 0; i < n_sources; ++i) {
                     memtables.push_back(make_lw_shared<replica::memtable>(s));
@@ -1239,9 +1239,9 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
     }
 
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
-        auto populate = [&env] (schema_ptr s, const std::vector<mutation>& mutations) {
+        auto populate = [&env] (schema_ptr s, const mutation_vector& mutations) {
             const auto remote_shard = (this_shard_id() + 1) % smp::count;
-            auto frozen_mutations = ranges::to<std::vector<frozen_mutation>>(
+            auto frozen_mutations = ranges::to<frozen_mutation_vector>(
                 mutations
                 | boost::adaptors::transformed([] (const mutation& m) { return freeze(m); }));
             auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &frozen_mutations] {
@@ -2337,12 +2337,12 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                 });
         auto close_reference_reader = deferred_close(reference_reader);
 
-        std::vector<mutation> reference_muts;
+        mutation_vector reference_muts;
         while (auto mut_opt = read_mutation_from_flat_mutation_reader(reference_reader).get()) {
             reference_muts.push_back(std::move(*mut_opt));
         }
 
-        std::vector<mutation> tested_muts;
+        mutation_vector tested_muts;
         while (auto mut_opt = read_mutation_from_flat_mutation_reader(tested_reader).get()) {
             tested_muts.push_back(std::move(*mut_opt));
         }
@@ -2367,7 +2367,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
     // Simultaneous read and write
     {
-        auto read_all = [] (flat_mutation_reader_v2& reader, std::vector<mutation>& muts) {
+        auto read_all = [] (flat_mutation_reader_v2& reader, mutation_vector& muts) {
             return async([&reader, &muts] {
                 auto close_reader = deferred_close(reader);
                 while (auto mut_opt = read_mutation_from_flat_mutation_reader(reader).get()) {
@@ -2376,7 +2376,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
             });
         };
 
-        auto write_all = [&semaphore] (queue_reader_handle_v2& handle, const std::vector<mutation>& muts) {
+        auto write_all = [&semaphore] (queue_reader_handle_v2& handle, const mutation_vector& muts) {
             return async([&] {
                 auto reader = make_flat_mutation_reader_from_mutations_v2(muts.front().schema(), semaphore.make_permit(), muts);
                 auto close_reader = deferred_close(reader);
@@ -2387,7 +2387,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
             });
         };
 
-        auto actual_muts = std::vector<mutation>{};
+        auto actual_muts = mutation_vector{};
         actual_muts.reserve(20);
 
         auto p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
@@ -2559,7 +2559,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
 SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
     auto make_populate = [] (bool single_fragment_buffer) {
-        return [single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) mutable {
+        return [single_fragment_buffer] (schema_ptr s, const mutation_vector& mutations, gc_clock::time_point query_time) mutable {
             auto mt = make_memtable(s, mutations);
             return mutation_source([=] (
                     schema_ptr s,
@@ -2683,7 +2683,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_is_consistent_with_compaction) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_auto_paused_evictable_reader_is_mutation_source) {
-    auto make_populate = [] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) {
+    auto make_populate = [] (schema_ptr s, const mutation_vector& mutations, gc_clock::time_point query_time) {
         auto mt = make_memtable(s, mutations);
         return mutation_source([=] (
                 schema_ptr s,
@@ -2760,7 +2760,7 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
         }
     };
 
-    auto make_populate = [] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) {
+    auto make_populate = [] (schema_ptr s, const mutation_vector& mutations, gc_clock::time_point query_time) {
         auto mt = make_memtable(s, mutations);
         return mutation_source([=] (
                 schema_ptr s,
@@ -3287,7 +3287,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_drop_flags) {
         simple_schema& s;
         reader_permit permit;
         std::deque<mutation_fragment_v2> frags;
-        std::vector<mutation> muts;
+        mutation_vector muts;
         std::optional<mutation_rebuilder_v2> mut_rebuilder;
         size_t size = 0;
         std::optional<position_in_partition_view> last_pos;
@@ -4097,10 +4097,10 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
 
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
-    auto populate = [&semaphore] (schema_ptr s, const std::vector<mutation>& muts) {
+    auto populate = [&semaphore] (schema_ptr s, const mutation_vector& muts) {
         std::map<dht::decorated_key, std::vector<mutation_bounds>, dht::decorated_key::less_comparator>
             good_mutations{dht::decorated_key::less_comparator(s)};
-        std::vector<mutation> bad_mutations;
+        mutation_vector bad_mutations;
         for (auto& m: muts) {
             auto& dk = m.decorated_key();
 
@@ -4230,7 +4230,7 @@ public:
 };
 
 SEASTAR_THREAD_TEST_CASE(test_generating_reader_v1) {
-    auto populator_v1 = [] (schema_ptr s, const std::vector<mutation>& muts) {
+    auto populator_v1 = [] (schema_ptr s, const mutation_vector& muts) {
         return mutation_source([muts] (
                 schema_ptr schema,
                 reader_permit permit,
@@ -4252,7 +4252,7 @@ SEASTAR_THREAD_TEST_CASE(test_generating_reader_v1) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_generating_reader_v2) {
-    auto populator_v2 = [] (schema_ptr s, const std::vector<mutation>& muts) {
+    auto populator_v2 = [] (schema_ptr s, const mutation_vector& muts) {
         return mutation_source([muts] (
                 schema_ptr schema,
                 reader_permit permit,

@@ -46,9 +46,9 @@ const sstring& drop_keyspace_statement::keyspace() const
     return _keyspace;
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, mutation_vector, cql3::cql_warnings_vec>>
 drop_keyspace_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
-    std::vector<mutation> m;
+    mutation_vector m;
     ::shared_ptr<cql_transport::event::schema_change> ret;
 
     try {

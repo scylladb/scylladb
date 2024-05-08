@@ -23,11 +23,10 @@
 #include "utils/serialized_action.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "mutation/mutation_fwd.hh"
 
 #include <vector>
 
-class canonical_mutation;
-class frozen_mutation;
 namespace cql3 {
 namespace functions { class user_function; class user_aggregate; }
 }
@@ -117,7 +116,7 @@ public:
 
     // Merge mutations received from src.
     // Keep mutations alive around whole async operation.
-    future<> merge_schema_from(netw::msg_addr src, const std::vector<canonical_mutation>& mutations);
+    future<> merge_schema_from(netw::msg_addr src, const canonical_mutation_vector& mutations);
     // Incremented each time the function above is called. Needed by tests.
     size_t canonical_mutation_merge_count = 0;
 
@@ -136,7 +135,7 @@ public:
 
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
-    future<> announce(std::vector<mutation> schema, group0_guard, std::string_view description);
+    future<> announce(mutation_vector schema, group0_guard, std::string_view description);
 
     void passive_announce(table_schema_version version);
 
@@ -156,7 +155,7 @@ private:
     void init_messaging_service();
     future<> uninit_messaging_service();
 
-    future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
+    future<> push_schema_mutation(const gms::inet_address& endpoint, const mutation_vector& schema);
 
     future<> passive_announce();
 
@@ -164,8 +163,8 @@ private:
 
     future<> maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint);
 
-    future<> announce_with_raft(std::vector<mutation> schema, group0_guard, std::string_view description);
-    future<> announce_without_raft(std::vector<mutation> schema, group0_guard);
+    future<> announce_with_raft(mutation_vector schema, group0_guard, std::string_view description);
+    future<> announce_without_raft(mutation_vector schema, group0_guard);
 
 public:
     future<> maybe_sync(const schema_ptr& s, netw::msg_addr endpoint);
@@ -195,46 +194,46 @@ public:
 
 future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id, table_schema_version v);
 
-std::vector<mutation> prepare_keyspace_update_announcement(replica::database& db, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type ts);
+mutation_vector prepare_keyspace_update_announcement(replica::database& db, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type ts);
 
-std::vector<mutation> prepare_new_keyspace_announcement(replica::database& db, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp);
+mutation_vector prepare_new_keyspace_announcement(replica::database& db, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp);
 
 // The timestamp parameter can be used to ensure that all nodes update their internal tables' schemas
 // with identical timestamps, which can prevent an undeeded schema exchange
-future<std::vector<mutation>> prepare_column_family_update_announcement(storage_proxy& sp,
+future<mutation_vector> prepare_column_family_update_announcement(storage_proxy& sp,
         schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, api::timestamp_type ts);
 
-future<std::vector<mutation>> prepare_new_column_family_announcement(storage_proxy& sp, schema_ptr cfm, api::timestamp_type timestamp);
+future<mutation_vector> prepare_new_column_family_announcement(storage_proxy& sp, schema_ptr cfm, api::timestamp_type timestamp);
 // The ksm parameter can describe a keyspace that hasn't been created yet.
 // This function allows announcing a new keyspace together with its tables at once.
-future<> prepare_new_column_family_announcement(std::vector<mutation>& mutations,
+future<> prepare_new_column_family_announcement(mutation_vector& mutations,
         storage_proxy& sp, const keyspace_metadata& ksm, schema_ptr cfm, api::timestamp_type timestamp);
 
-future<std::vector<mutation>> prepare_new_type_announcement(storage_proxy& sp, user_type new_type, api::timestamp_type ts);
+future<mutation_vector> prepare_new_type_announcement(storage_proxy& sp, user_type new_type, api::timestamp_type ts);
 
-future<std::vector<mutation>> prepare_new_function_announcement(storage_proxy& sp, shared_ptr<cql3::functions::user_function> func, api::timestamp_type ts);
+future<mutation_vector> prepare_new_function_announcement(storage_proxy& sp, shared_ptr<cql3::functions::user_function> func, api::timestamp_type ts);
 
-future<std::vector<mutation>> prepare_new_aggregate_announcement(storage_proxy& sp, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts);
+future<mutation_vector> prepare_new_aggregate_announcement(storage_proxy& sp, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts);
 
-future<std::vector<mutation>> prepare_function_drop_announcement(storage_proxy& sp, shared_ptr<cql3::functions::user_function> func, api::timestamp_type ts);
+future<mutation_vector> prepare_function_drop_announcement(storage_proxy& sp, shared_ptr<cql3::functions::user_function> func, api::timestamp_type ts);
 
-future<std::vector<mutation>> prepare_aggregate_drop_announcement(storage_proxy& sp, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts);
+future<mutation_vector> prepare_aggregate_drop_announcement(storage_proxy& sp, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts);
 
-future<std::vector<mutation>> prepare_update_type_announcement(storage_proxy& sp, user_type updated_type, api::timestamp_type ts);
+future<mutation_vector> prepare_update_type_announcement(storage_proxy& sp, user_type updated_type, api::timestamp_type ts);
 
-future<std::vector<mutation>> prepare_keyspace_drop_announcement(replica::database& db, const sstring& ks_name, api::timestamp_type ts);
+future<mutation_vector> prepare_keyspace_drop_announcement(replica::database& db, const sstring& ks_name, api::timestamp_type ts);
 
 class drop_views_tag;
 using drop_views = bool_class<drop_views_tag>;
-future<std::vector<mutation>> prepare_column_family_drop_announcement(storage_proxy& sp,
+future<mutation_vector> prepare_column_family_drop_announcement(storage_proxy& sp,
         const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts, drop_views drop_views = drop_views::no);
 
-future<std::vector<mutation>> prepare_type_drop_announcement(storage_proxy& sp, user_type dropped_type, api::timestamp_type ts);
+future<mutation_vector> prepare_type_drop_announcement(storage_proxy& sp, user_type dropped_type, api::timestamp_type ts);
 
-future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts);
+future<mutation_vector> prepare_new_view_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts);
 
-future<std::vector<mutation>> prepare_view_update_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts);
+future<mutation_vector> prepare_view_update_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts);
 
-future<std::vector<mutation>> prepare_view_drop_announcement(storage_proxy& sp, const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts);
+future<mutation_vector> prepare_view_drop_announcement(storage_proxy& sp, const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts);
 
 }

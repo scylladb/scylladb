@@ -198,7 +198,7 @@ public:
     // A single mutation object for lightweight transactions, which can only span one partition, or a vector
     // of mutations, one per partition key, for statements which affect multiple partition keys,
     // e.g. DELETE FROM table WHERE pk  IN (1, 2, 3).
-    std::vector<mutation> apply_updates(
+    mutation_vector apply_updates(
             const std::vector<dht::partition_range>& keys,
             const std::vector<query::clustering_range>& ranges,
             const update_parameters& params,
@@ -250,7 +250,7 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const;
+    future<mutation_vector> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 

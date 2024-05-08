@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "mutation/mutation_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "replica/database_fwd.hh"
 #include "bytes_ostream.hh"

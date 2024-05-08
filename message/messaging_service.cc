@@ -1220,32 +1220,32 @@ future<gms::gossip_get_endpoint_states_response> messaging_service::send_gossip_
     return send_message_timeout<future<gms::gossip_get_endpoint_states_response>>(this, messaging_verb::GOSSIP_GET_ENDPOINT_STATES, std::move(id), std::move(timeout), std::move(request));
 }
 
-void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,
-            rpc::optional<std::vector<canonical_mutation>> cm)>&& func) {
+void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, frozen_mutation_vector fm,
+            rpc::optional<canonical_mutation_vector> cm)>&& func) {
     register_handler(this, netw::messaging_verb::DEFINITIONS_UPDATE, std::move(func));
 }
 future<> messaging_service::unregister_definitions_update() {
     return unregister_handler(netw::messaging_verb::DEFINITIONS_UPDATE);
 }
-future<> messaging_service::send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm, std::vector<canonical_mutation> cm) {
+future<> messaging_service::send_definitions_update(msg_addr id, frozen_mutation_vector fm, canonical_mutation_vector cm) {
     return send_message_oneway(this, messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm), std::move(cm));
 }
 
-void messaging_service::register_migration_request(std::function<future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>>
+void messaging_service::register_migration_request(std::function<future<rpc::tuple<frozen_mutation_vector, canonical_mutation_vector>>
         (const rpc::client_info&, rpc::optional<schema_pull_options>)>&& func) {
     register_handler(this, netw::messaging_verb::MIGRATION_REQUEST, std::move(func));
 }
 future<> messaging_service::unregister_migration_request() {
     return unregister_handler(netw::messaging_verb::MIGRATION_REQUEST);
 }
-future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> messaging_service::send_migration_request(msg_addr id,
+future<rpc::tuple<frozen_mutation_vector, rpc::optional<canonical_mutation_vector>>> messaging_service::send_migration_request(msg_addr id,
         schema_pull_options options) {
-    return send_message<future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>>>(this, messaging_verb::MIGRATION_REQUEST,
+    return send_message<future<rpc::tuple<frozen_mutation_vector, rpc::optional<canonical_mutation_vector>>>>(this, messaging_verb::MIGRATION_REQUEST,
             std::move(id), options);
 }
-future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> messaging_service::send_migration_request(msg_addr id,
+future<rpc::tuple<frozen_mutation_vector, rpc::optional<canonical_mutation_vector>>> messaging_service::send_migration_request(msg_addr id,
         abort_source& as, schema_pull_options options) {
-    return send_message_cancellable<future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>>>(this, messaging_verb::MIGRATION_REQUEST,
+    return send_message_cancellable<future<rpc::tuple<frozen_mutation_vector, rpc::optional<canonical_mutation_vector>>>>(this, messaging_verb::MIGRATION_REQUEST,
             std::move(id), as, options);
 }
 

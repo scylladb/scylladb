@@ -188,7 +188,7 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
 
     assert(mt->occupancy().used_space() == 0);
 
-    std::vector<mutation> muts;
+    mutation_vector muts;
     for (size_t i = 0; i < settings.partition_count; ++i) {
         muts.emplace_back(make_mutation(s, settings));
         mt->apply(muts.back());

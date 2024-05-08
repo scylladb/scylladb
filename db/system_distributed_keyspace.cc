@@ -256,7 +256,7 @@ future<> system_distributed_keyspace::start() {
 
         auto group0_guard = co_await _mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
-        std::vector<mutation> mutations;
+        mutation_vector mutations;
         sstring description;
 
         auto sd_ksm = keyspace_metadata::new_keyspace(
@@ -568,14 +568,14 @@ system_distributed_keyspace::read_cdc_generation(utils::UUID id) {
     co_return std::optional{cdc::topology_description(std::move(entries))};
 }
 
-static future<std::vector<mutation>> get_cdc_streams_descriptions_v2_mutation(
+static future<mutation_vector> get_cdc_streams_descriptions_v2_mutation(
         const replica::database& db,
         db_clock::time_point time,
         const cdc::topology_description& desc) {
     auto s = db.find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC_V2);
 
     auto ts = api::new_timestamp();
-    std::vector<mutation> res;
+    mutation_vector res;
     res.emplace_back(s, partition_key::from_singular(*s, time));
     size_t size_estimate = 0;
     for (auto& e : desc.entries()) {

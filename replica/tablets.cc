@@ -194,7 +194,7 @@ tablet_replica_set deserialize_replica_set(cql3::untyped_result_set_row::view_ty
 
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {
     tablet_logger.trace("Saving tablet metadata: {}", tm);
-    std::vector<mutation> muts;
+    mutation_vector muts;
     muts.reserve(tm.all_tables().size());
     for (auto&& [id, tablets] : tm.all_tables()) {
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
@@ -337,10 +337,10 @@ future<std::unordered_set<locator::host_id>> read_required_hosts(cql3::query_pro
     co_return std::move(hosts);
 }
 
-future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<replica::database>& db) {
+future<canonical_mutation_vector> read_tablet_mutations(seastar::sharded<replica::database>& db) {
     auto s = db::system_keyspace::tablets();
     auto rs = co_await db::system_keyspace::query_mutations(db, db::system_keyspace::NAME, db::system_keyspace::TABLETS);
-    std::vector<canonical_mutation> result;
+    canonical_mutation_vector result;
     result.reserve(rs->partitions().size());
     for (auto& p: rs->partitions()) {
         result.emplace_back(co_await make_canonical_mutation_gently(co_await unfreeze_gently(p.mut(), s)));

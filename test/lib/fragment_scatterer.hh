@@ -74,8 +74,8 @@ public:
         return stop_iteration::no;
     }
 
-    std::vector<mutation> consume_end_of_stream() {
-        std::vector<mutation> muts;
+    mutation_vector consume_end_of_stream() {
+        mutation_vector muts;
         muts.reserve(_mutations.size());
         for (auto& mut_builder : _mutations) {
             muts.emplace_back(*mut_builder.consume_end_of_stream());

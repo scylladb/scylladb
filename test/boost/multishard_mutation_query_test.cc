@@ -52,7 +52,7 @@ static cql_test_config cql_config_with_extensions() {
 struct generated_table {
     schema_ptr schema;
     std::vector<dht::decorated_key> keys;
-    std::vector<frozen_mutation> compacted_frozen_mutations;
+    frozen_mutation_vector compacted_frozen_mutations;
 };
 
 class random_schema_specification : public tests::random_schema_specification {
@@ -108,7 +108,7 @@ static generated_table create_test_table(
     auto schema = random_schema.schema();
 
     std::vector<dht::decorated_key> keys;
-    std::vector<frozen_mutation> compacted_frozen_mutations;
+    frozen_mutation_vector compacted_frozen_mutations;
     keys.reserve(mutations.size());
     compacted_frozen_mutations.reserve(mutations.size());
     {
@@ -220,10 +220,10 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
     }, cql_config_with_extensions()).get();
 }
 
-static std::vector<mutation> read_all_partitions_one_by_one(distributed<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys,
+static mutation_vector read_all_partitions_one_by_one(distributed<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys,
         const query::partition_slice& slice) {
     const auto& sharder = s->get_sharder();
-    std::vector<mutation> results;
+    mutation_vector results;
     results.reserve(pkeys.size());
 
     for (const auto& pkey : pkeys) {
@@ -244,7 +244,7 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<replica:
     return results;
 }
 
-static std::vector<mutation> read_all_partitions_one_by_one(distributed<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
+static mutation_vector read_all_partitions_one_by_one(distributed<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
     return read_all_partitions_one_by_one(db, s, pkeys, s->full_slice());
 }
 
@@ -353,13 +353,13 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
 
 class mutation_result_builder {
 public:
-    using end_result_type = std::vector<mutation>;
+    using end_result_type = mutation_vector;
 
 private:
     schema_ptr _s;
     const query::partition_slice& _slice;
     uint64_t _page_size = 0;
-    std::vector<mutation> _results;
+    mutation_vector _results;
     std::optional<dht::decorated_key> _last_pkey;
     std::optional<clustering_key> _last_ckey;
     uint64_t _last_pkey_rows = 0;
@@ -502,20 +502,20 @@ public:
     }
 };
 
-static std::pair<std::vector<mutation>, size_t>
+static std::pair<mutation_vector, size_t>
 read_partitions_with_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     return read_partitions_with_generic_paged_scan<mutation_result_builder>(db, std::move(s), page_size, max_size, is_stateful, range, slice, page_hook);
 }
 
-static std::pair<std::vector<mutation>, size_t>
+static std::pair<mutation_vector, size_t>
 read_all_partitions_with_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, stateful_query is_stateful,
         const std::function<void(size_t)>& page_hook) {
     return read_partitions_with_paged_scan(db, s, page_size, std::numeric_limits<uint64_t>::max(), is_stateful, query::full_partition_range,
             s->full_slice(), page_hook);
 }
 
-void check_results_are_equal(std::vector<mutation>& results1, std::vector<mutation>& results2) {
+void check_results_are_equal(mutation_vector& results1, mutation_vector& results2) {
     tests::require_equal(results1.size(), results2.size());
 
     auto mut_less = [] (const mutation& a, const mutation& b) {
@@ -928,7 +928,7 @@ static interval<int> generate_range(RandomEngine& rnd_engine, int start, int end
 
 template <typename RandomEngine>
 static query::clustering_row_ranges
-generate_clustering_ranges(RandomEngine& rnd_engine, const schema& schema, const std::vector<mutation>& mutations) {
+generate_clustering_ranges(RandomEngine& rnd_engine, const schema& schema, const mutation_vector& mutations) {
     if (!schema.clustering_key_size()) {
         return {};
     }
@@ -966,8 +966,8 @@ generate_clustering_ranges(RandomEngine& rnd_engine, const schema& schema, const
     return clustering_key_ranges;
 }
 
-static std::vector<mutation>
-slice_partitions(const schema& schema, const std::vector<mutation>& partitions,
+static mutation_vector
+slice_partitions(const schema& schema, const mutation_vector& partitions,
         const interval<int>& partition_index_range, const query::partition_slice& slice) {
     const auto& sb = partition_index_range.start();
     const auto& eb = partition_index_range.end();
@@ -976,7 +976,7 @@ slice_partitions(const schema& schema, const std::vector<mutation>& partitions,
 
     const auto& row_ranges = slice.default_row_ranges();
 
-    std::vector<mutation> sliced_partitions;
+    mutation_vector sliced_partitions;
     for (;it != end; ++it) {
         sliced_partitions.push_back(it->sliced(row_ranges));
         thread::maybe_yield();
@@ -985,7 +985,7 @@ slice_partitions(const schema& schema, const std::vector<mutation>& partitions,
 }
 
 static void
-validate_result_size(size_t i, schema_ptr schema, const std::vector<mutation>& results, const std::vector<mutation>& expected_partitions) {
+validate_result_size(size_t i, schema_ptr schema, const mutation_vector& results, const mutation_vector& expected_partitions) {
     if (results.size() == expected_partitions.size()) {
         return;
     }
@@ -1024,11 +1024,11 @@ struct fuzzy_test_config {
 
 static void
 run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<replica::database>& db, schema_ptr schema,
-        const std::vector<frozen_mutation>& frozen_mutations) {
+        const frozen_mutation_vector& frozen_mutations) {
     const auto seed = cfg.seed + (i + 1) * this_shard_id();
     auto rnd_engine = std::mt19937(seed);
 
-    std::vector<mutation> mutations;
+    mutation_vector mutations;
     for (const auto& mut : frozen_mutations) {
         mutations.emplace_back(mut.unfreeze(schema));
         thread::maybe_yield();
@@ -1099,7 +1099,7 @@ future<> run_concurrently(size_t count, size_t concurrency, noncopyable_function
 
 static future<>
 run_fuzzy_test_workload(fuzzy_test_config cfg, distributed<replica::database>& db, schema_ptr schema,
-        const std::vector<frozen_mutation>& frozen_mutations) {
+        const frozen_mutation_vector& frozen_mutations) {
     return run_concurrently(cfg.scans, cfg.concurrency, [cfg, &db, schema = std::move(schema), &frozen_mutations] (size_t i) {
         return seastar::async([i, cfg, &db, schema, &frozen_mutations] () mutable {
             run_fuzzy_test_scan(i, cfg, db, std::move(schema), frozen_mutations);

@@ -918,7 +918,7 @@ query_processor::execute_internal(
     }
 }
 
-future<std::vector<mutation>> query_processor::get_mutations_internal(
+future<mutation_vector> query_processor::get_mutations_internal(
         const sstring query_string,
         service::query_state& query_state,
         api::timestamp_type timestamp,
@@ -1046,7 +1046,7 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
 
 future<std::string>
 query_processor::execute_thrift_schema_command(
-        std::function<future<std::vector<mutation>>(data_dictionary::database, api::timestamp_type)> prepare_schema_mutations,
+        std::function<future<mutation_vector>(data_dictionary::database, api::timestamp_type)> prepare_schema_mutations,
         std::string_view description) {
     assert(this_shard_id() == 0);
 

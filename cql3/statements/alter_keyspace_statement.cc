@@ -81,7 +81,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 #endif
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, mutation_vector, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     try {
         auto old_ksm = qp.db().find_keyspace(_name).metadata();
@@ -96,9 +96,9 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 event::schema_change::target_type::KEYSPACE,
                 keyspace());
 
-        return make_ready_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>()));
+        return make_ready_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, mutation_vector, cql3::cql_warnings_vec>>(std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>()));
     } catch (data_dictionary::no_such_keyspace& e) {
-        return make_exception_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(exceptions::invalid_request_exception("Unknown keyspace " + _name));
+        return make_exception_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, mutation_vector, cql3::cql_warnings_vec>>(exceptions::invalid_request_exception("Unknown keyspace " + _name));
     }
 }
 
