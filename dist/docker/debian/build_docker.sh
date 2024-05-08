@@ -69,9 +69,6 @@ packages=(
     "build/dist/$config/debian/$product-conf_$version-$release-1_$arch.deb"
     "build/dist/$config/debian/$product-kernel-conf_$version-$release-1_$arch.deb"
     "build/dist/$config/debian/$product-node-exporter_$version-$release-1_$arch.deb"
-    "tools/java/build/debian/$product-tools_$version-$release-1_all.deb"
-    "tools/java/build/debian/$product-tools-core_$version-$release-1_all.deb"
-    "tools/jmx/build/debian/$product-jmx_$version-$release-1_all.deb"
     "tools/cqlsh/build/debian/$product-cqlsh_$version-$release-1_all.deb"
     "tools/python3/build/debian/$product-python3_$version-$release-1_$arch.deb"
 )
@@ -98,7 +95,7 @@ run apt-get -y upgrade
 run apt-get -y --no-install-suggests install dialog apt-utils
 run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
 run bash -ec "rm -rf /etc/rsyslog.conf"
-run apt-get -y --no-install-suggests install hostname supervisor openjdk-11-jre-headless python2 python3 python3-yaml curl rsyslog sudo
+run apt-get -y --no-install-suggests install hostname supervisor python3 python3-yaml curl rsyslog sudo
 run bash -ec "echo LANG=C.UTF-8 > /etc/default/locale"
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
@@ -111,7 +108,6 @@ run sed -i -e 's/^SCYLLA_ARGS=".*"$/SCYLLA_ARGS="--log-to-syslog 0 --log-to-stdo
 run mkdir -p /opt/scylladb/supervisor
 run touch /opt/scylladb/SCYLLA-CONTAINER-FILE
 bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-server.sh
-bcp dist/common/supervisor/scylla-jmx.sh /opt/scylladb/supervisor/scylla-jmx.sh
 bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
 bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.sh
 
