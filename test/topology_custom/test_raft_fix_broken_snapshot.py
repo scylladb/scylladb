@@ -10,7 +10,7 @@ import logging
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver, restart, enter_recovery_state, \
+from test.topology.util import reconnect_driver, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
         wait_for_token_ring_and_group0_consistency
 from test.topology.conftest import skip_mode
@@ -43,7 +43,7 @@ async def test_raft_fix_broken_snapshot(manager: ManagerClient):
     # but with error injection that causes the snapshot to have index 0 (as in ScyllaDB 5.2).
     logger.info(f"Entering recovery state on {srv}")
     await enter_recovery_state(cql, h)
-    await restart(manager, srv)
+    await manager.server_restart(srv.server_id)
     cql = await reconnect_driver(manager)
     await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
 
@@ -67,7 +67,7 @@ async def test_raft_fix_broken_snapshot(manager: ManagerClient):
     await cql.run_async("create table ks.t2 (pk int primary key)")
 
     # Restarting the server should trigger snapshot creation.
-    await restart(manager, srv)
+    await manager.server_restart(srv.server_id)
     cql = await reconnect_driver(manager)
     await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
 

@@ -122,14 +122,6 @@ async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, dea
         await wait_for(token_ring_matches, deadline, period=.5)
 
 
-async def restart(manager: ManagerClient, server: ServerInfo) -> None:
-    logging.info(f"Stopping {server} gracefully")
-    await manager.server_stop_gracefully(server.server_id)
-    logging.info(f"Restarting {server}")
-    await manager.server_start(server.server_id)
-    logging.info(f"{server} restarted")
-
-
 async def wait_for_upgrade_state(state: str, cql: Session, host: Host, deadline: float) -> None:
     """Wait until group 0 upgrade state reaches `state` on `host`, using `cql` to query it.  Warning: if the
        upgrade procedure may progress beyond `state` this function may not notice when it entered `state` and
