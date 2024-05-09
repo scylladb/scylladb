@@ -1021,6 +1021,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dbcfg.commitlog_scheduling_group = make_sched_group("commitlog", "clog", 1000);
             dbcfg.available_memory = memory::stats().total_memory();
 
+            // Make sure to initialize the scheduling group keys at a point where we are sure
+            // that nobody will be creating scheduling groups (e.g. service levels controller can do that).
+            // Creating a scheduling group and scheduling group key concurrently
+            // doesn't work properly. See: https://github.com/scylladb/seastar/issues/2231
+            scheduling_group_key_config maintenance_cql_sg_stats_cfg =
+            make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::yes);
+            auto maintenance_cql_sg_stats_key = scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get();
+            scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::no);
+            auto cql_sg_stats_key = scheduling_group_key_create(cql_sg_stats_cfg).get();
+
             supervisor::notify("starting compaction_manager");
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
             // we need the getter since updateable_value is not shard-safe (#7316)
@@ -1720,9 +1730,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes).get();
 
-            scheduling_group_key_config maintenance_cql_sg_stats_cfg =
-            make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::yes);
-            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get(), maintenance_socket_enabled::yes);
+            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes);
 
             std::any stop_maintenance_auth_service;
             std::any stop_maintenance_cql;
@@ -1948,8 +1956,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::no);
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(cql_sg_stats_cfg).get(), maintenance_socket_enabled::no);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no);
 
             ss.local().register_protocol_server(cql_server_ctl);
 
