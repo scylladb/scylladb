@@ -85,9 +85,9 @@ public:
     }
 
     // See cassandra Types.java
-    std::vector<user_type> build() {
+    future<std::vector<user_type>> build() {
         if (_definitions.empty()) {
-            return {};
+            co_return std::vector<user_type>();
         }
 
         /*
@@ -145,7 +145,7 @@ public:
             throw exceptions::configuration_exception(format("Cannot resolve UDTs for keyspace {}: some types are missing", ks_name));
         }
 
-        return created;
+        co_return created;
     }
 private:
     data_dictionary::keyspace_metadata& _ks;
@@ -163,6 +163,6 @@ void db::cql_type_parser::raw_builder::add(sstring name, std::vector<sstring> fi
     _impl->add(std::move(name), std::move(field_names), std::move(field_types));
 }
 
-std::vector<user_type> db::cql_type_parser::raw_builder::build() {
+future<std::vector<user_type>> db::cql_type_parser::raw_builder::build() {
     return _impl->build();
 }
