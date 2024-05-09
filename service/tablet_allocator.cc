@@ -1192,14 +1192,11 @@ public:
     future<migration_plan> make_plan(dc_name dc) {
         migration_plan plan;
 
-        _stats.for_dc(dc).calls++;
-        lblogger.info("Examining DC {}", dc);
-
         // Causes load balancer to move some tablet even though load is balanced.
         auto shuffle = in_shuffle_mode();
-        if (shuffle) {
-            lblogger.warn("Running without convergence checks");
-        }
+
+        _stats.for_dc(dc).calls++;
+        lblogger.info("Examining DC {} (shuffle={}, balancing={})", dc, shuffle, _tm->tablets().balancing_enabled());
 
         const locator::topology& topo = _tm->get_topology();
 
