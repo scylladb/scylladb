@@ -357,6 +357,9 @@ public:
     /// \throws std::logic_error If the given id does not belong to this instance.
     dht::token_range get_token_range(tablet_id id) const;
 
+    /// Returns the primary replica for the tablet
+    host_id get_primary_replica(tablet_id id) const;
+
     /// Returns a vector of sorted last tokens for tablets.
     future<std::vector<token>> get_sorted_tokens() const;
 
