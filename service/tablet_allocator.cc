@@ -1373,7 +1373,7 @@ public:
             });
         }
 
-        if (!nodes_to_drain.empty() || shuffle || (max_load != min_load && _tm->tablets().balancing_enabled())) {
+        if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || max_load != min_load))) {
             host_id target = *min_load_node;
             lblogger.info("target node: {}, avg_load: {}, max: {}", target, min_load, max_load);
             plan.merge(co_await make_internode_plan(dc, nodes, nodes_to_drain, target));
