@@ -15,6 +15,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include "reader_permit.hh"
 #include "utils/updateable_value.hh"
+#include "dht/i_partitioner_fwd.hh"
 
 namespace bi = boost::intrusive;
 
@@ -326,7 +327,7 @@ public:
     ///
     /// The semaphore takes ownership of the passed in reader for the duration
     /// of its inactivity and it may evict it to free up resources if necessary.
-    inactive_read_handle register_inactive_read(flat_mutation_reader_v2 ir) noexcept;
+    inactive_read_handle register_inactive_read(flat_mutation_reader_v2 ir, const dht::partition_range* range = nullptr) noexcept;
 
     /// Set the inactive read eviction notification handler and optionally eviction ttl.
     ///
@@ -358,7 +359,12 @@ public:
     void clear_inactive_reads();
 
     /// Evict all inactive reads the belong to the table designated by the id.
-    future<> evict_inactive_reads_for_table(table_id id) noexcept;
+    /// If a range is provided, only inactive reads whose range overlaps with the
+    /// range are evicted.
+    /// The range of the inactive read is provided in register_inactive_read().
+    /// If the range for an inactive read was not provided, all reads for the
+    /// table are evicted.
+    future<> evict_inactive_reads_for_table(table_id id, const dht::partition_range* range = nullptr) noexcept;
 private:
     // The following two functions are extension points for
     // future inheriting classes that needs to run some stop

@@ -1551,6 +1551,8 @@ private:
     void drop_keyspace(const sstring& name);
     future<> update_keyspace(const keyspace_metadata& tmp_ksm);
     static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func, std::function<future<>(replica::database&)> notifier);
+
+    future<> foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func);
 public:
     static table_schema_version empty_version;
 
@@ -1870,6 +1872,8 @@ public:
     db::timeout_semaphore& view_update_sem() {
         return _view_update_concurrency_sem;
     }
+
+    future<> clear_inactive_reads_for_tablet(table_id table, dht::token_range tablet_range);
 };
 
 } // namespace replica

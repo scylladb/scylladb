@@ -13,6 +13,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "schema/schema.hh"
 #include "log.hh"
+#include "utils/error_injection.hh"
 
 #include <boost/range/adaptor/map.hpp>
 
@@ -289,6 +290,11 @@ void querier_cache::insert_querier(
         }
         --stats.population;
     };
+
+
+    if (const auto override_ttl = utils::get_local_injector().inject_parameter<uint64_t>("querier-cache-ttl-seconds"); override_ttl) {
+        ttl = std::chrono::seconds(*override_ttl);
+    }
 
     sem.set_notify_handler(irh, std::move(notify_handler), ttl);
     querier_utils::set_inactive_read_handle(*it->second, std::move(irh));

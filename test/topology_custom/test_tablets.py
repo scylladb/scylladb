@@ -11,6 +11,8 @@ from test.pylib.tablets import get_all_tablet_replicas
 import pytest
 import logging
 import asyncio
+import re
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -140,3 +142,71 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
 
     logger.info(f"Checking {rf_to} re-allocated replicas")
     await check_allocated_replica(rf_to)
+
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/18110
+# Check that an existing cached read, will be cleaned up when the tablet it reads
+# from is migrated away.
+@pytest.mark.asyncio
+async def test_saved_readers_tablet_migration(manager: ManagerClient, mode):
+    cfg = {
+            'enable_user_defined_functions': False,
+            'experimental_features': ['tablets'],
+    }
+
+    if mode != "release":
+        cfg['error_injections_at_startup'] = [{'name': 'querier-cache-ttl-seconds', 'value': 999999999}]
+
+    servers = await manager.servers_add(2, config=cfg)
+
+    cql = manager.get_cql()
+
+    await cql.run_async("CREATE KEYSPACE test WITH"
+                        " replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+                        " and tablets = {'initial': 1}")
+    await cql.run_async("CREATE TABLE test.test (pk int, ck int, c int, PRIMARY KEY (pk, ck));")
+
+    logger.info("Populating table")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, ck, c) VALUES (0, {k}, 0);") for k in range(128)])
+
+    statement = SimpleStatement("SELECT * FROM test.test WHERE pk = 0", fetch_size=10)
+    cql.execute(statement)
+
+    def get_querier_cache_population(server):
+        metrics = requests.get(f"http://{server.ip_addr}:9180/metrics").text
+        pattern = re.compile("^scylla_database_querier_cache_population")
+        for metric in metrics.split('\n'):
+            if pattern.match(metric) is not None:
+                return int(float(metric.split()[1]))
+
+    assert any(map(lambda x: x > 0, [get_querier_cache_population(server) for server in servers]))
+
+    table_id = await cql.run_async("SELECT id FROM system_schema.tables WHERE keyspace_name = 'test' AND table_name = 'test'")
+    table_id = table_id[0].id
+
+    tablet_infos = await cql.run_async(f"SELECT last_token, replicas FROM system.tablets WHERE table_id = {table_id}")
+    tablet_infos = list(tablet_infos)
+
+    assert len(tablet_infos) == 1
+    tablet_info = tablet_infos[0]
+    assert len(tablet_info.replicas) == 1
+
+    hosts = {await manager.get_host_id(server.server_id) for server in servers}
+    print(f"HOSTS: {hosts}")
+    source_host, source_shard = tablet_info.replicas[0]
+
+    hosts.remove(str(source_host))
+    target_host, target_shard = list(hosts)[0], source_shard
+
+    await manager.api.move_tablet(
+           node_ip=servers[0].ip_addr,
+           ks="test",
+           table="test",
+           src_host=source_host,
+           src_shard=source_shard,
+           dst_host=target_host,
+           dst_shard=target_shard,
+           token=tablet_info.last_token)
+
+    # The tablet move should have evicted the cached reader.
+    assert all(map(lambda x: x == 0, [get_querier_cache_population(server) for server in servers]))
