@@ -6166,13 +6166,6 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     while (true) {
         group0_guard guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
-        while (_topology_state_machine._topology.is_busy()) {
-            rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
-            release_guard(std::move(guard));
-            co_await _topology_state_machine.event.wait();
-            guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-        }
-
         std::vector<canonical_mutation> updates;
         updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
             .set_tablet_balancing_enabled(enabled)
@@ -6188,6 +6181,11 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
         } catch (group0_concurrent_modification&) {
             rtlogger.debug("set_tablet_balancing_enabled(): concurrent modification");
         }
+    }
+
+    while (_topology_state_machine._topology.is_busy()) {
+        rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
+        co_await _topology_state_machine.event.wait();
     }
 }
 
