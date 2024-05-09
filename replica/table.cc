@@ -2176,11 +2176,7 @@ int64_t table::calculate_tablet_count() const {
 
     for (auto tablet_id : tablet_map.tablet_ids()) {
         const std::optional<shard_id> shard_id = tablet_map.get_shard(tablet_id, this_host_id);
-        if (!shard_id.has_value()) {
-            continue;
-        }
-
-        if (*shard_id == this_shard_id()) {
+        if (shard_id == this_shard_id()) {
             ++new_tablet_count;
         }
     }
