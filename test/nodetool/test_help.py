@@ -52,9 +52,9 @@ def test_help_command_too_many_args(nodetool, scylla_only):
 def test_help_consistent(nodetool, scylla_only):
     for command in ("version", "compact", "settraceprobability"):
         res1 = nodetool("help", command)
-        # seastar returns 1 when --help is invoked
-        with pytest.raises(subprocess.CalledProcessError) as e:
-            nodetool(command, "--help")
-        assert e.value.returncode == 1
-        out2 = e.value.stdout
-        assert res1.stdout == out2
+        res2 = nodetool(command, "--help", check_return_code=False)
+        # TODO: older seastar returns 1 when --help is invoked
+        #       remove the check_return_code parameter above after
+        #       updating the seastar submodule
+        assert res2.returncode in (1, 0)
+        assert res1.stdout == res2.stdout
