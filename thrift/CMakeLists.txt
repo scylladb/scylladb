@@ -14,6 +14,7 @@ target_link_libraries(thrift
     xxHash::xxhash
   PRIVATE
     interface
+    absl::headers
     Thrift::thrift)
 
 check_headers(check-headers thrift
