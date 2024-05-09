@@ -212,8 +212,8 @@ public:
     ///
     /// The loader object does not survive deferring, so the caller must deal with its liveness.
     template<typename Loader>
+    requires std::same_as<typename futurize<std::invoke_result_t<Loader, const key_type&>>::type, future<value_type>>
     future<entry_ptr> get_or_load(const key_type& key, Loader&& loader) noexcept {
-        static_assert(std::is_same<future<value_type>, typename futurize<std::result_of_t<Loader(const key_type&)>>::type>::value, "Bad Loader signature");
         try {
             auto i = _set.find(key, Hash(), key_eq<key_type, EqualPred>());
             lw_shared_ptr<entry> e;
