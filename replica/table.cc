@@ -119,7 +119,12 @@ table::make_sstable_reader(schema_ptr s,
     }
 }
 
-lw_shared_ptr<sstables::sstable_set> compaction_group::make_compound_sstable_set() const {
+lw_shared_ptr<sstables::sstable_set> compaction_group::make_sstable_set() const {
+    // Bypasses compound set if maintenance one is empty. If a SSTable is added later into maintenance,
+    // the sstable set is refreshed to reflect the current state.
+    if (!_maintenance_sstables->size()) {
+        return _main_sstables;
+    }
     return make_lw_shared(sstables::make_compound_sstable_set(_t.schema(), { _main_sstables, _maintenance_sstables }));
 }
 
@@ -609,7 +614,7 @@ public:
     future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
 
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
-        return _compaction_groups.begin()->make_compound_sstable_set();
+        return _compaction_groups.begin()->make_sstable_set();
     }
 };
 
@@ -787,14 +792,14 @@ future<> storage_group::split(compaction_group_list& list, sstables::compaction_
 
 lw_shared_ptr<sstables::sstable_set> storage_group::make_sstable_set() const {
     if (!splitting_mode()) {
-        return _main_cg->make_compound_sstable_set();
+        return _main_cg->make_sstable_set();
     }
     const auto& schema = _main_cg->_t.schema();
     std::vector<lw_shared_ptr<sstables::sstable_set>> underlying;
     underlying.reserve(1 + _split_ready_groups.size());
-    underlying.emplace_back(_main_cg->make_compound_sstable_set());
+    underlying.emplace_back(_main_cg->make_sstable_set());
     for (const auto& cg : _split_ready_groups) {
-        underlying.emplace_back(cg->make_compound_sstable_set());
+        underlying.emplace_back(cg->make_sstable_set());
     }
     return make_lw_shared(sstables::make_compound_sstable_set(schema, std::move(underlying)));
 }
@@ -988,7 +993,7 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
 
         co_await cg->flush();
 
-        auto set = cg->make_compound_sstable_set();
+        auto set = cg->make_sstable_set();
 
         for (auto all_sstables = set->all(); auto& sst : *all_sstables) {
            ret.push_back({
@@ -3384,7 +3389,7 @@ future<> compaction_group::cleanup() {
         }
         virtual future<> prepare() override {
             // Capture SSTables after flush, and with compaction disabled, to avoid missing any.
-            auto set = _cg.make_compound_sstable_set();
+            auto set = _cg.make_sstable_set();
             std::vector<sstables::shared_sstable> all_sstables;
             all_sstables.reserve(set->size());
             set->for_each_sstable([&all_sstables] (const sstables::shared_sstable& sst) mutable {
