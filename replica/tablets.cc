@@ -501,6 +501,7 @@ future<stop_iteration> tablet_sstable_set::for_each_sstable_set_gently_until(con
 
 std::vector<sstables::shared_sstable> tablet_sstable_set::select(const dht::partition_range& range) const {
     std::vector<sstables::shared_sstable> ret;
+    ret.reserve(size());
     for_each_sstable_set_until(range, [&] (lw_shared_ptr<sstables::sstable_set> set) {
         auto ssts = set->select(range);
         if (ret.empty()) {
@@ -516,6 +517,7 @@ std::vector<sstables::shared_sstable> tablet_sstable_set::select(const dht::part
 
 lw_shared_ptr<const sstable_list> tablet_sstable_set::all() const {
     auto ret = make_lw_shared<sstable_list>();
+    ret->reserve(size());
     for_each_sstable_set_until(query::full_partition_range, [&] (lw_shared_ptr<sstables::sstable_set> set) {
         set->for_each_sstable([&] (const sstables::shared_sstable& sst) {
             ret->insert(sst);
