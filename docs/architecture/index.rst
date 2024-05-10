@@ -4,6 +4,7 @@ ScyllaDB Architecture
    :titlesonly:
    :hidden:
  
+   Data Distribution with Tablets </architecture/tablets>
    ScyllaDB Ring Architecture <ringarchitecture/index/>
    ScyllaDB Fault Tolerance <architecture-fault-tolerance>
    Consistency Level Console Demo <console-CL-full-demo>
@@ -13,6 +14,7 @@ ScyllaDB Architecture
    Raft Consensus Algorithm in ScyllaDB </architecture/raft>
    
               
+* :doc:`Data Distribution with Tablets </architecture/tablets/>` - Tablets in ScyllaDB
 * :doc:`ScyllaDB Ring Architecture </architecture/ringarchitecture/index/>` - High-Level view of ScyllaDB Ring Architecture
 * :doc:`ScyllaDB Fault Tolerance </architecture/architecture-fault-tolerance>` - Deep dive into ScyllaDB Fault Tolerance
 * :doc:`Consistency Level Console Demo </architecture/console-CL-full-demo>` - Console Demos of Consistency Level Settings
