@@ -39,7 +39,10 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/coroutine/exception.hh>
+#include <seastar/coroutine/as_future.hh>
 
+#include <exception>
 #include <cfloat>
 #include <atomic>
 
@@ -2235,6 +2238,8 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
                 }
             }
             for (auto& r : intersection_ranges) {
+                rlogger.debug("repair[{}] Repair tablet task table={}.{} master_shard_id={} range={} neighbors={} replicas={}",
+                        rid.uuid(), keyspace_name, table_name, master_shard_id, r, repair_neighbors(nodes, shards).shard_map, m.replicas);
                 task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, master_shard_id, r, repair_neighbors(nodes, shards), m.replicas});
                 co_await coroutine::maybe_yield();
             }
@@ -2246,8 +2251,6 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
 future<> repair::tablet_repair_task_impl::run() {
     auto m = dynamic_pointer_cast<repair::task_manager_module>(_module);
     auto& rs = m->get_repair_service();
-    auto& sharded_db = rs.get_db();
-    auto& db = sharded_db.local();
     auto id = get_repair_uniq_id();
     auto keyspace = _keyspace;
     rlogger.debug("repair[{}]: Repair tablet for keyspace={} tables={} status=started", id.uuid(), _keyspace, _tables);
@@ -2305,6 +2308,7 @@ future<> repair::tablet_repair_task_impl::run() {
 
 
         rs.container().invoke_on_all([&idx, id, metas = _metas, parent_data, reason = _reason, tables = _tables, ranges_parallelism = _ranges_parallelism] (repair_service& rs) -> future<> {
+            std::exception_ptr error;
             for (auto& m : metas) {
                 if (m.master_shard_id != this_shard_id()) {
                     continue;
@@ -2312,10 +2316,8 @@ future<> repair::tablet_repair_task_impl::run() {
                 auto nr = idx.fetch_add(1);
                 rlogger.info("repair[{}] Repair {} out of {} tablets: table={}.{} range={} replicas={}",
                     id.uuid(), nr, metas.size(), m.keyspace_name, m.table_name, m.range, m.replicas);
-                lw_shared_ptr<replica::table> t;
-                try {
-                    t = rs._db.local().find_column_family(m.tid).shared_from_this();
-                } catch (replica::no_such_column_family& e) {
+                lw_shared_ptr<replica::table> t = rs._db.local().get_tables_metadata().get_table_if_exists(m.tid);
+                if (!t) {
                     rlogger.debug("repair[{}] Table {}.{} does not exist anymore", id.uuid(), m.keyspace_name, m.table_name);
                     continue;
                 }
@@ -2344,7 +2346,25 @@ future<> repair::tablet_repair_task_impl::run() {
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await rs._repair_module->make_task(std::move(task_impl_ptr), parent_data);
                 task->start();
-                co_await task->done();
+                auto res = co_await coroutine::as_future(task->done());
+                if (res.failed()) {
+                    auto ep = res.get_exception();
+                    sstring ignore_msg;
+                    // Ignore the error if the keyspace and/or table were dropped
+                    auto ignore = co_await repair::table_sync_and_check(rs.get_db().local(), rs.get_migration_manager(), m.tid);
+                    if (ignore) {
+                        ignore_msg = format("{} does not exist any more, ignoring it, ",
+                                rs.get_db().local().has_keyspace(m.keyspace_name) ? "table" : "keyspace");
+                    }
+                    rlogger.warn("repair[{}]: Repair tablet for table={}.{} range={} status=failed: {}{}",
+                            id.uuid(), m.keyspace_name, m.table_name, m.range, ignore_msg, ep);
+                    if (!ignore) {
+                        error = std::move(ep);
+                    }
+                }
+            }
+            if (error) {
+                co_await coroutine::return_exception_ptr(std::move(error));
             }
         }).get();
         auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
@@ -2352,11 +2372,7 @@ future<> repair::tablet_repair_task_impl::run() {
                 id.uuid(), _keyspace, _tables, id.id, _metas.size(), duration);
     }).then([id, keyspace] {
         rlogger.debug("repair[{}]: Repair tablet for keyspace={} status=succeeded", id.uuid(), keyspace);
-    }).handle_exception([&db, id, keyspace, &rs] (std::exception_ptr ep) {
-        if (!db.has_keyspace(keyspace)) {
-            rlogger.warn("repair[{}]: Repair tablet for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id.uuid(), keyspace, ep);
-            return make_ready_future<>();
-        }
+    }).handle_exception([id, keyspace, &rs] (std::exception_ptr ep) {
         rlogger.warn("repair[{}]: Repair tablet for keyspace={} status=failed: {}", id.uuid(), keyspace,  ep);
         rs.get_repair_module().check_in_shutdown();
         return make_exception_future<>(ep);
