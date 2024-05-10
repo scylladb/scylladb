@@ -3278,7 +3278,7 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) 
     }, {
         // limit available memory to the sstables_manager to test reclaiming.
         // this will set the reclaim threshold to 100 bytes.
-        .available_memory = 1000
+        .available_memory = 500
     });
 }
 
@@ -3356,6 +3356,6 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
     }, {
         // limit available memory to the sstables_manager to test reclaiming.
         // this will set the reclaim threshold to 100 bytes.
-        .available_memory = 1000
+        .available_memory = 500
     });
 }
