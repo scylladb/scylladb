@@ -1923,7 +1923,10 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     const auto endpoint_load = rjson_to_map<size_t>(client.get("/storage_service/load_map"));
     const auto endpoint_host_id = rjson_to_map<sstring>(client.get("/storage_service/host_id"));
 
-    const auto is_effective_ownership_unknown = (!keyspace || (!table && keyspace_uses_tablets(client, *keyspace)));
+    const auto tablets_keyspace = keyspace && keyspace_uses_tablets(client, *keyspace);
+
+    const auto is_effective_ownership_unknown = (!keyspace || (!table && tablets_keyspace));
+
     const auto endpoint_ownership = is_effective_ownership_unknown
         ? std::map<sstring, float>{}
         : get_effective_ownership(client, *keyspace, table);
@@ -1931,7 +1934,12 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     std::unordered_map<sstring, sstring> endpoint_rack;
     std::map<sstring, std::set<sstring>> dc_endpoints;
     std::unordered_map<sstring, size_t> endpoint_tokens;
-    const auto tokens_endpoint_res = client.get("/storage_service/tokens_endpoint");
+    std::unordered_map<sstring, sstring> tokens_endpoint_params;
+    if (tablets_keyspace && table) {
+        tokens_endpoint_params["keyspace"] = *keyspace;
+        tokens_endpoint_params["cf"] = *table;
+    }
+    const auto tokens_endpoint_res = client.get("/storage_service/tokens_endpoint", std::move(tokens_endpoint_params));
     for (const auto& te : tokens_endpoint_res.GetArray()) {
         const auto ep = sstring(rjson::to_string_view(te["value"]));
          // We are not printing the actual tokens, so it is enough just to count them.
@@ -1944,6 +1952,8 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         endpoint_rack.emplace(ep, rack);
         dc_endpoints[dc].insert(ep);
     }
+
+    const bool token_count_unknown = tablets_keyspace && !table;
 
     for (const auto& [dc, endpoints] : dc_endpoints) {
         const auto dc_header = fmt::format("Datacenter: {}", dc);
@@ -1981,7 +1991,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
                     fmt::format("{}{}", status, state),
                     address,
                     load,
-                    endpoint_tokens.at(ep),
+                    token_count_unknown ? "?" : fmt::to_string(endpoint_tokens.at(ep)),
                     !is_effective_ownership_unknown ? format("{:.1f}%", endpoint_ownership.at(ep) * 100) : "?",
                     endpoint_host_id.contains(ep) ? endpoint_host_id.at(ep) : "?",
                     endpoint_rack.at(ep));
