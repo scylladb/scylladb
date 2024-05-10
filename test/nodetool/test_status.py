@@ -45,7 +45,8 @@ null_ownership_error = ("Non-system keyspaces don't have the same replication se
                         "effective ownership information is meaningless")
 
 
-def validate_status_output(res, keyspace, nodes, ownership, resolve, effective_ownership_unknown, token_count_unknown):
+def validate_status_output(res, keyspace, nodes, ownership, resolve, effective_ownership_unknown, token_count_unknown,
+                           cassandra_nodetool):
     datacenters = sorted(list(set([node.datacenter for node in nodes.values()])))
     load_multiplier = {"bytes": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
 
@@ -117,7 +118,10 @@ def validate_status_output(res, keyspace, nodes, ownership, resolve, effective_o
             if node.host_id is not None:
                 assert host_id == node.host_id
             else:
-                assert host_id == "?"
+                if cassandra_nodetool:
+                    assert host_id == "null"
+                else:
+                    assert host_id == "?"
             assert rack == node.rack
 
         assert len(dc_eps) == 0
@@ -276,7 +280,7 @@ def _do_test_status(request, nodetool, status_query_target, node_list, resolve=N
     effective_ownership_unknown = keyspace is None or (table is None and keyspace_uses_tablets)
     token_count_unknown = keyspace_uses_tablets and not table
     validate_status_output(res.stdout, keyspace, nodes, ownership, bool(resolve), effective_ownership_unknown,
-                           token_count_unknown)
+                           token_count_unknown, uses_cassandra_nodetool)
 
 
 def test_status_no_keyspace_single_dc(request, nodetool):
