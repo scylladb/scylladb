@@ -222,7 +222,7 @@ public:
     future<> split(compaction_group_list&, sstables::compaction_type_options::split opt);
 
     // Make an sstable set spanning all sstables in the storage_group
-    lw_shared_ptr<sstables::sstable_set> make_sstable_set() const;
+    lw_shared_ptr<const sstables::sstable_set> make_sstable_set() const;
 };
 
 using storage_group_map = absl::flat_hash_map<size_t, std::unique_ptr<storage_group>, absl::Hash<size_t>>;

@@ -94,7 +94,7 @@ sstables::generation_type table::calculate_generation_for_new_table() {
 flat_mutation_reader_v2
 table::make_sstable_reader(schema_ptr s,
                                    reader_permit permit,
-                                   lw_shared_ptr<sstables::sstable_set> sstables,
+                                   lw_shared_ptr<const sstables::sstable_set> sstables,
                                    const dht::partition_range& pr,
                                    const query::partition_slice& slice,
                                    tracing::trace_state_ptr trace_state,
@@ -128,7 +128,7 @@ lw_shared_ptr<sstables::sstable_set> compaction_group::make_sstable_set() const 
     return make_lw_shared(sstables::make_compound_sstable_set(_t.schema(), { _main_sstables, _maintenance_sstables }));
 }
 
-lw_shared_ptr<sstables::sstable_set> table::make_compound_sstable_set() const {
+lw_shared_ptr<const sstables::sstable_set> table::make_compound_sstable_set() const {
     return _sg_manager->make_sstable_set();
 }
 
@@ -790,7 +790,7 @@ future<> storage_group::split(compaction_group_list& list, sstables::compaction_
     co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt));
 }
 
-lw_shared_ptr<sstables::sstable_set> storage_group::make_sstable_set() const {
+lw_shared_ptr<const sstables::sstable_set> storage_group::make_sstable_set() const {
     if (!splitting_mode()) {
         return _main_cg->make_sstable_set();
     }
@@ -2156,7 +2156,7 @@ int64_t table::calculate_tablet_count() const {
 }
 
 partition_presence_checker
-table::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set> sstables) {
+table::make_partition_presence_checker(lw_shared_ptr<const sstables::sstable_set> sstables) {
     auto sel = make_lw_shared<sstables::sstable_set::incremental_selector>(sstables->make_incremental_selector());
     return [this, sstables = std::move(sstables), sel = std::move(sel)] (const dht::decorated_key& key) {
         auto& sst = sel->select(key).sstables;
