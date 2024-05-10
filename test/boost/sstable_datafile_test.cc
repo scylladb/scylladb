@@ -3242,7 +3242,7 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_under_pressure) {
     }, {
         // limit available memory to the sstables_manager to test reclaiming.
         // this will set the reclaim threshold to 100 bytes.
-        .available_memory = 1000
+        .available_memory = 125
     });
 }
 
