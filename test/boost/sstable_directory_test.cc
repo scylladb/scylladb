@@ -196,7 +196,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
 // Test unrecoverable SSTable: missing a file that is expected in the TOC.
 SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
     return sstables::test_env::do_with_async([] (test_env& env) {
-        auto sst = make_sstable_for_this_shard(std::bind(new_env_sstable, std::ref(env)));
+        auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), env.tempdir().path().native(), generation_type(this_shard_id())));
 
         // Now there is one sstable to the upload directory, but it is incomplete and one component is missing.
         // We should fail validation and leave the directory untouched

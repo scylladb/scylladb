@@ -53,6 +53,10 @@ public:
     size_t get_total_memory_reclaimed() {
         return _total_memory_reclaimed;
     }
+
+    size_t get_total_reclaimable_memory() {
+        return _total_reclaimable_memory;
+    }
 };
 
 class test_env_compaction_manager {
