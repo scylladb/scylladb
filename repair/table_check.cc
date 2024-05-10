@@ -22,8 +22,12 @@ future<table_dropped> table_sync_and_check(replica::database& db, service::migra
             }
         });
 
-        // Trigger read barrier to synchronize schema.
-        co_await mm.get_group0_barrier().trigger(as);
+        try {
+            // Trigger read barrier to synchronize schema.
+            co_await mm.get_group0_barrier().trigger(as);
+        } catch (const service::raft_operation_timeout_error&) {
+            // If read barrier times out, swallow the exception and proceed with local schema.
+        }
     }
 
     co_return !db.column_family_exists(uuid);
