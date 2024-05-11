@@ -2925,7 +2925,7 @@ table::query(schema_ptr s,
 
         if (!querier_opt) {
             query::querier_base::querier_config conf(_config.tombstone_warn_threshold);
-            querier_opt = query::querier(as_mutation_source(), s, permit, range, qs.cmd.slice, trace_state, conf);
+            querier_opt.emplace(as_mutation_source(), s, permit, range, qs.cmd.slice, trace_state, conf);
         }
         auto& q = *querier_opt;
 
@@ -2979,7 +2979,7 @@ table::mutation_query(schema_ptr s,
     }
     if (!querier_opt) {
         query::querier_base::querier_config conf(_config.tombstone_warn_threshold);
-        querier_opt = query::querier(as_mutation_source(), s, permit, range, cmd.slice, trace_state, conf);
+        querier_opt.emplace(as_mutation_source(), s, permit, range, cmd.slice, trace_state, conf);
     }
     auto& q = *querier_opt;
 
