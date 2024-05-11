@@ -127,7 +127,7 @@ add_custom_command(
     ${dist_pkgs}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   VERBATIM)
-add_custom_target(dist-unified
+add_custom_target(dist-unified ALL
   DEPENDS ${unified_dist_pkg})
 
 add_subdirectory(debuginfo)
