@@ -455,7 +455,7 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
     abort();
 }
 
-void write_json_result(std::string result_file, const test_config& cfg, perf_result median, double mad, double max, double min) {
+void write_json_result(std::string result_file, const test_config& cfg, const aggregated_perf_results& agg) {
     Json::Value results;
 
     Json::Value params;
@@ -470,14 +470,15 @@ void write_json_result(std::string result_file, const test_config& cfg, perf_res
     results["parameters"] = std::move(params);
 
     Json::Value stats;
-    stats["median tps"] = median.throughput;
-    stats["allocs_per_op"] = median.mallocs_per_op;
-    stats["logallocs_per_op"] = median.logallocs_per_op;
-    stats["tasks_per_op"] = median.tasks_per_op;
-    stats["instructions_per_op"] = median.instructions_per_op;
-    stats["mad tps"] = mad;
-    stats["max tps"] = max;
-    stats["min tps"] = min;
+    auto med = agg.median_by_throughput;
+    stats["median tps"] = med.throughput;
+    stats["allocs_per_op"] = med.mallocs_per_op;
+    stats["logallocs_per_op"] = med.logallocs_per_op;
+    stats["tasks_per_op"] = med.tasks_per_op;
+    stats["instructions_per_op"] = med.instructions_per_op;
+    stats["mad tps"] = agg.throughput.median_absolute_deviation;
+    stats["max tps"] = agg.throughput.max;
+    stats["min tps"] = agg.throughput.min;
     results["stats"] = std::move(stats);
 
     std::string test_type;
@@ -602,23 +603,10 @@ int scylla_simple_query_main(int argc, char** argv) {
                     ? do_cql_test(env, cfg)
                     : do_alternator_test(app.configuration()["alternator"].as<std::string>(),
                             env.local_client_state(), env.qp(), env.migration_manager(), env.gossiper(), cfg);
-
-            auto compare_throughput = [] (perf_result a, perf_result b) { return a.throughput < b.throughput; };
-            std::sort(results.begin(), results.end(), compare_throughput);
-            auto median_result = results[results.size() / 2];
-            auto median = median_result.throughput;
-            auto min = results[0].throughput;
-            auto max = results[results.size() - 1].throughput;
-            auto absolute_deviations = boost::copy_range<std::vector<double>>(
-                    results
-                    | boost::adaptors::transformed(std::mem_fn(&perf_result::throughput))
-                    | boost::adaptors::transformed([&] (double r) { return abs(r - median); }));
-            std::sort(absolute_deviations.begin(), absolute_deviations.end());
-            auto mad = absolute_deviations[results.size() / 2];
-            std::cout << format("\nmedian {}\nmedian absolute deviation: {:.2f}\nmaximum: {:.2f}\nminimum: {:.2f}\n", median_result, mad, max, min);
-
+            aggregated_perf_results agg(results);
+            std::cout << agg << std::endl;
             if (app.configuration().contains("json-result")) {
-                write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, median_result, mad, max, min);
+                write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, agg);
             }
           }, std::move(cfg));
         });
