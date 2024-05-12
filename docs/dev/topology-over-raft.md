@@ -292,7 +292,7 @@ stateDiagram-v2
     use_new --> cleanup
     cleanup --> end_migration
     end_migration --> [*]
-    allow_write_both_read_old --> revert_migration: error
+    allow_write_both_read_old --> cleanup_target: error
     write_both_read_old --> cleanup_target: error
     streaming --> cleanup_target: error
     write_both_read_new --> if_state: error

@@ -114,6 +114,10 @@ namespace gms {
 class gossiper;
 }
 
+namespace compaction {
+class shard_reshaping_compaction_task_impl;
+}
+
 namespace db {
 class commitlog;
 class config;
@@ -591,8 +595,6 @@ private:
     storage_group* storage_group_for_id(size_t i) const;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
-    // Return compaction group if table owns a single one. Otherwise, null is returned.
-    compaction_group* single_compaction_group_if_available() const noexcept;
     compaction_group* get_compaction_group(size_t id) const noexcept;
     // Select a compaction group from a given token.
     compaction_group& compaction_group_for_token(dht::token token) const noexcept;
@@ -604,8 +606,6 @@ private:
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept;
     // Returns a list of all compaction groups.
     compaction_group_list& compaction_groups() const noexcept;
-    // Returns a list of all storage groups.
-    const storage_group_map& storage_groups() const noexcept;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
 
@@ -838,7 +838,15 @@ public:
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
     future<> update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
+private:
+    future<> clear_inactive_reads_for_tablet(database& db, storage_group* sg);
+    future<> stop_compaction_groups(storage_group* sg);
+    future<> flush_compaction_groups(storage_group* sg);
+    future<> cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group* sg);
+public:
     future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id);
+    // For tests only.
+    future<> cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     shard_id shard_of(const mutation& m) const {
@@ -1198,6 +1206,7 @@ public:
 
     friend class distributed_loader;
     friend class table_populator;
+    friend class compaction::shard_reshaping_compaction_task_impl;
 
 private:
     timer<> _off_strategy_trigger;
@@ -1207,8 +1216,7 @@ public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
 
-    // FIXME: get rid of it once no users.
-    compaction::table_state& as_table_state() const noexcept;
+    compaction::table_state& try_get_table_state_with_static_sharding() const;
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
 

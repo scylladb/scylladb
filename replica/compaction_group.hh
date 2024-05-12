@@ -8,6 +8,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/rwlock.hh>
 
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
@@ -233,9 +234,15 @@ protected:
     // The list entries are unlinked automatically when the storage group, they belong to, is removed.
     compaction_group_list _compaction_groups;
     storage_group_map _storage_groups;
-
+    // Prevents _storage_groups from having its elements inserted or deleted while other layer iterates
+    // over them (or over _compaction_groups).
+    seastar::rwlock _lock;
 public:
     virtual ~storage_group_manager();
+
+    seastar::rwlock& get_rwlock() noexcept {
+        return _lock;
+    }
 
     const compaction_group_list& compaction_groups() const noexcept {
         return _compaction_groups;
@@ -244,18 +251,11 @@ public:
         return _compaction_groups;
     }
 
-    const storage_group_map& storage_groups() const noexcept {
-        return _storage_groups;
-    }
-    storage_group_map& storage_groups() noexcept {
-        return _storage_groups;
-    }
+    future<> for_each_storage_group_gently(std::function<future<>(size_t, storage_group&)> f);
+    void for_each_storage_group(std::function<void(size_t, storage_group&)> f) const;
+    void remove_storage_group(size_t id);
     // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
     storage_group* storage_group_for_id(const schema_ptr&, size_t i) const;
-
-    compaction_group* single_compaction_group_if_available() noexcept {
-        return _compaction_groups.size() == 1 ? &_compaction_groups.front() : nullptr;
-    }
 
     // Caller must keep the current effective_replication_map_ptr valid
     // until the storage_group_manager finishes update_effective_replication_map

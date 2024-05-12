@@ -70,10 +70,10 @@ public:
         return true;
     }
     const sstables::sstable_set& main_sstable_set() const override {
-        return table().as_table_state().main_sstable_set();
+        return table().try_get_table_state_with_static_sharding().main_sstable_set();
     }
     const sstables::sstable_set& maintenance_sstable_set() const override {
-        return table().as_table_state().maintenance_sstable_set();
+        return table().try_get_table_state_with_static_sharding().maintenance_sstable_set();
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
         return sstables::get_fully_expired_sstables(*this, sstables, query_time);
@@ -105,7 +105,7 @@ public:
     }
     bool memtable_has_key(const dht::decorated_key& key) const override { return false; }
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
-        return table().as_table_state().on_compaction_completion(std::move(desc), offstrategy);
+        return table().try_get_table_state_with_static_sharding().on_compaction_completion(std::move(desc), offstrategy);
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return table().is_auto_compaction_disabled_by_user();
