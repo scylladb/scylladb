@@ -628,7 +628,7 @@ leveled_compaction_strategy::calculate_max_sstable_size_in_mb(std::optional<sstr
             max_size);
     } else if (max_size < 50) {
         leveled_manifest::logger.warn("Max sstable size of {}MB is configured. Testing done for CASSANDRA-5727 indicates that performance" \
-            "improves up to 160MB", max_size);
+            " improves up to 160MB", max_size);
     }
     return max_size;
 }
