@@ -542,6 +542,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("stop-on-error", bpo::value<bool>()->default_value(true), "stop after encountering the first error")
         ("timeout", bpo::value<std::string>()->default_value(""), "use timeout")
         ("bypass-cache", "use bypass cache when querying")
+        ("stats-metric", bpo::value<std::string>()->default_value("throughput"), "field to sort by for determining the median result and stats (options are: \"throughput\"|\"allocs\"|\"tasks\"|\"instructions\")")
         ;
 
     set_abort_on_internal_error(true);
@@ -603,19 +604,35 @@ int scylla_simple_query_main(int argc, char** argv) {
                     : do_alternator_test(app.configuration()["alternator"].as<std::string>(),
                             env.local_client_state(), env.qp(), env.migration_manager(), env.gossiper(), cfg);
 
-            auto compare_throughput = [] (perf_result a, perf_result b) { return a.throughput < b.throughput; };
-            std::sort(results.begin(), results.end(), compare_throughput);
+            std::string stats_metric = "throughput";
+            if (app.configuration().contains("stats-metric")) {
+                stats_metric = app.configuration()["stats-metric"].as<std::string>();
+            }
+            std::function<double(const perf_result& r)> get_metric;
+            if (stats_metric.starts_with("throughput") || stats_metric.starts_with("tps")) {
+                get_metric = [] (const perf_result a) { return a.throughput; };
+            } else if (stats_metric.starts_with("alloc")) {
+                get_metric = [] (const perf_result a) { return a.mallocs_per_op + a.logallocs_per_op; };
+            } else if (stats_metric.starts_with("task")) {
+                get_metric = [] (const perf_result a) { return a.tasks_per_op; };
+            } else if (stats_metric.starts_with("ins")) {
+                get_metric = [] (const perf_result a) { return a.instructions_per_op; };
+            }
+            auto compare_results = [&] (const perf_result& a, const perf_result& b) { return get_metric(a) < get_metric(b); };
+            std::sort(results.begin(), results.end(), compare_results);
             auto median_result = results[results.size() / 2];
-            auto median = median_result.throughput;
-            auto min = results[0].throughput;
-            auto max = results[results.size() - 1].throughput;
+            auto median = get_metric(median_result);
+            auto min = get_metric(results[0]);
+            auto max = get_metric(results[results.size() - 1]);
             auto absolute_deviations = boost::copy_range<std::vector<double>>(
                     results
-                    | boost::adaptors::transformed(std::mem_fn(&perf_result::throughput))
+                    | boost::adaptors::transformed(get_metric)
                     | boost::adaptors::transformed([&] (double r) { return abs(r - median); }));
             std::sort(absolute_deviations.begin(), absolute_deviations.end());
             auto mad = absolute_deviations[results.size() / 2];
-            std::cout << format("\nmedian {}\nmedian absolute deviation: {:.2f}\nmaximum: {:.2f}\nminimum: {:.2f}\n", median_result, mad, max, min);
+            std::cout << format("\nstats metric: {}\n", stats_metric);
+            std::cout << format("median {}\n", median_result);
+            std::cout << format("median absolute deviation: {:.2f}\nmaximum: {:.2f}\nminimum: {:.2f}\n", mad, max, min);
 
             if (app.configuration().contains("json-result")) {
                 write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, median_result, mad, max, min);
