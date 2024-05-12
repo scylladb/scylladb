@@ -542,7 +542,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("stop-on-error", bpo::value<bool>()->default_value(true), "stop after encountering the first error")
         ("timeout", bpo::value<std::string>()->default_value(""), "use timeout")
         ("bypass-cache", "use bypass cache when querying")
-        ("stats-metric", bpo::value<std::string>()->default_value("throughput"), "field to sort by for determining the median result and stats (options are: \"throughput\"|\"allocs\"|\"tasks\"|\"instructions\")")
+        ("stats-metric", bpo::value<std::string>()->default_value("instructions"), "field to sort by for determining the median result and stats (options are: \"throughput\"|\"allocs\"|\"tasks\"|\"instructions\")")
         ;
 
     set_abort_on_internal_error(true);
