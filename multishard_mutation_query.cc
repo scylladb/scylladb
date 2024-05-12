@@ -93,21 +93,18 @@ class read_context : public reader_lifecycle_policy_v2 {
     struct reader_meta {
         struct remote_parts {
             reader_permit permit;
-            lw_shared_ptr<const dht::partition_range> range;
-            std::unique_ptr<const query::partition_slice> slice;
+            query::querier_reader_context_ptr ctx;
             utils::phased_barrier::operation read_operation;
             std::optional<reader_concurrency_semaphore::inactive_read_handle> handle;
             std::optional<flat_mutation_reader_v2::tracked_buffer> buffer;
 
             remote_parts(
                     reader_permit permit,
-                    lw_shared_ptr<const dht::partition_range> range = nullptr,
-                    std::unique_ptr<const query::partition_slice> slice = nullptr,
+                    query::querier_reader_context_ptr ctx,
                     utils::phased_barrier::operation read_operation = {},
                     std::optional<reader_concurrency_semaphore::inactive_read_handle> handle = {})
                 : permit(std::move(permit))
-                , range(std::move(range))
-                , slice(std::move(slice))
+                , ctx(std::move(ctx))
                 , read_operation(std::move(read_operation))
                 , handle(std::move(handle)) {
             }
@@ -354,8 +351,7 @@ flat_mutation_reader_v2 read_context::create_reader(
 
     auto remote_parts = reader_meta::remote_parts(
             std::move(permit),
-            make_lw_shared<const dht::partition_range>(pr),
-            std::make_unique<const query::partition_slice>(ps),
+            std::make_unique<query::querier_reader_context>(pr, ps),
             table.read_in_progress());
 
     if (!rm.rparts) {
@@ -366,21 +362,21 @@ flat_mutation_reader_v2 read_context::create_reader(
 
     rm.state = reader_state::used;
 
-    return table.as_mutation_source().make_reader_v2(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice,
+    return table.as_mutation_source().make_reader_v2(std::move(schema), rm.rparts->permit, rm.rparts->ctx->range, rm.rparts->ctx->slice,
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
 }
 
 const dht::partition_range* read_context::get_read_range() const {
     auto& rm = _readers[this_shard_id()];
     if (rm.rparts) {
-        return rm.rparts->range.get();
+        return &rm.rparts->ctx->range;
     }
     return nullptr;
 }
 
 void read_context::update_read_range(lw_shared_ptr<const dht::partition_range> range) {
     auto& rm = _readers[this_shard_id()];
-    rm.rparts->range = std::move(range);
+    rm.rparts->ctx->range = std::move(*range);
 }
 
 future<> read_context::destroy_reader(stopped_reader reader) noexcept {
@@ -543,8 +539,7 @@ future<> read_context::save_reader(shard_id shard, full_position_view last_pos) 
 
             auto querier = query::shard_mutation_querier(
                     std::move(query_ranges),
-                    std::move(rparts->range),
-                    std::move(rparts->slice),
+                    std::move(rparts->ctx),
                     std::move(*reader),
                     std::move(rparts->permit),
                     last_pos);
@@ -595,7 +590,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
             auto handle = semaphore.register_inactive_read(std::move(q).reader());
             _readers[shard] = reader_meta(
                     reader_state::successful_lookup,
-                    reader_meta::remote_parts(q.permit(), std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress(),
+                    reader_meta::remote_parts(q.permit(), std::move(q).reader_ctx(), table.read_in_progress(),
                             std::move(handle)));
         });
     } catch (...) {

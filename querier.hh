@@ -14,6 +14,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "readers/mutation_source.hh"
 #include "full_position.hh"
+#include "query-request.hh"
 
 #include <boost/intrusive/set.hpp>
 
@@ -50,6 +51,12 @@ auto consume_page(flat_mutation_reader_v2& reader,
     });
 }
 
+struct querier_reader_context {
+    dht::partition_range range;
+    query::partition_slice slice;
+};
+using querier_reader_context_ptr = std::unique_ptr<querier_reader_context>;
+
 class querier_base {
     friend class querier_utils;
 
@@ -64,32 +71,28 @@ public:
 protected:
     schema_ptr _schema;
     reader_permit _permit;
-    lw_shared_ptr<const dht::partition_range> _range;
-    std::unique_ptr<const query::partition_slice> _slice;
+    querier_reader_context_ptr _ctx;
     std::variant<flat_mutation_reader_v2, reader_concurrency_semaphore::inactive_read_handle> _reader;
     dht::partition_ranges_view _query_ranges;
     querier_config _qr_config;
 
 public:
-    querier_base(reader_permit permit, lw_shared_ptr<const dht::partition_range> range,
-            std::unique_ptr<const query::partition_slice> slice, flat_mutation_reader_v2 reader, dht::partition_ranges_view query_ranges)
+    querier_base(reader_permit permit, querier_reader_context_ptr ctx,
+            flat_mutation_reader_v2 reader, dht::partition_ranges_view query_ranges)
         : _schema(reader.schema())
         , _permit(std::move(permit))
-        , _range(std::move(range))
-        , _slice(std::move(slice))
+        , _ctx(std::move(ctx))
         , _reader(std::move(reader))
         , _query_ranges(query_ranges)
     { }
 
-    querier_base(schema_ptr schema, reader_permit permit, dht::partition_range range,
-            query::partition_slice slice, const mutation_source& ms, tracing::trace_state_ptr trace_ptr,
+    querier_base(schema_ptr schema, reader_permit permit, querier_reader_context_ptr ctx, const mutation_source& ms, tracing::trace_state_ptr trace_ptr,
             querier_config config)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
-        , _range(make_lw_shared<const dht::partition_range>(std::move(range)))
-        , _slice(std::make_unique<const query::partition_slice>(std::move(slice)))
-        , _reader(ms.make_reader_v2(_schema, _permit, *_range, *_slice, std::move(trace_ptr), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
-        , _query_ranges(*_range)
+        , _ctx(std::move(ctx))
+        , _reader(ms.make_reader_v2(_schema, _permit, _ctx->range, _ctx->slice, std::move(trace_ptr), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
+        , _query_ranges(_ctx->range)
         , _qr_config(std::move(config))
     { }
 
@@ -107,13 +110,21 @@ public:
     }
 
     bool is_reversed() const {
-        return _slice->is_reversed();
+        return slice().is_reversed();
     }
 
     virtual std::optional<full_position_view> current_position() const = 0;
 
     dht::partition_ranges_view ranges() const {
         return _query_ranges;
+    }
+
+    const dht::partition_range& range() const {
+        return _ctx->range;
+    }
+
+    const query::partition_slice& slice() const {
+        return _ctx->slice;
     }
 
     size_t memory_usage() const {
@@ -151,12 +162,12 @@ public:
     querier(const mutation_source& ms,
             schema_ptr schema,
             reader_permit permit,
-            dht::partition_range range,
-            query::partition_slice slice,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
             tracing::trace_state_ptr trace_ptr,
             querier_config config = {})
-        : querier_base(schema, permit, std::move(range), std::move(slice), ms, std::move(trace_ptr), std::move(config))
-        , _compaction_state(make_lw_shared<compact_for_query_state_v2>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
+        : querier_base(schema, permit, std::make_unique<querier_reader_context>(range, slice), ms, std::move(trace_ptr), std::move(config))
+        , _compaction_state(make_lw_shared<compact_for_query_state_v2>(*schema, gc_clock::time_point{}, this->slice(), 0, 0)) {
     }
 
     bool are_limits_reached() const {
@@ -170,7 +181,7 @@ public:
             uint32_t partition_limit,
             gc_clock::time_point query_time,
             tracing::trace_state_ptr trace_ptr = {}) {
-        return ::query::consume_page(std::get<flat_mutation_reader_v2>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
+        return ::query::consume_page(std::get<flat_mutation_reader_v2>(_reader), _compaction_state, slice(), std::move(consumer), row_limit,
                 partition_limit, query_time).then_wrapped([this, trace_ptr = std::move(trace_ptr)] (auto&& fut) {
             const auto& cstats = _compaction_state->stats();
             tracing::trace(trace_ptr, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
@@ -185,12 +196,12 @@ public:
             auto dead = cstats.static_rows.dead + cstats.clustering_rows.dead + cstats.range_tombstones;
             if (_qr_config.tombstone_warn_threshold > 0 && dead >= _qr_config.tombstone_warn_threshold) {
                 auto live = cstats.static_rows.live + cstats.clustering_rows.live;
-                if (_range->is_singular()) {
+                if (range().is_singular()) {
                     qrlogger.warn("Read {} live rows and {} tombstones for {}.{} partition key \"{}\" {} (see tombstone_warn_threshold)",
-                                  live, dead, _schema->ks_name(), _schema->cf_name(), _range->start()->value().key()->with_schema(*_schema), (*_range));
+                                  live, dead, _schema->ks_name(), _schema->cf_name(), range().start()->value().key()->with_schema(*_schema), range());
                 } else {
                     qrlogger.warn("Read {} live rows and {} tombstones for {}.{} <partition-range-scan> {} (see tombstone_warn_threshold)",
-                                  live, dead, _schema->ks_name(), _schema->cf_name(), (*_range));
+                                  live, dead, _schema->ks_name(), _schema->cf_name(), range());
                 }
             }
             return std::move(fut);
@@ -222,12 +233,11 @@ class shard_mutation_querier : public querier_base {
 private:
     shard_mutation_querier(
             std::unique_ptr<const dht::partition_range_vector> query_ranges,
-            lw_shared_ptr<const dht::partition_range> reader_range,
-            std::unique_ptr<const query::partition_slice> reader_slice,
+            querier_reader_context_ptr ctx,
             flat_mutation_reader_v2 reader,
             reader_permit permit,
             full_position nominal_pos)
-        : querier_base(permit, std::move(reader_range), std::move(reader_slice), std::move(reader), *query_ranges)
+        : querier_base(permit, std::move(ctx), std::move(reader), *query_ranges)
         , _query_ranges(std::move(query_ranges))
         , _nominal_pos(std::move(nominal_pos)) {
     }
@@ -236,25 +246,20 @@ private:
 public:
     shard_mutation_querier(
             const dht::partition_range_vector query_ranges,
-            lw_shared_ptr<const dht::partition_range> reader_range,
-            std::unique_ptr<const query::partition_slice> reader_slice,
+            querier_reader_context_ptr ctx,
             flat_mutation_reader_v2 reader,
             reader_permit permit,
             full_position nominal_pos)
-        : shard_mutation_querier(std::make_unique<const dht::partition_range_vector>(std::move(query_ranges)), std::move(reader_range),
-                std::move(reader_slice), std::move(reader), std::move(permit), std::move(nominal_pos)) {
+        : shard_mutation_querier(std::make_unique<const dht::partition_range_vector>(std::move(query_ranges)), std::move(ctx),
+                std::move(reader), std::move(permit), std::move(nominal_pos)) {
     }
 
     virtual std::optional<full_position_view> current_position() const override {
         return _nominal_pos;
     }
 
-    lw_shared_ptr<const dht::partition_range> reader_range() && {
-        return std::move(_range);
-    }
-
-    std::unique_ptr<const query::partition_slice> reader_slice() && {
-        return std::move(_slice);
+    querier_reader_context_ptr reader_ctx() && {
+        return std::move(_ctx);
     }
 
     flat_mutation_reader_v2 reader() && {
