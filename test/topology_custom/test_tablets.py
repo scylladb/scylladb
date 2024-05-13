@@ -105,7 +105,6 @@ async def test_reshape_with_tablets(manager: ManagerClient):
 
 
 @pytest.mark.parametrize("direction", ["up", "down", "none"])
-@pytest.mark.xfail(reason="Scaling not implemented yet")
 @pytest.mark.asyncio
 async def test_tablet_rf_change(manager: ManagerClient, direction):
     cfg = {'enable_user_defined_functions': False,
