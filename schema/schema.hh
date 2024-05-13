@@ -934,6 +934,9 @@ public:
      * (and `ALTER ADD` if the column has been re-added) to the description.
      */
     virtual std::ostream& describe(replica::database& db, std::ostream& os, bool with_internals) const override;
+    // Generate ALTER TABLE/MATERIALIZED VIEW statement containing all properties with current values.
+    // The method cannot be used on index, as indexes don't support alter statement.
+    std::ostream& describe_alter_with_properties(replica::database& db, std::ostream& os) const;
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;
     friend class schema_registry_entry;

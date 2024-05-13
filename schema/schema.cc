@@ -1002,6 +1002,24 @@ std::ostream& schema::schema_properties(replica::database& db, std::ostream& os)
     return os;
 }
 
+std::ostream& schema::describe_alter_with_properties(replica::database& db, std::ostream& os) const {
+    os << "ALTER "; 
+    if (is_view()) {
+        if (is_index(db, view_info()->base_id(), *this)) {
+            on_internal_error(dblog, "ALTER statement is not supported for index");
+        }
+        
+        os << "MATERIALIZED VIEW ";
+    } else {
+        os << "TABLE ";
+    }
+    os << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " WITH ";
+    schema_properties(db, os);
+    os << ";\n";
+
+    return os;
+}
+
 const sstring&
 column_definition::name_as_text() const {
     return column_specification->name->text();
