@@ -2929,7 +2929,13 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::
         sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
                        sm::description("number of currently throttled write requests")),
     });
-
+    _metrics.add_group(storage_proxy_stats::REPLICA_STATS_CATEGORY, {
+        sm::make_current_bytes("view_update_backlog", [this] { return _max_view_update_backlog.fetch_shard(this_shard_id()).get_current_bytes(); },
+                       sm::description("Tracks the size of scylla_database_view_update_backlog and is used instead of that one to calculate the "
+                                        "max backlog across all shards, which is then used by other nodes to calculate appropriate throttling delays "
+                                        "if it grows too large. If it's notably different from scylla_database_view_update_backlog, it means "
+                                        "that we're currently processing a write that generated a large number of view updates.")),
+    });
     slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
     _hints_manager.register_metrics("hints_manager");
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
