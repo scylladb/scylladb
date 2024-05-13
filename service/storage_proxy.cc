@@ -2910,7 +2910,10 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::
         sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
                        sm::description("number of currently throttled write requests")),
     });
-
+    _metrics.add_group(storage_proxy_stats::REPLICA_STATS_CATEGORY, {
+        sm::make_current_bytes("view_update_backlog", [this] { return _max_view_update_backlog.fetch_shard(this_shard_id()).current; },
+                       sm::description("View update backlog size used for slowing down writes when it grows too large")),
+    });
     slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
     _hints_manager.register_metrics("hints_manager");
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
