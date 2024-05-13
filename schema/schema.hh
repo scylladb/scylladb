@@ -948,6 +948,9 @@ public:
     bool wait_for_sync_to_commitlog() const {
         return _static_props.wait_for_sync_to_commitlog;
     }
+private:
+    // Print all schema properties in CQL syntax
+    std::ostream& schema_properties(replica::database& db, std::ostream& os) const;
 public:
     const v3_columns& v3() const {
         return _v3_columns;

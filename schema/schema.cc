@@ -943,6 +943,28 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
     if (is_compact_table()) {
         os << "COMPACT STORAGE\n    AND ";
     }
+    schema_properties(db, os);
+    os << ";\n";
+
+    if (with_internals) {
+        for (auto& cdef : dropped_columns()) {
+            os << "\nALTER TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name())
+               << " DROP " << cql3::util::maybe_quote(cdef.first) << " USING TIMESTAMP " << cdef.second.timestamp << ";";
+
+            auto column = get_column_definition(to_bytes(cdef.first));
+            if (column) {
+                os << "\nALTER TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name())
+                   << " ADD ";
+                column_definition_as_cql_key(os, *column);
+                os << ";";
+            }
+        }
+    }
+
+    return os;
+}
+
+std::ostream& schema::schema_properties(replica::database& db, std::ostream& os) const {
     os << "bloom_filter_fp_chance = " << bloom_filter_fp_chance();
     os << "\n    AND caching = {";
     map_as_cql_param(os, caching_options().to_map());
@@ -977,23 +999,6 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
             os << "\n    AND synchronous_updates = " << *is_sync_update;
         }
     }
-    os << ";\n";
-
-    if (with_internals) {
-        for (auto& cdef : dropped_columns()) {
-            os << "\nALTER TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name())
-               << " DROP " << cql3::util::maybe_quote(cdef.first) << " USING TIMESTAMP " << cdef.second.timestamp << ";";
-
-            auto column = get_column_definition(to_bytes(cdef.first));
-            if (column) {
-                os << "\nALTER TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name())
-                   << " ADD ";
-                column_definition_as_cql_key(os, *column);
-                os << ";";
-            }
-        }
-    }
-
     return os;
 }
 
