@@ -41,7 +41,7 @@ public:
 
     virtual future<> create(std::string_view role_name, const role_config&, ::service::mutations_collector&) override;
 
-    virtual future<> drop(std::string_view role_name) override;
+    virtual future<> drop(std::string_view role_name, ::service::mutations_collector& mc) override;
 
     virtual future<> alter(std::string_view role_name, const role_config_update&) override;
 

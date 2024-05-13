@@ -1013,20 +1013,14 @@ query_processor::forward(query::forward_request req, tracing::trace_state_ptr tr
 
 future<::shared_ptr<messages::result_message>>
 query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options, service::mutations_collector& mc) {
-    ::shared_ptr<cql_transport::event::schema_change> ce;
-
     if (this_shard_id() != 0) {
         on_internal_error(log, "DDL must be executed on shard 0");
     }
 
-    cql3::cql_warnings_vec warnings;
-
     // TODO: remove this field, it should be injected directly as prepare_schema_mutations argument
     stmt.global_req_id = mc.new_group0_state_id();
 
-    auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, options, mc.write_timestamp());
-    warnings = std::move(cql_warnings);
-    mc.add_mutations(std::move(m));
+    auto [ce, warnings] = co_await stmt.prepare_schema_mutations(*this, state, options, mc);
 
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)

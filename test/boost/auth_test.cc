@@ -151,8 +151,11 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             });
         }).then([&env] {
             // check deleted user
-            return auth::drop_role(env.local_auth_service(), username).then([&env] {
-                return require_throws<exceptions::authentication_exception>(authenticate(env, username, password));
+            return seastar::async([&env] {
+                do_with_mc(env, [&env] (auto& mc) {
+                    auth::drop_role(env.local_auth_service(), username, mc).get();
+                    require_throws<exceptions::authentication_exception>(authenticate(env, username, password)).get();
+                });
             });
         });
     }, auth_on(false));

@@ -73,7 +73,9 @@ SEASTAR_TEST_CASE(drop_role) {
         do_with_mc(env, [&m] (auto& mc) {
             m->create("lord", auth::role_config(), mc).get();
         });
-        m->drop("lord").get();
+        do_with_mc(env, [&m] (auto& mc) {
+            m->drop("lord", mc).get();
+        });
         BOOST_REQUIRE_EQUAL(m->exists("lord").get(), false);
 
         //
@@ -95,7 +97,9 @@ SEASTAR_TEST_CASE(drop_role) {
         m->grant("king", "lord").get();
         m->grant("tim", "lord").get();
 
-        m->drop("lord").get();
+        do_with_mc(env, [&m] (auto& mc) {
+            m->drop("lord", mc).get();
+        });
 
         BOOST_REQUIRE_EQUAL(
                 m->query_granted("tim", auth::recursive_role_query::yes).get(),
@@ -108,8 +112,9 @@ SEASTAR_TEST_CASE(drop_role) {
         //
         // Dropping a role that does not exist is an error.
         //
-
-        BOOST_REQUIRE_THROW(m->drop("emperor").get(), auth::nonexistant_role);
+        do_with_mc(env, [&m] (auto& mc) {
+            BOOST_REQUIRE_THROW(m->drop("emperor", mc).get(), auth::nonexistant_role);
+        });
     });
 }
 

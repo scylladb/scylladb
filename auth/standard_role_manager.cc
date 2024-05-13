@@ -341,12 +341,12 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
     });
 }
 
-future<> standard_role_manager::drop(std::string_view role_name) {
+future<> standard_role_manager::drop(std::string_view role_name, ::service::mutations_collector& mc) {
     if (!co_await this->exists(role_name)) {
         throw nonexistant_role(role_name);
     }
     // First, revoke this role from all roles that are members of it.
-    const auto revoke_from_members = [this, role_name] () -> future<> {
+    const auto revoke_from_members = [this, role_name, &mc] () -> future<> {
         const sstring query = format("SELECT member FROM {}.{} WHERE role = ?",
                 get_auth_ks_name(_qp),
                 meta::role_members_table::name);
@@ -359,26 +359,26 @@ future<> standard_role_manager::drop(std::string_view role_name) {
         co_await parallel_for_each(
                 members->begin(),
                 members->end(),
-                [this, role_name] (const cql3::untyped_result_set_row& member_row) -> future<> {
+                [this, role_name, &mc] (const cql3::untyped_result_set_row& member_row) -> future<> {
                     const sstring member = member_row.template get_as<sstring>("member");
-                    co_await this->legacy_modify_membership(member, role_name, membership_change::remove);
+                    co_await this->modify_membership(member, role_name, membership_change::remove, mc);
                 }
         );
     };
     // In parallel, revoke all roles that this role is members of.
-    const auto revoke_members_of = [this, grantee = role_name] () -> future<> {
+    const auto revoke_members_of = [this, grantee = role_name, &mc] () -> future<> {
         const role_set granted_roles = co_await this->query_granted(
                 grantee,
                 recursive_role_query::no);
         co_await parallel_for_each(
                 granted_roles.begin(),
                 granted_roles.end(),
-                [this, grantee](const sstring& role_name) {
-            return this->legacy_modify_membership(grantee, role_name, membership_change::remove);
+                [this, grantee, &mc](const sstring& role_name) {
+            return this->modify_membership(grantee, role_name, membership_change::remove, mc);
         });
     };
     // Delete all attributes for that role
-    const auto remove_attributes_of = [this, role_name] () -> future<> {
+    const auto remove_attributes_of = [this, role_name, &mc] () -> future<> {
         const sstring query = format("DELETE FROM {}.{} WHERE role = ?",
                 get_auth_ks_name(_qp),
                 meta::role_attributes_table::name);
@@ -386,11 +386,11 @@ future<> standard_role_manager::drop(std::string_view role_name) {
             co_await _qp.execute_internal(query, {sstring(role_name)},
                 cql3::query_processor::cache_internal::yes).discard_result();
         } else {
-            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as, ::service::raft_timeout{});
+            co_await collect_mutations(_qp, mc, query, {sstring(role_name)});
         }
     };
     // Finally, delete the role itself.
-    const auto delete_role = [this, role_name] () -> future<> {
+    const auto delete_role = [this, role_name, &mc] () -> future<> {
         const sstring query = format("DELETE FROM {}.{} WHERE {} = ?",
                 get_auth_ks_name(_qp),
                 meta::roles_table::name,
@@ -404,7 +404,7 @@ future<> standard_role_manager::drop(std::string_view role_name) {
                     {sstring(role_name)},
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
-            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as, ::service::raft_timeout{});
+            co_await collect_mutations(_qp, mc, query, {sstring(role_name)});
         }
     };
 

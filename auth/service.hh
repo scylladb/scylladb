@@ -253,7 +253,7 @@ future<> alter_role(
 ///
 /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
 ///
-future<> drop_role(const service&, std::string_view name);
+future<> drop_role(const service&, std::string_view name, ::service::mutations_collector& mc);
 
 ///
 /// Grant `role_name` to `grantee_name`.
@@ -335,6 +335,13 @@ future<> revoke_permissions(
         permission_set,
         const resource&,
         ::service::mutations_collector&);
+
+///
+/// Revoke all permissions granted to any role for a particular resource.
+///
+/// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
+///
+future<> revoke_all(const service&, const resource&, ::service::mutations_collector&);
 
 using recursive_permissions = bool_class<struct recursive_permissions_tag>;
 

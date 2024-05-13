@@ -95,8 +95,8 @@ public:
         return _authenticator->alter(role_name, options);
     }
 
-    virtual future<> drop(std::string_view role_name) override {
-        return _authenticator->drop(role_name);
+    virtual future<> drop(std::string_view role_name, ::service::mutations_collector& mc) override {
+        return _authenticator->drop(role_name, mc);
     }
 
     virtual future<custom_options> query_custom_options(std::string_view role_name) const override {
@@ -199,12 +199,12 @@ public:
         return _authorizer->list_all();
     }
 
-    virtual future<> revoke_all(std::string_view s) override {
-        return _authorizer->revoke_all(s);
+    virtual future<> revoke_all(std::string_view s, ::service::mutations_collector& mc) override {
+        return _authorizer->revoke_all(s, mc);
     }
 
-    virtual future<> revoke_all(const resource& r) override {
-        return _authorizer->revoke_all(r);
+    virtual future<> revoke_all(const resource& r, ::service::mutations_collector& mc) override {
+        return _authorizer->revoke_all(r, mc);
     }
 
     virtual const resource_set& protected_resources() const override {

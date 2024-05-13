@@ -23,10 +23,8 @@ std::unique_ptr<prepared_statement> drop_aggregate_statement::prepare(data_dicti
     return std::make_unique<prepared_statement>(make_shared<drop_aggregate_statement>(*this));
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::mutations_collector& mc) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
-    std::vector<mutation> m;
 
     auto func = co_await validate_while_executing(qp);
     if (func) {
@@ -34,11 +32,16 @@ drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, const qu
         if (!user_aggr) {
             throw exceptions::invalid_request_exception(format("'{}' is not a user defined aggregate", func));
         }
-        m = co_await service::prepare_aggregate_drop_announcement(qp.proxy(), user_aggr, ts);
+        auto muts = co_await service::prepare_aggregate_drop_announcement(qp.proxy(), user_aggr, mc.write_timestamp());
+        mc.add_mutations(std::move(muts));
+
+        const auto& as = *state.get_client_state().get_auth_service();
+        co_await auth::revoke_all(as, auth::make_functions_resource(*user_aggr), mc);
+
         ret = create_schema_change(*func, false);
     }
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(std::move(ret), std::vector<sstring>());
 }
 
 drop_aggregate_statement::drop_aggregate_statement(functions::function_name name,

@@ -166,7 +166,7 @@ future<> auth::certificate_authenticator::alter(std::string_view role_name, cons
     co_return;
 }
 
-future<> auth::certificate_authenticator::drop(std::string_view role_name) {
+future<> auth::certificate_authenticator::drop(std::string_view role_name, ::service::mutations_collector&) {
     co_return;
 }
 

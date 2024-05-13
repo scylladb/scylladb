@@ -113,7 +113,7 @@ public:
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<> drop(std::string_view role_name) = 0;
+    virtual future<> drop(std::string_view role_name, ::service::mutations_collector&) = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.

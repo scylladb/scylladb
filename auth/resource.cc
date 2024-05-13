@@ -19,10 +19,15 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
+#include "cql3/functions/aggregate_function.hh"
+#include "cql3/functions/user_function.hh"
 #include "cql3/util.hh"
 #include "db/marshal/type_parser.hh"
+#include "log.hh"
 
 namespace auth {
+
+static logging::logger logger("auth_resource");
 
 static const std::unordered_map<resource_kind, std::string_view> roots{
         {resource_kind::data, "data"},
@@ -223,6 +228,15 @@ static sstring decoded_signature_string(std::string_view encoded_signature) {
             }), ", "));
 }
 
+resource make_functions_resource(const cql3::functions::function& f) {
+    if (!dynamic_cast<const cql3::functions::user_function*>(&f) &&
+            !dynamic_cast<const cql3::functions::aggregate_function*>(&f)) {
+        on_internal_error(logger, "unsuppported function type");
+    }
+    auto&& sig = auth::encode_signature(f.name().name, f.arg_types());
+    return make_functions_resource(f.name().keyspace, sig);
+}
+
 functions_resource_view::functions_resource_view(const resource& r) : _resource(r) {
     if (r._kind != resource_kind::functions) {
         throw resource_kind_mismatch(resource_kind::functions, r._kind);
@@ -280,6 +294,10 @@ std::optional<std::string_view> data_resource_view::keyspace() const {
     }
 
     return _resource._parts[1];
+}
+
+bool data_resource_view::is_keyspace() const {
+    return _resource._parts.size() == 2;
 }
 
 std::optional<std::string_view> data_resource_view::table() const {

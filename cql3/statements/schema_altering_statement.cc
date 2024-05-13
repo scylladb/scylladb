@@ -9,6 +9,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <tuple>
 #include "cql3/statements/schema_altering_statement.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/data_dictionary.hh"
@@ -18,6 +19,8 @@
 namespace cql3 {
 
 namespace statements {
+
+static logging::logger logger("schema_altering_statement");
 
 schema_altering_statement::schema_altering_statement(timeout_config_selector timeout_selector)
     : cf_statement(cf_name())
@@ -81,6 +84,18 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
     }
     co_await qp.announce_schema_statement(*this, mc);
     co_return std::move(result);
+}
+
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> schema_altering_statement::prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const {
+    // derived class must implement one of prepare_schema_mutations overloads
+    on_internal_error(logger, "not implemented");
+    co_return std::make_tuple(::shared_ptr<cql_transport::event::schema_change>(nullptr), std::vector<mutation>{}, cql3::cql_warnings_vec{});
+}
+
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> schema_altering_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::mutations_collector& mc) const {
+    auto [ret, muts, cql_warnings] = co_await prepare_schema_mutations(qp, options, mc.write_timestamp());
+    mc.add_mutations(std::move(muts));
+    co_return std::make_tuple(ret, cql_warnings);
 }
 
 }

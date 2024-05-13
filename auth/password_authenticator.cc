@@ -298,7 +298,7 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
     }
 }
 
-future<> password_authenticator::drop(std::string_view name) {
+future<> password_authenticator::drop(std::string_view name, ::service::mutations_collector& mc) {
     const sstring query = format("DELETE {} FROM {}.{} WHERE {} = ?",
             SALTED_HASH,
             get_auth_ks_name(_qp),
@@ -311,7 +311,7 @@ future<> password_authenticator::drop(std::string_view name) {
                 {sstring(name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query, {sstring(name)}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc, query, {sstring(name)});
     }
 }
 

@@ -121,7 +121,7 @@ public:
     ///
     /// Delete the authentication record for a user. This will disallow the user from logging in.
     ///
-    virtual future<> drop(std::string_view role_name) = 0;
+    virtual future<> drop(std::string_view role_name, ::service::mutations_collector&) = 0;
 
     ///
     /// Query for custom options (those corresponding to \ref authentication_options::options).

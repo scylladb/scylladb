@@ -229,18 +229,16 @@ future<> drop_role_statement::check_access(query_processor& qp, const service::c
 
 future<result_message_ptr>
 drop_role_statement::execute(query_processor&, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
-    if (guard) {
-        release_guard(std::move(*guard));
-    }
+    service::mutations_collector mc{std::move(guard)};
     auto& as = *state.get_client_state().get_auth_service();
     try {
-        co_await auth::drop_role(as, _role);
+        co_await auth::drop_role(as, _role, mc);
     } catch (const auth::nonexistant_role& e) {
          if (!_if_exists) {
             throw exceptions::invalid_request_exception(e.what());
         }
     }
-
+    co_await auth::announce_mutations(as, std::move(mc));
     co_return nullptr;
 }
 

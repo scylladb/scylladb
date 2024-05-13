@@ -53,7 +53,7 @@ future<> maintenance_socket_role_manager::create(std::string_view role_name, con
     return operation_not_supported_exception("CREATE");
 }
 
-future<> maintenance_socket_role_manager::drop(std::string_view role_name) {
+future<> maintenance_socket_role_manager::drop(std::string_view role_name, ::service::mutations_collector& mc) {
     return operation_not_supported_exception("DROP");
 }
 

@@ -103,14 +103,14 @@ public:
     ///
     /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
     ///
-    virtual future<> revoke_all(std::string_view role_name) = 0;
+    virtual future<> revoke_all(std::string_view role_name, ::service::mutations_collector&) = 0;
 
     ///
     /// Revoke all permissions granted to any role for a particular resource.
     ///
     /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
     ///
-    virtual future<> revoke_all(const resource&) = 0;
+    virtual future<> revoke_all(const resource&, ::service::mutations_collector&) = 0;
 
     ///
     /// System resources used internally as part of the implementation. These are made inaccessible to users.

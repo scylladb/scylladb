@@ -56,9 +56,10 @@ static logging::logger log("auth_service");
 
 class auth_migration_listener final : public ::service::migration_listener {
     authorizer& _authorizer;
+    cql3::query_processor& _qp;
 
 public:
-    explicit auth_migration_listener(authorizer& a) : _authorizer(a) {
+    explicit auth_migration_listener(authorizer& a, cql3::query_processor& qp) : _authorizer(a),  _qp(qp) {
     }
 
 private:
@@ -78,41 +79,61 @@ private:
     void on_update_tablet_metadata() override {}
 
     void on_drop_keyspace(const sstring& ks_name) override {
+        if (!legacy_mode(_qp)) {
+            // in non legacy path revoke is part of schema change statement execution
+            return;
+        }
         // Do it in the background.
-        (void)_authorizer.revoke_all(
-                auth::make_data_resource(ks_name)
-        ).handle_exception([] (std::exception_ptr e) {
+        (void)do_with(::service::mutations_collector::unused(), [this, &ks_name] (auto& mc) mutable {
+            return _authorizer.revoke_all(auth::make_data_resource(ks_name), mc);
+        }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped keyspace: {}", e);
         });
-        (void)_authorizer.revoke_all(
-            auth::make_functions_resource(ks_name)
-        ).handle_exception([] (std::exception_ptr e) {
+
+        (void)do_with(::service::mutations_collector::unused(), [this, &ks_name] (auto& mc) mutable {
+            return _authorizer.revoke_all(auth::make_functions_resource(ks_name), mc);
+        }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on functions in dropped keyspace: {}", e);
         });
     }
 
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
+        if (!legacy_mode(_qp)) {
+            // in non legacy path revoke is part of schema change statement execution
+            return;
+        }
         // Do it in the background.
-        (void)_authorizer.revoke_all(
-                auth::make_data_resource(
-                        ks_name, cf_name)
-        ).handle_exception([] (std::exception_ptr e) {
+        (void)do_with(::service::mutations_collector::unused(), [this, &ks_name, &cf_name] (auto& mc) mutable {
+            return _authorizer.revoke_all(
+                    auth::make_data_resource(ks_name, cf_name), mc);
+        }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped table: {}", e);
         });
     }
 
     void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
     void on_drop_function(const sstring& ks_name, const sstring& function_name) override {
-        (void)_authorizer.revoke_all(
-            auth::make_functions_resource(ks_name, function_name)
-        ).handle_exception([] (std::exception_ptr e) {
+        if (!legacy_mode(_qp)) {
+            // in non legacy path revoke is part of schema change statement execution
+            return;
+        }
+        // Do it in the background.
+        (void)do_with(::service::mutations_collector::unused(), [this, &ks_name, &function_name] (auto& mc) mutable {
+            return _authorizer.revoke_all(
+                    auth::make_functions_resource(ks_name, function_name), mc);
+        }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped function: {}", e);
         });
     }
     void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {
-        (void)_authorizer.revoke_all(
-            auth::make_functions_resource(ks_name, aggregate_name)
-        ).handle_exception([] (std::exception_ptr e) {
+        if (!legacy_mode(_qp)) {
+            // in non legacy path revoke is part of schema change statement execution
+            return;
+        }
+        (void)do_with(::service::mutations_collector::unused(), [this, &ks_name, &aggregate_name] (auto& mc) mutable {
+            return _authorizer.revoke_all(
+                    auth::make_functions_resource(ks_name, aggregate_name), mc);
+        }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped aggregate: {}", e);
         });
     }
@@ -144,7 +165,7 @@ service::service(
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
-            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer))
+            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer, qp))
             , _permissions_cache_cfg_cb([this] (uint32_t) { (void) _permissions_cache_config_action.trigger_later(); })
             , _permissions_cache_config_action([this] { update_cache_config(); return make_ready_future<>(); })
             , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
@@ -345,7 +366,7 @@ future<> service::create_role(std::string_view name,
         // Rollback only in legacy mode as normally mutations won't be
         // applied in case exception is raised
         if (legacy_mode(_qp)) {
-            co_await underlying_role_manager().drop(name);
+            co_await underlying_role_manager().drop(name, mc);
         }
         std::rethrow_exception(std::move(ep));
     }
@@ -471,13 +492,13 @@ future<> alter_role(
     co_await ser.underlying_authenticator().alter(name, options);
 }
 
-future<> drop_role(const service& ser, std::string_view name) {
+future<> drop_role(const service& ser, std::string_view name, ::service::mutations_collector& mc) {
     auto& a = ser.underlying_authorizer();
     auto r = make_role_resource(name);
-    co_await a.revoke_all(name);
-    co_await a.revoke_all(r);
-    co_await ser.underlying_authenticator().drop(name);
-    co_await ser.underlying_role_manager().drop(name);
+    co_await a.revoke_all(name, mc);
+    co_await a.revoke_all(r, mc);
+    co_await ser.underlying_authenticator().drop(name, mc);
+    co_await ser.underlying_role_manager().drop(name, mc);
 }
 
 future<> grant_role(const service& ser, std::string_view grantee_name, std::string_view role_name) {
@@ -540,6 +561,10 @@ future<> revoke_permissions(
         ::service::mutations_collector& mc) {
     co_await validate_role_exists(ser, role_name);
     co_await ser.underlying_authorizer().revoke(role_name, perms, r, mc);
+}
+
+future<> revoke_all(const service& ser, const resource& r, ::service::mutations_collector& mc) {
+    return ser.underlying_authorizer().revoke_all(r, mc);
 }
 
 future<std::vector<permission_details>> list_filtered_permissions(

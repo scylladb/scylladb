@@ -67,7 +67,7 @@ public:
         return make_ready_future();
     }
 
-    virtual future<> drop(std::string_view) override {
+    virtual future<> drop(std::string_view, ::service::mutations_collector&) override {
         return make_ready_future();
     }
 

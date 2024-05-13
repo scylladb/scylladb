@@ -68,7 +68,7 @@ public:
 
     virtual future<> alter(std::string_view role_name, const authentication_options& options) override;
 
-    virtual future<> drop(std::string_view role_name) override;
+    virtual future<> drop(std::string_view role_name, ::service::mutations_collector&) override;
 
     virtual future<custom_options> query_custom_options(std::string_view role_name) const override;
 

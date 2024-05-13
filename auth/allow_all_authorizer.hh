@@ -61,11 +61,11 @@ public:
                         "LIST PERMISSIONS operation is not supported by AllowAllAuthorizer"));
     }
 
-    virtual future<> revoke_all(std::string_view) override {
+    virtual future<> revoke_all(std::string_view, ::service::mutations_collector&) override {
         return make_ready_future();
     }
 
-    virtual future<> revoke_all(const resource&) override {
+    virtual future<> revoke_all(const resource&, ::service::mutations_collector&) override {
         return make_ready_future();
     }
 
