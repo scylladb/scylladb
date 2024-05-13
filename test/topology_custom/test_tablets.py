@@ -8,11 +8,15 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_all_tablet_replicas
+from test.pylib.util import read_barrier
+from test.topology.util import wait_for_cql_and_get_hosts
 import pytest
 import logging
 import asyncio
+import random
 import re
 import requests
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +105,6 @@ async def test_reshape_with_tablets(manager: ManagerClient):
 
 
 @pytest.mark.parametrize("direction", ["up", "down", "none"])
-@pytest.mark.xfail(reason="Scaling not implemented yet")
 @pytest.mark.asyncio
 async def test_tablet_rf_change(manager: ManagerClient, direction):
     cfg = {'enable_user_defined_functions': False,
