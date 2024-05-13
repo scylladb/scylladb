@@ -453,7 +453,7 @@ private:
     // It contains and manages both the compaction_groups list and the storage_groups vector.
     std::unique_ptr<storage_group_manager> _sg_manager;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
-    lw_shared_ptr<sstables::sstable_set> _sstables;
+    lw_shared_ptr<const sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
     // This semaphore ensures that an operation like snapshot won't have its selected
@@ -643,7 +643,7 @@ private:
     // Mutations returned by the reader will all have given schema.
     flat_mutation_reader_v2 make_sstable_reader(schema_ptr schema,
                                         reader_permit permit,
-                                        lw_shared_ptr<sstables::sstable_set> sstables,
+                                        lw_shared_ptr<const sstables::sstable_set> sstables,
                                         const dht::partition_range& range,
                                         const query::partition_slice& slice,
                                         tracing::trace_state_ptr trace_state,
@@ -652,12 +652,12 @@ private:
                                         const sstables::sstable_predicate& = sstables::default_sstable_predicate()) const;
 
     lw_shared_ptr<sstables::sstable_set> make_maintenance_sstable_set() const;
-    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set() const;
+    lw_shared_ptr<const sstables::sstable_set> make_compound_sstable_set() const;
     // Compound sstable set must be refreshed whenever any of its managed sets are changed
     void refresh_compound_sstable_set();
 
     snapshot_source sstables_as_snapshot_source();
-    partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
+    partition_presence_checker make_partition_presence_checker(lw_shared_ptr<const sstables::sstable_set>);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
 
     dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {

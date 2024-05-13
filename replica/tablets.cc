@@ -355,7 +355,7 @@ class tablet_sstable_set : public sstables::sstable_set_impl {
     schema_ptr _schema;
     locator::tablet_map _tablet_map;
     // Keep a single (compound) sstable_set per tablet/storage_group
-    absl::flat_hash_map<size_t, lw_shared_ptr<sstables::sstable_set>, absl::Hash<size_t>> _sstable_sets;
+    absl::flat_hash_map<size_t, lw_shared_ptr<const sstables::sstable_set>, absl::Hash<size_t>> _sstable_sets;
     // Used when ordering is required for correctness, but hot paths will use flat_hash_map
     // which provides faster lookup time.
     std::set<size_t> _sstable_set_ids;
@@ -423,7 +423,7 @@ public:
             const sstables::sstable_predicate&) const override;
 
     // Will always return an engaged sstable set ptr.
-    const lw_shared_ptr<sstables::sstable_set>& find_sstable_set(size_t i) const {
+    const lw_shared_ptr<const sstables::sstable_set>& find_sstable_set(size_t i) const {
         auto it = _sstable_sets.find(i);
         if (it == _sstable_sets.end() || !it->second) [[unlikely]] {
             on_internal_error(tablet_logger, format("SSTable set wasn't found for tablet {} of table {}.{}", i, schema()->ks_name(), schema()->cf_name()));
@@ -451,8 +451,8 @@ private:
 #endif
         return _tablet_map.get_last_token(tablet_id(idx));
     }
-    stop_iteration for_each_sstable_set_until(const dht::partition_range&, std::function<stop_iteration(lw_shared_ptr<sstables::sstable_set>)>) const;
-    future<stop_iteration> for_each_sstable_set_gently_until(const dht::partition_range&, std::function<future<stop_iteration>(lw_shared_ptr<sstables::sstable_set>)>) const;
+    stop_iteration for_each_sstable_set_until(const dht::partition_range&, std::function<stop_iteration(lw_shared_ptr<const sstables::sstable_set>)>) const;
+    future<stop_iteration> for_each_sstable_set_gently_until(const dht::partition_range&, std::function<future<stop_iteration>(lw_shared_ptr<const sstables::sstable_set>)>) const;
 
     auto subrange(const dht::partition_range& pr) const {
         size_t candidate_start = pr.start() ? group_of(pr.start()->value().token()) : size_t(0);
@@ -477,7 +477,7 @@ future<std::optional<tablet_transition_stage>> read_tablet_transition_stage(cql3
     co_return tablet_transition_stage_from_string(rs->one().get_as<sstring>("stage"));
 }
 
-stop_iteration tablet_sstable_set::for_each_sstable_set_until(const dht::partition_range& pr, std::function<stop_iteration(lw_shared_ptr<sstables::sstable_set>)> func) const {
+stop_iteration tablet_sstable_set::for_each_sstable_set_until(const dht::partition_range& pr, std::function<stop_iteration(lw_shared_ptr<const sstables::sstable_set>)> func) const {
     for (const auto& i : subrange(pr)) {
         const auto& set = find_sstable_set(i);
         if (func(set) == stop_iteration::yes) {
@@ -487,7 +487,7 @@ stop_iteration tablet_sstable_set::for_each_sstable_set_until(const dht::partiti
     return stop_iteration::no;
 }
 
-future<stop_iteration> tablet_sstable_set::for_each_sstable_set_gently_until(const dht::partition_range& pr, std::function<future<stop_iteration>(lw_shared_ptr<sstables::sstable_set>)> func) const {
+future<stop_iteration> tablet_sstable_set::for_each_sstable_set_gently_until(const dht::partition_range& pr, std::function<future<stop_iteration>(lw_shared_ptr<const sstables::sstable_set>)> func) const {
     for (const auto& i : subrange(pr)) {
         const auto& set = find_sstable_set(i);
         if (co_await func(set) == stop_iteration::yes) {
@@ -499,7 +499,8 @@ future<stop_iteration> tablet_sstable_set::for_each_sstable_set_gently_until(con
 
 std::vector<sstables::shared_sstable> tablet_sstable_set::select(const dht::partition_range& range) const {
     std::vector<sstables::shared_sstable> ret;
-    for_each_sstable_set_until(range, [&] (lw_shared_ptr<sstables::sstable_set> set) {
+    ret.reserve(size());
+    for_each_sstable_set_until(range, [&] (lw_shared_ptr<const sstables::sstable_set> set) {
         auto ssts = set->select(range);
         if (ret.empty()) {
             ret = std::move(ssts);
@@ -514,7 +515,8 @@ std::vector<sstables::shared_sstable> tablet_sstable_set::select(const dht::part
 
 lw_shared_ptr<const sstable_list> tablet_sstable_set::all() const {
     auto ret = make_lw_shared<sstable_list>();
-    for_each_sstable_set_until(query::full_partition_range, [&] (lw_shared_ptr<sstables::sstable_set> set) {
+    ret->reserve(size());
+    for_each_sstable_set_until(query::full_partition_range, [&] (lw_shared_ptr<const sstables::sstable_set> set) {
         set->for_each_sstable([&] (const sstables::shared_sstable& sst) {
             ret->insert(sst);
         });
@@ -524,13 +526,13 @@ lw_shared_ptr<const sstable_list> tablet_sstable_set::all() const {
 }
 
 stop_iteration tablet_sstable_set::for_each_sstable_until(std::function<stop_iteration(const sstables::shared_sstable&)> func) const {
-    return for_each_sstable_set_until(query::full_partition_range, [func = std::move(func)] (lw_shared_ptr<sstables::sstable_set> set) {
+    return for_each_sstable_set_until(query::full_partition_range, [func = std::move(func)] (lw_shared_ptr<const sstables::sstable_set> set) {
         return set->for_each_sstable_until(func);
     });
 }
 
 future<stop_iteration> tablet_sstable_set::for_each_sstable_gently_until(std::function<future<stop_iteration>(const sstables::shared_sstable&)> func) const {
-    return for_each_sstable_set_gently_until(query::full_partition_range, [func = std::move(func)] (lw_shared_ptr<sstables::sstable_set> set) {
+    return for_each_sstable_set_gently_until(query::full_partition_range, [func = std::move(func)] (lw_shared_ptr<const sstables::sstable_set> set) {
         return set->for_each_sstable_gently_until(func);
     });
 }
@@ -547,7 +549,7 @@ class tablet_incremental_selector : public sstables::incremental_selector_impl {
 
     // _cur_set and _cur_selector contain a snapshot
     // for the currently selected compaction_group.
-    lw_shared_ptr<sstables::sstable_set> _cur_set;
+    lw_shared_ptr<const sstables::sstable_set> _cur_set;
     std::optional<sstables::sstable_set::incremental_selector> _cur_selector;
     dht::token _lowest_next_token = dht::maximum_token();
 

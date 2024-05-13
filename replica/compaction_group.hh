@@ -148,8 +148,8 @@ public:
     const lw_shared_ptr<sstables::sstable_set>& maintenance_sstables() const noexcept;
     void set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables);
 
-    // Makes a compound set, which includes main and maintenance sets
-    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set() const;
+    // Makes a sstable set, which includes all sstables managed by this group
+    lw_shared_ptr<sstables::sstable_set> make_sstable_set() const;
 
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept;
     // Triggers regular compaction.
@@ -223,7 +223,7 @@ public:
     future<> split(compaction_group_list&, sstables::compaction_type_options::split opt);
 
     // Make an sstable set spanning all sstables in the storage_group
-    lw_shared_ptr<sstables::sstable_set> make_sstable_set() const;
+    lw_shared_ptr<const sstables::sstable_set> make_sstable_set() const;
 };
 
 using storage_group_map = absl::flat_hash_map<size_t, std::unique_ptr<storage_group>, absl::Hash<size_t>>;
