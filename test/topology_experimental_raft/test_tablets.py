@@ -3,6 +3,9 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+import threading
+
+from cassandra.cluster import Session
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import ServerInfo
@@ -392,7 +395,12 @@ async def test_table_dropped_during_streaming(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_tablet_repair(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
+    cmdline = [
+        '--logger-log-level', 'repair=trace',
+    ]
+    servers = await manager.servers_add(3, cmdline=cmdline)
+
+    await inject_error_on(manager, "tablet_allocator_shuffle", servers)
 
     cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
@@ -402,20 +410,43 @@ async def test_tablet_repair(manager: ManagerClient):
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
-    await repair_on_node(manager, servers[0], servers)
+    stmt = cql.prepare("INSERT INTO test.test (pk, c) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
 
-    async def check():
-        logger.info("Checking table")
-        rows = await cql.run_async("SELECT * FROM test.test;")
-        assert len(rows) == len(keys)
-        for r in rows:
-            assert r.c == r.pk
+    # Repair runs concurrently with tablet shuffling which exercises issues with serialization
+    # of repair and tablet migration.
+    #
+    # We do it 30 times because it's been experimentally shown to be enough to trigger the issue with high probability.
+    # Lack of proper synchronization would manifest as repair failure with the following cause:
+    #
+    #   failed_because=std::runtime_error (multishard_writer: No shards for token 7505809055260144771 of test.test)
+    #
+    # ...which indicates that repair tried to stream data to a node which is no longer a tablet replica.
+    repair_cycles = 30
+    for i in range(repair_cycles):
+        # Write concurrently with repair to increase the chance of repair having some discrepancy to resolve and send writes.
+        inserts_future = asyncio.gather(*[cql.run_async(stmt, [k, i]) for k in keys])
 
-    await check()
+        # Disable in the background so that repair is started with migrations in progress.
+        # We need to disable balancing so that repair which blocks on migrations eventually gets unblocked.
+        # Otherwise, shuffling would keep the topology busy forever.
+        disable_balancing_future = asyncio.create_task(manager.api.disable_tablet_balancing(servers[0].ip_addr))
 
-    await cql.run_async("DROP KEYSPACE test;")
+        await repair_on_node(manager, servers[0], servers)
+
+        await inserts_future
+        await disable_balancing_future
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    key_count = len(keys)
+    stmt = cql.prepare("SELECT * FROM test.test;")
+    stmt.consistency_level = ConsistencyLevel.ALL
+    rows = await cql.run_async(stmt)
+    assert len(rows) == key_count
+    for r in rows:
+        assert r.c == repair_cycles - 1
+
 
 @pytest.mark.repair
 @pytest.mark.asyncio

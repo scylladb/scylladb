@@ -400,6 +400,10 @@ public:
         return _transitions;
     }
 
+    bool has_transitions() const {
+        return !_transitions.empty();
+    }
+
     /// Returns an iterable range over tablet_id:s which includes all tablets in token ring order.
     auto tablet_ids() const {
         return boost::irange<size_t>(0, tablet_count()) | boost::adaptors::transformed([] (size_t i) {
