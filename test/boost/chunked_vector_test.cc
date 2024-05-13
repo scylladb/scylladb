@@ -123,6 +123,9 @@ public:
         }
         ++_live_objects;
     }
+    void add_live_object_noexcept() noexcept {
+        ++_live_objects;
+    }
     void del_live_object() {
         --_live_objects;
     }
@@ -137,7 +140,9 @@ public:
     exception_safe_class(const exception_safe_class& x) : _esc(x._esc) {
         _esc.add_live_object();
     }
-    exception_safe_class(exception_safe_class&&) = default;
+    exception_safe_class(exception_safe_class&& x) noexcept : _esc(x._esc) {
+        _esc.add_live_object_noexcept();
+    }
     ~exception_safe_class() {
         _esc.del_live_object();
     }
