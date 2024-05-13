@@ -1154,9 +1154,15 @@ void table::set_metrics() {
                 ms::make_counter("memtable_row_hits", _stats.memtable_app_stats.row_hits, ms::description("Number of rows overwritten by write operations in memtables"))(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}),
-                ms::make_counter("read_latency_count", ms::description("Number of reads"), [this] {return _stats.reads.histogram().count();})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
-                ms::make_counter("write_latency_count", ms::description("Number of writes"), [this] {return _stats.writes.histogram().count();})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
+                ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}),
+                ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return to_metrics_histogram(_stats.reads.histogram());})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return to_metrics_histogram(_stats.writes.histogram());})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
             });
+            if (this_shard_id() == 0) {
+                _metrics.add_group("column_family", {
+                        ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)(ms::shard_label(""))
+                });
+            }
         }
     }
 }
@@ -2670,7 +2676,7 @@ table::disable_auto_compaction() {
     // - there are major compactions that additionally uses constant
     //   size backlog of shares,
     // - sstables rewrites tasks that do the same.
-    // 
+    //
     // Setting NullCompactionStrategy is not an option due to the
     // following reasons:
     // - it will 0 backlog if suspending current compactions is not an
