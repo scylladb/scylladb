@@ -351,7 +351,8 @@ chunked_vector<T, max_contiguous_allocation>::chunked_vector(Iterator begin, Ite
 }
 
 template <typename T, size_t max_contiguous_allocation>
-chunked_vector<T, max_contiguous_allocation>::chunked_vector(size_t n, const T& value) {
+chunked_vector<T, max_contiguous_allocation>::chunked_vector(size_t n, const T& value)
+        : chunked_vector() {
     reserve(n);
     std::fill_n(std::back_inserter(*this), n, value);
 }
