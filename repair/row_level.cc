@@ -3045,16 +3045,17 @@ public:
                     _estimated_partitions /= master.all_nodes().size();
 
                     // In addition, estimate the difference between nodes is
-                    // less than 10% for regular repair. Underestimation will
-                    // not be a big problem since those sstables produced by
-                    // repair will go through off-strategy later anyway. The
-                    // worst case is that we have a worse false positive ratio
-                    // than expected temporarily when the sstable is still in
-                    // maintenance set.
+                    // less than the specified ratio for regular repair.
+                    // Underestimation will not be a big problem since those
+                    // sstables produced by repair will go through off-strategy
+                    // later anyway. The worst case is that we have a worse
+                    // false positive ratio than expected temporarily when the
+                    // sstable is still in maintenance set.
                     //
                     // To save memory and have less different conditions, we
-                    // use the 10% estimation for RBNO repair as well.
-                    _estimated_partitions /= 10;
+                    // use the estimation for RBNO repair as well.
+
+                    _estimated_partitions *= _shard_task.db.local().get_config().repair_partition_count_estimation_ratio();
                 }
 
                 parallel_for_each(master.all_nodes(), [&, this] (repair_node_state& ns) {
