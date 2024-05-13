@@ -9,6 +9,7 @@
 #pragma once
 
 #include "auth/authorizer.hh"
+#include "seastar/core/future.hh"
 
 namespace cql3 {
 class query_processor;
@@ -61,13 +62,11 @@ public:
     }
 
     virtual future<> revoke_all(std::string_view) override {
-        return make_exception_future(
-                unsupported_authorization_operation("REVOKE operation is not supported by AllowAllAuthorizer"));
+        return make_ready_future();
     }
 
     virtual future<> revoke_all(const resource&) override {
-        return make_exception_future(
-                unsupported_authorization_operation("REVOKE operation is not supported by AllowAllAuthorizer"));
+        return make_ready_future();
     }
 
     virtual const resource_set& protected_resources() const override {

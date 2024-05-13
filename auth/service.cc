@@ -80,15 +80,13 @@ private:
     void on_drop_keyspace(const sstring& ks_name) override {
         // Do it in the background.
         (void)_authorizer.revoke_all(
-                auth::make_data_resource(ks_name)).handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
-        }).handle_exception([] (std::exception_ptr e) {
+                auth::make_data_resource(ks_name)
+        ).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped keyspace: {}", e);
         });
         (void)_authorizer.revoke_all(
-            auth::make_functions_resource(ks_name)).handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
-        }).handle_exception([] (std::exception_ptr e) {
+            auth::make_functions_resource(ks_name)
+        ).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on functions in dropped keyspace: {}", e);
         });
     }
@@ -97,9 +95,8 @@ private:
         // Do it in the background.
         (void)_authorizer.revoke_all(
                 auth::make_data_resource(
-                        ks_name, cf_name)).handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
-        }).handle_exception([] (std::exception_ptr e) {
+                        ks_name, cf_name)
+        ).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped table: {}", e);
         });
     }
@@ -107,17 +104,15 @@ private:
     void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
     void on_drop_function(const sstring& ks_name, const sstring& function_name) override {
         (void)_authorizer.revoke_all(
-            auth::make_functions_resource(ks_name, function_name)).handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
-        }).handle_exception([] (std::exception_ptr e) {
+            auth::make_functions_resource(ks_name, function_name)
+        ).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped function: {}", e);
         });
     }
     void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {
         (void)_authorizer.revoke_all(
-            auth::make_functions_resource(ks_name, aggregate_name)).handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
-        }).handle_exception([] (std::exception_ptr e) {
+            auth::make_functions_resource(ks_name, aggregate_name)
+        ).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped aggregate: {}", e);
         });
     }
@@ -479,12 +474,8 @@ future<> alter_role(
 future<> drop_role(const service& ser, std::string_view name) {
     auto& a = ser.underlying_authorizer();
     auto r = make_role_resource(name);
-    try {
-        co_await a.revoke_all(name);
-        co_await a.revoke_all(r);
-    } catch (const unsupported_authorization_operation&) {
-        // Nothing.
-    }
+    co_await a.revoke_all(name);
+    co_await a.revoke_all(r);
     co_await ser.underlying_authenticator().drop(name);
     co_await ser.underlying_role_manager().drop(name);
 }
