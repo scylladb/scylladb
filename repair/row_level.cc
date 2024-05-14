@@ -899,7 +899,7 @@ public:
                 add_to_repair_meta_for_followers(*this);
             }
             assert(all_live_peer_shards.size() == all_live_peer_nodes.size());
-            _all_node_states.push_back(repair_node_state(_myip, this_shard_id()));
+            _all_node_states.push_back(repair_node_state(myip(), this_shard_id()));
             for (unsigned i = 0; i < all_live_peer_nodes.size(); i++) {
                 _all_node_states.push_back(repair_node_state(all_live_peer_nodes[i], all_live_peer_shards[i].value_or(repair_unspecified_shard)));
             }
@@ -1483,7 +1483,7 @@ public:
     // Return the hashes of the rows in _working_row_buf
     future<repair_hash_set>
     get_full_row_hashes(gms::inet_address remote_node, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return get_full_row_hashes_handler();
         }
         return _messaging.send_repair_get_full_row_hashes(msg_addr(remote_node),
@@ -1538,7 +1538,7 @@ private:
 public:
     future<repair_hash_set>
     get_full_row_hashes_with_rpc_stream(gms::inet_address remote_node, unsigned node_idx, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return get_full_row_hashes_handler();
         }
         auto current_hashes = make_lw_shared<repair_hash_set>();
@@ -1567,7 +1567,7 @@ public:
     // Return the combined hashes of the current working row buf
     future<get_combined_row_hash_response>
     get_combined_row_hash(std::optional<repair_sync_boundary> common_sync_boundary, gms::inet_address remote_node, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return get_combined_row_hash_handler(common_sync_boundary);
         }
         return _messaging.send_repair_get_combined_row_hash(msg_addr(remote_node),
@@ -1595,7 +1595,7 @@ public:
     // RPC API
     future<>
     repair_row_level_start(gms::inet_address remote_node, sstring ks_name, sstring cf_name, dht::token_range range, table_schema_version schema_version, streaming::stream_reason reason, gc_clock::time_point compaction_time, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return make_ready_future<>();
         }
         stats().rpc_call_nr++;
@@ -1634,7 +1634,7 @@ public:
 
     // RPC API
     future<> repair_row_level_stop(gms::inet_address remote_node, sstring ks_name, sstring cf_name, dht::token_range range, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return stop();
         }
         stats().rpc_call_nr++;
@@ -1656,7 +1656,7 @@ public:
 
     // RPC API
     future<uint64_t> repair_get_estimated_partitions(gms::inet_address remote_node, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return get_estimated_partitions();
         }
         stats().rpc_call_nr++;
@@ -1676,7 +1676,7 @@ public:
 
     // RPC API
     future<> repair_set_estimated_partitions(gms::inet_address remote_node, uint64_t estimated_partitions, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return set_estimated_partitions(estimated_partitions);
         }
         stats().rpc_call_nr++;
@@ -1697,7 +1697,7 @@ public:
     // Return the largest sync point contained in the _row_buf , current _row_buf checksum, and the _row_buf size
     future<get_sync_boundary_response>
     get_sync_boundary(gms::inet_address remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return get_sync_boundary_handler(skipped_sync_boundary);
         }
         stats().rpc_call_nr++;
@@ -1719,7 +1719,7 @@ public:
     // Must run inside a seastar thread
     void get_row_diff(repair_hash_set set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, unsigned node_idx, shard_id dst_cpu_id) {
         if (needs_all_rows || !set_diff.empty()) {
-            if (remote_node == _myip) {
+            if (remote_node == myip()) {
                 return;
             }
             if (needs_all_rows) {
@@ -1739,7 +1739,7 @@ public:
 
     // Must run inside a seastar thread
     void get_row_diff_and_update_peer_row_hash_sets(gms::inet_address remote_node, unsigned node_idx, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return;
         }
         stats().rpc_call_nr++;
@@ -1824,7 +1824,7 @@ public:
             unsigned node_idx,
             shard_id dst_cpu_id) {
         if (needs_all_rows || !set_diff.empty()) {
-            if (remote_node == _myip) {
+            if (remote_node == myip()) {
                 return;
             }
             if (needs_all_rows) {
@@ -1856,7 +1856,7 @@ public:
     // Send rows in the _working_row_buf with hash within the given sef_diff
     future<> put_row_diff(repair_hash_set set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, shard_id dst_cpu_id) {
         if (!set_diff.empty()) {
-            if (remote_node == _myip) {
+            if (remote_node == myip()) {
                 return make_ready_future<>();
             }
             size_t sz = set_diff.size();
@@ -1938,7 +1938,7 @@ public:
         if (set_diff.empty()) {
             co_return;
         }
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             co_return;
         }
         size_t sz = set_diff.size();
