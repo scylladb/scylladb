@@ -77,8 +77,21 @@ private:
 
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
+<<<<<<< HEAD
 public:
     explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem);
+=======
+    std::unique_ptr<sstables::sstables_registry> _sstables_registry;
+    // This function is bound to token_metadata.get_my_id() in the database constructor,
+    // it can return unset value (bool(host_id) == false) until host_id is loaded
+    // after system_keyspace initialization.
+    noncopyable_function<locator::host_id()> _resolve_host_id;
+
+    scheduling_group _maintenance_sg;
+
+public:
+    explicit sstables_manager(sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, noncopyable_function<locator::host_id()>&& resolve_host_id, scheduling_group maintenance_sg = current_scheduling_group(), storage_manager* shared = nullptr);
+>>>>>>> 79f6746298 (sstables_manager: add member to store maintenance scheduling group)
     virtual ~sstables_manager();
 
     // Constructs a shared sstable
