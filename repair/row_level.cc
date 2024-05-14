@@ -746,7 +746,6 @@ private:
     size_t _max_row_buf_size;
     uint64_t _seed = 0;
     repair_master _repair_master;
-    gms::inet_address _myip;
     uint32_t _repair_meta_id;
     streaming::stream_reason _reason;
     // Repair master's sharding configuration
@@ -811,7 +810,7 @@ public:
         return _stats;
     }
     gms::inet_address myip() const {
-        return _myip;
+        return _rs.my_address();
     }
     uint32_t repair_meta_id() const {
         return _repair_meta_id;
@@ -862,7 +861,6 @@ public:
             , _max_row_buf_size(max_row_buf_size)
             , _seed(seed)
             , _repair_master(master)
-            , _myip(_db.local().get_token_metadata().get_topology().my_address())
             , _repair_meta_id(repair_meta_id)
             , _reason(reason)
             , _master_node_shard_config(std::move(master_node_shard_config))
