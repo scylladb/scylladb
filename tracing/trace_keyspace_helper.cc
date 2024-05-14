@@ -215,7 +215,7 @@ future<> trace_keyspace_helper::start(cql3::query_processor& qp, service::migrat
 }
 
 gms::inet_address trace_keyspace_helper::my_address() const noexcept {
-    return _qp_anchor->proxy().local_db().get_token_metadata().get_topology().my_address();
+    return _qp_anchor->proxy().my_address();
 }
 
 void trace_keyspace_helper::write_one_session_records(lw_shared_ptr<one_session_records> records) {
