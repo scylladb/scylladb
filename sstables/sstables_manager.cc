@@ -6,6 +6,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+<<<<<<< HEAD
+=======
+#include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/switch_to.hh>
+>>>>>>> 6f58768c46 (sstables_manager: use maintenance scheduling group to run components reload fiber)
 #include "log.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/partition_index_cache.hh"
@@ -166,6 +171,60 @@ void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(ssta
     smlogger.info("Reclaimed {} bytes of memory from SSTable components. Total memory reclaimed so far is {} bytes", memory_reclaimed, _total_memory_reclaimed);
 }
 
+<<<<<<< HEAD
+=======
+size_t sstables_manager::get_memory_available_for_reclaimable_components() {
+    size_t memory_reclaim_threshold = _available_memory * _db_config.components_memory_reclaim_threshold();
+    return memory_reclaim_threshold - _total_reclaimable_memory;
+}
+
+future<> sstables_manager::components_reloader_fiber() {
+    co_await coroutine::switch_to(_maintenance_sg);
+
+    sstlog.trace("components_reloader_fiber start");
+    while (true) {
+        co_await _sstable_deleted_event.when();
+
+        if (_closing) {
+            co_return;
+        }
+
+        // Reload bloom filters from the smallest to largest so as to maximize
+        // the number of bloom filters being reloaded.
+        auto memory_available = get_memory_available_for_reclaimable_components();
+        while (!_reclaimed.empty() && memory_available > 0) {
+            auto sstable_to_reload = _reclaimed.begin();
+            const size_t reclaimed_memory = sstable_to_reload->total_memory_reclaimed();
+            if (reclaimed_memory > memory_available) {
+                // cannot reload anymore sstables
+                break;
+            }
+
+            // Increment the total memory before reloading to prevent any parallel
+            // fibers from loading new bloom filters into memory.
+            _total_reclaimable_memory += reclaimed_memory;
+            _reclaimed.erase(sstable_to_reload);
+            // Use a lw_shared_ptr to prevent the sstable from getting deleted when
+            // the components are being reloaded.
+            auto sstable_ptr = sstable_to_reload->shared_from_this();
+            try {
+                co_await sstable_ptr->reload_reclaimed_components();
+            } catch (...) {
+                // reload failed due to some reason
+                sstlog.warn("Failed to reload reclaimed SSTable components : {}", std::current_exception());
+                // revert back changes made before the reload
+                _total_reclaimable_memory -= reclaimed_memory;
+                _reclaimed.insert(*sstable_to_reload);
+                break;
+            }
+
+            _total_memory_reclaimed -= reclaimed_memory;
+            memory_available = get_memory_available_for_reclaimable_components();
+        }
+    }
+}
+
+>>>>>>> 6f58768c46 (sstables_manager: use maintenance scheduling group to run components reload fiber)
 void sstables_manager::add(sstable* sst) {
     _active.push_back(*sst);
 }
