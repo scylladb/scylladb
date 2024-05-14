@@ -3437,3 +3437,7 @@ future<uint32_t> repair_service::get_next_repair_meta_id() {
         return local_repair._next_repair_meta_id++;
     });
 }
+
+gms::inet_address repair_service::my_address() const noexcept {
+    return _sp.local().my_address();
+}
