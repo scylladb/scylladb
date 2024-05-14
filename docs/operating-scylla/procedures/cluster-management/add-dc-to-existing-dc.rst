@@ -156,7 +156,9 @@ Add New DC
       UN   54.160.174.243  109.54 KB       256     ?               c7686ffd-7a5b-4124-858e-df2e61130aaa    RACK1
       UN   54.235.9.159    109.75 KB       256     ?               39798227-9f6f-4868-8193-08570856c09a    RACK1
       UN   54.146.228.25   128.33 KB       256     ?               7a4957a1-9590-4434-9746-9c8a6f796a0c    RACK1
-   
+
+.. TODO possibly provide additional information WRT how ALTER works with tablets
+
 #. When all nodes are up and running ``ALTER`` the following Keyspaces in the new nodes:
 
    * Keyspace created by the user (which needed to replicate to the new DC).

@@ -289,6 +289,17 @@ For instance::
 
 The supported options are the same as :ref:`creating a keyspace <create-keyspace-statement>`.
 
+ALTER KEYSPACE with Tablets :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Modifying a keyspace with tablets enabled is possible and doesn't require any special CQL syntax. However, there are some limitations:
+
+- The replication factor (RF) can be increased or decreased by at most 1 at a time. To reach the desired RF value, modify the RF repeatedly.
+- The ``ALTER`` statement rejects the ``replication_factor`` tag. List the DCs explicitly when altering a keyspace. See :ref:`NetworkTopologyStrategy <replication-strategy>`.
+- If there's any other ongoing global topology operation, executing the ``ALTER`` statement will fail (with an explicit and specific error) and needs to be repeated.
+- The ``ALTER`` statement may take longer than the regular query timeout, and even if it times out, it will continue to execute in the background.
+- The replication strategy cannot be modified, as keyspaces with tablets only support ``NetworkTopologyStrategy``.
+
 .. _drop-keyspace-statement:
 
 DROP KEYSPACE
