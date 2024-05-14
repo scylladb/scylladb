@@ -1797,9 +1797,7 @@ def find_single_sstable_readers():
 
     types = []
     try:
-        # For Scylla < 2.1
-        # FIXME: this only finds range readers
-        types = [_lookup_type(['sstable_range_wrapping_reader'])]
+        return intrusive_list(gdb.parse_and_eval('sstables::_reader_tracker._readers'), link='_tracker_link')
     except gdb.error:
         try:
             # for Scylla <= 4.5

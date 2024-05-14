@@ -24,8 +24,13 @@ namespace mx {
 }
 
 class mp_row_consumer_reader_base {
+public:
+    using tracker_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
+    friend class reader_tracker;
 protected:
     shared_sstable _sst;
+
+    tracker_link_type _tracker_link;
 
     // Whether index lower bound is in current partition
     bool _index_in_current_partition = false;
@@ -42,9 +47,7 @@ protected:
 
     std::optional<dht::decorated_key> _current_partition_key;
 public:
-    mp_row_consumer_reader_base(shared_sstable sst)
-        : _sst(std::move(sst))
-    { }
+    mp_row_consumer_reader_base(shared_sstable sst);
 
     // Called when all fragments relevant to the query range or fast forwarding window
     // within the current partition have been pushed.
