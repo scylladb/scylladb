@@ -738,9 +738,20 @@ future<> manager::initialize_endpoint_managers() {
             co_return co_await maybe_create_ep_mgr(maybe_host_id_or_ep->id(), gms::inet_address{});
         }
 
-        // If we have got to this line, hinted handoff is still IP-based.
-        const locator::host_id host_id = maybe_host_id_or_ep->resolve_id(*tmptr);
-        co_await maybe_create_ep_mgr(host_id, maybe_host_id_or_ep->endpoint());
+        // If we have got to this line, hinted handoff is still IP-based and we need to map the IP.
+        const auto maybe_host_id = std::invoke([&] () -> std::optional<locator::host_id> {
+            try {
+                return maybe_host_id_or_ep->resolve_id(*tmptr);
+            } catch (...) {
+                return std::nullopt;
+            }
+        });
+
+        if (!maybe_host_id) {
+            co_return;
+        }
+
+        co_await maybe_create_ep_mgr(*maybe_host_id, maybe_host_id_or_ep->endpoint());
     });
 }
 
@@ -901,11 +912,11 @@ future<> manager::perform_migration() {
 
     // Step 6. Make resource manager scan the hint directory again.
     resource_manager_lock.return_all();
-    // Step 7. Once resource manager is working again, endpoint managers can be safely recreated.
+    // Step 7. Start accepting incoming hints again.
+    _state.remove(state::migrating);
+    // Step 8. Once resource manager is working again, endpoint managers can be safely recreated.
     //         We won't modify the contents of the hint directory anymore.
     co_await initialize_endpoint_managers();
-    // Step 8. Start accepting incoming hints again.
-    _state.remove(state::migrating);
     manager_logger.info("Migration of hinted handoff to host ID has finished successfully");
 }
 
