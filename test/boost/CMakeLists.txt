@@ -360,6 +360,8 @@ add_scylla_test(wasm_test
   KIND SEASTAR)
 add_scylla_test(pretty_printers_test
   KIND BOOST)
+add_scylla_test(sorting_test
+  KIND SEASTAR)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/suite.yaml")
   set(scylla_tests "${scylla_tests}" PARENT_SCOPE)
