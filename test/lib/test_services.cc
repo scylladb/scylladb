@@ -201,8 +201,14 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     , feature_service(gms::feature_config_from_db_config(*db_config))
     , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config,
         feature_service, cache_tracker, cfg.available_memory, dir_sem,
+<<<<<<< HEAD
         [host_id = locator::host_id::create_random_id()]{ return host_id; }, sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
+=======
+        [host_id = locator::host_id::create_random_id()]{ return host_id; }, current_scheduling_group(), sstm)
+    , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)
+    , use_uuid(cfg.use_uuid)
+>>>>>>> 79f6746298 (sstables_manager: add member to store maintenance scheduling group)
     , storage(std::move(cfg.storage))
 { }
 
