@@ -123,8 +123,10 @@ private:
     // after system_keyspace initialization.
     noncopyable_function<locator::host_id()> _resolve_host_id;
 
+    scheduling_group _maintenance_sg;
+
 public:
-    explicit sstables_manager(sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, noncopyable_function<locator::host_id()>&& resolve_host_id, storage_manager* shared = nullptr);
+    explicit sstables_manager(sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, noncopyable_function<locator::host_id()>&& resolve_host_id, scheduling_group maintenance_sg = current_scheduling_group(), storage_manager* shared = nullptr);
     virtual ~sstables_manager();
 
     shared_sstable make_sstable(schema_ptr schema, sstring table_dir,
