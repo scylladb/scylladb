@@ -139,6 +139,7 @@ class mutation_reordered_with_truncate_exception : public std::exception {};
 class column_family_test;
 class table_for_tests;
 class database_test;
+using sstable_list = sstables::sstable_list;
 
 extern logging::logger dblog;
 
@@ -283,12 +284,6 @@ public:
 private:
     lw_shared_ptr<memtable> new_memtable();
 };
-
-}
-
-using sstable_list = sstables::sstable_list;
-
-namespace replica {
 
 class distributed_loader;
 class table_populator;
