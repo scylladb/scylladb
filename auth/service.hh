@@ -156,6 +156,17 @@ public:
     future<bool> has_superuser(std::string_view role_name) const;
 
     ///
+    /// Create a role with optional authentication information.
+    ///
+    /// \returns an exceptional future with \ref role_already_exists if the user or role exists.
+    ///
+    /// \returns an exceptional future with \ref unsupported_authentication_option if an unsupported option is included.
+    ///
+    future<> create_role(std::string_view name,
+            const role_config& config,
+            const authentication_options& options) const;
+
+    ///
     /// Return the set of all roles granted to the given role, including itself and roles granted through other roles.
     ///
     /// \returns an exceptional future with \ref nonexistent_role if the role does not exist.

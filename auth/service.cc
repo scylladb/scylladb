@@ -311,6 +311,46 @@ future<bool> service::has_superuser(std::string_view role_name) const {
     });
 }
 
+static void validate_authentication_options_are_supported(
+        const authentication_options& options,
+        const authentication_option_set& supported) {
+    const auto check = [&supported](authentication_option k) {
+        if (!supported.contains(k)) {
+            throw unsupported_authentication_option(k);
+        }
+    };
+
+    if (options.password) {
+        check(authentication_option::password);
+    }
+
+    if (options.options) {
+        check(authentication_option::options);
+    }
+}
+
+future<> service::create_role(std::string_view name,
+        const role_config& config,
+        const authentication_options& options) const {
+    co_await underlying_role_manager().create(name, config);
+    if (!auth::any_authentication_options(options)) {
+        co_return;
+    }
+    std::exception_ptr ep;
+    try {
+        validate_authentication_options_are_supported(options,
+                underlying_authenticator().supported_options());
+        co_await underlying_authenticator().create(name, options);
+    } catch (...) {
+        ep = std::current_exception();
+    }
+    if (ep) {
+        // Roll-back.
+        co_await underlying_role_manager().drop(name);
+        std::rethrow_exception(std::move(ep));
+    }
+}
+
 future<role_set> service::get_roles(std::string_view role_name) const {
     //
     // We may wish to cache this information in the future (as Apache Cassandra does).
@@ -408,47 +448,12 @@ bool is_protected(const service& ser, command_desc cmd) noexcept {
             || ser.underlying_authorizer().protected_resources().contains(cmd.resource);
 }
 
-static void validate_authentication_options_are_supported(
-        const authentication_options& options,
-        const authentication_option_set& supported) {
-    const auto check = [&supported](authentication_option k) {
-        if (!supported.contains(k)) {
-            throw unsupported_authentication_option(k);
-        }
-    };
-
-    if (options.password) {
-        check(authentication_option::password);
-    }
-
-    if (options.options) {
-        check(authentication_option::options);
-    }
-}
-
-
 future<> create_role(
         const service& ser,
         std::string_view name,
         const role_config& config,
         const authentication_options& options) {
-    co_await ser.underlying_role_manager().create(name, config);
-    if (!auth::any_authentication_options(options)) {
-        co_return;
-    }
-    std::exception_ptr ep;
-    try {
-        validate_authentication_options_are_supported(options,
-                ser.underlying_authenticator().supported_options());
-        co_await ser.underlying_authenticator().create(name, options);
-    } catch (...) {
-        ep = std::current_exception();
-    }
-    if (ep) {
-        // Roll-back.
-        co_await ser.underlying_role_manager().drop(name);
-        std::rethrow_exception(std::move(ep));
-    }
+    return ser.create_role(name, config, options);
 }
 
 future<> alter_role(
