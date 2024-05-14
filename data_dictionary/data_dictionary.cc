@@ -14,6 +14,7 @@
 #include "cql3/util.hh"
 #include "gms/feature_service.hh"
 #include <fmt/core.h>
+#include <fmt/ranges.h>
 #include <ios>
 #include <ostream>
 #include <boost/range/adaptor/map.hpp>
@@ -389,7 +390,6 @@ struct fmt::formatter<data_dictionary::user_types_metadata> {
 };
 
 auto fmt::formatter<data_dictionary::keyspace_metadata>::format(const data_dictionary::keyspace_metadata& m, fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    return ctx.out();
-    // return fmt::format_to(ctx.out(), "KSMetaData{{name={}, strategyClass={}, strategyOptions={}, cfMetaData={}, durable_writes={}, userTypes={}}}",
-    //         m.name(), m.strategy_name(), m.strategy_options(), m.cf_meta_data(), m.durable_writes(), m.user_types());
+    return fmt::format_to(ctx.out(), "KSMetaData{{name={}, strategyClass={}, strategyOptions={}, cfMetaData={}, durable_writes={}, userTypes={}}}",
+            m.name(), m.strategy_name(), m.strategy_options(), m.cf_meta_data(), m.durable_writes(), m.user_types());
 }
