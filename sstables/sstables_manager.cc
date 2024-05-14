@@ -7,6 +7,7 @@
  */
 
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include "log.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstables_registry.hh"
@@ -177,6 +178,8 @@ size_t sstables_manager::get_memory_available_for_reclaimable_components() {
 }
 
 future<> sstables_manager::components_reloader_fiber() {
+    co_await coroutine::switch_to(_maintenance_sg);
+
     sstlog.trace("components_reloader_fiber start");
     while (true) {
         co_await _sstable_deleted_event.when();
