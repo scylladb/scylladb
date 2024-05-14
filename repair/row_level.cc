@@ -2654,7 +2654,7 @@ private:
 
     inet_address_vector_replica_set sort_peer_nodes(const std::vector<gms::inet_address>& nodes) {
         inet_address_vector_replica_set sorted_nodes(nodes.begin(), nodes.end());
-        auto& topology = _shard_task.db.local().get_token_metadata().get_topology();
+        auto& topology = get_erm()->get_topology();
         topology.sort_by_proximity(topology.my_address(), sorted_nodes);
         return sorted_nodes;
     }
