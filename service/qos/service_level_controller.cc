@@ -31,9 +31,10 @@ sstring service_level_controller::default_service_level_name = "default";
 
 
 
-service_level_controller::service_level_controller(sharded<auth::service>& auth_service, service_level_options default_service_level_config):
+service_level_controller::service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, service_level_options default_service_level_config):
         _sl_data_accessor(nullptr),
         _auth_service(auth_service),
+        _token_metadata(tm),
         _last_successful_config_update(seastar::lowres_clock::now()),
         _logged_intervals(0)
 
