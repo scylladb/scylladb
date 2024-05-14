@@ -263,7 +263,7 @@ future<> drop_role(const service&, std::string_view name, ::service::mutations_c
 /// \returns an exceptional future with \ref role_already_included if granting the role would be redundant, or
 /// create a cycle.
 ///
-future<> grant_role(const service&, std::string_view grantee_name, std::string_view role_name);
+future<> grant_role(const service&, std::string_view grantee_name, std::string_view role_name, ::service::mutations_collector& mc);
 
 ///
 /// Revoke `role_name` from `revokee_name`.
@@ -272,7 +272,7 @@ future<> grant_role(const service&, std::string_view grantee_name, std::string_v
 ///
 /// \returns an exceptional future with \ref revoke_ungranted_role if the role was not granted.
 ///
-future<> revoke_role(const service&, std::string_view revokee_name, std::string_view role_name);
+future<> revoke_role(const service&, std::string_view revokee_name, std::string_view role_name, ::service::mutations_collector& mc);
 
 ///
 /// Check if `grantee` has been granted the named role.

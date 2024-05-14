@@ -21,6 +21,7 @@
 #include "seastarx.hh"
 #include "exceptions/exceptions.hh"
 #include "auth/common.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace auth {
 
@@ -128,7 +129,7 @@ public:
     /// \returns an exceptional future with \ref role_already_included if granting the role would be redundant, or
     /// create a cycle.
     ///
-    virtual future<> grant(std::string_view grantee_name, std::string_view role_name) = 0;
+    virtual future<> grant(std::string_view grantee_name, std::string_view role_name, ::service::mutations_collector& mc) = 0;
 
     ///
     /// Revoke `role_name` from `revokee_name`.
@@ -137,7 +138,7 @@ public:
     ///
     /// \returns an exceptional future with \ref revoke_ungranted_role if the role was not granted.
     ///
-    virtual future<> revoke(std::string_view revokee_name, std::string_view role_name) = 0;
+    virtual future<> revoke(std::string_view revokee_name, std::string_view role_name, ::service::mutations_collector& mc) = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.

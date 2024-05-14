@@ -55,9 +55,9 @@ public:
 
     virtual future<> alter(std::string_view role_name, const role_config_update&) override;
 
-    virtual future<> grant(std::string_view grantee_name, std::string_view role_name) override;
+    virtual future<> grant(std::string_view grantee_name, std::string_view role_name, ::service::mutations_collector& mc) override;
 
-    virtual future<> revoke(std::string_view revokee_name, std::string_view role_name) override;
+    virtual future<> revoke(std::string_view revokee_name, std::string_view role_name, ::service::mutations_collector& mc) override;
 
     virtual future<role_set> query_granted(std::string_view grantee_name, recursive_role_query) override;
 

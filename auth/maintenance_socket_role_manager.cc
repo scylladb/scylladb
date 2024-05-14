@@ -61,11 +61,11 @@ future<> maintenance_socket_role_manager::alter(std::string_view role_name, cons
     return operation_not_supported_exception("ALTER");
 }
 
-future<> maintenance_socket_role_manager::grant(std::string_view grantee_name, std::string_view role_name) {
+future<> maintenance_socket_role_manager::grant(std::string_view grantee_name, std::string_view role_name, ::service::mutations_collector& mc) {
     return operation_not_supported_exception("GRANT");
 }
 
-future<> maintenance_socket_role_manager::revoke(std::string_view revokee_name, std::string_view role_name) {
+future<> maintenance_socket_role_manager::revoke(std::string_view revokee_name, std::string_view role_name, ::service::mutations_collector& mc) {
     return operation_not_supported_exception("REVOKE");
 }
 

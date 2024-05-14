@@ -501,12 +501,12 @@ future<> drop_role(const service& ser, std::string_view name, ::service::mutatio
     co_await ser.underlying_role_manager().drop(name, mc);
 }
 
-future<> grant_role(const service& ser, std::string_view grantee_name, std::string_view role_name) {
-    return ser.underlying_role_manager().grant(grantee_name, role_name);
+future<> grant_role(const service& ser, std::string_view grantee_name, std::string_view role_name, ::service::mutations_collector& mc) {
+    return ser.underlying_role_manager().grant(grantee_name, role_name, mc);
 }
 
-future<> revoke_role(const service& ser, std::string_view revokee_name, std::string_view role_name) {
-    return ser.underlying_role_manager().revoke(revokee_name, role_name);
+future<> revoke_role(const service& ser, std::string_view revokee_name, std::string_view role_name, ::service::mutations_collector& mc) {
+    return ser.underlying_role_manager().revoke(revokee_name, role_name, mc);
 }
 
 future<bool> has_role(const service& ser, std::string_view grantee, std::string_view name) {

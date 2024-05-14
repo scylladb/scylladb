@@ -93,9 +93,11 @@ SEASTAR_TEST_CASE(drop_role) {
             m->create("tim", tim_config, mc).get();
         });
 
-        m->grant("lord", "peasant").get();
-        m->grant("king", "lord").get();
-        m->grant("tim", "lord").get();
+        do_with_mc(env, [&m] (auto& mc) {
+            m->grant("lord", "peasant", mc).get();
+            m->grant("king", "lord", mc).get();
+            m->grant("tim", "lord", mc).get();
+        });
 
         do_with_mc(env, [&m] (auto& mc) {
             m->drop("lord", mc).get();
@@ -134,12 +136,11 @@ SEASTAR_TEST_CASE(grant_role) {
             m->create("king", auth::role_config(), mc).get();
         });
 
-        //
         // All kings have the rights of lords, and 'jsnow' is a king.
-        //
-
-        m->grant("king", "lord").get();
-        m->grant("jsnow", "king").get();
+        do_with_mc(env, [&m] (auto& mc) {
+            m->grant("king", "lord", mc).get();
+            m->grant("jsnow", "king", mc).get();
+        });
 
         BOOST_REQUIRE_EQUAL(
                 m->query_granted("king", auth::recursive_role_query::yes).get(),
@@ -153,11 +154,12 @@ SEASTAR_TEST_CASE(grant_role) {
                 m->query_granted("jsnow", auth::recursive_role_query::yes).get(),
                 (std::unordered_set<sstring>{"jsnow", "king", "lord"}));
 
-        // A non-existing role cannot be granted.
-        BOOST_REQUIRE_THROW(m->grant("jsnow", "doctor").get(), auth::nonexistant_role);
-
-        // A role cannot be granted to a non-existing role.
-        BOOST_REQUIRE_THROW(m->grant("hpotter", "lord").get(), auth::nonexistant_role);
+        do_with_mc(env, [&m] (auto& mc) {
+            // A non-existing role cannot be granted.
+            BOOST_REQUIRE_THROW(m->grant("jsnow", "doctor", mc).get(), auth::nonexistant_role);
+            // A role cannot be granted to a non-existing role.
+            BOOST_REQUIRE_THROW(m->grant("hpotter", "lord", mc).get(), auth::nonexistant_role);
+        });
     });
 }
 
@@ -177,27 +179,33 @@ SEASTAR_TEST_CASE(revoke_role) {
             m->create("sous_chef", auth::role_config(), mc).get();
         });
 
-        m->grant("chef", "sous_chef").get();
-        m->grant("rrat", "chef").get();
+        do_with_mc(env, [&m] (auto& mc) {
+            m->grant("chef", "sous_chef", mc).get();
+            m->grant("rrat", "chef", mc).get();
+        });
 
-        m->revoke("chef", "sous_chef").get();
+        do_with_mc(env, [&m] (auto& mc) {
+            m->revoke("chef", "sous_chef", mc).get();
+        });
         BOOST_REQUIRE_EQUAL(
                 m->query_granted("rrat", auth::recursive_role_query::yes).get(),
                 (std::unordered_set<sstring>{"chef", "rrat"}));
 
-        m->revoke("rrat", "chef").get();
+        do_with_mc(env, [&m] (auto& mc) {
+            m->revoke("rrat", "chef", mc).get();
+        });
         BOOST_REQUIRE_EQUAL(
                 m->query_granted("rrat", auth::recursive_role_query::yes).get(),
                 std::unordered_set<sstring>{"rrat"});
 
-        // A non-existing role cannot be revoked.
-        BOOST_REQUIRE_THROW(m->revoke("rrat", "taster").get(), auth::nonexistant_role);
-
-        // A role cannot be revoked from a non-existing role.
-        BOOST_REQUIRE_THROW(m->revoke("ccasper", "chef").get(), auth::nonexistant_role);
-
-        // Revoking a role not granted is an error.
-        BOOST_REQUIRE_THROW(m->revoke("rrat", "sous_chef").get(), auth::revoke_ungranted_role);
+        do_with_mc(env, [&m] (auto& mc) {
+            // A non-existing role cannot be revoked.
+            BOOST_REQUIRE_THROW(m->revoke("rrat", "taster", mc).get(), auth::nonexistant_role);
+            // A role cannot be revoked from a non-existing role.
+            BOOST_REQUIRE_THROW(m->revoke("ccasper", "chef", mc).get(), auth::nonexistant_role);
+            // Revoking a role not granted is an error.
+            BOOST_REQUIRE_THROW(m->revoke("rrat", "sous_chef", mc).get(), auth::revoke_ungranted_role);
+        });
     });
 }
 

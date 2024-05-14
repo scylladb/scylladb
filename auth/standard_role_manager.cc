@@ -521,7 +521,7 @@ standard_role_manager::modify_membership(
 }
 
 future<>
-standard_role_manager::grant(std::string_view grantee_name, std::string_view role_name) {
+standard_role_manager::grant(std::string_view grantee_name, std::string_view role_name, ::service::mutations_collector& mc) {
     const auto check_redundant = [this, role_name, grantee_name] {
         return this->query_granted(
                 grantee_name,
@@ -546,18 +546,18 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
         });
     };
 
-   return when_all_succeed(check_redundant(), check_cycle()).then_unpack([this, role_name, grantee_name] {
-       return this->legacy_modify_membership(grantee_name, role_name, membership_change::add);
-   });
+    return when_all_succeed(check_redundant(), check_cycle()).then_unpack([this, role_name, grantee_name, &mc] {
+        return this->modify_membership(grantee_name, role_name, membership_change::add, mc);
+    });
 }
 
 future<>
-standard_role_manager::revoke(std::string_view revokee_name, std::string_view role_name) {
+standard_role_manager::revoke(std::string_view revokee_name, std::string_view role_name, ::service::mutations_collector& mc) {
     return this->exists(role_name).then([role_name](bool role_exists) {
         if (!role_exists) {
             throw nonexistant_role(sstring(role_name));
         }
-    }).then([this, revokee_name, role_name] {
+    }).then([this, revokee_name, role_name, &mc] {
         return this->query_granted(
                 revokee_name,
                 recursive_role_query::no).then([revokee_name, role_name](role_set roles) {
@@ -566,8 +566,8 @@ standard_role_manager::revoke(std::string_view revokee_name, std::string_view ro
             }
 
             return make_ready_future<>();
-        }).then([this, revokee_name, role_name] {
-            return this->legacy_modify_membership(revokee_name, role_name, membership_change::remove);
+        }).then([this, revokee_name, role_name, &mc] {
+            return this->modify_membership(revokee_name, role_name, membership_change::remove, mc);
         });
     });
 }

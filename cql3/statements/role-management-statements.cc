@@ -12,7 +12,7 @@
 
 #include "types/map.hh"
 #include "auth/authentication_options.hh"
-#include "auth/common.hh"
+#include "auth/service.hh"
 #include "auth/role_manager.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/column_identifier.hh"
@@ -396,16 +396,14 @@ future<> grant_role_statement::check_access(query_processor& qp, const service::
 
 future<result_message_ptr>
 grant_role_statement::execute(query_processor&, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
-    if (guard) {
-        release_guard(std::move(*guard));
-    }
-    const auto& as = *state.get_client_state().get_auth_service();
+    service::mutations_collector mc{std::move(guard)};
+    auto& as = *state.get_client_state().get_auth_service();
     try {
-        co_await auth::grant_role(as, _grantee, _role);
+        co_await auth::grant_role(as, _grantee, _role, mc);
     } catch (const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
-
+    co_await auth::announce_mutations(as, std::move(mc));
     co_return nullptr;
 }
 
@@ -431,15 +429,14 @@ future<result_message_ptr> revoke_role_statement::execute(
         service::query_state& state,
         const query_options&,
         std::optional<service::group0_guard> guard) const {
-    if (guard) {
-        release_guard(std::move(*guard));
-    }
-    const auto& as = *state.get_client_state().get_auth_service();
+    service::mutations_collector mc{std::move(guard)};
+    auto& as = *state.get_client_state().get_auth_service();
     try {
-        co_await auth::revoke_role(as, _revokee, _role);
+        co_await auth::revoke_role(as, _revokee, _role, mc);
     } catch (const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
+    co_await auth::announce_mutations(as, std::move(mc));
     co_return nullptr;
 }
 
