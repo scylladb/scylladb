@@ -26,6 +26,8 @@
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
+#include "seastar/core/on_internal_error.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "utils/class_registrator.hh"
 #include "service/migration_manager.hh"
 #include "password_authenticator.hh"
@@ -359,7 +361,7 @@ future<> standard_role_manager::drop(std::string_view role_name) {
                 members->end(),
                 [this, role_name] (const cql3::untyped_result_set_row& member_row) -> future<> {
                     const sstring member = member_row.template get_as<sstring>("member");
-                    co_await this->modify_membership(member, role_name, membership_change::remove);
+                    co_await this->legacy_modify_membership(member, role_name, membership_change::remove);
                 }
         );
     };
@@ -372,7 +374,7 @@ future<> standard_role_manager::drop(std::string_view role_name) {
                 granted_roles.begin(),
                 granted_roles.end(),
                 [this, grantee](const sstring& role_name) {
-            return this->modify_membership(grantee, role_name, membership_change::remove);
+            return this->legacy_modify_membership(grantee, role_name, membership_change::remove);
         });
     };
     // Delete all attributes for that role
@@ -411,7 +413,7 @@ future<> standard_role_manager::drop(std::string_view role_name) {
 }
 
 future<>
-standard_role_manager::modify_membership(
+standard_role_manager::legacy_modify_membership(
         std::string_view grantee_name,
         std::string_view role_name,
         membership_change ch) {
@@ -481,6 +483,44 @@ standard_role_manager::modify_membership(
 }
 
 future<>
+standard_role_manager::modify_membership(
+        std::string_view grantee_name,
+        std::string_view role_name,
+        membership_change ch,
+        ::service::mutations_collector& mc) {
+    if (legacy_mode(_qp)) {
+        co_return co_await legacy_modify_membership(grantee_name, role_name, ch);
+    }
+
+    const auto modify_roles = format(
+            "UPDATE {}.{} SET member_of = member_of {} ? WHERE {} = ?",
+            get_auth_ks_name(_qp),
+            meta::roles_table::name,
+            (ch == membership_change::add ? '+' : '-'),
+            meta::roles_table::role_col_name);
+    co_await collect_mutations(_qp, mc, modify_roles,
+            {role_set{sstring(role_name)}, sstring(grantee_name)});
+
+    sstring modify_role_members;
+    switch (ch) {
+    case membership_change::add:
+        modify_role_members = format("INSERT INTO {}.{} (role, member) VALUES (?, ?)",
+                get_auth_ks_name(_qp),
+                meta::role_members_table::name);
+        break;
+    case membership_change::remove:
+        modify_role_members = format("DELETE FROM {}.{} WHERE role = ? AND member = ?",
+                get_auth_ks_name(_qp),
+                meta::role_members_table::name);
+        break;
+    default:
+        on_internal_error(log, format("unknown membership_change value: {}", int(ch)));
+    }
+    co_await collect_mutations(_qp, mc, modify_role_members,
+            {sstring(role_name), sstring(grantee_name)});
+}
+
+future<>
 standard_role_manager::grant(std::string_view grantee_name, std::string_view role_name) {
     const auto check_redundant = [this, role_name, grantee_name] {
         return this->query_granted(
@@ -507,7 +547,7 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
     };
 
    return when_all_succeed(check_redundant(), check_cycle()).then_unpack([this, role_name, grantee_name] {
-       return this->modify_membership(grantee_name, role_name, membership_change::add);
+       return this->legacy_modify_membership(grantee_name, role_name, membership_change::add);
    });
 }
 
@@ -527,7 +567,7 @@ standard_role_manager::revoke(std::string_view revokee_name, std::string_view ro
 
             return make_ready_future<>();
         }).then([this, revokee_name, role_name] {
-            return this->modify_membership(revokee_name, role_name, membership_change::remove);
+            return this->legacy_modify_membership(revokee_name, role_name, membership_change::remove);
         });
     });
 }

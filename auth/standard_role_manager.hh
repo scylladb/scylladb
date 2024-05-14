@@ -90,7 +90,9 @@ private:
 
     future<> create_or_replace(std::string_view role_name, const role_config&, ::service::mutations_collector&);
 
-    future<> modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change);
+    future<> legacy_modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change);
+
+    future<> modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change, ::service::mutations_collector& mc);
 };
 
 }
