@@ -284,7 +284,9 @@ bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment_v2
 
     mrlog.debug("[validator {}] {}:{} new_current_tombstone: {}", static_cast<void*>(this), kind, pos, new_current_tombstone);
 
-    if (_validation_level >= mutation_fragment_stream_validation_level::clustering_key) {
+    if (_validation_level == mutation_fragment_stream_validation_level::none) {
+        return true;
+    } else if (_validation_level >= mutation_fragment_stream_validation_level::clustering_key) {
         valid = _validator(kind, pos, new_current_tombstone);
     } else {
         valid = _validator(kind, new_current_tombstone);
