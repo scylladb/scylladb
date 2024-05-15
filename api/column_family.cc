@@ -1154,6 +1154,9 @@ void unset_column_family(http_context& ctx, routes& r) {
     cf::get_auto_compaction.unset(r);
     cf::enable_auto_compaction.unset(r);
     cf::disable_auto_compaction.unset(r);
+    cf::get_tombstone_gc.unset(r);
+    cf::enable_tombstone_gc.unset(r);
+    cf::disable_tombstone_gc.unset(r);
     cf::get_built_indexes.unset(r);
     cf::get_compression_metadata_off_heap_memory_used.unset(r);
     cf::get_compression_parameters.unset(r);
