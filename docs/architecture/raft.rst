@@ -13,9 +13,13 @@ Raft uses a heartbeat mechanism to trigger a leader election. All servers start 
 
 Leader selection is described in detail in the `Raft paper <https://raft.github.io/raft.pdf>`_.
 
-ScyllaDB can use Raft to maintain schema updates in every node (see below). Any schema update, like ALTER, CREATE or DROP TABLE, is first committed as an entry in the replicated Raft log, and, once stored on most replicas, applied to all nodes **in the same order**, even in the face of a node or network failures.
+ScyllaDB uses Raft to:
 
-Upcoming ScyllaDB releases will use Raft to guarantee consistent topology updates similarly.
+* Manage schema updates in every node. Any schema update, like ALTER, CREATE or DROP TABLE, 
+  is first committed as an entry in the replicated Raft log, and, once stored on most replicas,
+  applied to all nodes **in the same order**, even in the face of a node or network failures.
+* Manage cluster topology. All topology operations are consistently sequenced, making topology
+  updates fast and safe.
 
 .. _raft-quorum-requirement:
 
@@ -30,31 +34,35 @@ Note that when you have a two-DC cluster with the same number of nodes in each D
 of the DCs is down.
 **We recommend configuring three DCs per cluster to ensure that the cluster remains available and operational when one DC is down.**
 
-.. _enabling-raft-existing-cluster:
+.. _raft-schema-changes:
 
-Enabling Raft
----------------
+Safe Schema Changes with Raft
+-------------------------------
+In ScyllaDB, schema is based on :doc:`Data Definition Language (DDL) </cql/ddl>`. In earlier ScyllaDB versions, schema changes were tracked via the gossip protocol, which might lead to schema conflicts if the updates are happening concurrently.
 
-ScyllaDB Open Source 5.2 and later, and ScyllaDB Enterprise 2023.1 and later come equipped with a procedure that can setup Raft-based consistent cluster management in an existing cluster. We refer to this as the **Raft upgrade procedure** (do not confuse with the :doc:`ScyllaDB version upgrade procedure </upgrade/index/>`).
+Implementing Raft eliminates schema conflicts and allows full automation of DDL changes under any conditions, as long as a quorum
+of nodes in the cluster is available. The following examples illustrate how Raft provides the solution to problems with schema changes.
 
-.. warning::
-    In ScyllaDB Open Source 5.5 and ScyllaDB Enterprise 2024.2 Raft is mandatory.
+* A network partition may lead to a split-brain case, where each subset of nodes has a different version of the schema.
 
-When all the nodes in the cluster are upgraded to ScyllaDB Open Source 5.5 or ScyllaDB Enterprise 2024.2, the cluster will start the **Raft upgrade procedure**.
+     With Raft, after a network split, the majority of the cluster can continue performing schema changes, while the minority needs to wait until it can rejoin the majority. Data manipulation statements on the minority can continue unaffected, provided the :ref:`quorum requirement <raft-quorum-requirement>` is satisfied.
 
-.. only:: opensource
+* Two or more conflicting schema updates are happening at the same time. For example, two different columns with the same definition are simultaneously added to the cluster. There is no effective way to resolve the conflict - the cluster will employ the schema with the most recent timestamp, but changes related to the shadowed table will be lost.
 
-    See :doc:`the upgrade guide from 5.4 to 5.5 </upgrade/index>` for details.
+     With Raft, concurrent schema changes are safe.
 
-.. warning::
-    Once enabled, Raft cannot be disabled on your cluster.
+
+
+In summary, Raft makes schema changes safe, but it requires that a quorum of nodes in the cluster is available.
 
 .. _verify-raft-procedure:
 
 Verifying that the Raft upgrade procedure finished successfully
 ========================================================================
 
-.. scylladb_include_flag:: note-enabling-consistent-topology-changes.rst
+You may need to perform the following procedure on upgrade if you explicitly
+disabled the Raft-based schema changes feature in the previous ScyllaDB
+version. Please consult the upgrade guide.
 
 The Raft upgrade procedure requires **full cluster availability** to correctly setup the Raft algorithm; after the setup finishes, Raft can proceed with only a majority of nodes, but this initial setup is an exception.
 An unlucky event, such as a hardware failure, may cause one of your nodes to fail. If this happens before the Raft upgrade procedure finishes, the procedure will get stuck and your intervention will be required.
@@ -148,9 +156,27 @@ If **all nodes are alive and the network is healthy**, you performed a rolling r
 
 If some nodes are **dead and irrecoverable**, you'll need to perform a manual recovery procedure. Consult :ref:`the section about Raft recovery <recovery-procedure>`.
 
+.. _raft-topology-changes:
 
-Verifying that Raft is enabled
-===============================
+Consistent Topology with Raft
+-----------------------------------------------------------------
+
+ScyllaDB can use Raft to manage cluster topology. With Raft-managed topology 
+enabled, all topology operations are internally sequenced in a consistent 
+way. A centralized coordination process ensures that topology metadata is 
+synchronized across the nodes on each step of a topology change procedure. 
+This makes topology updates fast and safe, as the cluster administrator can 
+trigger many topology operations concurrently, and the coordination process 
+will safely drive all of them to completion. For example, multiple nodes can 
+be bootstrapped concurrently, which couldn't be done with the old 
+gossip-based topology.
+
+The feature is automatically enabled in new clusters.
+
+.. scylladb_include_flag:: consistent-topology-with-raft-upgrade-info.rst
+
+Verifying that Raft is Enabled
+----------------------------------
 
 .. _schema-on-raft-enabled:
 
@@ -211,46 +237,6 @@ You can verify that consistent topology management is enabled on your cluster in
         curl -X GET "http://127.0.0.1:10000/storage_service/raft_topology/upgrade"
 
    It returns a JSON string, with the same meaning and value as the ``upgrade_state`` column in ``system.topology`` (see the previous point).
-
-.. _raft-schema-changes:
-
-Safe Schema Changes with Raft
--------------------------------
-In ScyllaDB, schema is based on :doc:`Data Definition Language (DDL) </cql/ddl>`. In earlier ScyllaDB versions, schema changes were tracked via the gossip protocol, which might lead to schema conflicts if the updates are happening concurrently.
-
-Implementing Raft eliminates schema conflicts and allows full automation of DDL changes under any conditions, as long as a quorum
-of nodes in the cluster is available. The following examples illustrate how Raft provides the solution to problems with schema changes.
-
-* A network partition may lead to a split-brain case, where each subset of nodes has a different version of the schema.
-
-     With Raft, after a network split, the majority of the cluster can continue performing schema changes, while the minority needs to wait until it can rejoin the majority. Data manipulation statements on the minority can continue unaffected, provided the :ref:`quorum requirement <raft-quorum-requirement>` is satisfied.
-
-* Two or more conflicting schema updates are happening at the same time. For example, two different columns with the same definition are simultaneously added to the cluster. There is no effective way to resolve the conflict - the cluster will employ the schema with the most recent timestamp, but changes related to the shadowed table will be lost.
-
-     With Raft, concurrent schema changes are safe.
-
-
-
-In summary, Raft makes schema changes safe, but it requires that a quorum of nodes in the cluster is available.
-
-.. _raft-topology-changes:
-
-Consistent Topology with Raft
------------------------------------------------------------------
-
-ScyllaDB can use Raft to manage cluster topology. With Raft-managed topology 
-enabled, all topology operations are internally sequenced in a consistent 
-way. A centralized coordination process ensures that topology metadata is 
-synchronized across the nodes on each step of a topology change procedure. 
-This makes topology updates fast and safe, as the cluster administrator can 
-trigger many topology operations concurrently, and the coordination process 
-will safely drive all of them to completion. For example, multiple nodes can 
-be bootstrapped concurrently, which couldn't be done with the old 
-gossip-based topology.
-
-The feature is automatically enabled in new clusters.
-
-.. scylladb_include_flag:: consistent-topology-with-raft-upgrade-info.rst
 
 
 .. _raft-handling-failures:
