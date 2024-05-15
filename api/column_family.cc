@@ -99,11 +99,29 @@ static future<json::json_return_type> set_tables(http_context& ctx, const sstrin
     });
 }
 
+class autocompaction_toggle_guard {
+    replica::database& _db;
+public:
+    autocompaction_toggle_guard(replica::database& db) : _db(db) {
+        assert(this_shard_id() == 0);
+        if (!_db._enable_autocompaction_toggle) {
+            throw std::runtime_error("Autocompaction toggle is busy");
+        }
+        _db._enable_autocompaction_toggle = false;
+    }
+    autocompaction_toggle_guard(const autocompaction_toggle_guard&) = delete;
+    autocompaction_toggle_guard(autocompaction_toggle_guard&&) = default;
+    ~autocompaction_toggle_guard() {
+        assert(this_shard_id() == 0);
+        _db._enable_autocompaction_toggle = true;
+    }
+};
+
 static future<json::json_return_type> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
     apilog.info("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
 
     return ctx.db.invoke_on(0, [&ctx, keyspace, tables = std::move(tables), enabled] (replica::database& db) {
-        auto g = replica::database::autocompaction_toggle_guard(db);
+        auto g = autocompaction_toggle_guard(db);
         return set_tables(ctx, keyspace, tables, [enabled] (replica::table& cf) {
             if (enabled) {
                 cf.enable_auto_compaction();

@@ -118,6 +118,10 @@ namespace compaction {
 class shard_reshaping_compaction_task_impl;
 }
 
+namespace api {
+class autocompaction_toggle_guard;
+}
+
 namespace db {
 class commitlog;
 class config;
@@ -1566,23 +1570,7 @@ public:
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     void enable_autocompaction_toggle() noexcept { _enable_autocompaction_toggle = true; }
-    class autocompaction_toggle_guard {
-        database& _db;
-    public:
-        autocompaction_toggle_guard(database& db) : _db(db) {
-            assert(this_shard_id() == 0);
-            if (!_db._enable_autocompaction_toggle) {
-                throw std::runtime_error("Autocompaction toggle is busy");
-            }
-            _db._enable_autocompaction_toggle = false;
-        }
-        autocompaction_toggle_guard(const autocompaction_toggle_guard&) = delete;
-        autocompaction_toggle_guard(autocompaction_toggle_guard&&) = default;
-        ~autocompaction_toggle_guard() {
-            assert(this_shard_id() == 0);
-            _db._enable_autocompaction_toggle = true;
-        }
-    };
+    friend class api::autocompaction_toggle_guard;
 
     // Load the schema definitions kept in schema tables from disk and initialize in-memory schema data structures
     // (keyspace/table definitions, column mappings etc.)
