@@ -592,8 +592,24 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return ctx.db.local().commitlog()->active_config().commit_log_location;
     });
 
-    ss::get_token_endpoint.set(r, [&ss] (std::unique_ptr<http::request> req) {
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().get_token_to_endpoint_map(), [](const auto& i) {
+    ss::get_token_endpoint.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        const auto keyspace_name = req->get_query_param("keyspace");
+        const auto table_name = req->get_query_param("cf");
+
+        std::map<dht::token, gms::inet_address> token_endpoints;
+        if (keyspace_name.empty() && table_name.empty()) {
+            token_endpoints = ss.local().get_token_to_endpoint_map();
+        } else if (!keyspace_name.empty() && !table_name.empty()) {
+            auto& db = ctx.db.local();
+            if (!db.has_schema(keyspace_name, table_name)) {
+                throw bad_param_exception(fmt::format("Failed to find table {}.{}", keyspace_name, table_name));
+            }
+            token_endpoints = co_await ss.local().get_tablet_to_endpoint_map(db.find_schema(keyspace_name, table_name)->id());
+        } else {
+            throw bad_param_exception("Either provide both keyspace and table (for tablet table) or neither (for vnodes)");
+        }
+
+        co_return json::json_return_type(stream_range_as_array(token_endpoints, [](const auto& i) {
             storage_service_json::mapper val;
             val.key = fmt::to_string(i.first);
             val.value = fmt::to_string(i.second);

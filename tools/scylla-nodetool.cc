@@ -1613,25 +1613,55 @@ void print_dc(scylla_rest_client& client,
     }
 }
 
+static std::map<sstring, float> get_effective_ownership(scylla_rest_client& client, const sstring& keyspace, const std::optional<sstring>& table) {
+    const sstring request_str = format("/storage_service/ownership/{}", keyspace);
+    std::unordered_map<sstring, sstring> params{};
+    if (table) {
+        params["cf"] = *table;
+    }
+
+    return rjson_to_map<float>(client.get(request_str, params));
+}
+
+static bool keyspace_uses_tablets(scylla_rest_client& client, const sstring& keyspace) {
+    const std::unordered_map<sstring, sstring> params = {{"replication", "tablets"}};
+    const auto res = client.get("/storage_service/keyspaces", params);
+
+    const auto& ks_array = res.GetArray();
+    const auto is_same_ks = [&] (const auto& json_ks) { return rjson::to_string_view(json_ks) == keyspace; };
+    return std::find_if(ks_array.begin(), ks_array.end(), is_same_ks) != ks_array.end();
+}
+
 void ring_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const bool resolve_ip = vm.contains("resolve-ip");
 
+    const std::optional<sstring> keyspace = vm.contains("keyspace") ? std::optional(vm["keyspace"].as<sstring>()) : std::nullopt;
+    const std::optional<sstring> table = vm.contains("table") ? std::optional(vm["table"].as<sstring>()) : std::nullopt;
+
+    if (keyspace && !table && keyspace_uses_tablets(client, *keyspace)) {
+        throw std::invalid_argument("need a table to obtain ring for tablet keyspace");
+    }
+
+    std::unordered_map<sstring, sstring> tokens_endpoint_params;
+    if (keyspace && table) {
+        tokens_endpoint_params["keyspace"] = *keyspace;
+        tokens_endpoint_params["cf"] = *table;
+    }
+    auto tokens_endpoint = rjson_to_vector<std::string>(client.get("/storage_service/tokens_endpoint", std::move(tokens_endpoint_params)));
+
     std::multimap<std::string_view, std::string_view> endpoints_to_tokens;
-    bool have_vnodes = false;
-    auto tokens_endpoint = rjson_to_vector<std::string>(client.get("/storage_service/tokens_endpoint"));
+    bool have_vnodes_or_tablets = false;
     for (auto& [token, endpoint] : tokens_endpoint) {
         if (endpoints_to_tokens.contains(endpoint)) {
-            have_vnodes = true;
+            have_vnodes_or_tablets = true;
         }
         endpoints_to_tokens.emplace(endpoint, token);
     }
     // Calculate per-token ownership of the ring
     std::string_view warnings;
     std::map<sstring, float> endpoint_to_ownership;
-    if (vm.contains("keyspace")) {
-        auto ownership_res = client.get(seastar::format("/storage_service/ownership/{}",
-                                                        vm["keyspace"].as<sstring>()));
-        endpoint_to_ownership = rjson_to_map<float>(ownership_res);
+    if (keyspace) {
+        endpoint_to_ownership = get_effective_ownership(client, *keyspace, table);
     } else {
         warnings = "Note: Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless\n";
     }
@@ -1646,7 +1676,7 @@ void ring_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
                  last_token, endpoints_to_tokens, host_stats);
     }
 
-    if (have_vnodes) {
+    if (have_vnodes_or_tablets) {
         fmt::print(R"(
   Warning: "nodetool ring" is used to output all the tokens of a node.
   To view status related info of a node use "nodetool status" instead.
@@ -1873,25 +1903,6 @@ void sstableinfo_operation(scylla_rest_client& client, const bpo::variables_map&
     }
 }
 
-static bool keyspace_uses_tablets(scylla_rest_client& client, const sstring& keyspace) {
-    const std::unordered_map<sstring, sstring> params = {{"replication", "tablets"}};
-    const auto res = client.get("/storage_service/keyspaces", params);
-
-    const auto& ks_array = res.GetArray();
-    const auto is_same_ks = [&] (const auto& json_ks) { return rjson::to_string_view(json_ks) == keyspace; };
-    return std::find_if(ks_array.begin(), ks_array.end(), is_same_ks) != ks_array.end();
-}
-
-static std::map<sstring, double> get_effective_ownership(scylla_rest_client& client, const sstring& keyspace, const std::optional<sstring>& table) {
-    const sstring request_str = format("/storage_service/ownership/{}", keyspace);
-    std::unordered_map<sstring, sstring> params{};
-    if (table) {
-        params["cf"] = *table;
-    }
-
-    return rjson_to_map<double>(client.get(request_str, params));
-}
-
 void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::optional<sstring> keyspace;
     if (vm.count("keyspace")) {
@@ -1913,15 +1924,23 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     const auto endpoint_load = rjson_to_map<size_t>(client.get("/storage_service/load_map"));
     const auto endpoint_host_id = rjson_to_map<sstring>(client.get("/storage_service/host_id"));
 
-    const auto is_effective_ownership_unknown = (!keyspace || (!table && keyspace_uses_tablets(client, *keyspace)));
+    const auto tablets_keyspace = keyspace && keyspace_uses_tablets(client, *keyspace);
+
+    const auto is_effective_ownership_unknown = (!keyspace || (!table && tablets_keyspace));
+
     const auto endpoint_ownership = is_effective_ownership_unknown
-        ? std::map<sstring, double>{}
+        ? std::map<sstring, float>{}
         : get_effective_ownership(client, *keyspace, table);
 
     std::unordered_map<sstring, sstring> endpoint_rack;
     std::map<sstring, std::set<sstring>> dc_endpoints;
     std::unordered_map<sstring, size_t> endpoint_tokens;
-    const auto tokens_endpoint_res = client.get("/storage_service/tokens_endpoint");
+    std::unordered_map<sstring, sstring> tokens_endpoint_params;
+    if (tablets_keyspace && table) {
+        tokens_endpoint_params["keyspace"] = *keyspace;
+        tokens_endpoint_params["cf"] = *table;
+    }
+    const auto tokens_endpoint_res = client.get("/storage_service/tokens_endpoint", std::move(tokens_endpoint_params));
     for (const auto& te : tokens_endpoint_res.GetArray()) {
         const auto ep = sstring(rjson::to_string_view(te["value"]));
          // We are not printing the actual tokens, so it is enough just to count them.
@@ -1934,6 +1953,8 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         endpoint_rack.emplace(ep, rack);
         dc_endpoints[dc].insert(ep);
     }
+
+    const bool token_count_unknown = tablets_keyspace && !table;
 
     for (const auto& [dc, endpoints] : dc_endpoints) {
         const auto dc_header = fmt::format("Datacenter: {}", dc);
@@ -1971,7 +1992,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
                     fmt::format("{}{}", status, state),
                     address,
                     load,
-                    endpoint_tokens.at(ep),
+                    token_count_unknown ? "?" : fmt::to_string(endpoint_tokens.at(ep)),
                     !is_effective_ownership_unknown ? format("{:.1f}%", endpoint_ownership.at(ep) * 100) : "?",
                     endpoint_host_id.contains(ep) ? endpoint_host_id.at(ep) : "?",
                     endpoint_rack.at(ep));
@@ -3371,6 +3392,7 @@ For more information, see: {}"
                 },
                 {
                     typed_option<sstring>("keyspace", "Specify a keyspace for accurate ownership information (topology awareness)", 1),
+                    typed_option<sstring>("table", "The table to print the ring for (needed for tablet keyspaces)", 1),
                 },
             },
             ring_operation

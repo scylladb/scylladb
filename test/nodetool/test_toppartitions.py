@@ -163,9 +163,6 @@ def test_toppartitions_invalid_capacity(nodetool, request):
     for name, value in options.items():
         args.extend([name, str(value)])
     error = "TopK count (-k) option must be smaller than the summary capacity (-s)"
-    if request.config.getoption("nodetool") == "cassandra":
-        # cassandra nodetool's error message has a typo in it.
-        error = error.replace('than', 'then')
     check_nodetool_fails_with_error_contains(
         nodetool,
         tuple(args),

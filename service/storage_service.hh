@@ -433,6 +433,15 @@ public:
     std::map<token, inet_address> get_token_to_endpoint_map();
 
     /**
+     * Retrieve a map of tablet tokens to endpoints.
+     *
+     * Tablet variant of get_token_to_endpoint_map().
+     *
+     * @return a map of tablet tokens to endpoints in ascending order
+     */
+    future<std::map<token, inet_address>> get_tablet_to_endpoint_map(table_id table);
+
+    /**
      * Construct the range to endpoint mapping based on the true view
      * of the world.
      * @param ranges

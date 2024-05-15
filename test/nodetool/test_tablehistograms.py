@@ -68,7 +68,9 @@ Max             7.00             17.00             95.00                 7      
 
 """
 
-def test_tablehistograms_empty_histogram(nodetool):
+# The java implementation explodes with null pointer exception.
+# It is not worth trying to fix, so just disable this test for the java nodetool.
+def test_tablehistograms_empty_histogram(scylla_only, nodetool):
     keyspace_name = "ks"
     table_name = "tbl"
     table_param = f"{keyspace_name}:{table_name}"
