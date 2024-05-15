@@ -63,7 +63,7 @@ public:
         return make_ready_future();
     }
 
-    virtual future<> alter(std::string_view, const authentication_options& options) override {
+    virtual future<> alter(std::string_view, const authentication_options& options, ::service::mutations_collector&) override {
         return make_ready_future();
     }
 

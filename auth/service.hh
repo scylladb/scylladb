@@ -246,7 +246,8 @@ future<> alter_role(
         const service&,
         std::string_view name,
         const role_config_update&,
-        const authentication_options&);
+        const authentication_options&,
+        ::service::mutations_collector& mc);
 
 ///
 /// Drop a role from the system, including all permissions and authentication information.

@@ -223,15 +223,20 @@ SEASTAR_TEST_CASE(alter_role) {
             m->create("tsmith", tsmith_config, mc).get();
         });
 
-        auth::role_config_update u;
-        u.can_login = false;
-
-        m->alter("tsmith", u).get();
+        do_with_mc(env, [&m] (auto& mc) {
+            auth::role_config_update u;
+            u.can_login = false;
+            m->alter("tsmith", u, mc).get();
+        });
 
         BOOST_REQUIRE_EQUAL(m->is_superuser("tsmith").get(), true);
         BOOST_REQUIRE_EQUAL(m->can_login("tsmith").get(), false);
 
         // Altering a non-existing role is an error.
-        BOOST_REQUIRE_THROW(m->alter("hjones", u).get(), auth::nonexistant_role);
+        do_with_mc(env, [&m] (auto& mc) {
+            auth::role_config_update u;
+            u.can_login = false;
+            BOOST_REQUIRE_THROW(m->alter("hjones", u, mc).get(), auth::nonexistant_role);
+        });
     });
 }

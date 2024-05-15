@@ -304,7 +304,7 @@ standard_role_manager::create(std::string_view role_name, const role_config& c, 
 }
 
 future<>
-standard_role_manager::alter(std::string_view role_name, const role_config_update& u) {
+standard_role_manager::alter(std::string_view role_name, const role_config_update& u, ::service::mutations_collector& mc) {
     static const auto build_column_assignments = [](const role_config_update& u) -> sstring {
         std::vector<sstring> assignments;
 
@@ -319,7 +319,7 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
         return boost::algorithm::join(assignments, ", ");
     };
 
-    return require_record(_qp, role_name).then([this, role_name, &u](record) {
+    return require_record(_qp, role_name).then([this, role_name, &u, &mc](record) {
         if (!u.is_superuser && !u.can_login) {
             return make_ready_future<>();
         }
@@ -336,7 +336,7 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
                     {sstring(role_name)},
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
-            return announce_mutations(_qp, _group0_client, std::move(query), {sstring(role_name)}, &_as, ::service::raft_timeout{});
+            return collect_mutations(_qp, mc, std::move(query), {sstring(role_name)});
         }
     });
 }

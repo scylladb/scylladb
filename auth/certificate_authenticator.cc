@@ -162,7 +162,7 @@ future<> auth::certificate_authenticator::create(std::string_view role_name, con
     co_return;
 }
 
-future<> auth::certificate_authenticator::alter(std::string_view role_name, const authentication_options& options) {
+future<> auth::certificate_authenticator::alter(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) {
     co_return;
 }
 

@@ -57,7 +57,7 @@ future<> maintenance_socket_role_manager::drop(std::string_view role_name, ::ser
     return operation_not_supported_exception("DROP");
 }
 
-future<> maintenance_socket_role_manager::alter(std::string_view role_name, const role_config_update&) {
+future<> maintenance_socket_role_manager::alter(std::string_view role_name, const role_config_update&, ::service::mutations_collector&) {
     return operation_not_supported_exception("ALTER");
 }
 

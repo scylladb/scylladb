@@ -91,8 +91,8 @@ public:
         return _authenticator->create(role_name, options, mc);
     }
 
-    virtual future<> alter(std::string_view role_name, const authentication_options& options) override {
-        return _authenticator->alter(role_name, options);
+    virtual future<> alter(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) override {
+        return _authenticator->alter(role_name, options, mc);
     }
 
     virtual future<> drop(std::string_view role_name, ::service::mutations_collector& mc) override {

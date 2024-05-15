@@ -124,8 +124,17 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
                     [&env](auto& config_update, const auto& options) {
                 config_update.can_login = false;
 
-                return auth::alter_role(env.local_auth_service(), username, config_update, options).then([&env] {
-                    return require_throws<exceptions::authentication_exception>(authenticate(env, username, password));
+                return seastar::async([&env] {
+                    do_with_mc(env, [&env] (auto& mc) {
+                        auth::authentication_options opts;
+                        auth::role_config_update conf;
+                        conf.can_login = false;
+                        auth::alter_role(env.local_auth_service(), username, conf, opts, mc).get();
+                    });
+                    // has to be in a separate transaction to observe results of alter role
+                    do_with_mc(env, [&env] (auto& mc) {
+                        require_throws<exceptions::authentication_exception>(authenticate(env, username, password)).get();
+                    });
                 });
             });
         }).then([&env] {

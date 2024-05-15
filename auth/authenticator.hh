@@ -116,7 +116,7 @@ public:
     ///
     /// Callers must ensure that the specification of `alterable_options()` is adhered to.
     ///
-    virtual future<> alter(std::string_view role_name, const authentication_options& options) = 0;
+    virtual future<> alter(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) = 0;
 
     ///
     /// Delete the authentication record for a user. This will disallow the user from logging in.

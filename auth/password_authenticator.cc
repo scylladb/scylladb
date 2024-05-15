@@ -275,7 +275,7 @@ future<> password_authenticator::create(std::string_view role_name, const authen
     }
 }
 
-future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options) {
+future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) {
     if (!options.password) {
         co_return;
     }
@@ -293,8 +293,8 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
                 {passwords::hash(*options.password, rng_for_salt), sstring(role_name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query,
-            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc, query,
+                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)});
     }
 }
 

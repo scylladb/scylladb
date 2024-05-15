@@ -43,7 +43,7 @@ public:
 
     virtual future<> drop(std::string_view role_name, ::service::mutations_collector& mc) override;
 
-    virtual future<> alter(std::string_view role_name, const role_config_update&) override;
+    virtual future<> alter(std::string_view role_name, const role_config_update&, ::service::mutations_collector&) override;
 
     virtual future<> grant(std::string_view grantee_name, std::string_view role_name, ::service::mutations_collector& mc) override;
 

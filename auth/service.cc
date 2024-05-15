@@ -482,14 +482,15 @@ future<> alter_role(
         const service& ser,
         std::string_view name,
         const role_config_update& config_update,
-        const authentication_options& options) {
-    co_await ser.underlying_role_manager().alter(name, config_update);
+        const authentication_options& options,
+        ::service::mutations_collector& mc) {
+    co_await ser.underlying_role_manager().alter(name, config_update, mc);
     if (!any_authentication_options(options)) {
         co_return;
     }
     validate_authentication_options_are_supported(options,
             ser.underlying_authenticator().supported_options());
-    co_await ser.underlying_authenticator().alter(name, options);
+    co_await ser.underlying_authenticator().alter(name, options, mc);
 }
 
 future<> drop_role(const service& ser, std::string_view name, ::service::mutations_collector& mc) {

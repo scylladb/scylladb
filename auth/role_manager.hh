@@ -119,7 +119,7 @@ public:
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<> alter(std::string_view role_name, const role_config_update&) = 0;
+    virtual future<> alter(std::string_view role_name, const role_config_update&, ::service::mutations_collector&) = 0;
 
     ///
     /// Grant `role_name` to `grantee_name`.

@@ -168,22 +168,21 @@ future<> alter_role_statement::check_access(query_processor& qp, const service::
 
 future<result_message_ptr>
 alter_role_statement::execute(query_processor&, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
-    if (guard) {
-        release_guard(std::move(*guard));
-    }
     auth::role_config_update update;
     update.is_superuser = _options.is_superuser;
     update.can_login = _options.can_login;
 
     auto& as = *state.get_client_state().get_auth_service();
+    service::mutations_collector mc{std::move(guard)};
     try {
-        co_await auth::alter_role(as, _role, update, extract_authentication_options(_options));
+        co_await auth::alter_role(as, _role, update, extract_authentication_options(_options), mc);
     } catch (const auth::nonexistant_role& e) {
         throw exceptions::invalid_request_exception(e.what());
     } catch (const auth::unsupported_authentication_option& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
 
+    co_await auth::announce_mutations(as, std::move(mc));
     co_return nullptr;
 }
 
