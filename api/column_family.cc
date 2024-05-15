@@ -79,6 +79,9 @@ future<json::json_return_type>  get_cf_stats(http_context& ctx,
     }, std::plus<int64_t>());
 }
 
+future<json::json_return_type> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled);
+future<json::json_return_type> set_tables_tombstone_gc(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled);
+
 static future<json::json_return_type>  get_cf_stats_count(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     return map_reduce_cf(ctx, name, int64_t(0), [f](const replica::column_family& cf) {
@@ -859,26 +862,16 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/enable_auto_compaction: name={}", req->get_path_param("name"));
-        return ctx.db.invoke_on(0, [&ctx, req = std::move(req)] (replica::database& db) {
-            auto g = replica::database::autocompaction_toggle_guard(db);
-            return foreach_column_family(ctx, req->get_path_param("name"), [](replica::column_family &cf) {
-                cf.enable_auto_compaction();
-            }).then([g = std::move(g)] {
-                return make_ready_future<json::json_return_type>(json_void());
-            });
-        });
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
+        validate_table(ctx, ks, cf);
+        return set_tables_autocompaction(ctx, ks, {std::move(cf)}, true);
     });
 
     cf::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/disable_auto_compaction: name={}", req->get_path_param("name"));
-        return ctx.db.invoke_on(0, [&ctx, req = std::move(req)] (replica::database& db) {
-            auto g = replica::database::autocompaction_toggle_guard(db);
-            return foreach_column_family(ctx, req->get_path_param("name"), [](replica::column_family &cf) {
-                return cf.disable_auto_compaction();
-            }).then([g = std::move(g)] {
-                return make_ready_future<json::json_return_type>(json_void());
-            });
-        });
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
+        validate_table(ctx, ks, cf);
+        return set_tables_autocompaction(ctx, ks, {std::move(cf)}, false);
     });
 
     cf::get_tombstone_gc.set(r, [&ctx] (const_req req) {
@@ -889,20 +882,16 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/enable_tombstone_gc: name={}", req->get_path_param("name"));
-        return foreach_column_family(ctx, req->get_path_param("name"), [](replica::table& t) {
-            t.set_tombstone_gc_enabled(true);
-        }).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
+        validate_table(ctx, ks, cf);
+        return set_tables_tombstone_gc(ctx, ks, {std::move(cf)}, true);
     });
 
     cf::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/disable_tombstone_gc: name={}", req->get_path_param("name"));
-        return foreach_column_family(ctx, req->get_path_param("name"), [](replica::table& t) {
-            t.set_tombstone_gc_enabled(false);
-        }).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
+        validate_table(ctx, ks, cf);
+        return set_tables_tombstone_gc(ctx, ks, {std::move(cf)}, false);
     });
 
     cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) {

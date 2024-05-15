@@ -82,7 +82,7 @@ sstring validate_keyspace(const http_context& ctx, const http::request& req) {
     return validate_keyspace(ctx, req.get_path_param("keyspace"));
 }
 
-static void validate_table(const http_context& ctx, sstring ks_name, sstring table_name) {
+void validate_table(const http_context& ctx, sstring ks_name, sstring table_name) {
     auto& db = ctx.db.local();
     try {
         db.find_column_family(ks_name, table_name);
