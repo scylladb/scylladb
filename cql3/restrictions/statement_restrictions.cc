@@ -1132,13 +1132,14 @@ bool starts_before_start(
     const auto len1 = r1.start()->value().representation().size();
     const auto len2 = r2.start()->value().representation().size();
     if (len1 == len2) { // The values truly are equal.
+        // (a)>=(1) starts before (a)>(1)
         return r1.start()->is_inclusive() && !r2.start()->is_inclusive();
     } else if (len1 < len2) { // r1 start is a prefix of r2 start.
         // (a)>=(1) starts before (a,b)>=(1,1), but (a)>(1) doesn't.
         return r1.start()->is_inclusive();
     } else { // r2 start is a prefix of r1 start.
         // (a,b)>=(1,1) starts before (a)>(1) but after (a)>=(1).
-        return r2.start()->is_inclusive();
+        return !r2.start()->is_inclusive();
     }
 }
 
@@ -1163,6 +1164,7 @@ bool starts_before_or_at_end(
     const auto len1 = r1.start()->value().representation().size();
     const auto len2 = r2.end()->value().representation().size();
     if (len1 == len2) { // The values truly are equal.
+        // (a)>=(1) starts at end of (a)<=(1)
         return r1.start()->is_inclusive() && r2.end()->is_inclusive();
     } else if (len1 < len2) { // r1 start is a prefix of r2 end.
         // a>=(1) starts before (a,b)<=(1,1) ends, but (a)>(1) doesn't.
@@ -1194,6 +1196,7 @@ bool ends_before_end(
     const auto len1 = r1.end()->value().representation().size();
     const auto len2 = r2.end()->value().representation().size();
     if (len1 == len2) { // The values truly are equal.
+        // (a)<(1) ends before (a)<=(1) ends
         return !r1.end()->is_inclusive() && r2.end()->is_inclusive();
     } else if (len1 < len2) { // r1 end is a prefix of r2 end.
         // (a)<(1) ends before (a,b)<=(1,1), but (a)<=(1) doesn't.
@@ -1209,7 +1212,10 @@ std::optional<query::clustering_range> intersection(
         const query::clustering_range& r1,
         const query::clustering_range& r2,
         const clustering_key_prefix::prefix_equal_tri_compare& cmp) {
-    // Assume r1's start is to the left of r2's start.
+    // If needed, swap r1 and r2 so that r1's start is to the left of r2's
+    // start. Note that to avoid infinite recursion (#18688) the function
+    // starts_before_start() must never return true for both (r1,r2) and
+    // (r2,r1) - in other words, it must be a *strict* partial order.
     if (starts_before_start(r2, r1, cmp)) {
         return intersection(r2, r1, cmp);
     }
