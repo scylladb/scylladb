@@ -136,6 +136,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "MD_SSTABLE_FORMAT"sv,
         "ME_SSTABLE_FORMAT"sv,
         "VIEW_VIRTUAL_COLUMNS"sv,
+        "DIGEST_INSENSITIVE_TO_EXPIRY"sv,
     };
 
     if (is_test_only_feature_deprecated()) {
@@ -191,7 +192,7 @@ void feature::enable() {
 
 db::schema_features feature_service::cluster_schema_features() const {
     db::schema_features f;
-    f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(digest_insensitive_to_expiry);
+    f.set<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
     f.set<db::schema_feature::COMPUTED_COLUMNS>();
     f.set_if<db::schema_feature::CDC_OPTIONS>(cdc);
     f.set_if<db::schema_feature::PER_TABLE_PARTITIONERS>(per_table_partitioners);
