@@ -241,47 +241,6 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
     });
 }
 
-static future<json::json_return_type> set_tables(http_context& ctx, const sstring& keyspace, std::vector<sstring> tables, std::function<future<>(replica::table&)> set) {
-    if (tables.empty()) {
-        tables = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
-    }
-
-    return do_with(keyspace, std::move(tables), [&ctx, set] (const sstring& keyspace, const std::vector<sstring>& tables) {
-        return ctx.db.invoke_on_all([&keyspace, &tables, set] (replica::database& db) {
-            return parallel_for_each(tables, [&db, &keyspace, set] (const sstring& table) {
-                replica::table& t = db.find_column_family(keyspace, table);
-                return set(t);
-            });
-        });
-    }).then([] {
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-}
-
-future<json::json_return_type> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
-    apilog.info("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
-
-    return ctx.db.invoke_on(0, [&ctx, keyspace, tables = std::move(tables), enabled] (replica::database& db) {
-        auto g = replica::database::autocompaction_toggle_guard(db);
-        return set_tables(ctx, keyspace, tables, [enabled] (replica::table& cf) {
-            if (enabled) {
-                cf.enable_auto_compaction();
-            } else {
-                return cf.disable_auto_compaction();
-            }
-            return make_ready_future<>();
-        }).finally([g = std::move(g)] {});
-    });
-}
-
-future<json::json_return_type> set_tables_tombstone_gc(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
-    apilog.info("set_tables_tombstone_gc: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
-    return set_tables(ctx, keyspace, std::move(tables), [enabled] (replica::table& t) {
-        t.set_tombstone_gc_enabled(enabled);
-        return make_ready_future<>();
-    });
-}
-
 future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req) {
     scrub_info info;
     auto rp = req_params({
