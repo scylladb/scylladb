@@ -103,7 +103,8 @@ future<full_task_status> retrieve_status(const tasks::task_manager::foreign_task
     s.progress.completed = progress.completed;
     s.progress.total = progress.total;
     std::vector<std::string> ct{task->get_children().size()};
-    boost::transform(task->get_children(), ct.begin(), [] (const auto& child) {
+    boost::transform(task->get_children(), ct.begin(), [] (const auto& child_entry) {
+        const auto& [child_id, child] = child_entry;
         return child->id().to_sstring();
     });
     s.children_ids = std::move(ct);
@@ -231,7 +232,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         while (!q.empty()) {
             auto& current = q.front();
             res.push_back(co_await retrieve_status(current));
-            for (auto& child: current->get_children()) {
+            for (const auto& [_, child] : current->get_children()) {
                 q.push(co_await child.copy());
             }
             q.pop();
