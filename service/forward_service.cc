@@ -565,7 +565,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
         }
 
         auto endpoint_addr = netw::messaging_service::msg_addr{*live_endpoints.begin(), 0};
-        vnodes_per_addr[endpoint_addr].push_back(*vnode);
+        vnodes_per_addr[endpoint_addr].push_back(std::move(*vnode));
     }
 
     tracing::trace(tr_state, "Dispatching forward_request to {} endpoints", vnodes_per_addr.size());
@@ -577,8 +577,8 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
             // FIXME: indentation.
             co_await coroutine::parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
                 [&req, &result, &tr_state, &dispatcher] (
-                    std::pair<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_with_addr
-                ) {
+                    std::pair<const netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_with_addr
+                ) -> future<> {
                     netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
                     query::forward_result& result_ = result;
                     tracing::trace_state_ptr& tr_state_ = tr_state;
@@ -590,7 +590,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                     tracing::trace(tr_state_, "Sending forward_request to {}", addr);
                     flogger.debug("dispatching forward_request={} to address={}", req_with_modified_pr, addr);
 
-                    return dispatcher_.dispatch_to_node(addr, req_with_modified_pr).then(
+                    return dispatcher_.dispatch_to_node(addr, std::move(req_with_modified_pr)).then(
                         [&req, addr = std::move(addr), &result_, tr_state_ = std::move(tr_state_)] (
                             query::forward_result partial_result
                         ) mutable {
