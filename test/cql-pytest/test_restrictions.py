@@ -29,6 +29,11 @@ def table3(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int, b int, c int, d int, PRIMARY KEY (a, b, c, d)") as table:
         yield table
 
+@pytest.fixture(scope="module")
+def table4(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int, b int, c int, PRIMARY KEY (a, b, c)") as table:
+        yield table
+
 # Cassandra does not allow a WHERE clause restricting the same column with
 # an equality more than once. It complains that that column "cannot be
 # restricted by more than one relation if it includes an Equal".
@@ -79,6 +84,47 @@ def test_multiple_restrictions_on_ck(cql, table2, scylla_only):
     assert [(p, 0)] == list(cql.execute(f'SELECT * FROM {table2} WHERE a = {p} AND b < 4 AND b < 1'))
     assert [(p, 0)] == list(cql.execute(f'SELECT * FROM {table2} WHERE a = {p} AND b < 1 AND b < 4'))
     assert [(p, 0)] == list(cql.execute(f'SELECT * FROM {table2} WHERE a = {p} AND b < 1 AND b < 2'))
+
+# In the above test we noted that Cassandra doesn't allow restricting the
+# same clustering-key column more than once in the same direction, such as
+# b < 1 AND b < 2, but Scylla *does* allow it. But it turns out that for
+# multi-column restrictions we have different validation code, and Scylla
+# forbids  (b) < (1) AND (b,c) < (2,2) in exactly the same way that is
+# forbidden in Cassandra.
+# This should be reconsidered (this is what issue #18690 asks) - we should
+# consider allowing this query in Scylla, but until we do, this test checks
+# the existing situation that it refused on both Scylla and Cassandra:
+def test_multiple_multi_column_restrictions_on_ck(cql, table4):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table4} (a, b, c) VALUES ({p}, 0, 1)')
+    cql.execute(f'INSERT INTO {table4} (a, b, c) VALUES ({p}, 0, 2)')
+    cql.execute(f'INSERT INTO {table4} (a, b, c) VALUES ({p}, 0, 3)')
+    cql.execute(f'INSERT INTO {table4} (a, b, c) VALUES ({p}, 1, 1)')
+    cql.execute(f'INSERT INTO {table4} (a, b, c) VALUES ({p}, 1, 2)')
+    cql.execute(f'INSERT INTO {table4} (a, b, c) VALUES ({p}, 1, 3)')
+    assert [(0,1),(0,2),(0,3)] == list(cql.execute(f'SELECT b,c FROM {table4} WHERE a = {p} AND (b) < (1)'))
+    assert [(0,1),(0,2),(0,3),(1,1)] == list(cql.execute(f'SELECT b,c FROM {table4} WHERE a = {p} AND (b,c) < (1,2)'))
+    # Ideally the following query should return the intersection of the
+    # previous two results, but it's currently not supported by Scylla
+    # (#18690) or by Cassandra.
+    with pytest.raises(InvalidRequest, match='More than one restriction was found for the end bound on b'):
+        assert [(0,1),(0,2),(0,3)] == list(cql.execute(f'SELECT b,c FROM {table4} WHERE a = {p} AND (b) < (1) AND (b,c) < (1,2)'))
+
+# Reproducer for issue #18688 where a specially-crafted multi-column
+# restriction with two start restrictions could hang Scylla.
+def test_intersection_hang(cql, table4):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table4} (a, b, c) VALUES ({p}, 0, 0)')
+    cql.execute(f'INSERT INTO {table4} (a, b, c) VALUES ({p}, 0, 1)')
+    cql.execute(f'INSERT INTO {table4} (a, b, c) VALUES ({p}, 0, 2)')
+    cql.execute(f'INSERT INTO {table4} (a, b, c) VALUES ({p}, 1, 1)')
+    # The restriction below should either be rejected with InvalidRequest (as
+    # it is in Cassandra, see discussion in #18690) or return the correct
+    # results. Of course it mustn't hang as it did in #18688.
+    try:
+        assert [(0,1),(0,2)] == list(cql.execute(f'SELECT b,c FROM {table4} WHERE a = {p} AND (b) < (1) AND (b) >= (0) AND (b,c) > (0,0)'))
+    except InvalidRequest as err:
+        assert 'More than one restriction was found for the start bound on b' in str(err)
 
 # Try a multi-column restriction on several clustering columns, with the wrong
 # number of values on the right-hand-side of the restriction. Scylla should
