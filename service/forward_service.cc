@@ -566,6 +566,8 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
 
         auto endpoint_addr = netw::messaging_service::msg_addr{*live_endpoints.begin(), 0};
         vnodes_per_addr[endpoint_addr].push_back(std::move(*vnode));
+        // can potentially stall e.g. with a large tablet count.
+        co_await coroutine::maybe_yield();
     }
 
     tracing::trace(tr_state, "Dispatching forward_request to {} endpoints", vnodes_per_addr.size());
