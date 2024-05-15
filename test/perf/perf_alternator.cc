@@ -195,7 +195,7 @@ static void create_alternator_table_with_gsi(http::experimental::client& cli) {
 }
 
 // Exercise various types documented here: https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_AttributeValue.html
-auto update_item_suffix = R"(
+static constexpr auto update_item_suffix = R"(
         "UpdateExpression": "set C0 = :C0, C1 = :C1, C2 = :C2, C3 = :C3, C4 = :C4, C5 = :C5, C6 = :C6, C7 = :C7, C8 = :C8, C9 = :C9",
         "ExpressionAttributeValues": {{
             {}
