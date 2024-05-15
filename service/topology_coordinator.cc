@@ -814,6 +814,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}) {
+        auto version = _topo_sm._topology.version;
         bool drain_failed = false;
         try {
             guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain, exclude_nodes, drop_guard_and_retake::yes);
@@ -825,8 +826,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             guard = co_await start_operation();
         }
         topology_mutation_builder builder(guard.write_timestamp());
-        builder.set_fence_version(_topo_sm._topology.version);
-        auto reason = ::format("advance fence version to {}", _topo_sm._topology.version);
+        // Other nodes are guaranteed to be drained on success only up to the version which was current
+        // prior to barrier_and_drain RPCs were sent.
+        builder.set_fence_version(version);
+        auto reason = ::format("advance fence version to {}", version);
         co_await update_topology_state(std::move(guard), {builder.build()}, reason);
         guard = co_await start_operation();
         if (drain_failed) {
