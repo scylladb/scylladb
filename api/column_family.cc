@@ -6,9 +6,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <fmt/ranges.h>
 #include "column_family.hh"
 #include "api/api.hh"
 #include "api/api-doc/column_family.json.hh"
+#include "api/api-doc/storage_service.json.hh"
 #include <vector>
 #include <seastar/http/exception.hh>
 #include "sstables/sstables.hh"
@@ -28,6 +30,7 @@ using namespace httpd;
 
 using namespace json;
 namespace cf = httpd::column_family_json;
+namespace ss = httpd::storage_service_json;
 
 std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
     auto pos = name.find("%3A");
@@ -874,6 +877,22 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         return set_tables_autocompaction(ctx, ks, {std::move(cf)}, false);
     });
 
+    ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        auto keyspace = validate_keyspace(ctx, req);
+        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+
+        apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
+        return set_tables_autocompaction(ctx, keyspace, tables, true);
+    });
+
+    ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        auto keyspace = validate_keyspace(ctx, req);
+        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+
+        apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
+        return set_tables_autocompaction(ctx, keyspace, tables, false);
+    });
+
     cf::get_tombstone_gc.set(r, [&ctx] (const_req req) {
         auto uuid = get_uuid(req.get_path_param("name"), ctx.db.local());
         replica::table& t = ctx.db.local().find_column_family(uuid);
@@ -892,6 +911,22 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
         validate_table(ctx, ks, cf);
         return set_tables_tombstone_gc(ctx, ks, {std::move(cf)}, false);
+    });
+
+    ss::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        auto keyspace = validate_keyspace(ctx, req);
+        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+
+        apilog.info("enable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
+        return set_tables_tombstone_gc(ctx, keyspace, tables, true);
+    });
+
+    ss::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        auto keyspace = validate_keyspace(ctx, req);
+        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+
+        apilog.info("disable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
+        return set_tables_tombstone_gc(ctx, keyspace, tables, false);
     });
 
     cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) {
@@ -1143,9 +1178,13 @@ void unset_column_family(http_context& ctx, routes& r) {
     cf::get_auto_compaction.unset(r);
     cf::enable_auto_compaction.unset(r);
     cf::disable_auto_compaction.unset(r);
+    ss::enable_auto_compaction.unset(r);
+    ss::disable_auto_compaction.unset(r);
     cf::get_tombstone_gc.unset(r);
     cf::enable_tombstone_gc.unset(r);
     cf::disable_tombstone_gc.unset(r);
+    ss::enable_tombstone_gc.unset(r);
+    ss::disable_tombstone_gc.unset(r);
     cf::get_built_indexes.unset(r);
     cf::get_compression_metadata_off_heap_memory_used.unset(r);
     cf::get_compression_parameters.unset(r);

@@ -1281,38 +1281,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
     });
 
-    ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-
-        apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
-        return set_tables_autocompaction(ctx, keyspace, tables, true);
-    });
-
-    ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-
-        apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
-        return set_tables_autocompaction(ctx, keyspace, tables, false);
-    });
-
-    ss::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-
-        apilog.info("enable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
-        return set_tables_tombstone_gc(ctx, keyspace, tables, true);
-    });
-
-    ss::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-
-        apilog.info("disable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
-        return set_tables_tombstone_gc(ctx, keyspace, tables, false);
-    });
-
     ss::deliver_hints.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
@@ -1721,10 +1689,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_trace_probability.unset(r);
     ss::get_slow_query_info.unset(r);
     ss::set_slow_query.unset(r);
-    ss::enable_auto_compaction.unset(r);
-    ss::disable_auto_compaction.unset(r);
-    ss::enable_tombstone_gc.unset(r);
-    ss::disable_tombstone_gc.unset(r);
     ss::deliver_hints.unset(r);
     ss::get_cluster_name.unset(r);
     ss::get_partitioner_name.unset(r);
