@@ -70,8 +70,8 @@ future<task_manager::task::progress> task_manager::task::impl::get_progress() co
     }
 
     tasks::task_manager::task::progress progress{};
-    for (auto& child: _children) {
-        progress += co_await smp::submit_to(child.get_owner_shard(), [&child] {
+    for (auto& [id, child]: _children) {
+        progress += co_await smp::submit_to(child.get_owner_shard(), [&child = child] {
             return child->get_progress();
         });
     }
@@ -92,8 +92,9 @@ future<> task_manager::task::impl::abort() noexcept {
         _as.request_abort();
 
         std::vector<task_info> children_info{_children.size()};
-        boost::transform(_children, children_info.begin(), [] (const auto& child) {
-            return task_info{child->id(), child.get_owner_shard()};
+        boost::transform(_children, children_info.begin(), [] (const auto& child_entry) {
+            const auto& [child_id, child] = child_entry;
+            return task_info{child_id, child.get_owner_shard()};
         });
 
         co_await coroutine::parallel_for_each(children_info, [this] (auto info) {
@@ -183,7 +184,8 @@ void task_manager::task::change_state(task_state state) noexcept {
 }
 
 void task_manager::task::add_child(foreign_task_ptr&& child) {
-    _impl->_children.push_back(std::move(child));
+    auto inserted = _impl->_children.emplace(child->id(), std::move(child)).second;
+    assert(inserted);
 }
 
 void task_manager::task::start() {
@@ -254,7 +256,7 @@ void task_manager::task::unregister_task() noexcept {
     _impl->_module->unregister_task(id());
 }
 
-const task_manager::foreign_task_list& task_manager::task::get_children() const noexcept {
+const task_manager::foreign_task_map& task_manager::task::get_children() const noexcept {
     return _impl->_children;
 }
 
