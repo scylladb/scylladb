@@ -17,6 +17,7 @@
 #include <seastar/core/future-util.hh>
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/qos_configuration_change_subscriber.hh"
+#include "locator/token_metadata.hh"
 #include "auth/service.hh"
 #include "utils/overloaded_functor.hh"
 
@@ -86,7 +87,8 @@ std::ostream& operator<<(std::ostream& os, const service_level_op& op) {
 SEASTAR_THREAD_TEST_CASE(subscriber_simple) {
     sharded<service_level_controller> sl_controller;
     sharded<auth::service> auth_service;
-    sl_controller.start(std::ref(auth_service), service_level_options{}).get();
+    locator::shared_token_metadata tm({}, {});
+    sl_controller.start(std::ref(auth_service), std::ref(tm), service_level_options{}).get();
     qos_configuration_change_suscriber_simple ccss;
     sl_controller.local().register_subscriber(&ccss);
     sl_controller.local().add_service_level("sl1", service_level_options{}).get();

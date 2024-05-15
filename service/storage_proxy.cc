@@ -151,7 +151,7 @@ static future<ResultTuple> add_replica_exception_to_query_result(gms::feature_se
 }
 
 gms::inet_address storage_proxy::my_address() const noexcept {
-    return local_db().get_token_metadata().get_topology().my_address();
+    return _shared_token_metadata.get()->get_topology().my_address();
 }
 
 bool storage_proxy::is_me(gms::inet_address addr) const noexcept {

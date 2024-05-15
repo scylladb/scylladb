@@ -90,11 +90,12 @@ private:
     service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
+    locator::shared_token_metadata& _token_metadata;
     std::chrono::time_point<seastar::lowres_clock> _last_successful_config_update;
     unsigned _logged_intervals;
     atomic_vector<qos_configuration_change_subscriber*> _subscribers;
 public:
-    service_level_controller(sharded<auth::service>& auth_service, service_level_options default_service_level_config);
+    service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, service_level_options default_service_level_config);
 
     /**
      * this function must be called *once* from any shard before any other functions are called.
