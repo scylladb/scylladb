@@ -139,6 +139,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "DIGEST_INSENSITIVE_TO_EXPIRY"sv,
         "CDC"sv,
         "NONFROZEN_UDTS"sv,
+        "HINTED_HANDOFF_SEPARATE_CONNECTION"sv,
         "PER_TABLE_PARTITIONERS"sv,
     };
 

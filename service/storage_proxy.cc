@@ -3970,19 +3970,6 @@ future<> storage_proxy::send_to_endpoint(
 }
 
 future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target) {
-    if (!_features.hinted_handoff_separate_connection) {
-        return send_to_endpoint(
-                std::make_unique<shared_mutation>(std::move(fm_a_s)),
-                std::move(ermp),
-                std::move(target),
-                { },
-                db::write_type::SIMPLE,
-                tracing::trace_state_ptr(),
-                get_stats(),
-                allow_hints::no,
-                is_cancellable::yes);
-    }
-
     return send_to_endpoint(
             std::make_unique<hint_mutation>(std::move(fm_a_s)),
             std::move(ermp),
@@ -3996,12 +3983,6 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
 }
 
 future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s) {
-    if (!_features.hinted_handoff_separate_connection) {
-        std::array<mutation, 1> ms{fm_a_s.fm.unfreeze(fm_a_s.s)};
-        return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit())
-                .then(utils::result_into_future<result<>>);
-    }
-
     std::array<hint_wrapper, 1> ms{hint_wrapper { fm_a_s.fm.unfreeze(fm_a_s.s) }};
     return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit())
             .then(utils::result_into_future<result<>>);

@@ -81,7 +81,6 @@ public:
 
 public:
     gms::feature user_defined_functions { *this, "UDF"sv };
-    gms::feature hinted_handoff_separate_connection { *this, "HINTED_HANDOFF_SEPARATE_CONNECTION"sv };
     gms::feature lwt { *this, "LWT"sv };
     gms::feature per_table_caching { *this, "PER_TABLE_CACHING"sv };
     gms::feature digest_for_null_values { *this, "DIGEST_FOR_NULL_VALUES"sv };
