@@ -2649,6 +2649,10 @@ future<bool> view_builder::check_view_build_ongoing(const locator::token_metadat
     });
 }
 
+future<> view_builder::register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table) {
+    return _vug.register_staging_sstable(std::move(sst), std::move(table));
+}
+
 future<bool> check_needs_view_update_path(view_builder& vb, const locator::token_metadata& tm, const replica::table& t, streaming::stream_reason reason) {
     if (is_internal_keyspace(t.schema()->ks_name())) {
         return make_ready_future<bool>(false);

@@ -31,7 +31,7 @@
 #include "db/view/view_update_checks.hh"
 #include <unordered_map>
 #include <boost/range/adaptor/map.hpp>
-#include "db/view/view_update_generator.hh"
+#include "db/view/view_builder.hh"
 
 extern logging::logger dblog;
 
@@ -163,9 +163,9 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
         abort();
     });
 
-    co_await coroutine::parallel_for_each(new_sstables, [&view_update_generator, &table] (sstables::shared_sstable sst) -> future<> {
+    co_await coroutine::parallel_for_each(new_sstables, [&vb, &table] (sstables::shared_sstable sst) -> future<> {
         if (sst->requires_view_building()) {
-            co_await view_update_generator.local().register_staging_sstable(sst, table.shared_from_this());
+            co_await vb.local().register_staging_sstable(sst, table.shared_from_this());
         }
     });
 
