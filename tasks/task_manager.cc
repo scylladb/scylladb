@@ -151,8 +151,14 @@ void task_manager::task::impl::finish_failed(std::exception_ptr ex, std::string 
     }
 }
 
-void task_manager::task::impl::finish_failed(std::exception_ptr ex) {
-    finish_failed(ex, fmt::format("{}", ex));
+void task_manager::task::impl::finish_failed(std::exception_ptr ex) noexcept {
+    std::string error;
+    try {
+        error = fmt::format("{}", ex);
+    } catch (...) {
+        error = "Failed to get error message";
+    }
+    finish_failed(ex, std::move(error));
 }
 
 task_manager::task::task(task_impl_ptr&& impl, gate::holder gh) noexcept : _impl(std::move(impl)), _gate_holder(std::move(gh)) {
