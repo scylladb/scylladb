@@ -23,6 +23,7 @@ namespace db {
 class system_distributed_keyspace;
 namespace view {
 class view_update_generator;
+class view_builder;
 }
 }
 
@@ -35,6 +36,7 @@ class sstables_loader : public seastar::peering_sharded_service<sstables_loader>
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
     netw::messaging_service& _messaging;
+    sharded<db::view::view_builder>& _view_builder;
 
     // Note that this is obviously only valid for the current shard. Users of
     // this facility should elect a shard to be the coordinator based on any
@@ -52,11 +54,13 @@ public:
     sstables_loader(sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
-            netw::messaging_service& messaging)
+            netw::messaging_service& messaging,
+            sharded<db::view::view_builder>& vb)
         : _db(db)
         , _sys_dist_ks(sys_dist_ks)
         , _view_update_generator(view_update_generator)
         , _messaging(messaging)
+        , _view_builder(vb)
     {
     }
 
