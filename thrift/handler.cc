@@ -805,7 +805,7 @@ public:
             auto m = _ss.local().get_token_to_endpoint_map();
             std::map<std::string, std::string> ret;
             for (auto&& p : m) {
-                ret[format("{}", p.first)] = p.second.to_sstring();
+                ret[format("{}", p.first)] = fmt::to_string(p.second);
             }
             return ret;
         });

@@ -212,7 +212,7 @@ protected:
         std::unordered_set<gms::inet_address> local_dc_nodes = topology.get_datacenter_endpoints().at(local_dc);
         for (auto& ip : local_dc_nodes) {
             if (_gossiper.is_alive(ip)) {
-                rjson::push_back(results, rjson::from_string(ip.to_sstring()));
+                rjson::push_back(results, rjson::from_string(fmt::to_string(ip)));
             }
         }
         rep->set_status(reply::status_type::ok);

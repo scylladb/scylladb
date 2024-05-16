@@ -62,7 +62,6 @@ public:
     uint32_t raw_addr() const {
         return addr().as_ipv4_address().ip;
     }
-    sstring to_sstring() const;
     friend inline bool operator==(const inet_address& x, const inet_address& y) noexcept = default;
     friend inline bool operator<(const inet_address& x, const inet_address& y) noexcept {
         return x.bytes() < y.bytes();

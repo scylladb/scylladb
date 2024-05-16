@@ -66,7 +66,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
         return g.container().invoke_on(0, [] (gms::gossiper& g) {
             std::map<sstring, sstring> nodes_status;
             g.for_each_endpoint_state([&] (const gms::inet_address& node, const gms::endpoint_state&) {
-                nodes_status.emplace(node.to_sstring(), g.is_alive(node) ? "UP" : "DOWN");
+                nodes_status.emplace(fmt::to_string(node), g.is_alive(node) ? "UP" : "DOWN");
             });
             return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(nodes_status));
         });

@@ -2180,7 +2180,7 @@ view_builder::view_build_statuses(sstring keyspace, sstring view_name) const {
     topo.for_each_node([&] (const locator::node *node) {
         auto it = status.find(node->host_id());
         auto s = it != status.end() ? std::move(it->second) : "UNKNOWN";
-        status_map.emplace(node->endpoint().to_sstring(), std::move(s));
+        status_map.emplace(fmt::to_string(node->endpoint()), std::move(s));
     });
     co_return status_map;
 }

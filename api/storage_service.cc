@@ -677,7 +677,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 m.key.push("");
             }
             for (const gms::inet_address& address : entry.second) {
-                m.value.push(address.to_sstring());
+                m.value.push(fmt::to_string(address));
             }
             return m;
         });
