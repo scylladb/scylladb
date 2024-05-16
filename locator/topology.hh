@@ -29,10 +29,6 @@ namespace locator {
 class topology;
 }
 
-namespace std {
-std::ostream& operator<<(std::ostream& out, const locator::topology&);
-}
-
 namespace locator {
 
 class node;
@@ -429,8 +425,6 @@ private:
     friend class token_metadata_impl;
 public:
     void test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
-
-    friend std::ostream& std::operator<<(std::ostream& out, const topology&);
 };
 
 } // namespace locator
