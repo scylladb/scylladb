@@ -183,7 +183,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         on_internal_error(dblog, "process_upload_dir is not supported with tablets");
     }
 
-    return seastar::async(std::move(attr), [&db, &view_update_generator, &sys_dist_ks, &vb, ks = std::move(ks), cf = std::move(cf)] {
+    return seastar::async(std::move(attr), [&db, &view_update_generator, &vb, ks = std::move(ks), cf = std::move(cf)] {
         auto global_table = get_table_on_all_shards(db, ks, cf).get();
 
         sharded<sstables::sstable_directory> directory;
@@ -232,7 +232,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
                 [] (const sstables::shared_sstable&) { return true; }).get();
 
         // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
-        const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *global_table, streaming::stream_reason::repair).get();
+        const bool use_view_update_path = db::view::check_needs_view_update_path(vb.local(), db.local().get_token_metadata(), *global_table, streaming::stream_reason::repair).get();
 
         size_t loaded = directory.map_reduce0([&db, ks, cf, use_view_update_path, &view_update_generator, &vb] (sstables::sstable_directory& dir) {
             return make_sstables_available(dir, db, view_update_generator, vb, use_view_update_path, ks, cf);

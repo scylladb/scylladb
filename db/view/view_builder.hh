@@ -221,6 +221,7 @@ public:
 
     // Can only be called on shard-0
     future<> mark_existing_views_as_built();
+    future<bool> check_view_build_ongoing(const locator::token_metadata& tm, const sstring& ks_name, const sstring& cf_name);
 
 private:
     build_step& get_or_create_build_step(table_id);

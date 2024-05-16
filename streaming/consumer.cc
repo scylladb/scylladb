@@ -27,7 +27,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
         stream_reason reason,
         sstables::offstrategy offstrategy,
         service::frozen_topology_guard frozen_guard) {
-    return [&db, &sys_dist_ks, &vug, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard] (flat_mutation_reader_v2 reader) -> future<> {
+    return [&db, &vug, &vb, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard] (flat_mutation_reader_v2 reader) -> future<> {
         std::exception_ptr ex;
         try {
             if (current_scheduling_group() != db.local().get_streaming_scheduling_group()) {
@@ -37,7 +37,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
 
             auto cf = db.local().find_column_family(reader.schema()).shared_from_this();
             auto guard = service::topology_guard(frozen_guard);
-            auto use_view_update_path = co_await db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *cf, reason);
+            auto use_view_update_path = co_await db::view::check_needs_view_update_path(vb.local(), db.local().get_token_metadata(), *cf, reason);
             //FIXME: for better estimations this should be transmitted from remote
             auto metadata = mutation_source_metadata{};
             auto& cs = cf->get_compaction_strategy();
