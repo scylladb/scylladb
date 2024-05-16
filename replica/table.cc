@@ -289,6 +289,7 @@ sstables::shared_sstable table::make_streaming_staging_sstable() {
 }
 
 static flat_mutation_reader_v2 maybe_compact_for_streaming(flat_mutation_reader_v2 underlying, const compaction_manager& cm, gc_clock::time_point compaction_time, bool compaction_enabled) {
+    utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_enabled", fmt::to_string(compaction_enabled));
     if (!compaction_enabled) {
         return underlying;
     }
