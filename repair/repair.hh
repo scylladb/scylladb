@@ -42,10 +42,8 @@ class database;
 class repair_service;
 namespace db {
     namespace view {
-        class view_update_generator;
         class view_builder;
     }
-    class system_distributed_keyspace;
 }
 namespace netw { class messaging_service; }
 namespace service {
