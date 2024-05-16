@@ -64,6 +64,32 @@ void set_error_injection(http_context& ctx, routes& r) {
         });
     });
 
+    hf::read_injection.set(r, [](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        const sstring injection = req->get_path_param("injection");
+
+        std::vector<error_injection_json::error_injection_info> error_injection_infos(smp::count, error_injection_json::error_injection_info{});
+
+        co_await smp::invoke_on_all([&] {
+            auto& info = error_injection_infos[this_shard_id()];
+            auto& errinj = utils::get_local_injector();
+            const auto enabled = errinj.is_enabled(injection);
+            info.enabled = enabled;
+            if (!enabled) {
+                return;
+            }
+            std::vector<error_injection_json::mapper> parameters;
+            for (const auto& p : errinj.get_injection_parameters(injection)) {
+                error_injection_json::mapper param;
+                param.key = p.first;
+                param.value = p.second;
+                parameters.push_back(std::move(param));
+            }
+            info.parameters = std::move(parameters);
+        });
+
+        co_return json::json_return_type(error_injection_infos);
+    });
+
     hf::disable_on_all.set(r, [](std::unique_ptr<request> req) {
         auto& errinj = utils::get_local_injector();
         return errinj.disable_on_all().then([] {
