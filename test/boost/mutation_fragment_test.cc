@@ -641,3 +641,64 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_mixed_api_usage
     BOOST_REQUIRE(validator(dk0));
     BOOST_REQUIRE(!validator(dk0));
 }
+
+SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_validation_level) {
+    simple_schema ss;
+
+    const auto dkeys = ss.make_pkeys(5);
+    const auto& dk_ = dkeys[0];
+    const auto& dk0 = dkeys[1];
+    const auto& dk1 = dkeys[2];
+
+    const auto ck0 = ss.make_ckey(0);
+    const auto ck1 = ss.make_ckey(1);
+    const auto ck2 = ss.make_ckey(2);
+    const auto ck3 = ss.make_ckey(3);
+
+    reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 100);
+    auto stop_sem = deferred_stop(sem);
+    auto permit = sem.make_tracking_only_permit(ss.schema(), get_name(), db::no_timeout, {});
+
+    using vl = mutation_fragment_stream_validation_level;
+    using mf_kind = mutation_fragment_v2::kind;
+
+    const auto ps_pos = position_in_partition_view(position_in_partition_view::partition_start_tag_t{});
+    const auto sr_pos = position_in_partition_view(position_in_partition_view::static_row_tag_t{});
+    const auto pe_pos = position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{});
+
+    for (const auto validation_level : {vl::none, vl::partition_region, vl::token, vl::partition_key, vl::clustering_key}) {
+        testlog.info("valiation_level={}", static_cast<int>(validation_level));
+
+        mutation_fragment_stream_validating_filter validator("test", *ss.schema(), validation_level, false);
+
+        BOOST_REQUIRE(validator(mf_kind::partition_start, ps_pos, {}));
+        BOOST_REQUIRE(validator(dk_));
+        BOOST_REQUIRE(validator(mf_kind::static_row, sr_pos, {}));
+
+        // OOO fragment kind
+        BOOST_REQUIRE(validator(mf_kind::clustering_row, position_in_partition::for_key(ck0), {}));
+        BOOST_REQUIRE(validation_level < vl::partition_region || !validator(mf_kind::static_row, sr_pos, {}));
+
+        // OOO clustering row
+        BOOST_REQUIRE(validator(mf_kind::clustering_row, position_in_partition::for_key(ck1), {}));
+        BOOST_REQUIRE(validation_level < vl::clustering_key || !validator(mf_kind::clustering_row, position_in_partition::for_key(ck0), {}));
+
+        // Active range tombstone at partition-end
+        BOOST_REQUIRE(validator(mf_kind::range_tombstone_change, position_in_partition::after_key(*ss.schema(), ck2), ss.new_tombstone()));
+        if (validation_level == vl::none) {
+            BOOST_REQUIRE(validator(mf_kind::partition_end, pe_pos, {}));
+        } else {
+            BOOST_REQUIRE(!validator(mf_kind::partition_end, pe_pos, {}));
+            BOOST_REQUIRE(validator(mf_kind::range_tombstone_change, position_in_partition::after_key(*ss.schema(), ck3), tombstone()));
+            BOOST_REQUIRE(validator(mf_kind::partition_end, pe_pos, {}));
+        }
+
+        BOOST_REQUIRE(validator(dk1));
+
+        // OOO partition-key
+        BOOST_REQUIRE(validation_level < vl::partition_key || !validator(dk1));
+
+        // OOO token
+        BOOST_REQUIRE(validation_level < vl::token || !validator(dk0));
+    }
+}

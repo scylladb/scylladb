@@ -229,7 +229,11 @@ void mutation_fragment_stream_validator::reset(const mutation_fragment& mf) {
 
 namespace {
 
-[[noreturn]] void on_validation_error(seastar::logger& l, const mutation_fragment_stream_validating_filter& zis, mutation_fragment_stream_validator::validation_result res) {
+bool on_validation_error(seastar::logger& l, const mutation_fragment_stream_validating_filter& zis, mutation_fragment_stream_validator::validation_result res) {
+    if (!zis.raise_errors()) {
+        l.error("[validator {} for {}] {}", fmt::ptr(&zis), zis.full_name(), res.what());
+        return false;
+    }
     try {
         on_internal_error(l, format("[validator {} for {}] {}", fmt::ptr(&zis), zis.full_name(), res.what()));
     } catch (std::runtime_error& e) {
@@ -245,12 +249,12 @@ bool mutation_fragment_stream_validating_filter::operator()(const dht::decorated
     }
     if (_validation_level == mutation_fragment_stream_validation_level::token) {
         if (auto res = _validator(dk.token()); !res) {
-            on_validation_error(validator_log, *this, res);
+            return on_validation_error(validator_log, *this, res);
         }
         return true;
     } else {
         if (auto res = _validator(dk); !res) {
-            on_validation_error(validator_log, *this, res);
+            return on_validation_error(validator_log, *this, res);
         }
         return true;
     }
@@ -262,10 +266,11 @@ sstring mutation_fragment_stream_validating_filter::full_name() const {
 }
 
 mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_filter(const char* name_literal, sstring name_value, const schema& s,
-        mutation_fragment_stream_validation_level level)
+        mutation_fragment_stream_validation_level level, bool raise_errors)
     : _validator(s)
     , _name_storage(std::move(name_value))
     , _validation_level(level)
+    , _raise_errors(raise_errors)
 {
     if (name_literal) {
         _name_view = name_literal;
@@ -296,13 +301,13 @@ mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_
 }
 
 mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_filter(sstring name, const schema& s,
-        mutation_fragment_stream_validation_level level)
-    : mutation_fragment_stream_validating_filter(nullptr, std::move(name), s, level)
+        mutation_fragment_stream_validation_level level, bool raise_errors)
+    : mutation_fragment_stream_validating_filter(nullptr, std::move(name), s, level, raise_errors)
 { }
 
 mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_filter(const char* name, const schema& s,
-        mutation_fragment_stream_validation_level level)
-    : mutation_fragment_stream_validating_filter(name, {}, s, level)
+        mutation_fragment_stream_validation_level level, bool raise_errors)
+    : mutation_fragment_stream_validating_filter(name, {}, s, level, raise_errors)
 { }
 
 bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos,
@@ -311,14 +316,16 @@ bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment_v2
 
     validator_log.debug("[validator {}] {}:{} new_current_tombstone: {}", static_cast<void*>(this), kind, pos, new_current_tombstone);
 
-    if (_validation_level >= mutation_fragment_stream_validation_level::clustering_key) {
+    if (_validation_level == mutation_fragment_stream_validation_level::none) {
+        return true;
+    } else if (_validation_level >= mutation_fragment_stream_validation_level::clustering_key) {
         res = _validator(kind, pos, new_current_tombstone);
     } else {
         res = _validator(kind, new_current_tombstone);
     }
 
     if (__builtin_expect(!res->is_valid(), false)) {
-        on_validation_error(validator_log, *this, *res);
+        return on_validation_error(validator_log, *this, *res);
     }
 
     return true;
@@ -360,13 +367,14 @@ bool mutation_fragment_stream_validating_filter::on_end_of_partition() {
     return (*this)(mutation_fragment::kind::partition_end, position_in_partition_view(position_in_partition_view::end_of_partition_tag_t()));
 }
 
-void mutation_fragment_stream_validating_filter::on_end_of_stream() {
+bool mutation_fragment_stream_validating_filter::on_end_of_stream() {
     if (_validation_level < mutation_fragment_stream_validation_level::partition_region) {
-        return;
+        return true;
     }
     validator_log.debug("[validator {}] EOS", static_cast<const void*>(this));
     if (auto res = _validator.on_end_of_stream(); !res) {
-        on_validation_error(validator_log, *this, res);
+        return on_validation_error(validator_log, *this, res);
     }
+    return true;
 }
 
