@@ -419,6 +419,7 @@ class repair_writer_impl : public repair_writer::impl {
     sharded<replica::database>& _db;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
+    sharded<db::view::view_builder>& _view_builder;
     streaming::stream_reason _reason;
     flat_mutation_reader_v2 _queue_reader;
 public:
@@ -428,6 +429,7 @@ public:
         sharded<replica::database>& db,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator,
+        sharded<db::view::view_builder>& view_builder,
         streaming::stream_reason reason,
         mutation_fragment_queue queue,
         flat_mutation_reader_v2 queue_reader)
@@ -437,6 +439,7 @@ public:
         , _db(db)
         , _sys_dist_ks(sys_dist_ks)
         , _view_update_generator(view_update_generator)
+        , _view_builder(view_builder)
         , _reason(reason)
         , _queue_reader(std::move(queue_reader))
     {}
@@ -531,10 +534,11 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             streaming::stream_reason reason,
             sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            sharded<db::view::view_update_generator>& view_update_generator) {
+            sharded<db::view::view_update_generator>& view_update_generator,
+            sharded<db::view::view_builder>& view_builder) {
     auto [queue_reader, queue_handle] = make_queue_reader_v2(schema, permit);
     auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
-    auto i = std::make_unique<repair_writer_impl>(schema, permit, db, sys_dist_ks, view_update_generator, reason, std::move(queue), std::move(queue_reader));
+    auto i = std::make_unique<repair_writer_impl>(schema, permit, db, sys_dist_ks, view_update_generator, view_builder, reason, std::move(queue), std::move(queue_reader));
     return make_lw_shared<repair_writer>(schema, permit, std::move(i));
 }
 
@@ -863,7 +867,7 @@ public:
             , _remote_sharder(make_remote_sharder())
             , _same_sharding_config(is_same_sharding_config(cf))
             , _nr_peer_nodes(nr_peer_nodes)
-            , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, rs.get_sys_dist_ks(), rs.get_view_update_generator()))
+            , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, rs.get_sys_dist_ks(), rs.get_view_update_generator(), rs.get_view_builder()))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [&rs] (uint32_t repair_meta_id, std::optional<shard_id> dst_cpu_id_opt, netw::messaging_service::msg_addr addr) {
                         auto dst_cpu_id = dst_cpu_id_opt.value_or(repair_unspecified_shard);
