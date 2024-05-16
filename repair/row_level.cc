@@ -734,8 +734,6 @@ private:
     repair_service& _rs;
     seastar::sharded<replica::database>& _db;
     netw::messaging_service& _messaging;
-    seastar::sharded<db::system_distributed_keyspace>& _sys_dist_ks;
-    seastar::sharded<db::view::view_update_generator>& _view_update_generator;
     schema_ptr _schema;
     reader_permit _permit;
     dht::token_range _range;
@@ -851,8 +849,6 @@ public:
             : _rs(rs)
             , _db(rs.get_db())
             , _messaging(rs.get_messaging())
-            , _sys_dist_ks(rs.get_sys_dist_ks())
-            , _view_update_generator(rs.get_view_update_generator())
             , _schema(s)
             , _permit(std::move(permit))
             , _range(range)
@@ -867,7 +863,7 @@ public:
             , _remote_sharder(make_remote_sharder())
             , _same_sharding_config(is_same_sharding_config(cf))
             , _nr_peer_nodes(nr_peer_nodes)
-            , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, _sys_dist_ks, _view_update_generator))
+            , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, rs.get_sys_dist_ks(), rs.get_view_update_generator()))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [&rs] (uint32_t repair_meta_id, std::optional<shard_id> dst_cpu_id_opt, netw::messaging_service::msg_addr addr) {
                         auto dst_cpu_id = dst_cpu_id_opt.value_or(repair_unspecified_shard);
