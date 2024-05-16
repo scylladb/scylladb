@@ -279,7 +279,8 @@ class TestSuite(ABC):
                     if len(pn) == 1 and p in testname:
                         break
                     if len(pn) == 2 and pn[0] == testname:
-                        casename = pn[1]
+                        if pn[1] != "*":
+                            casename = pn[1]
                         break
                 else:
                     continue
