@@ -726,7 +726,7 @@ private:
                 std::ref(_ms), std::ref(_fd)).get();
             auto stop_raft_gr = deferred_stop(_group0_registry);
 
-            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
+            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_view_builder), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
             auto stop_streaming = defer([this] { _stream_manager.stop().get(); });
 
             _feature_service.invoke_on_all([] (auto& fs) {

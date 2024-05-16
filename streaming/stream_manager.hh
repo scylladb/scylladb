@@ -30,6 +30,7 @@ class config;
 class system_distributed_keyspace;
 namespace view {
 class view_update_generator;
+class view_builder;
 }
 }
 
@@ -86,6 +87,7 @@ private:
     sharded<replica::database>& _db;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
+    sharded<db::view::view_builder>& _view_builder;
     sharded<netw::messaging_service>& _ms;
     sharded<service::migration_manager>& _mm;
     gms::gossiper& _gossiper;
@@ -108,6 +110,7 @@ public:
     stream_manager(db::config& cfg, sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
+            sharded<db::view::view_builder>& view_builder,
             sharded<netw::messaging_service>& ms,
             sharded<service::migration_manager>& mm,
             gms::gossiper& gossiper, scheduling_group sg);
