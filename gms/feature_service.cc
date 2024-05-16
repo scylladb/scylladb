@@ -140,6 +140,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "CDC"sv,
         "NONFROZEN_UDTS"sv,
         "HINTED_HANDOFF_SEPARATE_CONNECTION"sv,
+        "LWT"sv,
         "PER_TABLE_PARTITIONERS"sv,
     };
 

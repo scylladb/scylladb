@@ -1810,10 +1810,6 @@ paxos_response_handler::~paxos_response_handler() {
  */
 future<paxos_response_handler::ballot_and_data>
 paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write) {
-    if (!_proxy->features().lwt) {
-        co_await coroutine::return_exception(std::runtime_error("The cluster does not support Paxos. Upgrade all the nodes to the version with LWT support."));
-    }
-
     api::timestamp_type min_timestamp_micros_to_use = 0;
     auto _ = shared_from_this(); // hold the handler until co-routine ends
 
