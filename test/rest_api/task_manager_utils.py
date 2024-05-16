@@ -55,15 +55,17 @@ def assert_task_does_not_exist(rest_api, task_id):
     resp = rest_api.send("GET", f"task_manager/task_status/{task_id}")
     assert resp.status_code == requests.codes.bad_request, f"Task {task_id} is kept in memory"
 
-def check_child_parent_relationship(rest_api, parent, tree_depth, allow_no_children, depth=0):
+def get_children(status_tree, parent_id):
+    return [s for s in status_tree if s["parent_id"] == parent_id]
+
+def check_child_parent_relationship(rest_api, status_tree, parent, allow_no_children):
     assert allow_no_children or parent.get("children_ids", []), f"Child tasks were not created for {parent}"
 
-    for child_id in parent.get("children_ids", []):
-        child = wait_for_task(rest_api, child_id)
+    for child in get_children(status_tree, parent["id"]):
+        child_id = child["id"]
         assert parent["sequence_number"] == child["sequence_number"], f"Child task with id {child_id} did not inherit parent's sequence number"
         assert child["parent_id"] == parent["id"], f"Parent id of task with id {child_id} is not set"
-        if depth + 1 < tree_depth:
-            check_child_parent_relationship(rest_api, child, tree_depth, allow_no_children, depth + 1)
+        check_child_parent_relationship(rest_api, status_tree, child, True)
 
 def drain_module_tasks(rest_api, module_name):
     tasks = [task for task in list_tasks(rest_api, module_name, True)]
