@@ -83,7 +83,7 @@ public:
 
 std::function<future<>(flat_mutation_reader_v2)>
 stream_manager::make_streaming_consumer(uint64_t estimated_partitions, stream_reason reason, service::frozen_topology_guard topo_guard) {
-    return streaming::make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, _view_builder, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard);
+    return streaming::make_streaming_consumer("streaming", _db, _view_builder, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard);
 }
 
 void stream_manager::init_messaging_service_handler(abort_source& as) {

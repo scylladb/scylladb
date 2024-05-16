@@ -15,9 +15,7 @@ class database;
 }
 
 namespace db {
-class system_distributed_keyspace;
 namespace view {
-class view_update_generator;
 class view_builder;
 }
 }
@@ -26,8 +24,6 @@ namespace streaming {
 
 std::function<future<>(flat_mutation_reader_v2)> make_streaming_consumer(sstring origin,
     sharded<replica::database>& db,
-    sharded<db::system_distributed_keyspace>& sys_dist_ks,
-    sharded<db::view::view_update_generator>& vug,
     sharded<db::view::view_builder>& vb,
     uint64_t estimated_partitions,
     stream_reason reason,
