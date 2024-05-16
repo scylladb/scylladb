@@ -3182,6 +3182,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::system_keyspace>& sys_ks,
         sharded<db::view::view_update_generator>& vug,
+        sharded<db::view::view_builder>& vb,
         tasks::task_manager& tm,
         service::migration_manager& mm,
         size_t max_repair_memory)
@@ -3194,6 +3195,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _sys_dist_ks(sys_dist_ks)
     , _sys_ks(sys_ks)
     , _view_update_generator(vug)
+    , _view_builder(vb)
     , _repair_module(seastar::make_shared<repair::task_manager_module>(tm, *this, max_repair_memory))
     , _mm(mm)
     , _node_ops_metrics(_repair_module)
