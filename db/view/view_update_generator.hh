@@ -84,6 +84,8 @@ public:
 
     replica::database& get_db() noexcept { return _db; }
 
+    const sharded<service::storage_proxy>& get_storage_proxy() const noexcept { return _proxy; };
+
 private:
     future<> mutate_MV(
             schema_ptr base,
@@ -114,7 +116,8 @@ public:
             mutation&& m,
             flat_mutation_reader_v2_opt existings,
             tracing::trace_state_ptr tr_state,
-            gc_clock::time_point now);
+            gc_clock::time_point now,
+            db::timeout_clock::time_point timeout);
 
 private:
     bool should_throttle() const;

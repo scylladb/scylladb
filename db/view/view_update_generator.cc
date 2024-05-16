@@ -6,6 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "db/view/view_update_backlog.hh"
+#include "exceptions/exceptions.hh"
+#include "gms/inet_address.hh"
 #include <seastar/util/defer.hh>
 #include <boost/range/adaptor/map.hpp>
 #include "replica/database.hh"
@@ -375,6 +378,8 @@ future<> view_update_generator::populate_views(const replica::table& table,
  * @param views the affected views which need to be updated.
  * @param updates the base table updates being applied.
  * @param existings the existing values for the rows affected by updates. This is used to decide if a view is
+ * @param now the current time, used to calculate the deletion time for tombstones
+ * @param timeout client request timeout
  * obsoleted by the update and should be removed, gather the values for columns that may not be part of the update if
  * a new view entry needs to be created, and compute the minimal updates to be applied if the view entry isn't changed
  * but has simply some updated values.
@@ -387,7 +392,8 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
         mutation&& m,
         flat_mutation_reader_v2_opt existings,
         tracing::trace_state_ptr tr_state,
-        gc_clock::time_point now) {
+        gc_clock::time_point now,
+        db::timeout_clock::time_point timeout) {
     auto base_token = m.token();
     auto m_schema = m.schema();
     view_update_builder builder = make_view_update_builder(
@@ -400,7 +406,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
             now);
 
     std::exception_ptr err = nullptr;
-    while (true) {
+    for (size_t batch_num = 0; ; batch_num++) {
         std::optional<utils::chunked_vector<frozen_mutation_and_schema>> updates;
         try {
             updates = co_await builder.build_some();
@@ -413,7 +419,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
         }
         tracing::trace(tr_state, "Generated {} view update mutations", updates->size());
         auto units = seastar::consume_units(_db.view_update_sem(), memory_usage_of(*updates));
-        if (_db.view_update_sem().current() == 0) {
+        if (batch_num == 0 && _db.view_update_sem().current() == 0) {
             // We don't have resources to propagate view updates for this write. If we reached this point, we failed to
             // throttle the client. The memory queue is already full, waiting on the semaphore would block view updates
             // that we've already started applying, and generating hints would ultimately result in the disk queue being
@@ -422,6 +428,29 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
             err = std::make_exception_ptr(exceptions::overloaded_exception("Too many view updates started concurrently"));
             break;
         }
+        // To prevent overload we sleep for a moment before sending another batch of view updates.
+        // The amount of time to sleep for is chosen based on how full the view update backlog is,
+        // the more full the queue of pending view updates is the more aggressively we should delay
+        // new ones.
+        // The first batch of updates doesn't have any delays because it's slowed down by the other throttling mechanism,
+        // the one which limits the number of incoming client requests by delaying the response to the client.
+        if (batch_num > 0) {
+            update_backlog local_backlog = _db.get_view_update_backlog();
+            std::chrono::microseconds throttle_delay =  calculate_view_update_throttling_delay(local_backlog, timeout);
+
+            co_await seastar::sleep(throttle_delay);
+
+            if (utils::get_local_injector().enter("view_update_limit") && _db.view_update_sem().current() == 0) {
+                err = std::make_exception_ptr(std::runtime_error("View update backlog exceeded the limit"));
+                break;
+            }
+
+            if (db::timeout_clock::now() > timeout) {
+                err = std::make_exception_ptr(exceptions::view_update_generation_timeout_exception());
+                break;
+            }
+        }
+
         try {
             co_await mutate_MV(base, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(), tr_state,
                 std::move(units), service::allow_hints::yes, wait_for_all_updates::no);
