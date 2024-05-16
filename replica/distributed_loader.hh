@@ -34,6 +34,7 @@ class system_distributed_keyspace;
 class system_keyspace;
 namespace view {
 class view_update_generator;
+class view_builder;
 }
 }
 
@@ -71,7 +72,7 @@ class distributed_loader {
     static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir, sstables::sstable_directory::process_flags flags);
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name);
     static future<size_t> make_sstables_available(sstables::sstable_directory& dir,
-            sharded<replica::database>& db, sharded<db::view::view_update_generator>& view_update_generator,
+            sharded<replica::database>& db, sharded<db::view::view_update_generator>& view_update_generator, sharded<db::view::view_builder>& vb,
             bool needs_view_update, sstring ks, sstring cf);
     static future<> populate_keyspace(distributed<replica::database>& db, sharded<db::system_keyspace>& sys_ks, keyspace& ks, sstring ks_name);
 
@@ -97,7 +98,7 @@ public:
     static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
             get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg);
     static future<> process_upload_dir(distributed<replica::database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
-            distributed<db::view::view_update_generator>& view_update_generator, sstring ks_name, sstring cf_name);
+            distributed<db::view::view_update_generator>& view_update_generator, sharded<db::view::view_builder>& vb, sstring ks_name, sstring cf_name);
 };
 
 }
