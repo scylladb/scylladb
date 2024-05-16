@@ -134,7 +134,7 @@ public:
             void run_to_completion();
             void finish() noexcept;
             void finish_failed(std::exception_ptr ex, std::string error) noexcept;
-            void finish_failed(std::exception_ptr ex);
+            void finish_failed(std::exception_ptr ex) noexcept;
             virtual future<std::optional<double>> expected_total_workload() const;
             virtual std::optional<double> expected_children_number() const;
             task_manager::task::progress get_binary_progress() const;
