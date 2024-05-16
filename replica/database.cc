@@ -819,6 +819,7 @@ void database::init_schema_commitlog() {
     assert(this_shard_id() == 0);
 
     db::commitlog::config c;
+    c.sched_group = _dbcfg.schema_commitlog_scheduling_group;
     c.commit_log_location = _cfg.schema_commitlog_directory();
     c.fname_prefix = db::schema_tables::COMMITLOG_FILENAME_PREFIX;
     c.metrics_category_name = "schema-commitlog";
