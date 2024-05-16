@@ -746,7 +746,6 @@ private:
     size_t _max_row_buf_size;
     uint64_t _seed = 0;
     repair_master _repair_master;
-    gms::inet_address _myip;
     uint32_t _repair_meta_id;
     streaming::stream_reason _reason;
     // Repair master's sharding configuration
@@ -811,7 +810,7 @@ public:
         return _stats;
     }
     gms::inet_address myip() const {
-        return _myip;
+        return _rs.my_address();
     }
     uint32_t repair_meta_id() const {
         return _repair_meta_id;
@@ -862,7 +861,6 @@ public:
             , _max_row_buf_size(max_row_buf_size)
             , _seed(seed)
             , _repair_master(master)
-            , _myip(_db.local().get_token_metadata().get_topology().my_address())
             , _repair_meta_id(repair_meta_id)
             , _reason(reason)
             , _master_node_shard_config(std::move(master_node_shard_config))
@@ -899,7 +897,7 @@ public:
                 add_to_repair_meta_for_followers(*this);
             }
             assert(all_live_peer_shards.size() == all_live_peer_nodes.size());
-            _all_node_states.push_back(repair_node_state(_myip, this_shard_id()));
+            _all_node_states.push_back(repair_node_state(myip(), this_shard_id()));
             for (unsigned i = 0; i < all_live_peer_nodes.size(); i++) {
                 _all_node_states.push_back(repair_node_state(all_live_peer_nodes[i], all_live_peer_shards[i].value_or(repair_unspecified_shard)));
             }
@@ -1483,7 +1481,7 @@ public:
     // Return the hashes of the rows in _working_row_buf
     future<repair_hash_set>
     get_full_row_hashes(gms::inet_address remote_node, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return get_full_row_hashes_handler();
         }
         return _messaging.send_repair_get_full_row_hashes(msg_addr(remote_node),
@@ -1538,7 +1536,7 @@ private:
 public:
     future<repair_hash_set>
     get_full_row_hashes_with_rpc_stream(gms::inet_address remote_node, unsigned node_idx, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return get_full_row_hashes_handler();
         }
         auto current_hashes = make_lw_shared<repair_hash_set>();
@@ -1567,7 +1565,7 @@ public:
     // Return the combined hashes of the current working row buf
     future<get_combined_row_hash_response>
     get_combined_row_hash(std::optional<repair_sync_boundary> common_sync_boundary, gms::inet_address remote_node, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return get_combined_row_hash_handler(common_sync_boundary);
         }
         return _messaging.send_repair_get_combined_row_hash(msg_addr(remote_node),
@@ -1595,7 +1593,7 @@ public:
     // RPC API
     future<>
     repair_row_level_start(gms::inet_address remote_node, sstring ks_name, sstring cf_name, dht::token_range range, table_schema_version schema_version, streaming::stream_reason reason, gc_clock::time_point compaction_time, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return make_ready_future<>();
         }
         stats().rpc_call_nr++;
@@ -1624,7 +1622,7 @@ public:
             uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason,
             gc_clock::time_point compaction_time, abort_source& as) {
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
-            repair.get_db().local().get_token_metadata().get_topology().my_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
+                repair.my_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
         return repair.insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as).then([] {
             return repair_row_level_start_response{repair_row_level_start_status::ok};
         }).handle_exception_type([] (replica::no_such_column_family&) {
@@ -1634,7 +1632,7 @@ public:
 
     // RPC API
     future<> repair_row_level_stop(gms::inet_address remote_node, sstring ks_name, sstring cf_name, dht::token_range range, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return stop();
         }
         stats().rpc_call_nr++;
@@ -1646,7 +1644,7 @@ public:
     static future<>
     repair_row_level_stop_handler(repair_service& rs, gms::inet_address from, uint32_t repair_meta_id, sstring ks_name, sstring cf_name, dht::token_range range) {
         rlogger.debug("<<< Finished Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}",
-            rs.get_db().local().get_token_metadata().get_topology().my_address(), from, repair_meta_id, ks_name, cf_name, range);
+                rs.my_address(), from, repair_meta_id, ks_name, cf_name, range);
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::row_level_stop_started);
         return rs.remove_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range)).then([rm] {
@@ -1656,7 +1654,7 @@ public:
 
     // RPC API
     future<uint64_t> repair_get_estimated_partitions(gms::inet_address remote_node, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return get_estimated_partitions();
         }
         stats().rpc_call_nr++;
@@ -1676,7 +1674,7 @@ public:
 
     // RPC API
     future<> repair_set_estimated_partitions(gms::inet_address remote_node, uint64_t estimated_partitions, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return set_estimated_partitions(estimated_partitions);
         }
         stats().rpc_call_nr++;
@@ -1697,7 +1695,7 @@ public:
     // Return the largest sync point contained in the _row_buf , current _row_buf checksum, and the _row_buf size
     future<get_sync_boundary_response>
     get_sync_boundary(gms::inet_address remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return get_sync_boundary_handler(skipped_sync_boundary);
         }
         stats().rpc_call_nr++;
@@ -1719,7 +1717,7 @@ public:
     // Must run inside a seastar thread
     void get_row_diff(repair_hash_set set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, unsigned node_idx, shard_id dst_cpu_id) {
         if (needs_all_rows || !set_diff.empty()) {
-            if (remote_node == _myip) {
+            if (remote_node == myip()) {
                 return;
             }
             if (needs_all_rows) {
@@ -1739,7 +1737,7 @@ public:
 
     // Must run inside a seastar thread
     void get_row_diff_and_update_peer_row_hash_sets(gms::inet_address remote_node, unsigned node_idx, shard_id dst_cpu_id) {
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             return;
         }
         stats().rpc_call_nr++;
@@ -1824,7 +1822,7 @@ public:
             unsigned node_idx,
             shard_id dst_cpu_id) {
         if (needs_all_rows || !set_diff.empty()) {
-            if (remote_node == _myip) {
+            if (remote_node == myip()) {
                 return;
             }
             if (needs_all_rows) {
@@ -1856,7 +1854,7 @@ public:
     // Send rows in the _working_row_buf with hash within the given sef_diff
     future<> put_row_diff(repair_hash_set set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, shard_id dst_cpu_id) {
         if (!set_diff.empty()) {
-            if (remote_node == _myip) {
+            if (remote_node == myip()) {
                 return make_ready_future<>();
             }
             size_t sz = set_diff.size();
@@ -1938,7 +1936,7 @@ public:
         if (set_diff.empty()) {
             co_return;
         }
-        if (remote_node == _myip) {
+        if (remote_node == myip()) {
             co_return;
         }
         size_t sz = set_diff.size();
@@ -2465,7 +2463,7 @@ future<> repair_service::init_ms_handlers() {
                 range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason, compaction_time, this] (repair_service& local_repair) mutable {
             if (!local_repair._sys_dist_ks.local_is_initialized() || !local_repair._view_update_generator.local_is_initialized()) {
                 return make_exception_future<repair_row_level_start_response>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
-                        local_repair.get_db().local().get_token_metadata().get_topology().my_address())));
+                        local_repair.my_address())));
             }
             streaming::stream_reason r = reason ? *reason : streaming::stream_reason::repair;
             const gc_clock::time_point ct = compaction_time ? *compaction_time : gc_clock::now();
@@ -2656,7 +2654,7 @@ private:
 
     inet_address_vector_replica_set sort_peer_nodes(const std::vector<gms::inet_address>& nodes) {
         inet_address_vector_replica_set sorted_nodes(nodes.begin(), nodes.end());
-        auto& topology = _shard_task.db.local().get_token_metadata().get_topology();
+        auto& topology = get_erm()->get_topology();
         topology.sort_by_proximity(topology.my_address(), sorted_nodes);
         return sorted_nodes;
     }
@@ -3436,4 +3434,8 @@ future<uint32_t> repair_service::get_next_repair_meta_id() {
     return container().invoke_on(0, [] (repair_service& local_repair) {
         return local_repair._next_repair_meta_id++;
     });
+}
+
+gms::inet_address repair_service::my_address() const noexcept {
+    return _sp.local().my_address();
 }

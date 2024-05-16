@@ -185,6 +185,8 @@ public:
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
+    gms::inet_address my_address() const noexcept;
+
     repair::task_manager_module& get_repair_module() noexcept {
         return *_repair_module;
     }
