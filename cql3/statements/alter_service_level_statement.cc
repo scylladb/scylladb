@@ -9,7 +9,7 @@
 #include "seastarx.hh"
 #include "cql3/statements/alter_service_level_statement.hh"
 #include "service/qos/service_level_controller.hh"
-#include "transport/messages/result_message.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "service/client_state.hh"
 #include "service/query_state.hh"
 
@@ -37,9 +37,12 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 alter_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &, std::optional<service::group0_guard> guard) const {
+    service::mutations_collector mc{std::move(guard)};
     qos::service_level& sl = state.get_service_level_controller().get_service_level(_service_level);
     qos::service_level_options slo = _slo.replace_defaults(sl.slo);
-    co_await state.get_service_level_controller().alter_distributed_service_level(_service_level, slo, std::move(guard));
+    auto& slc = state.get_service_level_controller();
+    co_await slc.alter_distributed_service_level(_service_level, slo, mc);
+    co_await slc.announce_mutations(std::move(mc));
     co_return nullptr;
 }
 }

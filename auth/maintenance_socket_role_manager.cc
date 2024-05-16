@@ -97,11 +97,11 @@ future<role_manager::attribute_vals> maintenance_socket_role_manager::query_attr
     return operation_not_supported_exception<role_manager::attribute_vals>("QUERY ATTRIBUTE");
 }
 
-future<> maintenance_socket_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) {
+future<> maintenance_socket_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::mutations_collector& mc) {
     return operation_not_supported_exception("SET ATTRIBUTE");
 }
 
-future<> maintenance_socket_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name) {
+future<> maintenance_socket_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::mutations_collector& mc) {
     return operation_not_supported_exception("REMOVE ATTRIBUTE");
 }
 

@@ -172,12 +172,12 @@ public:
     /// Sets `attribute_name` with `attribute_value` for `role_name`.
     /// \returns an exceptional future with nonexistant_role if the role does not exist.
     ///
-    virtual future<> set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) = 0;
+    virtual future<> set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::mutations_collector& mc) = 0;
 
     /// Removes `attribute_name` for `role_name`.
     /// \returns an exceptional future with nonexistant_role if the role does not exist.
     /// \note: This is a no-op if the role does not have the named attribute set.
     ///
-    virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name) = 0;
+    virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::mutations_collector& mc) = 0;
 };
 }

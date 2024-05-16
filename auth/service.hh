@@ -292,13 +292,13 @@ future<bool> has_role(const service&, const authenticated_user&, std::string_vie
 /// Sets `attribute_name` with `attribute_value` for `role_name`.
 /// \returns an exceptional future with nonexistant_role if the role does not exist.
 ///
-future<> set_attribute(const service&, std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value);
+future<> set_attribute(const service&, std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::mutations_collector& mc);
 
 /// Removes `attribute_name` for `role_name`.
 /// \returns an exceptional future with nonexistant_role if the role does not exist.
 /// \note: This is a no-op if the role does not have the named attribute set.
 ///
-future<> remove_attribute(const service&, std::string_view role_name, std::string_view attribute_name);
+future<> remove_attribute(const service&, std::string_view role_name, std::string_view attribute_name, ::service::mutations_collector& mc);
 
 ///
 /// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.

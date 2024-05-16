@@ -63,9 +63,9 @@ public:
 
     virtual future<role_manager::attribute_vals> query_attribute_for_all(std::string_view attribute_name) override;
 
-    virtual future<> set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) override;
+    virtual future<> set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::mutations_collector& mc) override;
 
-    virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name) override;
+    virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::mutations_collector& mc) override;
 };
 
 }

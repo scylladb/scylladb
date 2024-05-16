@@ -674,7 +674,7 @@ future<role_manager::attribute_vals> standard_role_manager::query_attribute_for_
     });
 }
 
-future<> standard_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) {
+future<> standard_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::mutations_collector& mc) {
     if (!co_await exists(role_name)) {
         throw auth::nonexistant_role(role_name);
     }
@@ -684,12 +684,12 @@ future<> standard_role_manager::set_attribute(std::string_view role_name, std::s
     if (legacy_mode(_qp)) {
         co_await _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name), sstring(attribute_value)}, cql3::query_processor::cache_internal::yes).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query,
-                {sstring(role_name), sstring(attribute_name), sstring(attribute_value)}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc, query,
+                {sstring(role_name), sstring(attribute_name), sstring(attribute_value)});
     }
 }
 
-future<> standard_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name) {
+future<> standard_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::mutations_collector& mc) {
     if (!co_await exists(role_name)) {
         throw auth::nonexistant_role(role_name);
     }
@@ -699,8 +699,8 @@ future<> standard_role_manager::remove_attribute(std::string_view role_name, std
     if (legacy_mode(_qp)) {
         co_await _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name)}, cql3::query_processor::cache_internal::yes).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query,
-                {sstring(role_name), sstring(attribute_name)}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc, query,
+                {sstring(role_name), sstring(attribute_name)});
     }
 }
 }
