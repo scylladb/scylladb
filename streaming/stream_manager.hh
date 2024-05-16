@@ -27,9 +27,7 @@
 
 namespace db {
 class config;
-class system_distributed_keyspace;
 namespace view {
-class view_update_generator;
 class view_builder;
 }
 }
@@ -85,8 +83,6 @@ class stream_manager : public gms::i_endpoint_state_change_subscriber, public en
      */
 private:
     sharded<replica::database>& _db;
-    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
-    sharded<db::view::view_update_generator>& _view_update_generator;
     sharded<db::view::view_builder>& _view_builder;
     sharded<netw::messaging_service>& _ms;
     sharded<service::migration_manager>& _mm;
@@ -108,8 +104,6 @@ private:
 
 public:
     stream_manager(db::config& cfg, sharded<replica::database>& db,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            sharded<db::view::view_update_generator>& view_update_generator,
             sharded<db::view::view_builder>& view_builder,
             sharded<netw::messaging_service>& ms,
             sharded<service::migration_manager>& mm,
