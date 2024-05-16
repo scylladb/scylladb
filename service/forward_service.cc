@@ -10,6 +10,7 @@
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/smp.hh>
 #include <stdexcept>
@@ -564,7 +565,9 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
         }
 
         auto endpoint_addr = netw::messaging_service::msg_addr{*live_endpoints.begin(), 0};
-        vnodes_per_addr[endpoint_addr].push_back(*vnode);
+        vnodes_per_addr[endpoint_addr].push_back(std::move(*vnode));
+        // can potentially stall e.g. with a large tablet count.
+        co_await coroutine::maybe_yield();
     }
 
     tracing::trace(tr_state, "Dispatching forward_request to {} endpoints", vnodes_per_addr.size());
@@ -572,77 +575,64 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
 
     retrying_dispatcher dispatcher(*this, tr_state);
     query::forward_result result;
-    
-    return do_with(std::move(dispatcher), std::move(result), std::move(vnodes_per_addr), std::move(req), std::move(tr_state),
-        [] (
-            retrying_dispatcher& dispatcher,
-            query::forward_result& result,
-            std::map<netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_per_addr,
-            query::forward_request& req,
-            tracing::trace_state_ptr& tr_state
-        )-> future<query::forward_result> {
-            return parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
-                [&req, &result, &tr_state, &dispatcher] (
-                    std::pair<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_with_addr
-                ) {
-                    netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
-                    query::forward_result& result_ = result;
-                    tracing::trace_state_ptr& tr_state_ = tr_state;
-                    retrying_dispatcher& dispatcher_ = dispatcher;
 
-                    query::forward_request req_with_modified_pr = req;
-                    req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
+    co_await coroutine::parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
+        [&req, &result, &tr_state, &dispatcher] (
+            std::pair<const netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_with_addr
+        ) -> future<> {
+            netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
+            query::forward_result& result_ = result;
+            tracing::trace_state_ptr& tr_state_ = tr_state;
+            retrying_dispatcher& dispatcher_ = dispatcher;
 
-                    tracing::trace(tr_state_, "Sending forward_request to {}", addr);
-                    flogger.debug("dispatching forward_request={} to address={}", req_with_modified_pr, addr);
+            query::forward_request req_with_modified_pr = req;
+            req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
 
-                    return dispatcher_.dispatch_to_node(addr, req_with_modified_pr).then(
-                        [&req, addr = std::move(addr), &result_, tr_state_ = std::move(tr_state_)] (
-                            query::forward_result partial_result
-                        ) mutable {
-                            auto partial_printer = seastar::value_of([&req, &partial_result] { 
-                                return query::forward_result::printer {
-                                    .functions = get_functions(req),
-                                    .res = partial_result
-                                };
-                            });
-                            tracing::trace(tr_state_, "Received forward_result={} from {}", partial_printer, addr);
-                            flogger.debug("received forward_result={} from {}", partial_printer, addr);
-                            
-                            return do_with(forward_aggregates(req), [&result_, partial_result = std::move(partial_result)] (forward_aggregates& aggrs) mutable {
-                                return aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
-                                    aggrs.merge(result_, std::move(partial_result));
-                                });
-                            });
-                    });       
-                }
-            ).then(
-                [&result, &req, &tr_state] () -> future<query::forward_result> {
-                    forward_aggregates aggrs(req);
-                    const bool requires_thread = aggrs.requires_thread();
+            tracing::trace(tr_state_, "Sending forward_request to {}", addr);
+            flogger.debug("dispatching forward_request={} to address={}", req_with_modified_pr, addr);
 
-                    auto merge_result = [&result, &req, &tr_state, aggrs = std::move(aggrs)] () mutable {
-                        auto printer = seastar::value_of([&req, &result] {
-                            return query::forward_result::printer {
-                                .functions = get_functions(req),
-                                .res = result
-                            };
+            return dispatcher_.dispatch_to_node(addr, std::move(req_with_modified_pr)).then(
+                [&req, addr = std::move(addr), &result_, tr_state_ = std::move(tr_state_)] (
+                    query::forward_result partial_result
+                ) mutable {
+                    auto partial_printer = seastar::value_of([&req, &partial_result] {
+                        return query::forward_result::printer {
+                            .functions = get_functions(req),
+                            .res = partial_result
+                        };
+                    });
+                    tracing::trace(tr_state_, "Received forward_result={} from {}", partial_printer, addr);
+                    flogger.debug("received forward_result={} from {}", partial_printer, addr);
+
+                    return do_with(forward_aggregates(req), [&result_, partial_result = std::move(partial_result)] (forward_aggregates& aggrs) mutable {
+                        return aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
+                            aggrs.merge(result_, std::move(partial_result));
                         });
-                        tracing::trace(tr_state, "Merged result is {}", printer);
-                        flogger.debug("merged result is {}", printer);
+                    });
+            });
+        });
 
-                        aggrs.finalize(result);
-                        return result;
-                    };
-                    if (requires_thread) {
-                        return seastar::async(std::move(merge_result));
-                    } else {
-                        return make_ready_future<query::forward_result>(merge_result());
-                    }
-                }
-            );
+        forward_aggregates aggrs(req);
+        const bool requires_thread = aggrs.requires_thread();
+
+        auto merge_result = [&result, &req, &tr_state, aggrs = std::move(aggrs)] () mutable {
+            auto printer = seastar::value_of([&req, &result] {
+                return query::forward_result::printer {
+                    .functions = get_functions(req),
+                    .res = result
+                };
+            });
+            tracing::trace(tr_state, "Merged result is {}", printer);
+            flogger.debug("merged result is {}", printer);
+
+            aggrs.finalize(result);
+            return result;
+        };
+        if (requires_thread) {
+            co_return co_await seastar::async(std::move(merge_result));
+        } else {
+            co_return merge_result();
         }
-    );
 }
 
 void forward_service::register_metrics() {
