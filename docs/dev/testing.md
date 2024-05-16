@@ -302,6 +302,33 @@ suite is as solid as possible. The first step is contributing a stable (read: no
 To do so, when developing tests, please run them (1) in debug mode and (2) 100 times in a row (using `--repeat 100`),
 and see that they pass successfully.
 
+## Allure reporting
+
+To make analyzing of the test results more convenient, an allure reporting tool is introduced.
+Python module allure-pytest is included in the toolchain image and an additional parameter added to gather allure
+data for the test run.
+However, the allure binary is not a part of the toolchain image.
+So to have the full benefit of the new reporting tool allure binary should be installed locally.
+
+### Allure installation
+
+To install allure tool, please follow [official documentation](https://allurereport.org/docs/install-for-linux/)
+
+**Note:** rpm package requires dependency `default-jre-headless` but on Fedora 38,39 none of the packages provides it.
+So manual installation of allure is required.
+
+### Basic allure usage
+
+1. Open directory with the Junit xml test results, e.g. testlog/dev/xml
+2. Execute allure serve to show report
+```shell
+$ allure serve -h localhost .
+```
+This will open the default system browser with an interactive allure report.
+
+For more information please refer to `allure -h` or [official documentation](https://allurereport.org/docs/)
+
+
 ## See also
 
 For command line help and available options, please see also:
