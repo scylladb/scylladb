@@ -32,7 +32,6 @@ struct full_task_status {
     tasks::task_manager::task::status task_status;
     std::string type;
     tasks::task_manager::task::progress progress;
-    std::string module;
     tasks::task_id parent_id;
     tasks::is_abortable abortable;
     std::vector<std::string> children_ids;
@@ -99,7 +98,6 @@ future<full_task_status> retrieve_status(const tasks::task_manager::foreign_task
     s.type = task->type();
     s.parent_id = task->get_parent_id();
     s.abortable = task->is_abortable();
-    s.module = task->get_module_name();
     s.progress.completed = progress.completed;
     s.progress.total = progress.total;
     std::vector<std::string> ct{task->get_children().size()};
