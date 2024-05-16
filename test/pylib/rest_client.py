@@ -230,6 +230,14 @@ class ScyllaRESTAPIClient():
         await self.client.post(f"/v2/error_injection/injection/{injection}",
                                host=node_ip, params={"one_shot": str(one_shot)}, json={ key: str(value) for key, value in parameters.items() })
 
+    async def get_injection(self, node_ip: str, injection: str) -> list[dict[str, Any]]:
+        """Read the state of the error injection named `injection` on `node_ip`.
+           The returned information includes whether the error injections is
+           active, as well as any parameters it might have.
+           Note: this only has an effect in specific build modes: debug,dev,sanitize.
+        """
+        return await self.client.get_json(f"/v2/error_injection/injection/{injection}", host=node_ip)
+
     async def move_tablet(self, node_ip: str, ks: str, table: str, src_host: HostID, src_shard: int, dst_host: HostID, dst_shard: int, token: int) -> None:
         await self.client.post(f"/storage_service/tablets/move", host=node_ip, params={
             "ks": ks,
