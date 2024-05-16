@@ -46,20 +46,24 @@ struct topology_change {
     std::vector<canonical_mutation> mutations;
 };
 
+struct service_levels_change {
+    std::vector<canonical_mutation> mutations;
+};
+
 // Allows executing combined topology & schema mutations under a single RAFT command.
 // The order of the mutations doesn't matter.
 struct mixed_change {
     std::vector<canonical_mutation> mutations;
 };
 
-// This command is used to write data to tables other than topology or
-// schema tables and it doesn't update any in-memory data structures.
+// This command is used to write data to tables other than topology/schema/service levels
+// tables and it doesn't update any in-memory data structures.
 struct write_mutations {
     std::vector<canonical_mutation> mutations;
 };
 
 struct group0_command {
-    std::variant<schema_change, broadcast_table_query, topology_change, write_mutations, mixed_change> change;
+    std::variant<schema_change, broadcast_table_query, topology_change, service_levels_change, write_mutations, mixed_change> change;
 
     // Mutation of group0 history table, appending a new state ID and optionally a description.
     canonical_mutation history_append;

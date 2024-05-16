@@ -168,6 +168,10 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
         co_await _ss.topology_transition();
     },
+    [&] (service_levels_change& chng) -> future<> {
+        co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
+        co_await _ss.update_service_levels_configuration();
+    },
     [&] (mixed_change& chng) -> future<> {
         co_await _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
         co_await _ss.topology_transition();
