@@ -380,7 +380,7 @@ hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id, const
             if (_uses_host_id) {
                 return hints_dir() / host_id.to_sstring();
             } else {
-                return hints_dir() / ip.to_sstring();
+                return hints_dir() / fmt::to_string(ip);
             }
         });
 

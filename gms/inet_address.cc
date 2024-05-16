@@ -36,7 +36,3 @@ std::ostream& gms::operator<<(std::ostream& os, const inet_address& x) {
     fmt::print(os, "{}", x);
     return os;
 }
-
-sstring gms::inet_address::to_sstring() const {
-    return format("{}", *this);
-}
