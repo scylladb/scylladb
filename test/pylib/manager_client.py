@@ -53,9 +53,17 @@ class ManagerClient():
         self.api = ScyllaRESTAPIClient()
         self.metrics = ScyllaMetricsClient()
         self.thread_pool = ThreadPoolExecutor()
+        self.test_finished_event = asyncio.Event()
 
     @property
     def client(self):
+        if self.test_finished_event.is_set():
+            raise Exception("ManagerClient.after_test method was called, client object is not accessible anymore")
+            # there are still can be issue when some task first obtains the client object,
+            # but usually, tests obtains the manager and uses the client as manager.client
+            # and there is an actual workaround for this case.
+            # It is better to fix the task rather than every time doing
+            # close all clients in after_test->create new during after_test->close again after after_test.
         _client = self.client_for_asyncio_loop.get(asyncio.get_running_loop(), None)
         if _client is None:
             _client = UnixRESTClient(self.sock_path)
@@ -129,8 +137,10 @@ class ManagerClient():
 
     async def after_test(self, test_case_name: str, success: bool) -> None:
         """Tell harness this test finished"""
+        self.test_finished_event.set()
+        _client = self.client_for_asyncio_loop.get(asyncio.get_running_loop())
         logger.debug("after_test for %s (success: %s)", test_case_name, success)
-        cluster_str = await self.client.put_json(f"/cluster/after-test/{success}",
+        cluster_str = await _client.put_json(f"/cluster/after-test/{success}",
                                                  response_type = "json")
         logger.info("Cluster after test %s: %s", test_case_name, cluster_str)
 

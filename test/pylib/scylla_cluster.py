@@ -6,6 +6,7 @@
 """Scylla clusters for testing.
    Provides helpers to setup and manage clusters of Scylla servers for testing.
 """
+from functools import wraps
 import asyncio
 from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
@@ -200,6 +201,34 @@ class CqlUpState(Enum):
     CONNECTED = 2,
     QUERIED = 3
 
+
+def start_stop_lock(func):
+    """
+    The methods stop, stop_gracefully, and start in ScyllaServer
+    are not designed for parallel execution.
+    This lock ensures that these methods are executed sequentially
+    """
+    async def wrap(self: 'ScyllaServer', *args, **kwargs):
+        async with self.start_stop_lock:
+            result = await func(self, *args, **kwargs)
+        return result
+    return wrap
+
+
+def stop_event(func):
+    """
+    interrupt start node on state "wait for node started" if someone wants to stop it
+    """
+    async def wrap(self: 'ScyllaServer', *args, **kwargs):
+        try:
+            self.stop_event.set()
+            result = await func(self, *args, **kwargs)
+        finally:
+            self.stop_event.clear()
+        return result
+    return wrap
+
+
 class ScyllaServer:
     """Starts and handles a single Scylla server, managing logs, checking if responsive,
        and cleanup when finished."""
@@ -233,6 +262,8 @@ class ScyllaServer:
         self.ip_addr = IPAddress(ip_addr)
         self.seeds = seeds
         self.cmd: Optional[Process] = None
+        self.start_stop_lock = asyncio.Lock()
+        self.stop_event = asyncio.Event()
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
@@ -458,6 +489,7 @@ class ScyllaServer:
             return False
         # Any other exception may indicate a problem, and is passed to the caller.
 
+    @start_stop_lock
     async def start(self, api: ScyllaRESTAPIClient, expected_error: Optional[str] = None) -> None:
         """Start an installed server. May be used for restarts."""
 
@@ -498,7 +530,7 @@ class ScyllaServer:
                                          f"{logpath}\n"
                                          f"{self.log_filename}")
 
-        while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT:
+        while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT and not self.stop_event.is_set():
             assert self.cmd is not None
             if self.cmd.returncode:
                 self.cmd = None
@@ -520,7 +552,10 @@ class ScyllaServer:
             # Sleep and retry
             await asyncio.sleep(sleep_interval)
 
-        report_error('failed to start the node, timeout reached')
+        if self.stop_event.is_set():
+            report_error('failed to start the node as it was requested to be stopped in the meantime')
+        else:
+            report_error('failed to start the node, timeout reached')
 
     async def force_schema_migration(self) -> None:
         """This is a hack to change schema hash on an existing cluster node
@@ -550,6 +585,8 @@ class ScyllaServer:
             self.control_cluster.shutdown()
             self.control_cluster = None
 
+    @stop_event
+    @start_stop_lock
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
         stop, so is not graceful. Waits for the process to exit before return."""
@@ -577,6 +614,8 @@ class ScyllaServer:
                 self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
 
+    @stop_event
+    @start_stop_lock
     async def stop_gracefully(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGTERM to
         stop, so it is graceful. Waits for the process to exit before return."""
@@ -1096,6 +1135,14 @@ class ScyllaClusterManager:
         app = aiohttp.web.Application()
         self._setup_routes(app)
         self.runner = aiohttp.web.AppRunner(app)
+        self.tasks_history = dict()
+        self.server_broken_event = asyncio.Event()
+
+    def repr_tasks_history(self):
+        out = "Cluster_history"
+        for key, val in self.tasks_history.items():
+            out += f"\n{val}:\t\t{repr(key)}"
+        return out
 
     async def start(self) -> None:
         """Get first cluster, setup API"""
@@ -1161,11 +1208,23 @@ class ScyllaClusterManager:
                     return aiohttp.web.Response(status=500, text=str(e))
             return catching_handler
 
+        def route_history_wrapper(blockable = False)-> Callable:
+            def outer_wrapper(handler: Callable)-> Callable:
+                @wraps(handler)
+                async def inner_wrapper(request):
+                    if blockable and self.server_broken_event.is_set():
+                        raise Exception("ScyllaClusterManager BROKEN")
+                    self.logger.info("[ScyllaClusterManager][%s] %s", asyncio.current_task().get_name(), request.url)
+                    self.tasks_history[asyncio.current_task()] = request
+                    return await handler(request)
+                return inner_wrapper
+            return outer_wrapper
+
         def add_get(route: str, handler: Callable):
-            app.router.add_get(route, make_catching_handler(handler))
+            app.router.add_get(route, make_catching_handler(route_history_wrapper()(handler)))
 
         def add_put(route: str, handler: Callable):
-            app.router.add_put(route, make_catching_handler(handler))
+            app.router.add_put(route, make_catching_handler(route_history_wrapper(True)(handler)))
 
         add_get('/up', self._manager_up)
         add_get('/cluster/up', self._cluster_up)
@@ -1236,6 +1295,25 @@ class ScyllaClusterManager:
     async def _after_test(self, _request) -> str:
         assert self.cluster is not None
         assert self.current_test_case_full_name
+        self.logger.info(self.repr_tasks_history())
+        self.tasks_history.pop(asyncio.current_task())
+        # copy current tasks
+        tasks = [key for key in self.tasks_history.keys()]
+        # wait for all other tasks in ScyllaClusterManager
+        try:
+            for task in tasks:
+                request = self.tasks_history.pop(task)
+                if not task.done():
+                    self.logger.info("wait for task:%s, request:%s", task, request.path_qs)
+                    await asyncio.wait_for(task, timeout=120)
+        except asyncio.TimeoutError:
+            self.break_manager(f"error on waiting coro {task.get_name()}")
+
+        # check on tasks leakage
+        await asyncio.sleep(0.1)
+        if self.tasks_history:
+            self.break_manager(f"tasks leakage found  {self.tasks_history}")
+
         success = _request.match_info["success"] == "True"
         self.logger.info("Test %s %s, cluster: %s", self.current_test_case_full_name,
                          "SUCCEEDED" if success else "FAILED", self.cluster)
@@ -1246,6 +1324,12 @@ class ScyllaClusterManager:
         self.is_after_test_ok = True
         cluster_str = str(self.cluster)
         return cluster_str
+
+    def break_manager(self, reason):
+        # make ScyllaClusterManager not operatable from client side
+        self.logger.error(" %s, BREAK ScyllaClusterManager", reason)
+        self.server_broken_event.set()
+        self._mark_dirty(None)
 
     async def _mark_dirty(self, _request) -> None:
         """Mark current cluster dirty"""

@@ -8,6 +8,7 @@
 
 import ssl
 import platform
+from functools import partial
 from typing import List, Optional
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
@@ -150,7 +151,7 @@ def cluster_con(hosts: List[IPAddress | EndPoint], port: int, use_ssl: bool, aut
 
 @pytest.fixture(scope="session")
 async def manager_internal(event_loop, request):
-    """Session fixture to set up client object for communicating with the Cluster API.
+    """Session fixture to prepare client object for communicating with the Cluster API.
        Pass the Unix socket path where the Manager server API is listening.
        Pass a function to create driver connections.
        Test cases (functions) should not use this fixture.
@@ -163,9 +164,9 @@ async def manager_internal(event_loop, request):
         auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
     else:
         auth_provider = None
-    manager_int = ManagerClient(request.config.getoption('manager_api'), port, use_ssl, auth_provider, cluster_con)
+    manager_int = partial(ManagerClient, request.config.getoption('manager_api'), port, use_ssl, auth_provider, cluster_con)
     yield manager_int
-    await manager_int.stop()  # Stop client session and close driver after last test
+
 
 @pytest.fixture(scope="function")
 async def manager(request, manager_internal):
@@ -173,12 +174,14 @@ async def manager(request, manager_internal):
     perform checks for cluster state.
     """
     test_case_name = request.node.name
+    manager_internal = manager_internal()  # set up client object in fixture with scope function
     await manager_internal.before_test(test_case_name)
     yield manager_internal
     # `request.node.stash` contains a flag stored in `pytest_runtest_makereport`
     # that indicates test failure.
     failed = request.node.stash[FAILED_KEY]
     await manager_internal.after_test(test_case_name, not failed)
+    await manager_internal.stop()  # Stop client session and close driver after each test
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object
