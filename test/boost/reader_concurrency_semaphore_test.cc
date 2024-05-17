@@ -18,6 +18,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/random_schema.hh"
+#include "test/lib/test_utils.hh"
 #include "test/lib/tmpdir.hh"
 
 #include <fmt/ranges.h>
@@ -30,16 +31,6 @@
 #include "readers/from_mutations_v2.hh"
 #include "replica/database.hh" // new_reader_base_cost is there :(
 #include "db/config.hh"
-
-std::ostream& boost_test_print_type(std::ostream& os, const reader_resources& r) {
-    fmt::print(os, "{}", r);
-    return os;
-}
-
-std::ostream& boost_test_print_type(std::ostream& os, reader_permit::state s) {
-    fmt::print(os, "{}", s);
-    return os;
-}
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads) {
     simple_schema s;

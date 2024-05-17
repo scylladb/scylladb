@@ -102,22 +102,3 @@ future<> touch_file(std::string name) {
 std::mutex boost_logger_mutex;
 
 }
-
-namespace std {
-
-std::ostream& boost_test_print_type(std::ostream& os, const std::strong_ordering& order) {
-    fmt::print(os, "{}", order);
-    return os;
-}
-
-std::ostream& boost_test_print_type(std::ostream& os, const std::weak_ordering& order) {
-    fmt::print(os, "{}", order);
-    return os;
-}
-
-std::ostream& boost_test_print_type(std::ostream& os, const std::partial_ordering& order) {
-    fmt::print(os, "{}", order);
-    return os;
-}
-
-} // namespace std

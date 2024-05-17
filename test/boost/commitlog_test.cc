@@ -42,15 +42,9 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/key_utils.hh"
+#include "test/lib/test_utils.hh"
 
 using namespace db;
-
-namespace db {
-std::ostream& boost_test_print_type(std::ostream& os, const replay_position& p) {
-    fmt::print(os, "{}", p);
-    return os;
-}
-}
 
 static future<> cl_test(commitlog::config cfg, noncopyable_function<future<> (commitlog&)> f) {
     // enable as needed.

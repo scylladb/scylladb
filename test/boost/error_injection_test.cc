@@ -14,6 +14,7 @@
 #include "utils/error_injection.hh"
 #include "db/timeout_clock.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/test_utils.hh"
 #include "types/list.hh"
 #include "log.hh"
 #include <chrono>
@@ -27,14 +28,6 @@ using minutes = std::chrono::minutes;
 using steady_clock = std::chrono::steady_clock;
 
 constexpr milliseconds sleep_msec(10); // Injection time sleep 10 msec
-
-namespace std::chrono {
-template<class Clock, class Duration>
-std::ostream& boost_test_print_type(std::ostream& os, const std::chrono::time_point<Clock, Duration>& time_point) {
-    fmt::print(os, "{}", time_point);
-    return os;
-}
-}
 
 SEASTAR_TEST_CASE(test_inject_noop) {
     utils::error_injection<false> errinj;

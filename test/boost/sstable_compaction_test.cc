@@ -65,6 +65,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/key_utils.hh"
+#include "test/lib/test_utils.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/combined.hh"
@@ -85,12 +86,6 @@ atomic_cell make_atomic_cell(data_type dt, bytes_view value, uint32_t ttl = 0, u
     }
 }
 
-namespace sstables {
-std::ostream& boost_test_print_type(std::ostream& os, const generation_type& gen) {
-    fmt::print(os, "{}", gen);
-    return os;
-}
-}
 ////////////////////////////////  Test basic compaction support
 
 // open_sstables() opens several generations of the same sstable, returning,

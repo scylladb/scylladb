@@ -20,18 +20,12 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
 #include "utils/UUID_gen.hh"
+#include "test/lib/test_utils.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/rp_set.hh"
 
 using namespace db;
-
-namespace db {
-std::ostream& boost_test_print_type(std::ostream& os, const replay_position& p) {
-    fmt::print(os, "{}", p);
-    return os;
-}
-}
 
 static future<> cl_test(commitlog::config cfg, noncopyable_function<future<> (commitlog& log)> f) {
     tmpdir tmp;
