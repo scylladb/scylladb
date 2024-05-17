@@ -309,11 +309,6 @@ auto fmt::formatter<mutation>::format(const mutation& m, fmt::format_context& ct
     return fmt::format_to(out, "token: {}}}, {}\n}}", dk._token, mutation_partition::printer(s, m.partition()));
 }
 
-std::ostream& operator<<(std::ostream& os, const mutation& m) {
-    fmt::print(os, "{}", m);
-    return os;
-}
-
 namespace mutation_json {
 
 void mutation_partition_json_writer::write_each_collection_cell(const collection_mutation_view_description& mv, data_type type,
