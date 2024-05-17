@@ -830,7 +830,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             }
         };
 
-        schema_features sf = schema_features::of<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
+        schema_features sf = schema_features::of<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY, schema_feature::PER_TABLE_PARTITIONERS>();
 
         expect_digest(sf, expected_digests[0]);
 
@@ -913,7 +913,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options_without_di
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("7f1ac621-fc68-3420-bc9b-54520da40418"),
+        utils::UUID("ae9f0511-1c1d-3566-a36f-8e1c8abc66fc"),
         utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
         utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
         utils::UUID("265be25f-b268-3f43-a54d-9c6e379a901d"),
@@ -1009,7 +1009,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("7f1ac621-fc68-3420-bc9b-54520da40418"),
+        utils::UUID("ae9f0511-1c1d-3566-a36f-8e1c8abc66fc"),
         utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
         utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
         utils::UUID("fdfdea09-fee9-3fd4-945f-b91a7a2e0e39"),
