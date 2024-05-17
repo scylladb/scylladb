@@ -1228,11 +1228,6 @@ struct fmt::formatter<db::seed_provider_type> {
 
 namespace db {
 
-std::ostream& operator<<(std::ostream& os, const db::seed_provider_type& s) {
-    os << "seed_provider_type{class=" << s.class_name << ", params=" << s.parameters << "}";
-    return os;
-}
-
 std::istream& operator>>(std::istream& is, db::seed_provider_type& s) {
     // FIXME -- this operator is used, in particular, by boost lexical_cast<>
     // it's here just to make the code compile, but it's not yet called for real
