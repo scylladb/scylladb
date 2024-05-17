@@ -113,7 +113,7 @@ void service_level_controller::do_abort() noexcept {
     _global_controller_db->notifications_serializer.broken();
 }
 
-future<> service_level_controller::drain() {
+future<> service_level_controller::stop() {
     if (this_shard_id() != global_controller) {
         co_return;
     }
@@ -130,10 +130,6 @@ future<> service_level_controller::drain() {
     } catch (const exceptions::unavailable_exception& ignored) {
     } catch (const exceptions::read_timeout_exception& ignored) {
     }
-}
-
-future<> service_level_controller::stop() {
-    return drain();
 }
 
 void service_level_controller::abort_group0_operations() {

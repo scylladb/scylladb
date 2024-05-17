@@ -134,12 +134,6 @@ public:
     future<> remove_service_level(sstring name, bool remove_static);
 
     /**
-     * stops the distributed updater
-     * @return a future that is resolved when the updates stopped
-     */
-    future<> drain();
-
-    /**
      * stops all ongoing operations if exists
      * @return a future that is resolved when all operations has stopped
      */
