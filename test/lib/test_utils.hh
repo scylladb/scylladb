@@ -12,6 +12,7 @@
 #include <seastar/util/source_location-compat.hh>
 #include <string>
 #include <boost/test/unit_test.hpp>
+#include <fmt/core.h>
 #include <fmt/format.h>
 
 using namespace seastar;
@@ -113,10 +114,6 @@ extern std::mutex boost_logger_mutex;
 }
 
 namespace std {
-
-std::ostream& boost_test_print_type(std::ostream& os, const std::strong_ordering& order);
-std::ostream& boost_test_print_type(std::ostream& os, const std::weak_ordering& order);
-std::ostream& boost_test_print_type(std::ostream& os, const std::partial_ordering& order);
 
 template <typename T>
 requires fmt::is_formattable<T>::value

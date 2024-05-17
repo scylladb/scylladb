@@ -17,20 +17,11 @@
 #include <boost/range/algorithm/sort.hpp>
 
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/test_utils.hh"
 #include "schema/schema_builder.hh"
 #include "keys.hh"
 #include "mutation/mutation.hh"
 #include "mutation/frozen_mutation.hh"
-
-std::ostream& boost_test_print_type(std::ostream& os, const counter_shard_view& csv) {
-    fmt::print(os, "{}", csv);
-    return os;
-}
-
-std::ostream& boost_test_print_type(std::ostream& os, const counter_cell_view& ccv) {
-    fmt::print(os, "{}", ccv);
-    return os;
-}
 
 void verify_shard_order(counter_cell_view ccv) {
     if (ccv.shards().begin() == ccv.shards().end()) {

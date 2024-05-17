@@ -8,7 +8,9 @@
 
 
 #include <boost/test/unit_test.hpp>
+#include <fmt/ranges.h>
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/test_utils.hh"
 #include <seastar/util/std-compat.hh>
 #include <seastar/core/reactor.hh>
 #include <string>
@@ -18,15 +20,6 @@
 #include "locator/production_snitch_base.hh"
 
 static std::filesystem::path test_files_subdir("test/resource/snitch_property_files");
-
-namespace std {
-
-std::ostream& boost_test_print_type(std::ostream& os, const std::pair<sstring, sstring>& p) {
-    fmt::print(os, "{}:{}", p.first, p.second);
-    return os;
-}
-
-}
 
 future<> one_test(const std::string& property_fname, bool exp_result) {
     using namespace locator;

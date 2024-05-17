@@ -13,8 +13,9 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>
-#include "test/lib/scylla_test_case.hh"
 #include <seastar/util/defer.hh>
+#include "test/lib/scylla_test_case.hh"
+#include "test/lib/test_utils.hh"
 
 #include "auth/authenticated_user.hh"
 #include "auth/permission.hh"
@@ -28,15 +29,6 @@
 
 static const auto alice = std::string_view("alice");
 static const auto bob = std::string_view("bob");
-
-namespace seastar {
-
-std::ostream& boost_test_print_type(std::ostream& os, const std::unordered_set<seastar::sstring>& strings) {
-    fmt::print(os, "{}", strings);
-    return os;
-}
-
-} // namespace seastar
 
 static shared_ptr<db::config> db_config_with_auth() {
     shared_ptr<db::config> config_ptr = make_shared<db::config>();
