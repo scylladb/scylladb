@@ -9,6 +9,7 @@
 #define BOOST_TEST_MODULE core
 
 #include <stdexcept>
+#include <optional>
 #include <fmt/format.h>
 
 #include <boost/test/included/unit_test.hpp>
