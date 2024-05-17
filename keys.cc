@@ -52,11 +52,6 @@ partition_key partition_key::from_nodetool_style_string(const schema_ptr s, cons
     return partition_key::from_range(std::move(r));
 }
 
-std::ostream& operator<<(std::ostream& out, const bound_kind k) {
-    fmt::print(out, "{}", k);
-    return out;
-}
-
 auto fmt::formatter<bound_kind>::format(bound_kind k, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
     std::string_view name;

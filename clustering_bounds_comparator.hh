@@ -25,8 +25,6 @@ enum class bound_kind : uint8_t {
     excl_start = 7,
 };
 
-std::ostream& operator<<(std::ostream& out, const bound_kind k);
-
 // Swaps start <-> end && incl <-> excl
 bound_kind invert_kind(bound_kind k);
 // Swaps start <-> end
