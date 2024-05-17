@@ -741,7 +741,11 @@ private:
             tracing::trace(tr_state, "paxos_accept: message received from /{} ballot {}", src_ip, proposal);
         }
 
+<<<<<<< HEAD
         auto f = get_schema_for_read(proposal.update.schema_version(), src_addr).then([&sp = _sp, tr_state = std::move(tr_state),
+=======
+        auto f = get_schema_for_read(proposal.update.schema_version(), src_addr, *timeout).then([&sp = _sp, &sys_ks = _sys_ks, tr_state,
+>>>>>>> a429e7b1fe (service/storage_proxy: capture `tr_state` by copy in handle_paxos_accept())
                                                               proposal = std::move(proposal), timeout] (schema_ptr schema) mutable {
             dht::token token = proposal.update.decorated_key(*schema).token();
             unsigned shard = dht::shard_of(*schema, token);
