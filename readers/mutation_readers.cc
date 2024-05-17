@@ -1415,7 +1415,6 @@ private:
 
     // Compacted stream
     bool _has_compacted_partition_start = false;
-    bool _ignore_partition_end = false;
 
 private:
     void maybe_push_partition_start() {
@@ -1446,20 +1445,13 @@ private:
         return stop_iteration::no;
     }
     stop_iteration consume(range_tombstone_change&& rtc) {
-        // The compactor will close the active tombstone (if any) on partition
-        // end. We ignore this when we don't care about the partition-end.
-        if (_ignore_partition_end) {
-            return stop_iteration::no;
-        }
         maybe_push_partition_start();
         push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(rtc)));
         return stop_iteration::no;
     }
     stop_iteration consume_end_of_partition() {
         maybe_push_partition_start();
-        if (!_ignore_partition_end) {
-            push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end{}));
-        }
+        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end{}));
         return stop_iteration::no;
     }
     void consume_end_of_stream() {
