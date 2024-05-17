@@ -13,6 +13,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/on_internal_error.hh>
 #include "utils/large_bitset.hh"
 #include <array>
 #include <cstdlib>
@@ -72,6 +73,39 @@ void bloom_filter::add(const bytes_view& key) {
 
 bool bloom_filter::is_present(const bytes_view& key) {
     return is_present(make_hashed_key(key));
+}
+
+void bloom_filter::fold(const size_t new_num_bits) {
+    const auto curr_num_bits = _bitset.size();
+    if (curr_num_bits % new_num_bits != 0) {
+        seastar::on_internal_error(filterlog, std::format("cannot fold down bloom filter as the new number of bits({}) is not a factor of existing bitset size({})", new_num_bits, curr_num_bits));
+        return;
+    }
+
+    // The folding will happen inplace (i.e) the first new_num_bits of the current
+    // bitmap will be updated with the folded filter's bits. A bit b[i] where 'i'
+    // belonging to [0, new_num_bits), will be set if any of its input bits :
+    // b[i], b[i + new_num_bits], b[i + 2*new_num_bits]... is set in the current bitmap.
+    for (uint64_t new_bitset_idx = 0; new_bitset_idx < new_num_bits; new_bitset_idx++) {
+        if (_bitset.test(new_bitset_idx)) {
+            // the target bit is already set - no need to look at other input bits
+            continue;
+        }
+
+        // set the target bit if any of its input bit is set
+        auto old_bitset_idx = new_bitset_idx + new_num_bits;
+        while (old_bitset_idx < curr_num_bits) {
+            if (_bitset.test(old_bitset_idx)) {
+                _bitset.set(new_bitset_idx);
+                break;
+            }
+            old_bitset_idx += new_num_bits;
+        }
+    }
+
+    // The first new_num_bits has the folded filter bits.
+    // Shrink the bitmap storage to remove the older bits.
+    _bitset.shrink(new_num_bits);
 }
 
 filter_ptr create_filter(int hash, large_bitset&& bitset, filter_format format) {
