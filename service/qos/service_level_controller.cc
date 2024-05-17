@@ -30,12 +30,13 @@ sstring service_level_controller::default_service_level_name = "default";
 
 
 
-service_level_controller::service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, service_level_options default_service_level_config):
+service_level_controller::service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config):
         _sl_data_accessor(nullptr),
         _auth_service(auth_service),
         _token_metadata(tm),
         _last_successful_config_update(seastar::lowres_clock::now()),
-        _logged_intervals(0)
+        _logged_intervals(0),
+        _early_abort_subscription(as.subscribe([this] () noexcept { do_abort(); }))
 
 {
     if (this_shard_id() == global_controller) {
@@ -95,6 +96,9 @@ future<> service_level_controller::reload_distributed_data_accessor(cql3::query_
             qp,
             g0);
     set_distributed_data_accessor(std::move(accessor));
+}
+
+void service_level_controller::do_abort() noexcept {
 }
 
 future<> service_level_controller::drain() {

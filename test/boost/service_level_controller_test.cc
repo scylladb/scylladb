@@ -88,7 +88,10 @@ SEASTAR_THREAD_TEST_CASE(subscriber_simple) {
     sharded<service_level_controller> sl_controller;
     sharded<auth::service> auth_service;
     locator::shared_token_metadata tm({}, {});
-    sl_controller.start(std::ref(auth_service), std::ref(tm), service_level_options{}).get();
+    sharded<abort_source> as;
+    as.start().get();
+    auto stop_as = defer([&as] { as.stop().get(); });
+    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), service_level_options{}).get();
     qos_configuration_change_suscriber_simple ccss;
     sl_controller.local().register_subscriber(&ccss);
     sl_controller.local().add_service_level("sl1", service_level_options{}).get();
@@ -107,5 +110,6 @@ SEASTAR_THREAD_TEST_CASE(subscriber_simple) {
 
     sl_controller.local().unregister_subscriber(&ccss).get();
     BOOST_REQUIRE_EQUAL(ccss.ops, expected_result);
+    as.invoke_on_all([] (auto& as) { as.request_abort(); }).get();
     sl_controller.stop().get();
 }
