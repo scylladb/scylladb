@@ -417,10 +417,6 @@ standard_role_manager::legacy_modify_membership(
         std::string_view grantee_name,
         std::string_view role_name,
         membership_change ch) {
-    // FIXME: in auth-v2 mode callers of this function should use a single guard
-    // to achieve consistent data across read and write, but the structure of calls
-    // is too complex to make such a refactor a quick fix.
-
     const auto modify_roles = [this, role_name, grantee_name, ch] () -> future<> {
         const auto query = format(
                 "UPDATE {}.{} SET member_of = member_of {} ? WHERE {} = ?",
@@ -428,17 +424,12 @@ standard_role_manager::legacy_modify_membership(
                 meta::roles_table::name,
                 (ch == membership_change::add ? '+' : '-'),
                 meta::roles_table::role_col_name);
-        if (legacy_mode(_qp)) {
-            co_await _qp.execute_internal(
-                    query,
-                    consistency_for_role(grantee_name),
-                    internal_distributed_query_state(),
-                    {role_set{sstring(role_name)}, sstring(grantee_name)},
-                    cql3::query_processor::cache_internal::no).discard_result();
-        } else {
-            co_await announce_mutations(_qp, _group0_client, std::move(query),
-                    {role_set{sstring(role_name)}, sstring(grantee_name)}, &_as, ::service::raft_timeout{});
-        }
+        co_await _qp.execute_internal(
+                query,
+                consistency_for_role(grantee_name),
+                internal_distributed_query_state(),
+                {role_set{sstring(role_name)}, sstring(grantee_name)},
+                cql3::query_processor::cache_internal::no).discard_result();
     };
 
     const auto modify_role_members = [this, role_name, grantee_name, ch] () -> future<> {
@@ -447,34 +438,24 @@ standard_role_manager::legacy_modify_membership(
                 const sstring insert_query = format("INSERT INTO {}.{} (role, member) VALUES (?, ?)",
                         get_auth_ks_name(_qp),
                         meta::role_members_table::name);
-                if (legacy_mode(_qp)) {
-                    co_return co_await _qp.execute_internal(
-                            insert_query,
-                            consistency_for_role(role_name),
-                            internal_distributed_query_state(),
-                            {sstring(role_name), sstring(grantee_name)},
-                            cql3::query_processor::cache_internal::no).discard_result();
-                } else {
-                    co_return co_await announce_mutations(_qp, _group0_client, insert_query,
-                            {sstring(role_name), sstring(grantee_name)}, &_as, ::service::raft_timeout{});
-                }
+                co_return co_await _qp.execute_internal(
+                        insert_query,
+                        consistency_for_role(role_name),
+                        internal_distributed_query_state(),
+                        {sstring(role_name), sstring(grantee_name)},
+                        cql3::query_processor::cache_internal::no).discard_result();
             }
 
             case membership_change::remove: {
                 const sstring delete_query = format("DELETE FROM {}.{} WHERE role = ? AND member = ?",
                         get_auth_ks_name(_qp),
                         meta::role_members_table::name);
-                if (legacy_mode(_qp)) {
-                    co_return co_await _qp.execute_internal(
-                            delete_query,
-                            consistency_for_role(role_name),
-                            internal_distributed_query_state(),
-                            {sstring(role_name), sstring(grantee_name)},
-                            cql3::query_processor::cache_internal::no).discard_result();
-                } else {
-                    co_return co_await announce_mutations(_qp, _group0_client, delete_query,
-                            {sstring(role_name), sstring(grantee_name)}, &_as, ::service::raft_timeout{});
-                }
+                co_return co_await _qp.execute_internal(
+                        delete_query,
+                        consistency_for_role(role_name),
+                        internal_distributed_query_state(),
+                        {sstring(role_name), sstring(grantee_name)},
+                        cql3::query_processor::cache_internal::no).discard_result();
             }
         }
     };
