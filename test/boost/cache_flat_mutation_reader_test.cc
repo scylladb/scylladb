@@ -23,6 +23,7 @@
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/test_utils.hh"
 
 #include <variant>
 
