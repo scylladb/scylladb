@@ -1313,7 +1313,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
 
             netw::messaging_service::scheduling_config scfg;
-            scfg.statement_tenants = { {dbcfg.statement_scheduling_group, "$user"}, {default_scheduling_group(), "$system"} };
+            scfg.statement_tenants = {
+                    {dbcfg.statement_scheduling_group, "$user"},
+                    {default_scheduling_group(), "$system"},
+                    {dbcfg.streaming_scheduling_group, "$maintenance"}
+            };
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = dbcfg.gossip_scheduling_group;
 
