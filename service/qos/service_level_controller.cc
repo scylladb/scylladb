@@ -99,11 +99,8 @@ future<> service_level_controller::reload_distributed_data_accessor(cql3::query_
 }
 
 void service_level_controller::do_abort() noexcept {
-}
-
-future<> service_level_controller::drain() {
     if (this_shard_id() != global_controller) {
-        co_return;
+        return;
     }
 
     // abort the loop of the distributed data checking if it is running
@@ -114,6 +111,18 @@ future<> service_level_controller::drain() {
     abort_group0_operations();
     
     _global_controller_db->notifications_serializer.broken();
+}
+
+future<> service_level_controller::drain() {
+    if (this_shard_id() != global_controller) {
+        co_return;
+    }
+
+    if (*_early_abort_subscription) {
+        // Abort source didn't fire, so do it now
+        do_abort();
+    }
+
     try {
         co_await std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>());
     } catch (const broken_semaphore& ignored) {
