@@ -1,5 +1,5 @@
 set(CMAKE_CXX_FLAGS_COVERAGE
-  "-fprofile-instr-generate -fcoverage-mapping"
+  "-fprofile-instr-generate -fcoverage-mapping -fprofile-list=${CMAKE_SOURCE_DIR}/coverage_sources.list"
   CACHE
   INTERNAL
   "")
