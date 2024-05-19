@@ -12,6 +12,7 @@
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
+#include "gms/inet_address.hh"
 #include "partition_range_compat.hh"
 #include "db/consistency_level.hh"
 #include "db/commitlog/commitlog.hh"
@@ -1032,7 +1033,7 @@ protected:
     schema_ptr _schema;
 public:
     virtual ~mutation_holder() {}
-    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, locator::effective_replication_map_ptr ermptr,
+    virtual bool store_hint(db::hints::manager& hm, const locator::host_id& hid, std::optional<gms::inet_address> ep, locator::effective_replication_map_ptr ermptr,
             tracing::trace_state_ptr tr_state) = 0;
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
@@ -1072,11 +1073,17 @@ public:
             _mutations.emplace(m.first, std::move(fm));
         }
     }
-    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, locator::effective_replication_map_ptr ermptr,
+    virtual bool store_hint(db::hints::manager& hm, const locator::host_id& hid, std::optional<gms::inet_address> ep, locator::effective_replication_map_ptr ermptr,
             tracing::trace_state_ptr tr_state) override {
-        auto m = _mutations[ep];
+        if (!ep) {
+            ep = ermptr->get_token_metadata().get_endpoint_for_host_id_if_known(hid);
+        }
+        if (!ep) {
+            slogger.warn("per_destination_mutation: cannot store hint for {}: endpoint unknown", hid);
+            return false;
+        }
+        auto m = _mutations[*ep];
         if (m) {
-            const auto hid = ermptr->get_token_metadata().get_host_id(ep);
             return hm.store_hint(hid, ep, _schema, std::move(m), tr_state);
         } else {
             return false;
@@ -1133,9 +1140,11 @@ public:
     }
     explicit shared_mutation(const mutation& m) : shared_mutation(frozen_mutation_and_schema{freeze(m), m.schema()}) {
     }
-    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, locator::effective_replication_map_ptr ermptr,
+    virtual bool store_hint(db::hints::manager& hm, const locator::host_id& hid, std::optional<gms::inet_address> ep, locator::effective_replication_map_ptr ermptr,
             tracing::trace_state_ptr tr_state) override {
-        const auto hid = ermptr->get_token_metadata().get_host_id(ep);
+        if (!ep) {
+            ep = ermptr->get_token_metadata().get_endpoint_for_host_id_if_known(hid);
+        }
         return hm.store_hint(hid, ep, _schema, _mutation, tr_state);
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
@@ -1165,7 +1174,7 @@ public:
 class hint_mutation : public shared_mutation {
 public:
     using shared_mutation::shared_mutation;
-    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, locator::effective_replication_map_ptr,
+    virtual bool store_hint(db::hints::manager& hm, const locator::host_id&, std::optional<gms::inet_address>, locator::effective_replication_map_ptr,
             tracing::trace_state_ptr tr_state) override {
         throw std::runtime_error("Attempted to store a hint for a hint");
     }
@@ -1291,7 +1300,7 @@ public:
         _size = _proposal->update.representation().size();
         _schema = std::move(s);
     }
-    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, locator::effective_replication_map_ptr,
+    virtual bool store_hint(db::hints::manager& hm, const locator::host_id&, std::optional<gms::inet_address>, locator::effective_replication_map_ptr,
             tracing::trace_state_ptr tr_state) override {
         return false; // CAS does not save hints yet
     }
@@ -1588,9 +1597,9 @@ public:
     const inet_address_vector_topology_change& get_dead_endpoints() const {
         return _dead_endpoints;
     }
-    bool store_hint(db::hints::manager& hm, gms::inet_address ep, locator::effective_replication_map_ptr ermptr,
+    bool store_hint(db::hints::manager& hm, const locator::host_id& hid, std::optional<gms::inet_address> ep, locator::effective_replication_map_ptr ermptr,
             tracing::trace_state_ptr tr_state) {
-        return _mutation_holder->store_hint(hm, ep, std::move(ermptr), tr_state);
+        return _mutation_holder->store_hint(hm, hid, std::move(ep), std::move(ermptr), tr_state);
     }
     future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
         auto op = _proxy->start_write();
@@ -4204,7 +4213,11 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
     if (hints_enabled(type)) {
         db::hints::manager& hints_manager = hints_manager_for(type);
         return boost::count_if(targets, [&mh, ermptr, tr_state = std::move(tr_state), &hints_manager] (gms::inet_address target) mutable -> bool {
-            return mh->store_hint(hints_manager, target, ermptr, tr_state);
+            auto hid = ermptr->get_token_metadata().get_host_id_if_known(target);
+            if (!hid) {
+                return false;
+            }
+            return mh->store_hint(hints_manager, *hid, target, ermptr, tr_state);
         });
     } else {
         return 0;

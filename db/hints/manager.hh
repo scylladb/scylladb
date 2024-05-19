@@ -175,7 +175,7 @@ public:
     void register_metrics(const sstring& group_name);
     future<> start(shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
-    bool store_hint(endpoint_id host_id, gms::inet_address ip, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
+    bool store_hint(endpoint_id host_id, std::optional<gms::inet_address> ip, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
             tracing::trace_state_ptr tr_state) noexcept;
 
     /// \brief Changes the host_filter currently used, stopping and starting endpoint_managers relevant to the new host_filter.
