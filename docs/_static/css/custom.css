@@ -41,6 +41,6 @@ dl dt:hover > a.headerlink {
     visibility: visible;
 }
 
-dl.confval {
+dl.confval, dl.metrics_option {
     border-bottom: 1px solid #cacaca;
 }
