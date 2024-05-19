@@ -32,8 +32,22 @@ extensions = [
     "sphinx.ext.extlinks",
     "sphinx_sitemap",
     "sphinx_scylladb_theme",
+<<<<<<< HEAD
     "sphinx_multiversion",  # optional
     "recommonmark",  # optional
+=======
+    "sphinx_multiversion",
+    "sphinx_scylladb_markdown",
+    "sphinxcontrib.datatemplates",
+    "scylladb_cc_properties",
+    "scylladb_aws_images",
+    "scylladb_azure_images",
+    "scylladb_gcp_images",
+    "scylladb_include_flag",
+    "scylladb_dynamic_substitutions",
+    "scylladb_swagger",
+    "scylladb_metrics"
+>>>>>>> 9eef3d6139 (docs: docs: autogenerate metrics)
 ]
 
 # The suffix(es) of source filenames.
@@ -88,7 +102,37 @@ smv_released_pattern = r"^tags/.*$"
 # Format for versioned output directories inside the build directory
 smv_outputdir_format = "{ref.name}"
 
+<<<<<<< HEAD
 # -- Options for HTML output ----------------------------------------------
+=======
+# -- Options for scylladb_aws_images extension
+
+scylladb_aws_images_base_url = "https://s3.amazonaws.com/downloads.scylladb.com"
+scylladb_aws_images_ami_bucket_directory = "downloads/scylla/aws/ami/"
+scylladb_aws_images_ami_download_directory = "_data/opensource/aws/ami"
+scylladb_aws_images_cloudformation_bucket_directory = "downloads/scylla/aws/cloudformation/"
+
+# -- Options for scylladb_azure_images extension
+scylladb_azure_images_base_url = "https://s3.amazonaws.com/downloads.scylladb.com"
+scylladb_azure_images_bucket_directory = "downloads/scylla/azure/"
+scylladb_azure_images_download_directory = "_data/opensource/azure"
+
+# -- Options for scylladb_gcp_images extension
+scylladb_gcp_images_base_url = "https://s3.amazonaws.com/downloads.scylladb.com"
+scylladb_gcp_images_bucket_directory = "downloads/scylla/gce/"
+scylladb_gcp_images_download_directory = "_data/opensource/gce"
+
+# -- Options for scylladb_swagger extension
+scylladb_swagger_origin_api = "../api"
+scylladb_swagger_template = "swagger.tmpl"
+scylladb_swagger_inc_template = "swagger_inc.tmpl"
+
+# -- Options for scylladb_metrics
+scylladb_metrics_directory = "_data/opensource/metrics"
+
+
+# -- Options for HTML output
+>>>>>>> 9eef3d6139 (docs: docs: autogenerate metrics)
 
 # The theme to use for pages.
 html_theme = "sphinx_scylladb_theme"
