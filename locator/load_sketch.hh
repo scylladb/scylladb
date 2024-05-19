@@ -156,15 +156,21 @@ public:
     // Returns 0 when shards are perfectly balanced.
     // Returns 1 when shards are imbalanced, but it's not possible to balance them.
     uint64_t get_shard_imbalance(host_id node) const {
-        if (!_nodes.contains(node)) {
-            return 0; // Node has no tablets.
-        }
-        auto& n = _nodes.at(node);
-        min_max_tracker<uint64_t> minmax;
-        for (auto&& s : n._shards) {
-            minmax.update(s.load);
-        }
+        auto minmax = get_shard_minmax(node);
         return minmax.max() - minmax.max();
+    }
+
+    min_max_tracker<uint64_t> get_shard_minmax(host_id node) const {
+        min_max_tracker<uint64_t> minmax;
+        if (_nodes.contains(node)) {
+            auto& n = _nodes.at(node);
+            for (auto&& s: n._shards) {
+                minmax.update(s.load);
+            }
+        } else {
+            minmax.update(0);
+        }
+        return minmax;
     }
 };
 
