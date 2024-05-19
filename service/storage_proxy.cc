@@ -3167,14 +3167,14 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, is_cancellable cancellable) {
     replica::table& table = _db.local().find_column_family(s->id());
     auto erm = table.get_effective_replication_map();
-    inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
-    inet_address_vector_topology_change pending_endpoints = erm->get_pending_endpoints(token);
+    host_id_vector_replica_set natural_hosts = erm->get_natural_hosts_without_node_being_replaced(token);
+    host_id_vector_topology_change pending_hosts = erm->get_pending_hosts(token);
 
-    slogger.trace("creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints, pending_endpoints);
-    tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints ,pending_endpoints);
+    slogger.trace("creating write handler for token: {} natural: {} pending: {}", token, natural_hosts, pending_hosts);
+    tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", token, natural_hosts ,pending_hosts);
 
-    const bool coordinator_in_replica_set = std::find(natural_endpoints.begin(), natural_endpoints.end(),
-            my_address()) != natural_endpoints.end();
+    const bool coordinator_in_replica_set = std::find(natural_hosts.begin(), natural_hosts.end(),
+            my_host_id()) != natural_hosts.end();
 
     // Check if this node, which is serving as a coordinator for
     // the mutation, is also a replica for the partition being
@@ -3186,28 +3186,14 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     }
 
     // filter out natural_endpoints from pending_endpoints if the latter is not yet updated during node join
-    auto itend = boost::range::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
-        return boost::range::find(natural_endpoints, p) != natural_endpoints.end();
+    auto itend = boost::range::remove_if(pending_hosts, [&natural_hosts] (const auto& p) {
+        return boost::range::find(natural_hosts, p) != natural_hosts.end();
     });
-    pending_endpoints.erase(itend, pending_endpoints.end());
+    pending_hosts.erase(itend, pending_hosts.end());
 
-    auto all = boost::range::join(natural_endpoints, pending_endpoints);
-    auto all_hids = all | boost::adaptors::transformed([&erm] (const gms::inet_address& ep) {
-        const auto& tm = erm->get_token_metadata();
-        const auto maybe_host_id = tm.get_host_id_if_known(ep);
-        if (maybe_host_id) {
-            return *maybe_host_id;
-        }
-        // We need this additional check because even after removing the mapping IP-host ID corresponding
-        // to this node from `locator::token_metadata` while decommissioning, we still perform mutations
-        // targeting the local node.
-        if (tm.get_topology().is_me(ep)) {
-            return tm.get_topology().my_host_id();
-        }
-        on_internal_error(slogger, seastar::format("No mapping for {} in the passed effective replication map", ep));
-    });
+    auto all = boost::range::join(natural_hosts, pending_hosts);
 
-    if (cannot_hint(all_hids, type)) {
+    if (cannot_hint(all, type)) {
         get_stats().writes_failed_due_to_too_many_in_flight_hints++;
         // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
         // still generate hints for those if it's overloaded or simply dead but not yet known-to-be-dead.
@@ -3220,10 +3206,28 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     // filter live endpoints from dead ones
     inet_address_vector_replica_set live_endpoints;
     inet_address_vector_topology_change dead_endpoints;
+    inet_address_vector_topology_change pending_endpoints;
     live_endpoints.reserve(all.size());
     dead_endpoints.reserve(all.size());
-    std::partition_copy(all.begin(), all.end(), std::back_inserter(live_endpoints),
-            std::back_inserter(dead_endpoints), std::bind_front(&storage_proxy::is_alive, this));
+    pending_endpoints.reserve(pending_hosts.size());
+
+    auto live_or_dead = [&] (const gms::inet_address& ep) {
+        if (is_alive(ep)) {
+            live_endpoints.emplace_back(ep);
+        } else {
+            dead_endpoints.emplace_back(ep);
+        }
+    };
+
+    for (auto& hid : natural_hosts) {
+        auto ep = erm->resolve_endpoint(hid);
+        live_or_dead(ep);
+    }
+    for (auto& hid : pending_hosts) {
+        auto ep = erm->resolve_endpoint(hid);
+        live_or_dead(ep);
+        pending_endpoints.emplace_back(ep);
+    }
 
     db::per_partition_rate_limit::info rate_limit_info;
     if (allow_limit && _db.local().can_apply_per_partition_rate_limit(*s, db::operation_type::write)) {
