@@ -38,7 +38,10 @@ async def test_coordinator_queue_management(manager: ManagerClient):
              asyncio.create_task(manager.remove_node(servers[0].server_id, servers[3].server_id)),
              asyncio.create_task(manager.remove_node(servers[0].server_id, servers[4].server_id, [s3_id]))]
 
-    search = [asyncio.create_task(l.wait_for("received request to join from host_id", m) for l, m in zip(logs[:3], marks[:3]))]
+    # #18740 - list comprenhension with async calls fails mysteriously, so loop explicitly
+    search = []
+    for l, m in zip(logs[:3], marks[:3]):
+        search.append(asyncio.create_task(l.wait_for("received request to join from host_id", m)))
     done, pending = await asyncio.wait(search, return_when = asyncio.FIRST_COMPLETED)
     for t in pending: t.cancel()
 
@@ -60,7 +63,10 @@ async def test_coordinator_queue_management(manager: ManagerClient):
     tasks = [asyncio.create_task(manager.server_start(s.server_id, expected_error="request canceled because some required nodes are dead")),
              asyncio.create_task(manager.decommission_node(servers[1].server_id, expected_error="Decommission failed. See earlier errors"))]
 
-    search = [asyncio.create_task(l.wait_for("received request to join from host_id", m) for l, m in zip(logs[:3], marks[:3]))]
+    # #18740 - list comprenhension with async calls fails mysteriously, so loop explicitly
+    search = []
+    for l, m in zip(logs[:3], marks[:3]):
+        search.append(asyncio.create_task(l.wait_for("received request to join from host_id", m)))
     done, pending = await asyncio.wait(search, return_when = asyncio.FIRST_COMPLETED)
     for t in pending: t.cancel()
 
