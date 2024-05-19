@@ -1,21 +1,22 @@
-import os
 import re
-import yaml
 from typing import Any, Dict, List
-
-import jinja2
 
 from sphinx import addnodes
 from sphinx.application import Sphinx
 from sphinx.directives import ObjectDescription
+<<<<<<< HEAD
 from sphinx.util import logging, status_iterator, ws_re
+=======
+from sphinx.util import logging, ws_re
+>>>>>>> 9eef3d6139 (docs: docs: autogenerate metrics)
 from sphinx.util.docfields import Field
 from sphinx.util.docutils import switch_source_input, SphinxDirective
 from sphinx.util.nodes import make_id, nested_parse_with_titles
-from sphinx.jinja2glue import BuiltinTemplateLoader
 from docutils import nodes
 from docutils.parsers.rst import directives
 from docutils.statemachine import StringList
+
+from utils import maybe_add_filters
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,7 @@ class DBConfigParser:
         return DBConfigParser.all_properties[name]
 
 
+<<<<<<< HEAD
 def readable_desc(description: str) -> str:
     return (
         description.replace("\\n", "")
@@ -166,6 +168,8 @@ def maybe_add_filters(builder):
     if 'readable_desc' not in env.filters:
         env.filters['readable_desc'] = readable_desc
 
+=======
+>>>>>>> 9eef3d6139 (docs: docs: autogenerate metrics)
 
 class ConfigOption(ObjectDescription):
     has_content = True
