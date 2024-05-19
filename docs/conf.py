@@ -44,7 +44,8 @@ extensions = [
     "scylladb_gcp_images",
     "scylladb_include_flag",
     "scylladb_dynamic_substitutions",
-    "scylladb_swagger"
+    "scylladb_swagger",
+    "scylladb_metrics"
 ]
 
 # The suffix(es) of source filenames.
@@ -126,6 +127,10 @@ scylladb_gcp_images_download_directory = "_data/opensource/gce"
 scylladb_swagger_origin_api = "../api"
 scylladb_swagger_template = "swagger.tmpl"
 scylladb_swagger_inc_template = "swagger_inc.tmpl"
+
+# -- Options for scylladb_metrics
+scylladb_metrics_directory = "_data/opensource/metrics"
+
 
 # -- Options for HTML output
 
