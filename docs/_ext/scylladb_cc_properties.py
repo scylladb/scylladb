@@ -1,22 +1,18 @@
-import os
 import re
-import yaml
 from typing import Any, Dict, List
-
-import jinja2
 
 from sphinx import addnodes
 from sphinx.application import Sphinx
 from sphinx.directives import ObjectDescription
 from sphinx.util import logging, ws_re
-from sphinx.util.display import status_iterator
 from sphinx.util.docfields import Field
 from sphinx.util.docutils import switch_source_input, SphinxDirective
 from sphinx.util.nodes import make_id, nested_parse_with_titles
-from sphinx.jinja2glue import BuiltinTemplateLoader
 from docutils import nodes
 from docutils.parsers.rst import directives
 from docutils.statemachine import StringList
+
+from utils import maybe_add_filters
 
 logger = logging.getLogger(__name__)
 
@@ -151,51 +147,6 @@ class DBConfigParser:
     def get(cls, name: str):
         return DBConfigParser.all_properties[name]
 
-
-def readable_desc(description: str) -> str:
-    """
-    This function is deprecated and maintained only for backward compatibility 
-    with previous versions. Use ``readable_desc_rst``instead.
-    """
-    return (
-        description.replace("\\n", "")
-        .replace('<', '&lt;')
-        .replace('>', '&gt;')
-        .replace("\n", "<br>")
-        .replace("\\t", "- ")
-        .replace('"', "")
-    )
-
-
-def readable_desc_rst(description):
-    indent = ' ' * 3
-    lines = description.split('\n')
-    cleaned_lines = []
-    
-    for line in lines:
-
-        cleaned_line = line.replace('\\n', '\n')
-
-        if line.endswith('"'):
-            cleaned_line = cleaned_line[:-1] + ' '
-
-        cleaned_line = cleaned_line.lstrip()
-        cleaned_line = cleaned_line.replace('"', '')
-        
-        if cleaned_line != '':
-            cleaned_line = indent + cleaned_line
-            cleaned_lines.append(cleaned_line)
-    
-    return ''.join(cleaned_lines)
-
-
-def maybe_add_filters(builder):
-    env = builder.templates.environment
-    if 'readable_desc' not in env.filters:
-        env.filters['readable_desc'] = readable_desc
-
-    if 'readable_desc_rst' not in env.filters:
-        env.filters['readable_desc_rst'] = readable_desc_rst
 
 
 class ConfigOption(ObjectDescription):
