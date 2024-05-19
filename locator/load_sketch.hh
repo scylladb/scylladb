@@ -65,33 +65,42 @@ private:
         return trinfo ? trinfo->next : ti.replicas;
     }
 
+    future<> populate_table(const tablet_map& tmap, std::optional<host_id> host) {
+        const topology& topo = _tm->get_topology();
+        co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+            for (auto&& replica : get_replicas_for_tablet_load(ti, tmap.get_tablet_transition_info(tid))) {
+                if (host && *host != replica.host) {
+                    continue;
+                }
+                if (!_nodes.contains(replica.host)) {
+                    _nodes.emplace(replica.host, node_load{topo.find_node(replica.host)->get_shard_count()});
+                }
+                node_load& n = _nodes.at(replica.host);
+                if (replica.shard < n._shards.size()) {
+                    n.load() += 1;
+                    n._shards[replica.shard].load += 1;
+                }
+            }
+            return make_ready_future<>();
+        });
+    }
 public:
     load_sketch(token_metadata_ptr tm)
         : _tm(std::move(tm)) {
     }
 
-    future<> populate(std::optional<host_id> host = std::nullopt) {
-        const topology& topo = _tm->get_topology();
+    future<> populate(std::optional<host_id> host = std::nullopt, std::optional<table_id> only_table = std::nullopt) {
         co_await utils::clear_gently(_nodes);
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
-            co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
-                for (auto&& replica : get_replicas_for_tablet_load(ti, tmap.get_tablet_transition_info(tid))) {
-                    if (host && *host != replica.host) {
-                        continue;
-                    }
-                    if (!_nodes.contains(replica.host)) {
-                        _nodes.emplace(replica.host, node_load{topo.find_node(replica.host)->get_shard_count()});
-                    }
-                    node_load& n = _nodes.at(replica.host);
-                    if (replica.shard < n._shards.size()) {
-                        n.load() += 1;
-                        n._shards[replica.shard].load += 1;
-                    }
-                }
-                return make_ready_future<>();
-            });
+
+        if (only_table) {
+            auto& tmap = _tm->tablets().get_tablet_map(*only_table);
+            co_await populate_table(tmap, host);
+        } else {
+            for (auto&& [table, tmap]: _tm->tablets().all_tables()) {
+                co_await populate_table(tmap, host);
+            }
         }
+
         for (auto&& n : _nodes) {
             std::make_heap(n.second._shards.begin(), n.second._shards.end(), shard_load_cmp());
         }
