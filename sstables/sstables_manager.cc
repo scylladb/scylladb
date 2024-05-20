@@ -7,6 +7,7 @@
  */
 
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include "log.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstables_registry.hh"
@@ -23,7 +24,7 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, noncopyable_function<locator::host_id()>&& resolve_host_id, storage_manager* shared)
+    sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, noncopyable_function<locator::host_id()>&& resolve_host_id, scheduling_group maintenance_sg, storage_manager* shared)
     : _storage(shared)
     , _available_memory(available_memory)
     , _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
@@ -37,6 +38,7 @@ sstables_manager::sstables_manager(
         reader_concurrency_semaphore::register_metrics::no)
     , _dir_semaphore(dir_sem)
     , _resolve_host_id(std::move(resolve_host_id))
+    , _maintenance_sg(std::move(maintenance_sg))
 {
     _components_reloader_status = components_reloader_fiber();
 }
@@ -176,6 +178,8 @@ size_t sstables_manager::get_memory_available_for_reclaimable_components() {
 }
 
 future<> sstables_manager::components_reloader_fiber() {
+    co_await coroutine::switch_to(_maintenance_sg);
+
     sstlog.trace("components_reloader_fiber start");
     while (true) {
         co_await _sstable_deleted_event.when();
