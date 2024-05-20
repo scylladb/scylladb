@@ -1199,6 +1199,9 @@ std::vector<canonical_mutation> storage_service::build_mutation_from_join_params
     topology_request_tracking_mutation_builder rtbuilder(params.request_id);
     rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
              .set("done", false);
+    if (_db.local().features().topology_requests_type_column) {
+        rtbuilder.set("request_type", params.replaced_id ? topology_request::replace : topology_request::join);
+    }
 
     return {builder.build(), rtbuilder.build()};
 }
@@ -3576,6 +3579,9 @@ future<> storage_service::raft_decommission() {
         topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id());
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
+        if (_db.local().features().topology_requests_type_column) {
+            rtbuilder.set("request_type", topology_request::leave);
+        }
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("decommission: request decommission for {}", raft_server.id()));
 
@@ -3934,6 +3940,9 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id());
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
+        if (_db.local().features().topology_requests_type_column) {
+            rtbuilder.set("request_type", topology_request::remove);
+        }
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("removenode: request remove for {}", id));
 
@@ -4613,6 +4622,9 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
         topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id());
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
+        if (_db.local().features().topology_requests_type_column) {
+            rtbuilder.set("request_type", topology_request::rebuild);
+        }
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("rebuild: request rebuild for {} ({})", raft_server.id(), source_dc));
 

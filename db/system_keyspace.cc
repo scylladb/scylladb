@@ -261,6 +261,7 @@ schema_ptr system_keyspace::topology_requests() {
         return schema_builder(NAME, TOPOLOGY_REQUESTS, std::optional(id))
             .with_column("id", timeuuid_type, column_kind::partition_key)
             .with_column("initiating_host", uuid_type)
+            .with_column("request_type", utf8_type)
             .with_column("start_time", timestamp_type)
             .with_column("done", boolean_type)
             .with_column("error", utf8_type)
