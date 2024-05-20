@@ -107,12 +107,6 @@ For example:
    WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1' : 1, 'DC2' : 3}
    AND durable_writes = true;
 
-.. TODO Add a link to the description of minimum_keyspace_rf when the ScyllaDB options section is added to the docs.
-
-You can configure the minimum acceptable replication factor using the ``minimum_keyspace_rf`` option. 
-Attempting to create a keyspace with a replication factor lower than the value set with 
-``minimum_keyspace_rf`` will return an error (the default value is 0). 
-
 The supported ``options`` are:
 
 =================== ========== =========== ========= ===================================================================
@@ -142,7 +136,12 @@ query latency. For a production ready strategy, see *NetworkTopologyStrategy* . 
 ========================= ====== ======= =============================================
 sub-option                 type   since   description
 ========================= ====== ======= =============================================
-``'replication_factor'``   int    all     The number of replicas to store per range
+``'replication_factor'``   int    all     The number of replicas to store per range.
+
+                                          The replication factor should be equal to
+                                          or lower than the number of nodes.
+                                          Configuring a higher RF may prevent
+                                          creating tables in that keyspace. 
 ========================= ====== ======= =============================================
 
 .. note:: Using NetworkTopologyStrategy is recommended. Using SimpleStrategy will make it harder to add Data Center in the future.
@@ -166,6 +165,11 @@ sub-option                             type  description
                                              definitions or explicit datacenter settings.
                                              For example, to have three replicas per
                                              datacenter, supply this with a value of 3.
+
+                                             The replication factor configured for a DC
+                                             should be equal to or lower than the number
+                                             of nodes in that DC. Configuring a higher RF 
+                                             may prevent creating tables in that keyspace. 
 ===================================== ====== =============================================
 
 Note that when ``ALTER`` ing keyspaces and supplying ``replication_factor``,
