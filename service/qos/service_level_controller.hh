@@ -79,6 +79,7 @@ private:
         future<> distributed_data_update = make_ready_future();
         abort_source dist_data_update_aborter;
         abort_source group0_aborter;
+        gms::feature::listener_registration switch_to_raft_sl_change_listener;
     };
 
     std::unique_ptr<global_controller_data> _global_controller_db;
@@ -142,6 +143,13 @@ public:
     void abort_group0_operations();
 
     /**
+     * Start legacy update loop only when RAFT_SERVICE_LEVELS_CHANGE feature is not enable yet and setup
+     * a callback which will stop the loop after the feature gets enabled.
+     * Must be called on shard 0.
+     */
+    void maybe_start_legacy_update_loop(gms::feature_service& feature_service, lw_shared_ptr<db::config> cfg);
+
+    /**
      * Check the distributed data for changes in a constant interval and updates
      * the service_levels configuration in accordance (adds, removes, or updates
      * service levels as necessary).
@@ -150,6 +158,12 @@ public:
      * @return a future that is resolved when the update loop stops.
      */
     void update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f);
+
+    /**
+     * Request abort of update loop.
+     * Must be called on shard 0.
+     */
+    void stop_update_from_distributed_data();
 
     /**
      * Updates the service level data from the distributed data store.

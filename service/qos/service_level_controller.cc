@@ -17,11 +17,13 @@
 #include "db/system_keyspace.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/timer.hh>
+#include "seastar/core/shard_id.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service_level_controller.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "cql3/query_processor.hh"
+#include "gms/feature_service.hh"
 
 namespace qos {
 static logging::logger sl_logger("service_level_controller");
@@ -219,6 +221,28 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
             }
         });
     });
+}
+
+void service_level_controller::maybe_start_legacy_update_loop(gms::feature_service& feature_service, lw_shared_ptr<db::config> cfg) {
+    assert(this_shard_id() == global_controller);
+
+    if (!feature_service.raft_service_levels_change) {
+        update_from_distributed_data([cfg] () {
+            return std::chrono::duration_cast<steady_clock_type::duration>(std::chrono::milliseconds(cfg->service_levels_interval()));
+        });
+        _global_controller_db->switch_to_raft_sl_change_listener = feature_service.raft_service_levels_change.when_enabled([this] () {
+            stop_update_from_distributed_data();
+        });
+    }
+}
+
+void service_level_controller::stop_update_from_distributed_data() {
+    assert(this_shard_id() == global_controller);
+
+    if (_global_controller_db->dist_data_update_aborter.abort_requested()) {
+        return;
+    }
+    _global_controller_db->dist_data_update_aborter.request_abort();
 }
 
 future<std::optional<service_level_options>> service_level_controller::find_service_level(auth::role_set roles, include_effective_names include_names) {
