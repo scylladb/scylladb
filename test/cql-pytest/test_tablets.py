@@ -92,6 +92,7 @@ def test_tablets_can_be_explicitly_disabled(cql, skip_without_tablets):
         assert len(list(res)) == 0, "tablets replication strategy turned on"
 
 
+@pytest.mark.xfail(reason="Issue #16129; ALTER tablets KS doesn't support replication options")
 def test_alter_changes_initial_tablets(cql, skip_without_tablets):
     ksdef = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};"
     with new_test_keyspace(cql, ksdef) as keyspace:

@@ -293,6 +293,17 @@ For instance::
 
 The supported options are the same as :ref:`creating a keyspace <create-keyspace-statement>`.
 
+ALTER KEYSPACE with Tablets :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Modifying a keyspace with tablets enabled is not yet fully supported and all ``ALTER KEYSPACE`` statements specifying any replication option issued on a keyspace with tablets enabled are going to be rejected:
+
+.. code-block:: cql
+
+   cqlsh> CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': 4} and tablets = {'initial': 8};
+   cqlsh> ALTER KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': 3};
+   InvalidRequest: Error from server: code=2200 [Invalid query] message="Changing replication options via ALTER KEYSPACE statement is not yet supported for keyspaces with tablets."
+
 .. _drop-keyspace-statement:
 
 DROP KEYSPACE

@@ -97,11 +97,17 @@ def test_drop_keyspace_nonexistent(cql):
         cql.execute('DROP KEYSPACE nonexistent_keyspace')
 
 # Test trying to ALTER a keyspace.
+@pytest.mark.xfail(reason="Issue #16129; ALTER tablets KS doesn't support replication options")
 def test_alter_keyspace(cql, this_dc):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 3 }} AND DURABLE_WRITES = false")
 
+def test_alter_keyspace_without_providing_replication_options(cql, this_dc):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH DURABLE_WRITES = false")
+
 # Test trying to ALTER a keyspace with invalid options.
+@pytest.mark.xfail(reason="Issue #16129; ALTER tablets KS doesn't support replication options")
 def test_alter_keyspace_invalid(cql, this_dc):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
         with pytest.raises(ConfigurationException):
@@ -130,6 +136,7 @@ def test_alter_keyspace_missing_rf(cql, this_dc, scylla_only, has_tablets):
 
 # Test trying to ALTER a keyspace with invalid options.
 # Reproduces #7595.
+@pytest.mark.xfail(reason="Issue #16129; ALTER tablets KS doesn't support replication options")
 def test_alter_keyspace_nonexistent_dc(cql, this_dc):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
         with pytest.raises(ConfigurationException):

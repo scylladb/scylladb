@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(reason="Issue #16129; ALTER tablets KS doesn't support replication options")
 async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False,
            'experimental_features': ['tablets']}

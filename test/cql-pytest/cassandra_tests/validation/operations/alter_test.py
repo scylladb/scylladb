@@ -222,6 +222,7 @@ def testAlterKeyspaceWithNoOptionThrowsConfigurationException(cql, test_keyspace
 
 # Test {@link ConfigurationException} thrown when altering a keyspace to
 # invalid DC option in replication configuration.
+@pytest.mark.xfail(reason="Issue #16129; ALTER tablets KS doesn't support replication options")
 def testAlterKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, test_keyspace, this_dc):
     # Create a keyspace with expected DC name.
     with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }") as ks:
@@ -231,6 +232,7 @@ def testAlterKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, test_keysp
         # Mix valid and invalid, should throw an exception
         assert_invalid_throw_message_re(cql, ks, "Unrecognized strategy option {INVALID_DC} passed to .*NetworkTopologyStrategy for keyspace " + ks, ConfigurationException, "ALTER KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 , 'INVALID_DC': 1}")
 
+@pytest.mark.xfail(reason="Issue #16129; ALTER tablets KS doesn't support replication options")
 def testAlterKeyspaceWithMultipleInstancesOfSameDCThrowsSyntaxException(cql, test_keyspace, this_dc):
     # Create a keyspace
     with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }") as ks:

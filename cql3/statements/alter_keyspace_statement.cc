@@ -50,6 +50,10 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
         }
         try {
             auto ks = qp.db().find_keyspace(_name);
+            // TODO: the full tablets support will be implemented in https://github.com/scylladb/scylladb/issues/16129
+            if (ks.get_replication_strategy().uses_tablets() && !_attrs->get_replication_options().empty()) {
+                throw exceptions::invalid_request_exception("Changing replication options via ALTER KEYSPACE statement is not yet supported for keyspaces with tablets.");
+            }
             data_dictionary::storage_options current_options = ks.metadata()->get_storage_options();
             data_dictionary::storage_options new_options = _attrs->get_storage_options();
             if (!qp.proxy().features().keyspace_storage_options && !new_options.is_local_type()) {
