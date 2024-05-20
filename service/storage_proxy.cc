@@ -874,26 +874,20 @@ private:
             tracing::begin(tr_state);
             tracing::trace(tr_state, "paxos_accept: message received from /{} ballot {}", src_ip, proposal);
         }
-
-        auto f = get_schema_for_read(proposal.update.schema_version(), src_addr, *timeout).then([&sp = _sp, &sys_ks = _sys_ks, tr_state,
-                                                              proposal = std::move(proposal), timeout] (schema_ptr schema) mutable {
-            dht::token token = proposal.update.decorated_key(*schema).token();
-            unsigned shard = schema->table().shard_for_reads(token);
-            bool local = shard == this_shard_id();
-            sp.get_stats().replica_cross_shard_ops += !local;
-            return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     proposal = std::move(proposal), timeout, token, &sys_ks] (storage_proxy& sp) {
-                return paxos::paxos_state::accept(sp, sys_ks.local(), gt, gs, token, proposal, *timeout);
-            });
-        });
-
-        if (tr_state) {
-            f = f.finally([tr_state, src_ip] {
+        auto handling_done = defer([tr_state, src_ip] {
+            if (tr_state) {
                 tracing::trace(tr_state, "paxos_accept: handling is done, sending a response to /{}", src_ip);
-            });
-        }
-
-        return f;
+            }
+        });
+        auto schema = co_await get_schema_for_read(proposal.update.schema_version(), src_addr, *timeout);
+        dht::token token = proposal.update.decorated_key(*schema).token();
+        unsigned shard = schema->table().shard_for_reads(token);
+        bool local = shard == this_shard_id();
+        _sp.get_stats().replica_cross_shard_ops += !local;
+        co_return co_await _sp.container().invoke_on(shard, _sp._write_smp_service_group, coroutine::lambda([gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(tr_state),
+                                   proposal = std::move(proposal), timeout, token, this] (storage_proxy& sp) {
+            return paxos::paxos_state::accept(sp, _sys_ks.local(), gt, gs, token, proposal, *timeout);
+        }));
     }
 
     future<rpc::no_wait_type> handle_paxos_prune(
