@@ -409,6 +409,12 @@ bool manager::have_ep_manager(const std::variant<locator::host_id, gms::inet_add
 bool manager::store_hint(endpoint_id host_id, gms::inet_address ip, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
         tracing::trace_state_ptr tr_state) noexcept
 {
+    if (utils::get_local_injector().enter("reject_incoming_hints")) {
+        manager_logger.debug("Rejecting a hint to {} / {} due to an error injection", host_id, ip);
+        ++_stats.dropped;
+        return false;
+    }
+
     if (stopping() || draining_all() || !started() || !can_hint_for(host_id)) {
         manager_logger.trace("Can't store a hint to {}", host_id);
         ++_stats.dropped;
