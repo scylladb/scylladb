@@ -2,7 +2,7 @@ Reset Authenticator Password
 ============================
 
 This procedure describes what to do when a user loses his password and can not reset it with a superuser role. 
-The procedure requires cluster downtime and as a result, all of the ``system_auth_v2`` data is deleted.
+The procedure requires cluster downtime and as a result, all auth data is deleted.
 
 .. scylladb_include_flag:: system-auth-name-info.rst
 
@@ -15,11 +15,11 @@ Procedure
 
    sudo systemctl stop scylla-server
 
-| 2. Remove your tables under ``/var/lib/scylla/data/system_auth_v2/``.
+| 2. Remove system tables starting with ``role`` prefix from ``/var/lib/scylla/data/system`` directory.
 
 .. code-block:: shell  
 
-   rm -rf /var/lib/scylla/data/ssystem_auth_v2/
+   rm -rf /var/lib/scylla/data/system/role*
 
 | 3. Start Scylla nodes.
 

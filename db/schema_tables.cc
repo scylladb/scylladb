@@ -14,7 +14,6 @@
 #include "gms/feature_service.hh"
 #include "partition_slice_builder.hh"
 #include "dht/i_partitioner.hh"
-#include "system_auth_keyspace.hh"
 #include "system_keyspace.hh"
 #include "query-result-set.hh"
 #include "query-result-writer.hh"
@@ -235,7 +234,6 @@ future<> save_system_schema(cql3::query_processor& qp) {
     co_await save_system_schema_to_keyspace(qp, schema_tables::NAME);
     // #2514 - make sure "system" is written to system_schema.keyspaces.
     co_await save_system_schema_to_keyspace(qp, system_keyspace::NAME);
-    co_await save_system_schema_to_keyspace(qp, system_auth_keyspace::NAME);
 }
 
 namespace v3 {

@@ -9,7 +9,7 @@
  */
 
 #include "auth/default_authorizer.hh"
-#include "db/system_auth_keyspace.hh"
+#include "db/system_keyspace.hh"
 
 extern "C" {
 #include <crypt.h>
