@@ -21,9 +21,16 @@ is removed from the cluster or replaced.
 Prerequisites
 ------------------------
 
-Using ``removenode`` requires at least a quorum of nodes in a cluster to be available. 
-If the quorum is lost, it must be restored before you change the cluster topology. 
-See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
+* Using ``removenode`` requires at least a quorum of nodes in a cluster to be available. 
+  If the quorum is lost, it must be restored before you change the cluster topology. 
+  See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details.
+
+* Make sure that the number of nodes remaining in the DC after you remove a node
+  will be the same or higher than the Replication Factor configured for the keyspace
+  in this DC. If the number of remaining nodes is lower than the RF, the removenode
+  request may fail. In such a case, you should follow the procedure to
+  :doc:`replace a dead node </operating-scylla/procedures/cluster-management/replace-dead-node>`
+  instead of running ``nodetool removenode``.
 
 Usage
 --------
