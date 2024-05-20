@@ -82,7 +82,7 @@ sstring validate_keyspace(const http_context& ctx, const http::request& req) {
     return validate_keyspace(ctx, req.get_path_param("keyspace"));
 }
 
-static void validate_table(const http_context& ctx, sstring ks_name, sstring table_name) {
+void validate_table(const http_context& ctx, sstring ks_name, sstring table_name) {
     auto& db = ctx.db.local();
     try {
         db.find_column_family(ks_name, table_name);
@@ -238,47 +238,6 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
                 return make_ready_future<json::json_return_type>(results);
             });
         });
-    });
-}
-
-static future<json::json_return_type> set_tables(http_context& ctx, const sstring& keyspace, std::vector<sstring> tables, std::function<future<>(replica::table&)> set) {
-    if (tables.empty()) {
-        tables = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
-    }
-
-    return do_with(keyspace, std::move(tables), [&ctx, set] (const sstring& keyspace, const std::vector<sstring>& tables) {
-        return ctx.db.invoke_on_all([&keyspace, &tables, set] (replica::database& db) {
-            return parallel_for_each(tables, [&db, &keyspace, set] (const sstring& table) {
-                replica::table& t = db.find_column_family(keyspace, table);
-                return set(t);
-            });
-        });
-    }).then([] {
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-}
-
-future<json::json_return_type> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
-    apilog.info("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
-
-    return ctx.db.invoke_on(0, [&ctx, keyspace, tables = std::move(tables), enabled] (replica::database& db) {
-        auto g = replica::database::autocompaction_toggle_guard(db);
-        return set_tables(ctx, keyspace, tables, [enabled] (replica::table& cf) {
-            if (enabled) {
-                cf.enable_auto_compaction();
-            } else {
-                return cf.disable_auto_compaction();
-            }
-            return make_ready_future<>();
-        }).finally([g = std::move(g)] {});
-    });
-}
-
-future<json::json_return_type> set_tables_tombstone_gc(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
-    apilog.info("set_tables_tombstone_gc: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
-    return set_tables(ctx, keyspace, std::move(tables), [enabled] (replica::table& t) {
-        t.set_tombstone_gc_enabled(enabled);
-        return make_ready_future<>();
     });
 }
 
@@ -1281,38 +1240,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
     });
 
-    ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-
-        apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
-        return set_tables_autocompaction(ctx, keyspace, tables, true);
-    });
-
-    ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-
-        apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
-        return set_tables_autocompaction(ctx, keyspace, tables, false);
-    });
-
-    ss::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-
-        apilog.info("enable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
-        return set_tables_tombstone_gc(ctx, keyspace, tables, true);
-    });
-
-    ss::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-
-        apilog.info("disable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
-        return set_tables_tombstone_gc(ctx, keyspace, tables, false);
-    });
-
     ss::deliver_hints.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
@@ -1726,10 +1653,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_trace_probability.unset(r);
     ss::get_slow_query_info.unset(r);
     ss::set_slow_query.unset(r);
-    ss::enable_auto_compaction.unset(r);
-    ss::disable_auto_compaction.unset(r);
-    ss::enable_tombstone_gc.unset(r);
-    ss::disable_tombstone_gc.unset(r);
     ss::deliver_hints.unset(r);
     ss::get_cluster_name.unset(r);
     ss::get_partitioner_name.unset(r);
