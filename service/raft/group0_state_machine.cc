@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #include "service/raft/group0_state_machine.hh"
-#include "db/system_auth_keyspace.hh"
 #include "mutation/atomic_cell.hh"
 #include "cql3/selection/selection.hh"
 #include "dht/i_partitioner.hh"
@@ -279,7 +278,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     std::optional<service::raft_snapshot> raft_snp;
 
     if (_topology_change_enabled) {
-        auto auth_tables = db::system_auth_keyspace::all_tables();
+        auto auth_tables = db::system_keyspace::auth_tables();
         std::vector<table_id> tables;
         tables.reserve(3);
         tables.push_back(db::system_keyspace::topology()->id());

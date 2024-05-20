@@ -13,7 +13,6 @@
 #include "utils/lister.hh"
 #include "replica/database.hh"
 #include <seastar/core/future-util.hh>
-#include "db/system_auth_keyspace.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_keyspace_sstables_registry.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -812,7 +811,6 @@ future<> database::drop_keyspace_on_all_shards(sharded<database>& sharded_db, co
 static bool is_system_table(const schema& s) {
     auto& k = s.ks_name();
     return k == db::system_keyspace::NAME ||
-        k == db::system_auth_keyspace::NAME ||
         k == db::system_distributed_keyspace::NAME ||
         k == db::system_distributed_keyspace::NAME_EVERYWHERE;
 }

@@ -18,7 +18,6 @@
 #include <seastar/core/on_internal_error.hh>
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
-#include "db/system_auth_keyspace.hh"
 #include "thrift/server.hh"
 #include "cql3/query_processor.hh"
 #include "partition_slice_builder.hh"
@@ -88,6 +87,10 @@ namespace {
             system_keyspace::SCYLLA_LOCAL,
             system_keyspace::COMMITLOG_CLEANUPS,
             system_keyspace::SERVICE_LEVELS_V2,
+            system_keyspace::ROLES,
+            system_keyspace::ROLE_MEMBERS,
+            system_keyspace::ROLE_ATTRIBUTES,
+            system_keyspace::ROLE_PERMISSIONS,
             system_keyspace::v3::CDC_LOCAL
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
@@ -1142,6 +1145,103 @@ schema_ptr system_keyspace::service_levels_v2() {
     return schema;
 }
 
+schema_ptr system_keyspace::roles() {
+    static thread_local auto schema = [] {
+        schema_builder builder(generate_legacy_id(NAME, ROLES), NAME, ROLES,
+        // partition key
+        {{"role", utf8_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"can_login", boolean_type},
+            {"is_superuser", boolean_type},
+            {"member_of", set_type_impl::get_instance(utf8_type, true)},
+            {"salted_hash", utf8_type}
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "roles for authentication and RBAC"
+        );
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::role_members() {
+    static thread_local auto schema = [] {
+        schema_builder builder(generate_legacy_id(NAME, ROLE_MEMBERS), NAME, ROLE_MEMBERS,
+        // partition key
+        {{"role", utf8_type}},
+        // clustering key
+        {{"member", utf8_type}},
+        // regular columns
+        {},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "joins users and their granted roles in RBAC"
+        );
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::role_attributes() {
+    static thread_local auto schema = [] {
+        schema_builder builder(generate_legacy_id(NAME, ROLE_ATTRIBUTES), NAME, ROLE_ATTRIBUTES,
+        // partition key
+        {{"role", utf8_type}},
+        // clustering key
+        {{"name", utf8_type}},
+        // regular columns
+        {
+            {"value", utf8_type}
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "role permissions in RBAC"
+        );
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::role_permissions() {
+    static thread_local auto schema = [] {
+        schema_builder builder(generate_legacy_id(NAME, ROLE_PERMISSIONS), NAME, ROLE_PERMISSIONS,
+        // partition key
+        {{"role", utf8_type}},
+        // clustering key
+        {{"resource", utf8_type}},
+        // regular columns
+        {
+            {"permissions", set_type_impl::get_instance(utf8_type, true)}
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "role permissions for CassandraAuthorizer"
+        );
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::legacy::hints() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, HINTS), NAME, HINTS,
@@ -2133,10 +2233,16 @@ future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
     });
 }
 
+std::vector<schema_ptr> system_keyspace::auth_tables() {
+    return {roles(), role_members(), role_attributes(), role_permissions()};
+}
+
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     std::vector<schema_ptr> r;
     auto schema_tables = db::schema_tables::all_tables(schema_features::full());
     std::copy(schema_tables.begin(), schema_tables.end(), std::back_inserter(r));
+    auto auth_tables = system_keyspace::auth_tables();
+    std::copy(auth_tables.begin(), auth_tables.end(), std::back_inserter(r));
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
@@ -2151,9 +2257,6 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(),
     });
-
-    auto auth_tables = db::system_auth_keyspace::all_tables();
-    std::copy(auth_tables.begin(), auth_tables.end(), std::back_inserter(r));
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
         r.insert(r.end(), {broadcast_kv_store()});
@@ -2694,17 +2797,17 @@ future<std::optional<mutation>> system_keyspace::get_group0_schema_version() {
 
 static constexpr auto AUTH_VERSION_KEY = "auth_version";
 
-future<system_auth_keyspace::version_t> system_keyspace::get_auth_version() {
+future<system_keyspace::auth_version_t> system_keyspace::get_auth_version() {
     auto str_opt = co_await get_scylla_local_param(AUTH_VERSION_KEY);
     if (!str_opt) {
-        co_return db::system_auth_keyspace::version_t::v1;
+        co_return auth_version_t::v1;
     }
     auto& str = *str_opt;
     if (str == "" || str == "1") {
-        co_return db::system_auth_keyspace::version_t::v1;
+        co_return auth_version_t::v1;
     }
     if (str == "2") {
-        co_return db::system_auth_keyspace::version_t::v2;
+        co_return auth_version_t::v2;
     }
     on_internal_error(slogger, fmt::format("unexpected auth_version in scylla_local got {}", str));
 }
@@ -2722,7 +2825,7 @@ static service::query_state& internal_system_query_state() {
     return qs;
 };
 
-future<mutation> system_keyspace::make_auth_version_mutation(api::timestamp_type ts, db::system_auth_keyspace::version_t version) {
+future<mutation> system_keyspace::make_auth_version_mutation(api::timestamp_type ts, db::system_keyspace::auth_version_t version) {
     static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
     auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {AUTH_VERSION_KEY, std::to_string(int64_t(version))});
     if (muts.size() != 1) {

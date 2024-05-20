@@ -28,7 +28,6 @@
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/functions/function_name.hh"
-#include "db/system_auth_keyspace.hh"
 #include "log.hh"
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
@@ -644,7 +643,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
                 }
                 auto muts = co_await qp.get_mutations_internal(
                         format("INSERT INTO {}.{} ({}) VALUES ({})",
-                                db::system_auth_keyspace::NAME,
+                                db::system_keyspace::NAME,
                                 cf_name,
                                 col_names_str,
                                 val_binders_str),
@@ -659,7 +658,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             }
         }
         co_yield co_await sys_ks.make_auth_version_mutation(ts,
-                db::system_auth_keyspace::version_t::v2);
+                db::system_keyspace::auth_version_t::v2);
     };
     co_await announce_mutations_with_batching(g0,
             start_operation_func,

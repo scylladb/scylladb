@@ -90,18 +90,18 @@ async def check_auth_v2_data_migration(manager: ManagerClient, hosts):
     data = auth_data()
 
     roles = set()
-    for row in await cql.run_async("SELECT * FROM system_auth_v2.roles"):
+    for row in await cql.run_async("SELECT * FROM system.roles"):
         member_of = frozenset(row.member_of) if row.member_of else None
         roles.add((row.role, row.can_login, row.is_superuser, member_of, row.salted_hash))
     assert roles == set(data[0]["rows"])
 
     role_members = set()
-    for row in await cql.run_async("SELECT * FROM system_auth_v2.role_members"):
+    for row in await cql.run_async("SELECT * FROM system.role_members"):
         role_members.add((row.role, row.member))
     assert role_members == set(data[1]["rows"])
 
     role_attributes = set()
-    for row in await cql.run_async("SELECT * FROM system_auth_v2.role_attributes"):
+    for row in await cql.run_async("SELECT * FROM system.role_attributes"):
         role_attributes.add((row.role, row.name, row.value))
     assert role_attributes == set(data[2]["rows"])
 
@@ -121,7 +121,7 @@ async def check_auth_v2_works(manager: ManagerClient, hosts):
     await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
     # see warmup_v1_static_values for background about checks below
     # check if it was added to a new table
-    assert len(await cql.run_async("SELECT role FROM system_auth_v2.roles WHERE role = 'user_after_migration'")) == 1
+    assert len(await cql.run_async("SELECT role FROM system.roles WHERE role = 'user_after_migration'")) == 1
     # check whether list roles statement sees it also via new table (on all nodes)
     await asyncio.gather(*(cql.run_async("LIST ROLES OF user_after_migration", host=host) for host in hosts))
     await cql.run_async("DROP ROLE user_after_migration")
@@ -158,7 +158,7 @@ async def test_auth_v2_migration(request, manager: ManagerClient):
     logging.info("Waiting until upgrade finishes")
     await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
 
-    logging.info("Checking migrated data in system_auth_v2")
+    logging.info("Checking migrated data in system")
     await check_auth_v2_data_migration(manager, hosts)
 
     logging.info("Checking auth statements after migration")
