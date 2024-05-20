@@ -193,10 +193,12 @@ async def test_topology_changes(manager: ManagerClient):
 
     keys = range(256)
     await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    expected_rows = await cql.run_async("SELECT * FROM test.test;")
 
     async def check():
         logger.info("Checking table")
         rows = await cql.run_async("SELECT * FROM test.test;")
+        assert rows == expected_rows
         assert len(rows) == len(keys)
         for r in rows:
             assert r.c == r.pk

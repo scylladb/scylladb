@@ -959,6 +959,10 @@ public:
     // Returns a read-only file for all existing components of the sstable
     future<std::unordered_map<component_type, file>> readable_file_for_all_components() const;
 
+    // Clones this sstable with a new generation, under the same location as the original one.
+    // Implementation is underlying storage specific.
+    future<entry_descriptor> clone(generation_type new_generation) const;
+
     struct lesser_reclaimed_memory {
         // comparator class to be used by the _reclaimed set in sstables manager
         bool operator()(const sstable& sst1, const sstable& sst2) const {

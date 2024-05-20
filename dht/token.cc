@@ -238,7 +238,7 @@ dht::token token::from_int64(int64_t i) {
 }
 
 static
-dht::token find_first_token_for_shard_in_not_wrap_around_range(const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx) {
+dht::token find_first_token_for_shard_in_not_wrap_around_range(const dht::static_sharder& sharder, dht::token start, dht::token end, size_t shard_idx) {
     // Invariant start < end
     // It is guaranteed that start is not MAX_INT64 because end is greater
     auto t = dht::token::from_int64(dht::token::to_int64(start) + 1);
@@ -249,7 +249,7 @@ dht::token find_first_token_for_shard_in_not_wrap_around_range(const dht::sharde
 }
 
 dht::token find_first_token_for_shard(
-        const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx) {
+        const dht::static_sharder& sharder, dht::token start, dht::token end, size_t shard_idx) {
     if (start < end) { // Not a wrap around token range
         return find_first_token_for_shard_in_not_wrap_around_range(sharder, start, end, shard_idx);
     } else { // A wrap around token range

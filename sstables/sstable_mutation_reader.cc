@@ -14,8 +14,31 @@
 #include "utils/to_string.hh"
 
 #include <boost/range/algorithm/stable_partition.hpp>
+#include <boost/intrusive/list.hpp>
 
 namespace sstables {
+
+class reader_tracker {
+    using list_type = boost::intrusive::list<mp_row_consumer_reader_base,
+        boost::intrusive::member_hook<mp_row_consumer_reader_base,
+            mp_row_consumer_reader_base::tracker_link_type,
+            &mp_row_consumer_reader_base::_tracker_link>,
+        boost::intrusive::constant_time_size<false>>;
+public:
+    list_type _readers;
+
+    void add(mp_row_consumer_reader_base& reader) {
+        _readers.push_back(reader);
+    }
+};
+
+thread_local reader_tracker _reader_tracker;
+
+mp_row_consumer_reader_base::mp_row_consumer_reader_base(shared_sstable sst)
+    : _sst(std::move(sst))
+{
+    _reader_tracker.add(*this);
+}
 
 atomic_cell make_counter_cell(api::timestamp_type timestamp, fragmented_temporary_buffer::view cell_value) {
     static constexpr size_t shard_size = 32;

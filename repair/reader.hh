@@ -51,7 +51,7 @@ public:
         schema_ptr s,
         reader_permit permit,
         dht::token_range range,
-        const dht::sharder& remote_sharder,
+        const dht::static_sharder& remote_sharder,
         unsigned remote_shard,
         uint64_t seed,
         read_strategy strategy,

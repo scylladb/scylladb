@@ -241,6 +241,9 @@ class ScyllaRESTAPIClient():
             "token": str(token)
         })
 
+    async def quiesce_topology(self, node_ip: str) -> None:
+        await self.client.post(f"/storage_service/quiesce_topology", host=node_ip)
+
     async def add_tablet_replica(self, node_ip: str, ks: str, table: str, dst_host: HostID, dst_shard: int, token: int) -> None:
         await self.client.post(f"/storage_service/tablets/add_replica", host=node_ip, params={
             "ks": ks,

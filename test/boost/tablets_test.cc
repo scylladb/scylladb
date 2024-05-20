@@ -324,13 +324,33 @@ SEASTAR_TEST_CASE(test_get_shard) {
         auto h2 = host_id(utils::UUID_gen::get_time_UUID());
         auto h3 = host_id(utils::UUID_gen::get_time_UUID());
 
-        auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+        inet_address ip3("192.168.0.3");
 
-        tablet_metadata tm;
+        auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+        const auto shard_count = 2;
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+                locator::topology::config{
+                        .this_endpoint = ip1,
+                        .local_dc_rack = locator::endpoint_dc_rack::default_location
+                }
+        });
+
         tablet_id tid(0);
         tablet_id tid1(0);
 
-        {
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            tm.update_host_id(h1, ip1);
+            tm.update_host_id(h2, ip2);
+            tm.update_host_id(h3, ip3);
+            tm.update_topology(h1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(h2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(h3, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+
+            tablet_metadata tmeta;
             tablet_map tmap(2);
             tid = tmap.first_tablet();
             tmap.set_tablet(tid, tablet_info {
@@ -355,19 +375,25 @@ SEASTAR_TEST_CASE(test_get_shard) {
                 },
                 tablet_replica {h2, 3}
             });
-            tm.set_tablet_map(table1, std::move(tmap));
-        }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            return make_ready_future<>();
+        }).get();
 
-        auto&& tmap = tm.get_tablet_map(table1);
+        auto&& tmap = stm.get()->tablets().get_tablet_map(table1);
 
-        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid1, h1), std::make_optional(shard_id(2)));
-        BOOST_REQUIRE(!tmap.get_shard(tid1, h2));
-        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid1, h3), std::make_optional(shard_id(1)));
+        auto get_shard = [&] (tablet_id tid, host_id host) {
+            tablet_sharder sharder(*stm.get(), table1, host);
+            return sharder.shard_for_reads(tmap.get_last_token(tid));
+        };
 
-        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h1), std::make_optional(shard_id(0)));
-        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h2), std::make_optional(shard_id(3)));
-        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h3), std::make_optional(shard_id(5)));
+        BOOST_REQUIRE_EQUAL(get_shard(tid1, h1), std::make_optional(shard_id(2)));
+        BOOST_REQUIRE(!get_shard(tid1, h2));
+        BOOST_REQUIRE_EQUAL(get_shard(tid1, h3), std::make_optional(shard_id(1)));
 
+        BOOST_REQUIRE_EQUAL(get_shard(tid, h1), std::make_optional(shard_id(0)));
+        BOOST_REQUIRE_EQUAL(get_shard(tid, h2), std::make_optional(shard_id(3)));
+        BOOST_REQUIRE_EQUAL(get_shard(tid, h3), std::make_optional(shard_id(5)));
     }, tablet_cql_test_config());
 }
 
@@ -568,7 +594,7 @@ SEASTAR_TEST_CASE(test_sharder) {
 
         std::vector<tablet_id> tablet_ids;
         {
-            tablet_map tmap(4);
+            tablet_map tmap(8);
             auto tid = tmap.first_tablet();
 
             tablet_ids.push_back(tid);
@@ -615,50 +641,233 @@ SEASTAR_TEST_CASE(test_sharder) {
                 }
             });
 
+            // tablet_ids[4]
+            // h1 is leaving, h3 is pending
+            tid = *tmap.next_tablet(tid);
+            tablet_ids.push_back(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 5},
+                    tablet_replica {h2, 1},
+                }
+            });
+            tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                    tablet_transition_stage::allow_write_both_read_old,
+                    tablet_transition_kind::migration,
+                    tablet_replica_set {
+                            tablet_replica {h3, 7},
+                            tablet_replica {h2, 1},
+                    },
+                    tablet_replica {h3, 7}
+            });
+
+            // tablet_ids[5]
+            // h1 is leaving, h3 is pending
+            tid = *tmap.next_tablet(tid);
+            tablet_ids.push_back(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 5},
+                    tablet_replica {h2, 1},
+                }
+            });
+            tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                    tablet_transition_stage::write_both_read_old,
+                    tablet_transition_kind::migration,
+                    tablet_replica_set {
+                            tablet_replica {h3, 7},
+                            tablet_replica {h2, 1},
+                    },
+                    tablet_replica {h3, 7}
+            });
+
+            // tablet_ids[6]
+            // h1 is leaving, h3 is pending
+            tid = *tmap.next_tablet(tid);
+            tablet_ids.push_back(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 5},
+                    tablet_replica {h2, 1},
+                }
+            });
+            tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                    tablet_transition_stage::write_both_read_new,
+                    tablet_transition_kind::migration,
+                    tablet_replica_set {
+                            tablet_replica {h3, 7},
+                            tablet_replica {h2, 1},
+                    },
+                    tablet_replica {h3, 7}
+            });
+
+            // tablet_ids[7]
+            // h1 is leaving, h3 is pending
+            tid = *tmap.next_tablet(tid);
+            tablet_ids.push_back(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 5},
+                    tablet_replica {h2, 1},
+                }
+            });
+            tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                    tablet_transition_stage::use_new,
+                    tablet_transition_kind::migration,
+                    tablet_replica_set {
+                            tablet_replica {h3, 7},
+                            tablet_replica {h2, 1},
+                    },
+                    tablet_replica {h3, 7}
+            });
+
             tablet_metadata tm;
             tm.set_tablet_map(table1, std::move(tmap));
             tokm.set_tablets(std::move(tm));
         }
 
         auto& tm = tokm.tablets().get_tablet_map(table1);
-        tablet_sharder sharder(tokm, table1);
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[0])), 3);
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[1])), 0); // missing
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[2])), 1);
-        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[3])), 0); // missing
+        tablet_sharder sharder(tokm, table1); // for h1
+        tablet_sharder sharder_h3(tokm, table1, h3);
 
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_last_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_last_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_last_token(tablet_ids[1]), 3), dht::maximum_token());
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[0])), 3);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[1])), 0); // missing
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[2])), 1);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[3])), 0); // missing
 
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_first_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_first_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
-        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_first_token(tablet_ids[1]), 3), dht::maximum_token());
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[0])), dht::shard_replica_set{3});
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[1])), dht::shard_replica_set{});
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[2])), dht::shard_replica_set{1});
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[3])), dht::shard_replica_set{});
+
+        // Shard for read should be stable across stages of migration. The coordinator may route
+        // requests to the leaving replica even if the stage on the replica side is use_new.
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[4])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[5])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[6])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[7])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[4])), dht::shard_replica_set{5});
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[5])), dht::shard_replica_set{5});
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[6])), dht::shard_replica_set{5});
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[7])), dht::shard_replica_set{5});
+
+        // On pending host
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_reads(tm.get_last_token(tablet_ids[4])), 7);
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_reads(tm.get_last_token(tablet_ids[5])), 7);
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_reads(tm.get_last_token(tablet_ids[6])), 7);
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_reads(tm.get_last_token(tablet_ids[7])), 7);
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_writes(tm.get_last_token(tablet_ids[4])), dht::shard_replica_set{7});
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_writes(tm.get_last_token(tablet_ids[5])), dht::shard_replica_set{7});
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_writes(tm.get_last_token(tablet_ids[6])), dht::shard_replica_set{7});
+        BOOST_REQUIRE_EQUAL(sharder_h3.shard_for_writes(tm.get_last_token(tablet_ids[7])), dht::shard_replica_set{7});
+
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_last_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_last_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_last_token(tablet_ids[1]), 3), dht::maximum_token());
+
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_first_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_first_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard_for_reads(tm.get_first_token(tablet_ids[1]), 3), dht::maximum_token());
 
         {
-            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[0]));
+            auto shard_opt = sharder.next_shard_for_reads(tm.get_last_token(tablet_ids[0]));
             BOOST_REQUIRE(shard_opt);
             BOOST_REQUIRE_EQUAL(shard_opt->shard, 0);
             BOOST_REQUIRE_EQUAL(shard_opt->token, tm.get_first_token(tablet_ids[1]));
         }
 
         {
-            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[1]));
+            auto shard_opt = sharder.next_shard_for_reads(tm.get_last_token(tablet_ids[1]));
             BOOST_REQUIRE(shard_opt);
             BOOST_REQUIRE_EQUAL(shard_opt->shard, 1);
             BOOST_REQUIRE_EQUAL(shard_opt->token, tm.get_first_token(tablet_ids[2]));
         }
 
         {
-            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[2]));
+            auto shard_opt = sharder.next_shard_for_reads(tm.get_last_token(tablet_ids[2]));
             BOOST_REQUIRE(shard_opt);
             BOOST_REQUIRE_EQUAL(shard_opt->shard, 0);
             BOOST_REQUIRE_EQUAL(shard_opt->token, tm.get_first_token(tablet_ids[3]));
         }
 
         {
-            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[3]));
+            auto shard_opt = sharder.next_shard_for_reads(tm.get_last_token(tablet_ids[tablet_ids.size() - 1]));
             BOOST_REQUIRE(!shard_opt);
+        }
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_intranode_sharding) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+
+        token_metadata tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1 } });
+        tokm.get_topology().add_or_update_endpoint(h1, tokm.get_topology().my_address());
+
+        auto leaving_replica = tablet_replica{h1, 5};
+        auto pending_replica = tablet_replica{h1, 7};
+        auto const_replica = tablet_replica{h2, 1};
+
+        // Prepare a tablet map with different tablets being in intra-node migration at different stages.
+        std::vector<tablet_id> tablet_ids;
+        {
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+
+            auto set_tablet = [&] (tablet_id tid, tablet_transition_stage stage) {
+                tablet_ids.push_back(tid);
+                tmap.set_tablet(tid, tablet_info{
+                    tablet_replica_set{leaving_replica, const_replica}
+                });
+                tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                    stage,
+                    tablet_transition_kind::intranode_migration,
+                    tablet_replica_set{pending_replica, const_replica},
+                    pending_replica
+                });
+            };
+
+            // tablet_ids[0]
+            set_tablet(tid, tablet_transition_stage::allow_write_both_read_old);
+
+            // tablet_ids[1]
+            tid = *tmap.next_tablet(tid);
+            set_tablet(tid, tablet_transition_stage::write_both_read_old);
+
+            // tablet_ids[2]
+            tid = *tmap.next_tablet(tid);
+            set_tablet(tid, tablet_transition_stage::write_both_read_new);
+
+            // tablet_ids[3]
+            tid = *tmap.next_tablet(tid);
+            set_tablet(tid, tablet_transition_stage::use_new);
+
+            tablet_metadata tm;
+            tm.set_tablet_map(table1, std::move(tmap));
+            tokm.set_tablets(std::move(tm));
+        }
+
+        auto& tm = tokm.tablets().get_tablet_map(table1);
+        tablet_sharder sharder(tokm, table1); // for h1
+
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[0])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[1])), 5);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[2])), 7);
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_reads(tm.get_last_token(tablet_ids[3])), 7);
+
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[0])), dht::shard_replica_set{5});
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[1])), dht::shard_replica_set({7, 5}));
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[2])), dht::shard_replica_set({7, 5}));
+        BOOST_REQUIRE_EQUAL(sharder.shard_for_writes(tm.get_last_token(tablet_ids[3])), dht::shard_replica_set{7});
+
+        // On const replica
+        tablet_sharder sharder_h2(tokm, table1, const_replica.host);
+        for (auto id : tablet_ids) {
+            BOOST_REQUIRE_EQUAL(sharder_h2.shard_for_reads(tm.get_last_token(id)), const_replica.shard);
+            BOOST_REQUIRE_EQUAL(sharder_h2.shard_for_writes(tm.get_last_token(id)), dht::shard_replica_set{const_replica.shard});
         }
     }, tablet_cql_test_config());
 }
@@ -778,7 +987,7 @@ void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm, loc
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
     for (size_t i = 0; i < max_iterations; ++i) {
-        auto plan = talloc.balance_tablets(stm.get(), load_stats, std::move(skiplist)).get();
+        auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
         if (plan.empty()) {
             return;
         }
@@ -1533,6 +1742,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
         for (auto h : {host1, host2, host3, host4}) {
             testlog.debug("Checking host {}", h);
             BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(h), 4);
+            BOOST_REQUIRE_LE(load.get_shard_imbalance(h), 1);
         }
     }
   }).get();
@@ -1548,7 +1758,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
 
         auto table1 = table_id(next_uuid());
 
-        unsigned shard_count = 1;
+        unsigned shard_count = 2;
 
         semaphore sem(1);
         shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
@@ -1559,6 +1769,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         });
 
         // host1 is loaded and host2 is empty, resulting in an imbalance.
+        // host1's shard 0 is loaded and shard 1 is empty, resulting in intra-node imbalance.
         stm.mutate_token_metadata([&] (auto& tm) {
             tm.update_host_id(host1, ip1);
             tm.update_host_id(host2, ip2);
@@ -1626,6 +1837,68 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
             BOOST_REQUIRE(!plan.empty());
         }
   }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_drained_node_is_not_balanced_internally) {
+    do_with_cql_env_thread([] (auto& e) {
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+
+        auto host1 = host_id(next_uuid());
+        auto host2 = host_id(next_uuid());
+
+        auto table1 = table_id(next_uuid());
+
+        unsigned shard_count = 2;
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+            locator::topology::config{
+                .this_endpoint = ip1,
+                .local_dc_rack = locator::endpoint_dc_rack::default_location
+            }
+        });
+
+        stm.mutate_token_metadata([&] (locator::token_metadata& tm) {
+            tm.update_host_id(host1, ip1);
+            tm.update_host_id(host2, ip2);
+            tm.update_topology(host1, locator::endpoint_dc_rack::default_location, locator::node::state::being_removed, shard_count);
+            tm.update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+
+            tablet_map tmap(16);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica {host1, 0},
+                    }
+                });
+            }
+            tablet_metadata tmeta;
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            return make_ready_future<>();
+        }).get();
+
+        migration_plan plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
+        BOOST_REQUIRE(plan.has_nodes_to_drain());
+        for (auto&& mig : plan.migrations()) {
+            BOOST_REQUIRE(mig.kind != tablet_transition_kind::intranode_migration);
+        }
+  }).get();
+}
+
+static
+void check_tablet_invariants(const tablet_metadata& tmeta) {
+    for (auto&& [table, tmap] : tmeta.all_tables()) {
+        tmap.for_each_tablet([&](auto tid, const tablet_info& tinfo) -> future<> {
+            std::unordered_set<host_id> hosts;
+            // Uniqueness of hosts
+            for (const auto& replica: tinfo.replicas) {
+                BOOST_REQUIRE(hosts.insert(replica.host).second);
+            }
+            return make_ready_future<>();
+        }).get();
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
@@ -1711,7 +1984,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         testlog.debug("tablet metadata: {}", stm.get()->tablets());
         testlog.info("Total tablet count: {}, hosts: {}", total_tablet_count, hosts.size());
 
+        check_tablet_invariants(stm.get()->tablets());
+
         rebalance_tablets(e.get_tablet_allocator().local(), stm);
+
+        check_tablet_invariants(stm.get()->tablets());
 
         {
             load_sketch load(stm.get());
@@ -1722,6 +1999,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
                 auto l = load.get_avg_shard_load(h);
                 testlog.info("Load on host {}: {}", h, l);
                 min_max_load.update(l);
+                BOOST_REQUIRE_LE(load.get_shard_imbalance(h), 1);
             }
 
             testlog.debug("tablet metadata: {}", stm.get()->tablets());

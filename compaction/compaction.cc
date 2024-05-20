@@ -1705,7 +1705,12 @@ public:
     }
 
     compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
-        auto shard = _sharder->shard_of(dk.token());
+        auto shards = _sharder->shard_for_writes(dk.token());
+        if (shards.size() != 1) {
+            // Resharding is not supposed to run on tablets, so this case does not have to be supported.
+            on_internal_error(clogger, fmt::format("Got {} shards for token {} in table {}.{}", shards.size(), dk.token(), _schema->ks_name(), _schema->cf_name()));
+        }
+        auto shard = shards[0];
         auto sst = _sstable_creator(shard);
         setup_new_sstable(sst);
 

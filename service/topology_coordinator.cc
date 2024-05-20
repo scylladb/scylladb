@@ -814,6 +814,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}) {
+        auto version = _topo_sm._topology.version;
         bool drain_failed = false;
         try {
             guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain, exclude_nodes, drop_guard_and_retake::yes);
@@ -825,8 +826,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             guard = co_await start_operation();
         }
         topology_mutation_builder builder(guard.write_timestamp());
-        builder.set_fence_version(_topo_sm._topology.version);
-        auto reason = ::format("advance fence version to {}", _topo_sm._topology.version);
+        // Other nodes are guaranteed to be drained on success only up to the version which was current
+        // prior to barrier_and_drain RPCs were sent.
+        builder.set_fence_version(version);
+        auto reason = ::format("advance fence version to {}", version);
         co_await update_topology_state(std::move(guard), {builder.build()}, reason);
         guard = co_await start_operation();
         if (drain_failed) {
@@ -1110,6 +1113,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_new: {
+                    utils::get_local_injector().inject("crash-in-tablet-write-both-read-new", [] {
+                        rtlogger.info("crash-in-tablet-write-both-read-new hit, killing the node");
+                        _exit(1);
+                    });
+
                     auto next_stage = locator::tablet_transition_stage::use_new;
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
@@ -1125,7 +1133,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 excluded_new++;
                             }
                         }
-                        if (excluded_new > excluded_old) {
+                        // Cannot revert if this is intra-node migration.
+                        // We will lose data if the migrating node restarted, in which case the leaving replica
+                        // doesn't contain writes anymore as sstables are attached only on the pending replica.
+                        // Luckily, this we never reach this condition since excluded_new cannot be larger
+                        // than excluded_old for intra-node migration.
+                        if (excluded_new > excluded_old && trinfo.transition != locator::tablet_transition_kind::intranode_migration) {
                             rtlogger.debug("During {} stage of {} {} new nodes and {} old nodes were excluded", trinfo.stage, gid, excluded_new, excluded_old);
                             next_stage = locator::tablet_transition_stage::cleanup_target;
                         }

@@ -13,6 +13,7 @@
 #include "locator/host_id.hh"
 #include "service/session.hh"
 #include "dht/i_partitioner_fwd.hh"
+#include "dht/token-sharding.hh"
 #include "dht/ring_position.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
@@ -177,6 +178,9 @@ enum class tablet_transition_kind {
     // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
     migration,
 
+    // Like migration, but the new pending replica is on the same host as leaving replica.
+    intranode_migration,
+
     // New tablet replica is replacing a dead one.
     // The new replica is (tablet_transition_info::next - tablet_info::replicas).
     // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
@@ -188,9 +192,7 @@ tablet_transition_stage tablet_transition_stage_from_string(const sstring&);
 sstring tablet_transition_kind_to_string(tablet_transition_kind);
 tablet_transition_kind tablet_transition_kind_from_string(const sstring&);
 
-enum class write_replica_set_selector {
-    previous, both, next
-};
+using write_replica_set_selector = dht::write_replica_set_selector;
 
 enum class read_replica_set_selector {
     previous, next
@@ -382,11 +384,9 @@ public:
         return tablet_id(size_t(t) + 1);
     }
 
-    /// Returns shard id which is a replica for a given tablet on a given host.
-    /// If there is no replica on a given host, returns nullopt.
-    /// If the topology is transitional, also considers the new replica set.
-    /// The old replica set is preferred in case of ambiguity.
-    std::optional<shard_id> get_shard(tablet_id, host_id) const;
+    /// Returns true iff tablet has a given replica.
+    /// If tablet is in transition, considers both previous and next replica set.
+    bool has_replica(tablet_id, tablet_replica) const;
 
     const tablet_container& tablets() const {
         return _tablets;

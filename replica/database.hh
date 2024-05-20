@@ -103,6 +103,7 @@ class compaction_data;
 class sstable_set;
 class directory_semaphore;
 struct sstable_files_snapshot;
+struct entry_descriptor;
 
 }
 
@@ -845,13 +846,8 @@ public:
     future<> cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
-    shard_id shard_of(const mutation& m) const {
-        return shard_of(m.token());
-    }
-    shard_id shard_of(dht::token t) const {
-        return _erm ? _erm->shard_of(*_schema, t)
-                    : dht::static_shard_of(*_schema, t); // for tests.
-    }
+    shard_id shard_for_reads(dht::token t) const;
+    dht::shard_replica_set shard_for_writes(dht::token t) const;
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
@@ -1231,6 +1227,10 @@ public:
     // a list of SSTables that represent the snapshot.
     future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr);
 
+    // Clones storage of a given tablet. Memtable is flushed first to guarantee that the
+    // snapshot (list of sstables) will include all the data written up to the time it was taken.
+    future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid);
+
     friend class compaction_group;
 };
 
@@ -1355,7 +1355,7 @@ class db_user_types_storage;
 // Policy for distributed<database>:
 //   broadcast metadata writes
 //   local metadata reads
-//   use shard_of() for data
+//   use table::shard_for_reads()/table::shard_for_writes() for data
 
 class database : public peering_sharded_service<database> {
     friend class ::database_test;

@@ -37,6 +37,7 @@ namespace dht {
 
 class i_partitioner;
 class sharder;
+class static_sharder;
 
 }
 
@@ -605,7 +606,7 @@ private:
         std::reference_wrapper<const dht::i_partitioner> _partitioner;
         // Sharding info is not stored in the schema mutation and does not affect
         // schema digest. It is also not set locally on a schema tables.
-        std::reference_wrapper<const dht::sharder> _sharder;
+        std::reference_wrapper<const dht::static_sharder> _sharder;
     };
     raw_schema _raw;
     schema_static_props _static_props;
@@ -792,11 +793,11 @@ public:
     // Use only for tables which use vnode-based replication strategy, that is for which
     // table::uses_static_sharding() is true.
     // To obtain a sharder which is valid for all kinds of tables, use table::get_effective_replication_map()->get_sharder()
-    const dht::sharder& get_sharder() const;
+    const dht::static_sharder& get_sharder() const;
 
     // Returns a sharder for this table, but only if it is a static sharder (token->shard mappings
     // don't change while the node is up)
-    const dht::sharder* try_get_static_sharder() const;
+    const dht::static_sharder* try_get_static_sharder() const;
 
     // Returns a pointer to the table if the local database has a table which this object references by id().
     // The table pointer is not guaranteed to be stable, schema_ptr doesn't keep the table alive.

@@ -21,16 +21,24 @@
 
 namespace sstables {
 
+enum class sstable_state {
+    normal,
+    staging,
+    quarantine,
+    upload,
+};
+
 struct entry_descriptor {
     generation_type generation;
     sstable_version_types version;
     sstable_format_types format;
     component_type component;
+    std::optional<sstable_state> state;
 
     entry_descriptor(generation_type generation,
                      sstable_version_types version, sstable_format_types format,
-                     component_type component)
-        : generation(generation), version(version), format(format), component(component) {}
+                     component_type component, std::optional<sstable_state> state = {})
+        : generation(generation), version(version), format(format), component(component), state(state) {}
 };
 
 // Parses sstable file path extracting entry_descriptor from it. Returns the descriptor
@@ -68,6 +76,9 @@ struct sstable_open_config {
     // filter, meaning that the SSTable will be opened on every single-partition
     // read.
     bool load_bloom_filter = true;
+    // Mimicks behavior when a SSTable is streamed to a given shard, where SSTable
+    // writer considers the shard that created the SSTable as its owner.
+    bool current_shard_as_sstable_owner = false;
 };
 
 }

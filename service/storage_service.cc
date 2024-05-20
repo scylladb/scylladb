@@ -36,6 +36,8 @@
 #include "service/tablet_allocator.hh"
 #include "locator/types.hh"
 #include "locator/tablets.hh"
+#include "dht/auto_refreshing_sharder.hh"
+#include "mutation_writer/multishard_writer.hh"
 #include "locator/tablet_metadata_guard.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include <seastar/core/smp.hh>
@@ -70,6 +72,7 @@
 #include "supervisor.hh"
 #include "compaction/compaction_manager.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "db/view/view_builder.hh"
@@ -5651,6 +5654,48 @@ future<> storage_service::do_tablet_operation(locator::global_tablet_id tablet,
     }
 }
 
+future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id tablet, locator::tablet_replica leaving, locator::tablet_replica pending) {
+    if (leaving.host != pending.host) {
+        throw std::runtime_error(fmt::format("Leaving and pending tablet replicas belong to different nodes, {} and {} respectively",
+                                             leaving.host, pending.host));
+    }
+
+    auto d = co_await smp::submit_to(leaving.shard, [this, tablet] () -> future<utils::chunked_vector<sstables::entry_descriptor>> {
+        auto& table = _db.local().find_column_family(tablet.table);
+        auto op = table.stream_in_progress();
+        co_return co_await table.clone_tablet_storage(tablet.tablet);
+    });
+    rtlogger.debug("Cloned storage of tablet {} from leaving replica {}, {} sstables were found", tablet, leaving, d.size());
+
+    auto load_sstable = [] (const dht::sharder& sharder, replica::table& t, sstables::entry_descriptor d) -> future<sstables::shared_sstable> {
+        auto& mng = t.get_sstables_manager();
+        auto sst = mng.make_sstable(t.schema(), t.dir(), t.get_storage_options(), d.generation, d.state.value_or(sstables::sstable_state::normal),
+                                    d.version, d.format, gc_clock::now(), default_io_error_handler_gen());
+        // The loader will consider current shard as sstable owner, despite the tablet sharder
+        // will still point to leaving replica at this stage in migration. If node goes down,
+        // SSTables will be loaded at pending replica and migration is retried, so correctness
+        // wise, we're good.
+        auto cfg = sstables::sstable_open_config{ .current_shard_as_sstable_owner = true };
+        co_await sst->load(sharder, cfg);
+        co_return sst;
+    };
+
+    co_await smp::submit_to(pending.shard, [this, tablet, load_sstable, d = std::move(d)] () mutable -> future<> {
+        // Loads cloned sstables from leaving replica into pending one.
+        auto& table = _db.local().find_column_family(tablet.table);
+        auto op = table.stream_in_progress();
+        dht::auto_refreshing_sharder sharder(table.shared_from_this());
+
+        std::vector<sstables::shared_sstable> ssts;
+        ssts.reserve(d.size());
+        for (auto&& sst_desc : d) {
+            ssts.push_back(co_await load_sstable(sharder, table, std::move(sst_desc)));
+        }
+        co_await table.add_sstables_and_update_cache(ssts);
+    });
+    rtlogger.debug("Successfully loaded storage of tablet {} into pending replica {}", tablet, pending);
+}
+
 // Streams data to the pending tablet replica of a given tablet on this node.
 // The source tablet replica is determined from the current transition info of the tablet.
 future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
@@ -5682,44 +5727,53 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         auto& tinfo = tmap.get_tablet_info(tablet.tablet);
         auto range = tmap.get_token_range(tablet.tablet);
         std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-        if (leaving_replica && leaving_replica->host == tm->get_my_id()) {
-            // The algorithm doesn't work with tablet migration within the same node because
-            // it assumes there is only one tablet replica, picked by the sharder, on local node.
-            throw std::runtime_error(fmt::format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
-                                            tablet, leaving_replica->shard, pending_replica->shard));
-        }
-
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
 
         streaming::stream_reason reason = std::invoke([&] {
             switch (trinfo->transition) {
                 case locator::tablet_transition_kind::migration: return streaming::stream_reason::tablet_migration;
+                case locator::tablet_transition_kind::intranode_migration: return streaming::stream_reason::tablet_migration;
                 case locator::tablet_transition_kind::rebuild: return streaming::stream_reason::rebuild;
                 default:
                     throw std::runtime_error(fmt::format("stream_tablet(): Invalid tablet transition: {}", trinfo->transition));
             }
         });
 
-        auto& table = _db.local().find_column_family(tablet.table);
-        std::vector<sstring> tables = {table.schema()->cf_name()};
-        auto my_id = tm->get_my_id();
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm),
-                                                            guard.get_abort_source(),
-                                                            my_id, _snitch.local()->get_location(),
-                                                            format("Tablet {}", trinfo->transition),
-                                                            reason,
-                                                            topo_guard,
-                                                            std::move(tables));
-        tm = nullptr;
-        streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
-                _gossiper.get_unreachable_members()));
+        if (trinfo->transition == locator::tablet_transition_kind::intranode_migration) {
+            if (!leaving_replica || leaving_replica->host != tm->get_my_id()) {
+                throw std::runtime_error(fmt::format("Invalid leaving replica for intra-node migration, tablet: {}, leaving: {}",
+                                                     tablet, leaving_replica));
+            }
+            tm = nullptr;
+            rtlogger.info("Starting intra-node streaming of tablet {} from shard {} to {}", tablet, leaving_replica->shard, pending_replica->shard);
+            co_await clone_locally_tablet_storage(tablet, *leaving_replica, *pending_replica);
+            rtlogger.info("Finished intra-node streaming of tablet {} from shard {} to {}", tablet, leaving_replica->shard, pending_replica->shard);
+        } else {
+            if (leaving_replica && leaving_replica->host == tm->get_my_id()) {
+                throw std::runtime_error(fmt::format("Cannot stream within the same node using regular migration, tablet: {}, shard {} -> {}",
+                                                     tablet, leaving_replica->shard, trinfo->pending_replica->shard));
+            }
+            auto& table = _db.local().find_column_family(tablet.table);
+            std::vector<sstring> tables = {table.schema()->cf_name()};
+            auto my_id = tm->get_my_id();
+            auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm),
+                                                                guard.get_abort_source(),
+                                                                my_id, _snitch.local()->get_location(),
+                                                                format("Tablet {}", trinfo->transition),
+                                                                reason,
+                                                                topo_guard,
+                                                                std::move(tables));
+            tm = nullptr;
+            streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
+                    _gossiper.get_unreachable_members()));
 
-        std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
-        for (auto r : streaming_info.read_from) {
-            ranges_per_endpoint[host2ip(r.host)].emplace_back(range);
+            std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
+            for (auto r: streaming_info.read_from) {
+                ranges_per_endpoint[host2ip(r.host)].emplace_back(range);
+            }
+            streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
+            co_await streamer->stream_async();
         }
-        streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
-        co_await streamer->stream_async();
 
         // If new pending tablet replica needs splitting, streaming waits for it to complete.
         // That's to provide a guarantee that once migration is over, the coordinator can finalize
@@ -5770,6 +5824,7 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 if (leaving_replica->host != tm->get_my_id()) {
                     throw std::runtime_error(fmt::format("Tablet {} has leaving replica different than this one", tablet));
                 }
+                shard = leaving_replica->shard;
             } else if (trinfo->stage == locator::tablet_transition_stage::cleanup_target) {
                 if (!trinfo->pending_replica) {
                     throw std::runtime_error(fmt::format("Tablet {} has no pending replica", tablet));
@@ -5777,15 +5832,10 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 if (trinfo->pending_replica->host != tm->get_my_id()) {
                     throw std::runtime_error(fmt::format("Tablet {} has pending replica different than this one", tablet));
                 }
+                shard = trinfo->pending_replica->shard;
             } else {
                 throw std::runtime_error(fmt::format("Tablet {} stage is not at cleanup/cleanup_target", tablet));
             }
-
-            auto shard_opt = tmap.get_shard(tablet.tablet, tm->get_my_id());
-            if (!shard_opt) {
-                on_internal_error(rtlogger, format("Tablet {} has no shard on this node", tablet));
-            }
-            shard = *shard_opt;
         }
         return _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks] (replica::database& db) {
             auto& table = db.find_column_family(tablet.table);
@@ -5830,11 +5880,13 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         if (dst.shard >= node->get_shard_count()) {
             throw std::runtime_error(format("Host {} does not have shard {}", *node, dst.shard));
         }
-        if (src.host == dst.host) {
-            throw std::runtime_error("Migrating within the same node is not supported");
+
+        if (src == dst) {
+            sstring reason = format("No-op move of tablet {} to {}", gid, dst);
+            return std::make_tuple(std::move(updates), std::move(reason));
         }
 
-        if (locator::contains(tinfo.replicas, dst.host)) {
+        if (src.host != dst.host && locator::contains(tinfo.replicas, dst.host)) {
             throw std::runtime_error(fmt::format("Tablet {} has replica on {}", gid, dst.host));
         }
         auto src_dc_rack = get_token_metadata().get_topology().get_location(src.host);
@@ -5857,7 +5909,8 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-            .set_transition(last_token, locator::tablet_transition_kind::migration)
+            .set_transition(last_token, src.host == dst.host ? locator::tablet_transition_kind::intranode_migration
+                                                             : locator::tablet_transition_kind::migration)
             .build());
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
@@ -6112,6 +6165,27 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
         } catch (group0_concurrent_modification&) {
             rtlogger.debug("set_tablet_balancing_enabled(): concurrent modification");
         }
+    }
+}
+
+future<> storage_service::await_topology_quiesced() {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.await_topology_quiesced();
+        });
+        co_return;
+    }
+
+    group0_guard guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+
+    while (_topology_state_machine._topology.is_busy()) {
+        rtlogger.debug("await_topology_quiesced(): topology is busy");
+        release_guard(std::move(guard));
+        co_await _topology_state_machine.event.wait();
+        guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
     }
 }
 

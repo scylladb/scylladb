@@ -853,6 +853,11 @@ future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_
     co_return std::move(files);
 }
 
+future<entry_descriptor> sstable::clone(generation_type new_generation) const {
+    co_await _storage->snapshot(*this, _storage->prefix(), storage::absolute_path::yes, new_generation);
+    co_return entry_descriptor(new_generation, _version, _format, component_type::TOC, _state);
+}
+
 file_writer::~file_writer() {
     if (_closed) {
         return;
@@ -1469,7 +1474,8 @@ future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noe
     validate_partitioner();
     if (_shards.empty()) {
         set_first_and_last_keys();
-        _shards = compute_shards_for_this_sstable(sharder);
+        _shards = cfg.current_shard_as_sstable_owner ?
+                std::vector<unsigned>{this_shard_id()} : compute_shards_for_this_sstable(sharder);
     }
     co_await open_data(cfg);
 }
@@ -1622,7 +1628,7 @@ create_sharding_metadata(utils::chunked_vector<dht::partition_range> ranges) {
 
 static
 sharding_metadata
-create_sharding_metadata(schema_ptr schema, const dht::sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
+create_sharding_metadata(schema_ptr schema, const dht::static_sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
     auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto ranges = dht::split_range_to_single_shard(*schema, sharder, prange, shard).get();
     if (ranges.empty()) {

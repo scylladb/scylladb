@@ -848,7 +848,7 @@ private:
         return get_schema_for_read(cmd.schema_version, src_addr, *timeout).then([&sp = _sp, &sys_ks = _sys_ks, cmd = std::move(cmd), key = std::move(key), ballot,
                          only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
             dht::token token = dht::get_token(*schema, key);
-            unsigned shard = schema->table().shard_of(token);
+            unsigned shard = schema->table().shard_for_reads(token);
             bool local = shard == this_shard_id();
             sp.get_stats().replica_cross_shard_ops += !local;
             return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
@@ -878,7 +878,7 @@ private:
         auto f = get_schema_for_read(proposal.update.schema_version(), src_addr, *timeout).then([&sp = _sp, &sys_ks = _sys_ks, tr_state,
                                                               proposal = std::move(proposal), timeout] (schema_ptr schema) mutable {
             dht::token token = proposal.update.decorated_key(*schema).token();
-            unsigned shard = schema->table().shard_of(token);
+            unsigned shard = schema->table().shard_for_reads(token);
             bool local = shard == this_shard_id();
             sp.get_stats().replica_cross_shard_ops += !local;
             return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
@@ -921,7 +921,7 @@ private:
         return get_schema_for_read(schema_id, src_addr, *timeout).then([&sp = _sp, &sys_ks = _sys_ks, key = std::move(key), ballot,
                          timeout, tr_state = std::move(tr_state), src_ip, d = std::move(d)] (schema_ptr schema) mutable {
             dht::token token = dht::get_token(*schema, key);
-            unsigned shard = schema->table().shard_of(token);
+            unsigned shard = schema->table().shard_for_reads(token);
             bool local = shard == this_shard_id();
             sp.get_stats().replica_cross_shard_ops += !local;
             return smp::submit_to(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
@@ -957,7 +957,7 @@ const dht::token& end_token(const dht::partition_range& r) {
 }
 
 unsigned storage_proxy::cas_shard(const schema& s, dht::token token) {
-    return s.table().shard_of(token);
+    return s.table().shard_for_reads(token);
 }
 
 static uint32_t random_variable_for_rate_limit() {
@@ -978,7 +978,11 @@ static result<db::per_partition_rate_limit::info> choose_rate_limit_info(
     db::per_partition_rate_limit::account_and_enforce enforce_info{
         .random_variable = random_variable_for_rate_limit(),
     };
-    if (coordinator_in_replica_set && erm->get_sharder(*s).shard_of(token) == this_shard_id()) {
+    // It's fine to use shard_for_reads() because in case of no migration this is the
+    // shard used by all requests. During migration, it is the shard used for request routing
+    // by drivers during most of the migration. It changes after streaming, in which case we'll
+    // fall back to throttling on replica side, which is suboptimal but acceptable.
+    if (coordinator_in_replica_set && erm->shard_for_reads(*s, token) == this_shard_id()) {
         auto& cf = db.find_column_family(s);
         auto decision = db.account_coordinator_operation_to_rate_limit(cf, token, enforce_info, op_type);
         if (decision) {
@@ -1583,7 +1587,7 @@ public:
     future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
         auto op = _proxy->start_write();
         return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
-            adjust_rate_limit_for_local_operation(_rate_limit_info),
+            _rate_limit_info,
             storage_proxy::get_fence(*_effective_replication_map_ptr));
     }
     future<> apply_remotely(gms::inet_address ep, const inet_address_vector_replica_set& forward,
@@ -2963,32 +2967,60 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
     return r;
 }
 
+// Invokes "apply" on every shard that is responsible for the given token, according to sharder::shard_for_writes
+// Caller must keep the effective_replication_map alive around the apply operation.
+template <typename Applier>
+requires std::invocable<Applier, shard_id>
+future<> apply_on_shards(const locator::effective_replication_map_ptr& erm, const schema& s, dht::token tok, Applier&& apply) {
+    auto shards = erm->get_sharder(s).shard_for_writes(tok);
+    if (shards.empty()) {
+        return make_exception_future<>(std::runtime_error(format("No local shards for token {} of {}.{}", tok, s.ks_name(), s.cf_name())));
+    }
+    if (shards.size() == 1) [[likely]] {
+        return apply(shards[0]);
+    }
+    return seastar::parallel_for_each(shards, std::move(apply));
+}
+
 future<>
 storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto erm = _db.local().find_column_family(m.schema()).get_effective_replication_map();
-    auto shard = erm->get_sharder(*m.schema()).shard_of(m.token());
-    get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {smp_grp, timeout},
-            [s = global_schema_ptr(m.schema()),
-             m = freeze(m),
-             gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
-             timeout,
-             sync,
-             rate_limit_info] (replica::database& db) mutable -> future<> {
-        return db.apply(s, m, gtr.get(), sync, timeout, rate_limit_info);
-    });
+    auto apply = [this, erm, &m, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
+        get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        auto shard_rate_limit = rate_limit_info;
+        if (shard == this_shard_id()) {
+            shard_rate_limit = adjust_rate_limit_for_local_operation(shard_rate_limit);
+        }
+        return _db.invoke_on(shard, {smp_grp, timeout},
+                [s = global_schema_ptr(m.schema()),
+                 m = freeze(m),
+                 gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
+                 erm,
+                 timeout,
+                 sync,
+                 shard_rate_limit] (replica::database& db) mutable -> future<> {
+            return db.apply(s, m, gtr.get(), sync, timeout, shard_rate_limit);
+        });
+    };
+    return apply_on_shards(erm, *m.schema(), m.token(), std::move(apply));
 }
 
 future<>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
         smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
-    auto shard = erm->get_sharder(*s).shard_of(m.token(*s));
-    get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {smp_grp, timeout},
-            [&m, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, rate_limit_info] (replica::database& db) mutable -> future<> {
-        return db.apply(gs, m, gtr.get(), sync, timeout, rate_limit_info);
-    });
+    auto apply = [this, erm, s, &m, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
+        get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        auto shard_rate_limit = rate_limit_info;
+        if (shard == this_shard_id()) {
+            shard_rate_limit = adjust_rate_limit_for_local_operation(shard_rate_limit);
+        }
+        return _db.invoke_on(shard, {smp_grp, timeout},
+                [&m, erm, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, shard_rate_limit] (replica::database& db) mutable -> future<> {
+            return db.apply(gs, m, gtr.get(), sync, timeout, shard_rate_limit);
+        });
+    };
+    return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
 }
 
 future<>
@@ -3013,11 +3045,13 @@ storage_proxy::mutate_locally(std::vector<frozen_mutation_and_schema> mutations,
 future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
-    auto shard = erm->get_sharder(*s).shard_of(m.token(*s));
-    get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state = std::move(tr_state), timeout] (replica::database& db) mutable -> future<> {
-        return db.apply_hint(gs, m, std::move(tr_state), timeout);
-    });
+    auto apply = [&, erm] (unsigned shard) {
+        get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state, timeout, erm] (replica::database& db) mutable -> future<> {
+            return db.apply_hint(gs, m, tr_state, timeout);
+        });
+    };
+    return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
 }
 
 std::optional<replica::stale_topology_exception>
@@ -3081,7 +3115,9 @@ future<>
 storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout,
                                                       tracing::trace_state_ptr trace_state, service_permit permit) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
-    auto shard = erm->get_sharder(*s).shard_of(fm.token(*s));
+    // FIXME: This does not handle intra-node tablet migration properly.
+    // Refs https://github.com/scylladb/scylladb/issues/18180
+    auto shard = erm->get_sharder(*s).shard_for_reads(fm.token(*s));
     bool local = shard == this_shard_id();
     get_stats().replica_cross_shard_ops += !local;
     return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [&proxy = container(), gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (replica::database& db) {

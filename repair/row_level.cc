@@ -323,7 +323,7 @@ flat_mutation_reader_v2 repair_reader::make_reader(
             _permit.release_base_resources();
             return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range, compaction_time),
                 [&remote_sharder, remote_shard](const dht::decorated_key& k) {
-                    return remote_sharder.shard_of(k.token()) == remote_shard;
+                    return remote_sharder.shard_for_reads(k.token()) == remote_shard;
                 });
         }
         default:
@@ -338,7 +338,7 @@ repair_reader::repair_reader(
     schema_ptr s,
     reader_permit permit,
     dht::token_range range,
-    const dht::sharder& remote_sharder,
+    const dht::static_sharder& remote_sharder,
     unsigned remote_shard,
     uint64_t seed,
     read_strategy strategy,
@@ -751,7 +751,7 @@ private:
     // Repair master's sharding configuration
     shard_config _master_node_shard_config;
     // sharding info of repair master
-    dht::sharder _remote_sharder;
+    dht::static_sharder _remote_sharder;
     bool _same_sharding_config = false;
     struct local_range_estimation {
         size_t master_subranges_count;
@@ -1075,8 +1075,8 @@ private:
         });
     }
 
-    dht::sharder make_remote_sharder() {
-        return dht::sharder(_master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb);
+    dht::static_sharder make_remote_sharder() {
+        return dht::static_sharder(_master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb);
     }
 
     bool is_same_sharding_config(replica::column_family& cf) {

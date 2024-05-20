@@ -11,13 +11,6 @@
 
 namespace sstables {
 
-enum class sstable_state {
-    normal,
-    staging,
-    quarantine,
-    upload,
-};
-
 // sstables_manager needs to store the names of its sstables somewhere, when
 // using object storage. This is system_keyspace, but for modularity we hide
 // it behind this interface.

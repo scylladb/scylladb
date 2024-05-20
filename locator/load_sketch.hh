@@ -12,6 +12,7 @@
 #include "locator/token_metadata.hh"
 #include "locator/tablets.hh"
 #include "utils/stall_free.hh"
+#include "utils/extremum_tracking.hh"
 #include "utils/div_ceil.hh"
 
 #include <seastar/core/smp.hh>
@@ -140,6 +141,21 @@ public:
         }
         auto& n = _nodes.at(node);
         return div_ceil(n.load(), n._shards.size());
+    }
+
+    // Returns the difference in tablet count between highest-loaded shard and lowest-loaded shard.
+    // Returns 0 when shards are perfectly balanced.
+    // Returns 1 when shards are imbalanced, but it's not possible to balance them.
+    uint64_t get_shard_imbalance(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0; // Node has no tablets.
+        }
+        auto& n = _nodes.at(node);
+        min_max_tracker<uint64_t> minmax;
+        for (auto&& s : n._shards) {
+            minmax.update(s.load);
+        }
+        return minmax.max() - minmax.max();
     }
 };
 

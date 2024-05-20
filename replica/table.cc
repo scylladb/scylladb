@@ -106,11 +106,6 @@ table::make_sstable_reader(schema_ptr s,
     // consequence, fast_forward_to() will *NOT* work on the result,
     // regardless of what the fwd_mr parameter says.
     if (pr.is_singular() && pr.start()->value().has_key()) {
-        const dht::ring_position& pos = pr.start()->value();
-        if (_erm->shard_of(*s, pos.token()) != this_shard_id()) {
-            return make_empty_flat_reader_v2(s, std::move(permit)); // range doesn't belong to this shard
-        }
-
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
                 _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate);
     } else {
@@ -680,12 +675,12 @@ public:
         storage_group_map ret;
 
         auto& tmap = tablet_map();
+        auto local_replica = locator::tablet_replica{_my_host_id, this_shard_id()};
 
         for (auto tid : tmap.tablet_ids()) {
             auto range = tmap.get_token_range(tid);
 
-            auto shard = tmap.get_shard(tid, _my_host_id);
-            if (shard && *shard == this_shard_id()) {
+            if (tmap.has_replica(tid, local_replica)) {
                 tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
                 auto cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
                 ret[tid.value()] = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
@@ -1016,6 +1011,21 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
     }
 
     co_return std::move(ret);
+}
+
+future<utils::chunked_vector<sstables::entry_descriptor>>
+table::clone_tablet_storage(locator::tablet_id tid) {
+    utils::chunked_vector<sstables::entry_descriptor> ret;
+    auto holder = async_gate().hold();
+    // FIXME: guard storage group with shared lock.
+
+    auto* sg = storage_group_for_id(tid.value());
+    co_await sg->flush();
+    auto set = sg->make_sstable_set();
+    co_await set->for_each_sstable_gently([this, &ret] (const sstables::shared_sstable& sst) -> future<> {
+        ret.push_back(co_await sst->clone(calculate_generation_for_new_table()));
+    });
+    co_return ret;
 }
 
 void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept {
@@ -2184,10 +2194,10 @@ int64_t table::calculate_tablet_count() const {
     const auto this_host_id = token_metadata.get_topology().my_host_id();
 
     int64_t new_tablet_count{0};
+    auto local_replica = locator::tablet_replica{this_host_id, this_shard_id()};
 
     for (auto tablet_id : tablet_map.tablet_ids()) {
-        const std::optional<shard_id> shard_id = tablet_map.get_shard(tablet_id, this_host_id);
-        if (shard_id == this_shard_id()) {
+        if (tablet_map.has_replica(tablet_id, local_replica)) {
             ++new_tablet_count;
         }
     }
@@ -2463,6 +2473,12 @@ future<> compaction_group::flush() noexcept {
         return _memtables->flush();
     } catch (...) {
         return current_exception_as_future<>();
+    }
+}
+
+future<> storage_group::flush() noexcept {
+    for (auto& cg : compaction_groups()) {
+        co_await cg->flush();
     }
 }
 
@@ -3523,6 +3539,16 @@ future<> table::cleanup_tablet_without_deallocation(database& db, db::system_key
     co_await clear_inactive_reads_for_tablet(db, sg);
     co_await flush_compaction_groups(sg);
     co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
+}
+
+shard_id table::shard_for_reads(dht::token t) const {
+    return _erm ? _erm->shard_for_reads(*_schema, t)
+                : dht::static_shard_of(*_schema, t); // for tests.
+}
+
+dht::shard_replica_set table::shard_for_writes(dht::token t) const {
+    return _erm ? _erm->shard_for_writes(*_schema, t)
+                : dht::shard_replica_set{dht::static_shard_of(*_schema, t)}; // for tests.
 }
 
 } // namespace replica

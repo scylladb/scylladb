@@ -74,7 +74,12 @@ public:
 };
 
 // Returns the owning shard number for vnode-based replication strategies.
-// Use table::shard_of() for the general case.
+// For the general case, use the sharder obtained from table's effective replication map.
+//
+//   table& tbl;
+//   auto erm = tbl.get_effective_replication_map();
+//   auto& sharder = erm->get_sharder();
+//
 unsigned static_shard_of(const schema&, const token&);
 
 inline decorated_key decorate_key(const schema& s, const partition_key& key) {
@@ -95,9 +100,9 @@ dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& r
 std::map<unsigned, dht::partition_range_vector>
 split_range_to_shards(dht::partition_range pr, const schema& s, const sharder& sharder);
 
-// Intersect a partition_range with a shard and return the the resulting sub-ranges, in sorted order
+// Intersect a partition_range with a shard and return the resulting sub-ranges, in sorted order
 future<utils::chunked_vector<partition_range>> split_range_to_single_shard(const schema& s,
-    const sharder& sharder, const dht::partition_range& pr, shard_id shard);
+    const static_sharder& sharder, const dht::partition_range& pr, shard_id shard);
 
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name);
 
@@ -115,6 +120,7 @@ dht::token first_token(const dht::partition_range&);
 
 // Returns true iff a given partition range is wholly owned by a single shard.
 // If so, returns that shard. Otherwise, return std::nullopt.
+// During tablet migration, uses the view on shard ownership for reads.
 std::optional<shard_id> is_single_shard(const dht::sharder&, const schema&, const dht::partition_range&);
 
 } // dht
