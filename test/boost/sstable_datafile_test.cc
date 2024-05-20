@@ -15,7 +15,6 @@
 #include "sstables/sstables.hh"
 #include "sstables/compress.hh"
 #include "sstables/metadata_collector.hh"
-#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
@@ -52,7 +51,6 @@
 #include "readers/from_fragments_v2.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/exception_utils.hh"
-#include "test/lib/eventually.hh"
 
 namespace fs = std::filesystem;
 
@@ -3195,6 +3193,7 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
     });
 }
 
+<<<<<<< HEAD
 SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components_and_reload_reclaimed_components) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
@@ -3359,3 +3358,5 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
         .available_memory = 500
     });
 }
+=======
+>>>>>>> 4aa5698f0d (test/boost: move bloom filter tests from sstable_datafile_test into a new file)
