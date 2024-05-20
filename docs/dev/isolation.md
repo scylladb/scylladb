@@ -14,13 +14,14 @@ The groups currently defined are:
 
 | Name (`database_config::*_scheduling_group`) | Default shares
 | -------------------------------------------- | --------------
-| default                                      | TODO
+| default (a.k.a system)                       | 1000
 | memtable                                     | 1000
 | memtable_to_cache                            | 1000
 | compaction                                   | 1000
 | memory_compaction                            | 1000
 | statement                                    | 1000
-| streaming                                    | 200
+| gossip                                       | 1000
+| streaming (a.k.a maintenance)                | 200
 
 TODO: explain the purpose each of each of these scheduling groups, and what they are used for. E.g., "streaming" is also called maintenance and used also used for repair. memtable is used for memtable flushes (?). default is used for gossip, etc.
 
