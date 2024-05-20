@@ -14,7 +14,6 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include "db/system_auth_keyspace.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
@@ -180,6 +179,12 @@ public:
     static constexpr auto TABLETS = "tablets";
     static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
 
+    // auth
+    static constexpr auto ROLES = "roles";
+    static constexpr auto ROLE_MEMBERS = "role_members";
+    static constexpr auto ROLE_ATTRIBUTES = "role_attributes";
+    static constexpr auto ROLE_PERMISSIONS = "role_permissions";
+
     struct v3 {
         static constexpr auto BATCHES = "batches";
         static constexpr auto PAXOS = "paxos";
@@ -267,6 +272,12 @@ public:
     static schema_ptr tablets();
     static schema_ptr service_levels_v2();
 
+    // auth
+    static schema_ptr roles();
+    static schema_ptr role_members();
+    static schema_ptr role_attributes();
+    static schema_ptr role_permissions();
+
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
     future<> build_bootstrap_info();
@@ -310,7 +321,9 @@ public:
     template <typename T>
     future<std::optional<T>> get_scylla_local_param_as(const sstring& key);
 
+    static std::vector<schema_ptr> auth_tables();
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
+
     future<> make(
             locator::effective_replication_map_factory&,
             replica::database&);
@@ -577,11 +590,16 @@ public:
     // returns the corresponding mutation. Otherwise returns nullopt.
     future<std::optional<mutation>> get_group0_schema_version();
 
+    enum class auth_version_t: int64_t {
+        v1 = 1,
+        v2 = 2,
+    };
+
     // If the `auth_version` key in `system.scylla_local` is present (either live or tombstone),
     // returns the corresponding mutation. Otherwise returns nullopt.
     future<std::optional<mutation>> get_auth_version_mutation();
-    future<mutation> make_auth_version_mutation(api::timestamp_type ts, db::system_auth_keyspace::version_t version);
-    future<system_auth_keyspace::version_t> get_auth_version();
+    future<mutation> make_auth_version_mutation(api::timestamp_type ts, auth_version_t version);
+    future<auth_version_t> get_auth_version();
 
     future<> sstables_registry_create_entry(sstring location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc);
     future<> sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status);

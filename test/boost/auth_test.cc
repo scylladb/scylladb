@@ -178,19 +178,19 @@ void require_table_protected(cql_test_env& env, const char* table) {
 
 SEASTAR_TEST_CASE(roles_table_is_protected) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        require_table_protected(env, "system_auth_v2.roles");
+        require_table_protected(env, "system.roles");
     }, auth_on());
 }
 
 SEASTAR_TEST_CASE(role_members_table_is_protected) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        require_table_protected(env, "system_auth_v2.role_members");
+        require_table_protected(env, "system.role_members");
     }, auth_on());
 }
 
 SEASTAR_TEST_CASE(role_permissions_table_is_protected) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        require_table_protected(env, "system_auth_v2.role_permissions");
+        require_table_protected(env, "system.role_permissions");
     }, auth_on());
 }
 

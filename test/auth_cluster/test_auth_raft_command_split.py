@@ -19,7 +19,7 @@ async def test_auth_raft_command_split(manager: ManagerClient) -> None:
     servers = await manager.servers_add(3)
     cql, hosts = await manager.get_ready_cql(servers)
 
-    initial_perms = await cql.run_async("SELECT * FROM system_auth_v2.role_permissions")
+    initial_perms = await cql.run_async("SELECT * FROM system.role_permissions")
 
     shared_role = "shared_role_" + unique_name()
     await cql.run_async(f"CREATE ROLE {shared_role}")
@@ -43,11 +43,11 @@ async def test_auth_raft_command_split(manager: ManagerClient) -> None:
     await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
 
     # confirm that deleted shared_role is not attached to any other role
-    assert await cql.run_async(f"SELECT * FROM system_auth_v2.role_permissions WHERE resource = 'role/{shared_role}' ALLOW FILTERING") == []
+    assert await cql.run_async(f"SELECT * FROM system.role_permissions WHERE resource = 'role/{shared_role}' ALLOW FILTERING") == []
 
     # cleanup
     for user in users:
         await cql.run_async(f"DROP ROLE IF EXISTS {user}")
     await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
-    current_perms = await cql.run_async("SELECT * FROM system_auth_v2.role_permissions")
+    current_perms = await cql.run_async("SELECT * FROM system.role_permissions")
     assert initial_perms == current_perms
