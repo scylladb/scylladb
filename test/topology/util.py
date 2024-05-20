@@ -265,6 +265,9 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
     await cql.run_async(f"CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled':true}}")
 
     stmt = cql.prepare(f"INSERT INTO {ks_name}.tbl (pk, v) VALUES (?, 0)")
+    # FIXME: this function is used by tests that use clusters with at least 3 nodes and restart nodes sequentially.
+    # Therefore, RF=3 and CL=2 should work, but they don't. Some writes fail because CL=2 is not satisfied.
+    # We should investigate why it happens and increase CL to 2 if possible.
     stmt.consistency_level = ConsistencyLevel.ONE
 
     async def do_writes():
