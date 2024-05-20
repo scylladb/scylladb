@@ -7,14 +7,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "log.hh"
 #include "bloom_filter.hh"
 #include "bloom_calculations.hh"
 #include "utils/murmur_hash.hh"
 #include <seastar/core/thread.hh>
 
 namespace utils {
-static logging::logger filterlog("bloom_filter");
 
 filter_ptr i_filter::get_filter(int64_t num_elements, double max_false_pos_probability, filter_format fformat) {
     assert(seastar::thread::running_in_thread());

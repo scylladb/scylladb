@@ -18,9 +18,11 @@
 #include <cstdlib>
 #include "utils/bloom_calculations.hh"
 #include "bloom_filter.hh"
+#include "log.hh"
 
 namespace utils {
 namespace filter {
+static logging::logger filterlog("bloom_filter");
 
 thread_local bloom_filter::stats bloom_filter::_shard_stats;
 
