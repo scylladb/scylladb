@@ -1761,6 +1761,12 @@ def configure_abseil(build_dir, mode, mode_config):
     abseil_build_dir = os.path.join(build_dir, mode, 'abseil')
 
     abseil_cflags = seastar_cflags + ' ' + modes[mode]['cxx_ld_flags']
+    # We want to "undo" coverage for abseil if we have it enabled, as we are not
+    # interested in the coverage of the abseil library. these flags were previously
+    # added to cxx_ld_flags
+    if args.coverage:
+        for flag in COVERAGE_INST_FLAGS:
+            abseil_cflags = abseil_cflags.replace(f' {flag}', '')
     cmake_mode = mode_config['cmake_build_type']
     abseil_cmake_args = [
         '-DCMAKE_BUILD_TYPE={}'.format(cmake_mode),
