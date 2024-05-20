@@ -44,7 +44,7 @@ async def test_topology_upgrade_basic(request, mode: str, manager: ManagerClient
         status = await manager.api.raft_topology_upgrade_status(host.address)
         assert status == "not_upgraded"
 
-    finish_writes_and_verify = await start_writes_to_cdc_table(cql)
+    _, stop_writes_and_verify = await start_writes_to_cdc_table(cql)
 
     logging.info("Triggering upgrade to raft topology")
     await manager.api.upgrade_to_raft_topology(hosts[0].address)
@@ -79,4 +79,4 @@ async def test_topology_upgrade_basic(request, mode: str, manager: ManagerClient
     await asyncio.sleep(1)
 
     logging.info("Checking correctness of data in system_distributed.cdc_streams_descriptions_v2")
-    await finish_writes_and_verify()
+    await stop_writes_and_verify()
