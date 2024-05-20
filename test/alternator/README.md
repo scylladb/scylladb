@@ -98,17 +98,8 @@ configuration parameter:
 ```yaml
   alternator_enforce_authorization: true
 ```
-The implementation is currently coupled with Scylla's system\_auth.roles table,
-which means that an additional step needs to be performed when setting up Scylla
-as the test environment. Tests will use the following credentials:
-Username: `alternator`
-Secret key: `secret_pass`
-
-With CQLSH, it can be achieved by executing this snipped:
-
-```bash
-cqlsh -x "INSERT INTO system_auth.roles (role, salted_hash) VALUES ('alternator', 'secret_pass')"
-```
+The test implementation is currently coupled with Scylla's default account
+"cassandra" with password "cassandra".
 
 Most tests expect the authorization to succeed, so they will pass even with `alternator_enforce_authorization`
 turned off. However, test cases from `test_authorization.py` may require this option to be turned on,

@@ -1,6 +1,5 @@
 type: Python
 pool_size: 4
-prepare_cql: INSERT INTO system_auth_v2.roles (role, salted_hash) VALUES ('alternator', 'secret_pass')
 run_first:
     - test_streams
     - test_scan
