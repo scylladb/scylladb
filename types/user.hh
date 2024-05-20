@@ -47,6 +47,18 @@ public:
     sstring get_name_as_string() const;
     sstring get_name_as_cql_string() const;
 
+    /* Returns set of user-defined types referenced by this UDT
+     * 
+     * Example:
+     * create type some_udt {
+     *   a frozen<udt_a>,
+     *   m frozen<map<udt_a, udt_b>,
+     *   t frozen<tuple<int, list<udt_c>>   
+     * }
+     * get_all_referenced_user_types() will return {udt_a, udt_b, udt_c}.
+     */
+    std::set<user_type> get_all_referenced_user_types() const;
+
     virtual sstring keypace_name() const override { return _keyspace; }
     virtual sstring element_name() const override { return get_name_as_string(); }
     virtual sstring element_type() const override { return "type"; }

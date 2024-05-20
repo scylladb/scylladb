@@ -44,6 +44,7 @@
 #include "utils/overloaded_functor.hh"
 #include "data_dictionary/keyspace_element.hh"
 #include "db/system_keyspace.hh"
+#include "utils/sorting.hh"
 
 static logging::logger dlogger("describe");
 
@@ -110,13 +111,16 @@ struct description {
 future<std::vector<description>> generate_descriptions(
     replica::database& db, 
     std::vector<shared_ptr<const keyspace_element>> elements,
-    std::optional<bool> with_internals = std::nullopt) 
+    std::optional<bool> with_internals = std::nullopt,
+    bool sort_by_name = true) 
 {
     std::vector<description> descs;
     descs.reserve(elements.size());
-    boost::sort(elements, [] (const auto& a, const auto& b) {
-        return a->element_name() < b->element_name();
-    });
+    if (sort_by_name) {
+        boost::sort(elements, [] (const auto& a, const auto& b) {
+            return a->element_name() < b->element_name();
+        });
+    }
 
     for (auto& e: elements) {
         auto desc = (with_internals.has_value()) 
@@ -165,14 +169,31 @@ description type(replica::database& db, const lw_shared_ptr<keyspace_metadata>& 
     return description(db, *udt, true);
 }
 
-future<std::vector<description>> types(replica::database& db, const lw_shared_ptr<keyspace_metadata>& ks, bool with_stmt = false) {
-    auto user_types_map = ks->user_types().get_all_types();
-    auto user_types = boost::copy_range<std::vector<shared_ptr<const keyspace_element>>>(user_types_map | boost::adaptors::transformed([] (const auto& e) {
-        // return static_pointer_cast<const keyspace_element>(e.second);
-        return e.second;
-    }));
+// Because UDTs can depend on each other, we need to sort them topologically
+future<std::vector<shared_ptr<const keyspace_element>>> get_sorted_types(const lw_shared_ptr<keyspace_metadata>& ks) {
+    struct udts_comparator {
+        inline bool operator()(const user_type& a, const user_type& b) const {
+            return a->get_name_as_string() < b->get_name_as_string();
+        }
+    };
 
-    co_return co_await generate_descriptions(db, user_types, (with_stmt) ? std::optional(true) : std::nullopt);
+    std::vector<user_type> all_udts;
+    std::multimap<user_type, user_type, udts_comparator> adjacency;
+
+    for (auto& [_, udt]: ks->user_types().get_all_types()) {
+        all_udts.push_back(udt);
+        for (auto& ref_udt: udt->get_all_referenced_user_types()) {
+            adjacency.insert({ref_udt, udt});
+        }
+    }
+
+    auto sorted = co_await utils::topological_sort(all_udts, adjacency);
+    co_return boost::copy_range<std::vector<shared_ptr<const keyspace_element>>>(sorted);
+}
+
+future<std::vector<description>> types(replica::database& db, const lw_shared_ptr<keyspace_metadata>& ks, bool with_stmt = false) {
+    auto udts = co_await get_sorted_types(ks);
+    co_return co_await generate_descriptions(db, udts, (with_stmt) ? std::optional(true) : std::nullopt, false);
 }
     
 future<std::vector<description>> function(replica::database& db, const sstring& ks, const sstring& name) {

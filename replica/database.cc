@@ -686,7 +686,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
-        auto&& user_types = create_types_from_schema_partition(*ks.metadata(), v.second);
+        auto&& user_types = co_await create_types_from_schema_partition(*ks.metadata(), v.second);
         for (auto&& type : user_types) {
             ks.add_user_type(type);
         }

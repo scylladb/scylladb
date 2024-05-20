@@ -37,7 +37,7 @@ public:
     ~raw_builder();
 
     void add(sstring name, std::vector<sstring> field_names, std::vector<sstring> field_types);
-    std::vector<user_type> build();
+    future<std::vector<user_type>> build();
 private:
     class impl;
     std::unique_ptr<impl>

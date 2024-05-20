@@ -1788,7 +1788,7 @@ template<typename V>
 static std::vector<V> get_list(const query::result_set_row& row, const sstring& name);
 
 // Create types for a given keyspace. This takes care of topologically sorting user defined types.
-template <typename T> static std::vector<user_type> create_types(keyspace_metadata& ks, T&& range) {
+template <typename T> static future<std::vector<user_type>> create_types(keyspace_metadata& ks, T&& range) {
     cql_type_parser::raw_builder builder(ks);
     std::unordered_set<bytes> names;
     for (const query::result_set_row& row : range) {
@@ -1816,13 +1816,13 @@ template <typename T> static std::vector<user_type> create_types(keyspace_metada
             }
         }
     }
-    return builder.build();
+    co_return co_await builder.build();
 }
 
 // Given a set of rows that is sorted by keyspace, create types for each keyspace.
 // The topological sort in each keyspace is necessary when creating types, since we can only create a type when the
 // types it reference have already been created.
-static std::vector<user_type> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows) {
+static future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows) {
     std::vector<user_type> ret;
     for (auto i = rows.begin(), e = rows.end(); i != e;) {
         const auto &row = *i;
@@ -1831,11 +1831,11 @@ static std::vector<user_type> create_types(replica::database& db, const std::vec
             return r->get_nonnull<sstring>("keyspace_name") != keyspace;
         });
         auto ks = db.find_keyspace(keyspace).metadata();
-        auto v = create_types(*ks, boost::make_iterator_range(i, next) | boost::adaptors::indirected);
+        auto v = co_await create_types(*ks, boost::make_iterator_range(i, next) | boost::adaptors::indirected);
         ret.insert(ret.end(), std::make_move_iterator(v.begin()), std::make_move_iterator(v.end()));
         i = next;
     }
-    return ret;
+    co_return ret;
 }
 
 // see the comments for merge_keyspaces()
@@ -1848,11 +1848,13 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
     // some of these user types are dropped.
 
     co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-        for (auto&& user_type : create_types(db, diff.created)) {
+        auto created_types = co_await create_types(db, diff.created);
+        for (auto&& user_type : created_types) {
             db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
             co_await db.get_notifier().create_user_type(user_type);
         }
-        for (auto&& user_type : create_types(db, diff.altered)) {
+        auto altered_types = co_await create_types(db, diff.altered);
+        for (auto&& user_type : altered_types) {
             db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
             co_await db.get_notifier().update_user_type(user_type);
         }
@@ -1860,7 +1862,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
 
     co_return user_types_to_drop{[&proxy, before = std::move(before), rows = std::move(diff.dropped)] () mutable -> future<> {
         co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-            auto dropped = create_types(db, rows);
+            auto dropped = co_await create_types(db, rows);
             for (auto& user_type : dropped) {
                 db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
                 co_await db.get_notifier().drop_user_type(user_type);
@@ -2259,9 +2261,9 @@ static std::vector<V> get_list(const query::result_set_row& row, const sstring& 
     return list;
 }
 
-std::vector<user_type> create_types_from_schema_partition(
+future<std::vector<user_type>> create_types_from_schema_partition(
         keyspace_metadata& ks, lw_shared_ptr<query::result_set> result) {
-    return create_types(ks, result->rows());
+    co_return co_await create_types(ks, result->rows());
 }
 
 seastar::future<std::vector<shared_ptr<cql3::functions::user_function>>> create_functions_from_schema_partition(
