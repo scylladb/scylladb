@@ -7,10 +7,8 @@
  */
 
 #include "large_bitset.hh"
-#include <algorithm>
 #include <seastar/core/align.hh>
 #include <seastar/core/thread.hh>
-#include "seastarx.hh"
 
 using namespace seastar;
 
