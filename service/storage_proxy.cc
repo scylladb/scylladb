@@ -6597,8 +6597,8 @@ void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
 
 void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {
     // Discarding these futures is safe. They're awaited by db::hints::manager::stop().
-    (void) _hints_manager.drain_for(hid);
-    (void) _hints_for_views_manager.drain_for(hid);
+    (void) _hints_manager.drain_for(hid, endpoint);
+    (void) _hints_for_views_manager.drain_for(hid, endpoint);
 }
 
 void storage_proxy::on_up(const gms::inet_address& endpoint) {};
