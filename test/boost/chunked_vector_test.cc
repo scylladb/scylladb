@@ -8,7 +8,6 @@
 
 #define BOOST_TEST_MODULE core
 
-#include <stdexcept>
 #include <fmt/format.h>
 #include <optional>
 
