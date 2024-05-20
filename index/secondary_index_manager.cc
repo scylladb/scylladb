@@ -223,7 +223,7 @@ static data_type type_for_computed_column(cql3::statements::index_target::target
     }
 }
 
-view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im, bool new_token_column_computation) const {
+view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im) const {
     auto schema = _cf.schema();
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
     schema_builder builder{schema->ks_name(), index_table_name(im.name())};
@@ -264,13 +264,7 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         }
         // Additional token column is added to ensure token order on secondary index queries
         bytes token_column_name = get_available_token_column_name(*schema);
-        if (new_token_column_computation) {
-            builder.with_computed_column(token_column_name, long_type, column_kind::clustering_key, std::make_unique<token_column_computation>());
-        } else {
-            // FIXME(pgrabowski): this legacy code is here for backward compatibility and should be removed
-            // once "supports_correct_idx_token_in_secondary_index" is supported by every node
-            builder.with_computed_column(token_column_name, bytes_type, column_kind::clustering_key, std::make_unique<legacy_token_column_computation>());
-        }
+        builder.with_computed_column(token_column_name, long_type, column_kind::clustering_key, std::make_unique<token_column_computation>());
 
         for (auto& col : schema->partition_key_columns()) {
             if (col == *index_target) {

@@ -834,39 +834,31 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
 
         expect_digest(sf, expected_digests[0]);
 
-        sf.set<schema_feature::VIEW_VIRTUAL_COLUMNS>();
-        expect_digest(sf, expected_digests[1]);
-
-        sf.set<schema_feature::VIEW_VIRTUAL_COLUMNS>();
-        expect_digest(sf, expected_digests[2]);
-
         sf = schema_features::full();
         sf.remove<schema_feature::SCYLLA_KEYSPACES>();
-        expect_digest(sf, expected_digests[3]);
+        expect_digest(sf, expected_digests[1]);
 
         // Causes tombstones to become expired
         // This is in order to test that schema disagreement doesn't form due to expired tombstones being collected
         // Refs https://github.com/scylladb/scylla/issues/4485
         forward_jump_clocks(std::chrono::seconds(60*60*24*31));
 
-        expect_digest(sf, expected_digests[4]);
+        expect_digest(sf, expected_digests[2]);
 
-        expect_version("tests", "table1", expected_digests[5]);
-        expect_version("ks", "tbl", expected_digests[6]);
-        expect_version("ks", "tbl_view", expected_digests[7]);
-        expect_version("ks", "tbl_view_2", expected_digests[8]);
+        expect_version("tests", "table1", expected_digests[3]);
+        expect_version("ks", "tbl", expected_digests[4]);
+        expect_version("ks", "tbl_view", expected_digests[5]);
+        expect_version("ks", "tbl_view_2", expected_digests[6]);
 
         // Check that system_schema.scylla_keyspaces info is taken into account
         sf = schema_features::full();
-        expect_digest(sf, expected_digests[9]);
+        expect_digest(sf, expected_digests[7]);
 
     }, cfg_in).then([tmp = std::move(tmp)] {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_without_digest_feature) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("264f79fc-61bd-3670-8d6e-2794f9787b0a"),
-        utils::UUID("d2035515-b299-3265-b920-7dbe5306e72a"),
         utils::UUID("d2035515-b299-3265-b920-7dbe5306e72a"),
         utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
         utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
@@ -883,8 +875,6 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_without_digest_feature) {
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns_without_digest_feature) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("036153ec-4565-34fb-a878-ce347b94f247"),
-        utils::UUID("fa2e7735-7604-3202-8ce9-399996305aca"),
         utils::UUID("fa2e7735-7604-3202-8ce9-399996305aca"),
         utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
         utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
@@ -900,8 +890,6 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns_with
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions_without_digest_feature) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("6fa38d16-bbc4-3da5-bda5-680329789d8f"),
-        utils::UUID("649bf7ec-fd64-3ccb-adde-3887fc1432be"),
         utils::UUID("649bf7ec-fd64-3ccb-adde-3887fc1432be"),
         utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
         utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
@@ -925,9 +913,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options_without_di
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("ff69e387-64ca-3335-b488-b7a615908148"),
-        utils::UUID("7f1ac621-fc68-3420-bc9b-54520da40418"),
-        utils::UUID("7f1ac621-fc68-3420-bc9b-54520da40418"),
+        utils::UUID("ae9f0511-1c1d-3566-a36f-8e1c8abc66fc"),
         utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
         utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
         utils::UUID("265be25f-b268-3f43-a54d-9c6e379a901d"),
@@ -948,8 +934,6 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options_without_di
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_keyspace_storage_options_without_digest_feature) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("d9f78213-ff9f-3208-9083-47e18cebf06f"),
-        utils::UUID("30e2cf99-389d-381f-82b9-3fcdcf66a1fb"),
         utils::UUID("30e2cf99-389d-381f-82b9-3fcdcf66a1fb"),
         utils::UUID("98d63879-6633-3708-880e-8716fcbadda0"),
         utils::UUID("98d63879-6633-3708-880e-8716fcbadda0"),
@@ -971,8 +955,6 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_keyspace_storage_optio
 }
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("264f79fc-61bd-3670-8d6e-2794f9787b0a"),
-        utils::UUID("d2035515-b299-3265-b920-7dbe5306e72a"),
         utils::UUID("d2035515-b299-3265-b920-7dbe5306e72a"),
         utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
         utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
@@ -989,8 +971,6 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("036153ec-4565-34fb-a878-ce347b94f247"),
-        utils::UUID("fa2e7735-7604-3202-8ce9-399996305aca"),
         utils::UUID("fa2e7735-7604-3202-8ce9-399996305aca"),
         utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
         utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
@@ -1006,8 +986,6 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("6fa38d16-bbc4-3da5-bda5-680329789d8f"),
-        utils::UUID("649bf7ec-fd64-3ccb-adde-3887fc1432be"),
         utils::UUID("649bf7ec-fd64-3ccb-adde-3887fc1432be"),
         utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
         utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
@@ -1031,9 +1009,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("ff69e387-64ca-3335-b488-b7a615908148"),
-        utils::UUID("7f1ac621-fc68-3420-bc9b-54520da40418"),
-        utils::UUID("7f1ac621-fc68-3420-bc9b-54520da40418"),
+        utils::UUID("ae9f0511-1c1d-3566-a36f-8e1c8abc66fc"),
         utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
         utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
         utils::UUID("fdfdea09-fee9-3fd4-945f-b91a7a2e0e39"),
@@ -1054,8 +1030,6 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_keyspace_storage_options) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("d9f78213-ff9f-3208-9083-47e18cebf06f"),
-        utils::UUID("30e2cf99-389d-381f-82b9-3fcdcf66a1fb"),
         utils::UUID("30e2cf99-389d-381f-82b9-3fcdcf66a1fb"),
         utils::UUID("98d63879-6633-3708-880e-8716fcbadda0"),
         utils::UUID("98d63879-6633-3708-880e-8716fcbadda0"),

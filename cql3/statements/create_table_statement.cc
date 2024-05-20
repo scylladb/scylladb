@@ -209,10 +209,6 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
                         throw exceptions::invalid_request_exception("Non-frozen UDTs with nested non-frozen collections are not supported");
                     }
                 }
-
-                if (!db.features().nonfrozen_udts) {
-                    throw exceptions::invalid_request_exception("Non-frozen UDT support is not enabled");
-                }
             }
 
             if (!defined_multi_cell_columns) {

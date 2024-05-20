@@ -17,6 +17,7 @@
 #include "schema/schema_builder.hh"
 #include "schema/schema_registry.hh"
 #include "sstables/sstables.hh"
+#include "utils/hashers.hh"
 
 namespace replica::mutation_dump {
 

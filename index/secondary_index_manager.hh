@@ -93,7 +93,7 @@ class secondary_index_manager {
 public:
     secondary_index_manager(data_dictionary::table cf);
     void reload();
-    view_ptr create_view_for_index(const index_metadata& index, bool new_token_column_computation) const;
+    view_ptr create_view_for_index(const index_metadata& index) const;
     std::vector<index_metadata> get_dependent_indices(const column_definition& cdef) const;
     std::vector<index> list_indexes() const;
     bool is_index(view_ptr) const;

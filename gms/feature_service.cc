@@ -133,6 +133,18 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "MC_SSTABLE_FORMAT"sv,
         "COMPUTED_COLUMNS"sv,
         "SCHEMA_COMMITLOG"sv,
+        "MD_SSTABLE_FORMAT"sv,
+        "ME_SSTABLE_FORMAT"sv,
+        "VIEW_VIRTUAL_COLUMNS"sv,
+        "DIGEST_INSENSITIVE_TO_EXPIRY"sv,
+        "CDC"sv,
+        "NONFROZEN_UDTS"sv,
+        "HINTED_HANDOFF_SEPARATE_CONNECTION"sv,
+        "LWT"sv,
+        "PER_TABLE_PARTITIONERS"sv,
+        "PER_TABLE_CACHING"sv,
+        "DIGEST_FOR_NULL_VALUES"sv,
+        "CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX"sv,
     };
 
     if (is_test_only_feature_deprecated()) {
@@ -188,11 +200,8 @@ void feature::enable() {
 
 db::schema_features feature_service::cluster_schema_features() const {
     db::schema_features f;
-    f.set_if<db::schema_feature::VIEW_VIRTUAL_COLUMNS>(view_virtual_columns);
-    f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(digest_insensitive_to_expiry);
+    f.set<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
     f.set<db::schema_feature::COMPUTED_COLUMNS>();
-    f.set_if<db::schema_feature::CDC_OPTIONS>(cdc);
-    f.set_if<db::schema_feature::PER_TABLE_PARTITIONERS>(per_table_partitioners);
     f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(keyspace_storage_options);
     f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(tablets);
     f.set_if<db::schema_feature::SCYLLA_AGGREGATES>(aggregate_storage_options);

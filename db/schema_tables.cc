@@ -342,13 +342,11 @@ schema_ptr tables() {
 
 // Holds Scylla-specific table metadata.
 schema_ptr scylla_tables(schema_features features) {
-    static thread_local schema_ptr schemas[2][2][2]{};
+    static thread_local schema_ptr schemas[2]{};
 
-    bool has_cdc_options = features.contains(schema_feature::CDC_OPTIONS);
-    bool has_per_table_partitioners = features.contains(schema_feature::PER_TABLE_PARTITIONERS);
     bool has_group0_schema_versioning = features.contains(schema_feature::GROUP0_SCHEMA_VERSIONING);
 
-    schema_ptr& s = schemas[has_cdc_options][has_per_table_partitioners][has_group0_schema_versioning];
+    schema_ptr& s = schemas[has_group0_schema_versioning];
     if (!s) {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
         auto sb = schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
@@ -359,14 +357,13 @@ schema_ptr scylla_tables(schema_features features) {
         // Each bit in `offset` denotes a different schema feature,
         // so different values of `offset` are used for different combinations of features.
         uint16_t offset = 0;
-        if (has_cdc_options) {
-            sb.with_column("cdc", map_type_impl::get_instance(utf8_type, utf8_type, false));
-            offset |= 0b1;
-        }
-        if (has_per_table_partitioners) {
-            sb.with_column("partitioner", utf8_type);
-            offset |= 0b10;
-        }
+        // CDC_OPTIONS
+        sb.with_column("cdc", map_type_impl::get_instance(utf8_type, utf8_type, false));
+        offset |= 0b1;
+
+        // PER_TABLE_PARTITIONERS
+        sb.with_column("partitioner", utf8_type);
+        offset |= 0b10;
 
         // 0b100 reserved for Scylla Enterprise
 
@@ -776,9 +773,9 @@ schema_ptr scylla_table_schema_history() {
 static
 mutation
 redact_columns_for_missing_features(mutation&& m, schema_features features) {
-    if (features.contains(schema_feature::CDC_OPTIONS) && features.contains(schema_feature::PER_TABLE_PARTITIONERS)) {
-        return std::move(m);
-    }
+    return std::move(m);
+    // The following code is needed if there are new schema features that require redaction.
+#if 0
     if (m.schema()->cf_name() != SCYLLA_TABLES) {
         return std::move(m);
     }
@@ -787,6 +784,7 @@ redact_columns_for_missing_features(mutation&& m, schema_features features) {
     global_schema_ptr redacted_schema{scylla_tables(features)};
     m.upgrade(redacted_schema);
     return std::move(m);
+#endif
 }
 
 /**
@@ -2759,7 +2757,6 @@ static void make_update_indices_mutations(
     mutation indices_mutation(indexes(), partition_key::from_singular(*indexes(), old_table->ks_name()));
 
     auto diff = difference(old_table->all_indices(), new_table->all_indices());
-    bool new_token_column_computation = db.features().correct_idx_token_in_secondary_index;
 
     // indices that are no longer needed
     for (auto&& name : diff.entries_only_on_left) {
@@ -2780,7 +2777,7 @@ static void make_update_indices_mutations(
         const index_metadata& index = new_table->all_indices().at(name);
         add_index_to_schema_mutation(new_table, index, timestamp, indices_mutation);
         auto& cf = db.find_column_family(new_table);
-        auto view = cf.get_index_manager().create_view_for_index(index, new_token_column_computation);
+        auto view = cf.get_index_manager().create_view_for_index(index);
         auto view_mutations = make_view_mutations(view, timestamp, true);
         view_mutations.copy_to(mutations);
         return view;
@@ -3736,9 +3733,7 @@ std::vector<schema_ptr> all_tables(schema_features features) {
         keyspaces(), tables(), scylla_tables(), columns(), dropped_columns(), triggers(),
         views(), types(), functions(), aggregates(), indexes()
     };
-    if (features.contains<schema_feature::VIEW_VIRTUAL_COLUMNS>()) {
-        result.emplace_back(view_virtual_columns());
-    }
+    result.emplace_back(view_virtual_columns());
     if (features.contains<schema_feature::COMPUTED_COLUMNS>()) {
         result.emplace_back(computed_columns());
     }

@@ -124,15 +124,6 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         cp.validate();
     }
 
-    if (auto caching_options = get_caching_options(); caching_options && !caching_options->enabled() && !db.features().per_table_caching) {
-        throw exceptions::configuration_exception(KW_CACHING + " can't contain \"'enabled':false\" unless whole cluster supports it");
-    }
-
-    auto cdc_options = get_cdc_options(schema_extensions);
-    if (cdc_options && cdc_options->enabled() && !db.features().cdc) {
-        throw exceptions::configuration_exception("CDC not supported by the cluster");
-    }
-
     auto per_partition_rate_limit_options = get_per_partition_rate_limit_options(schema_extensions);
     if (per_partition_rate_limit_options && !db.features().typed_errors_in_read_rpc) {
         throw exceptions::configuration_exception("Per-partition rate limit is not supported yet by the whole cluster");

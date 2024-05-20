@@ -846,37 +846,6 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
 // Instantiation for mutation_test.cc
 template void appending_hash<row>::operator()<xx_hasher>(xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
 
-template<>
-void appending_hash<row>::operator()<legacy_xx_hasher_without_null_digest>(legacy_xx_hasher_without_null_digest& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
-    for (auto id : columns) {
-        const cell_and_hash* cell_and_hash = cells.find_cell_and_hash(id);
-        if (!cell_and_hash) {
-            return;
-        }
-        auto&& def = s.column_at(kind, id);
-        if (def.is_atomic()) {
-            max_ts.update(cell_and_hash->cell.as_atomic_cell(def).timestamp());
-            if (cell_and_hash->hash) {
-                feed_hash(h, *cell_and_hash->hash);
-            } else {
-                legacy_xx_hasher_without_null_digest cellh;
-                feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(def), def);
-                feed_hash(h, cellh.finalize_uint64());
-            }
-        } else {
-            auto cm = cell_and_hash->cell.as_collection_mutation();
-            max_ts.update(cm.last_update(*def.type));
-            if (cell_and_hash->hash) {
-                feed_hash(h, *cell_and_hash->hash);
-            } else {
-                legacy_xx_hasher_without_null_digest cellh;
-                feed_hash(cellh, cm, def);
-                feed_hash(h, cellh.finalize_uint64());
-            }
-        }
-    }
-}
-
 cell_hash_opt row::cell_hash_for(column_id id) const {
     const cell_and_hash* cah = _cells.get(id);
     return cah != nullptr ? cah->hash : cell_hash_opt();

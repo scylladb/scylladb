@@ -81,18 +81,6 @@ public:
 
 public:
     gms::feature user_defined_functions { *this, "UDF"sv };
-    gms::feature md_sstable { *this, "MD_SSTABLE_FORMAT"sv };
-    gms::feature me_sstable { *this, "ME_SSTABLE_FORMAT"sv };
-    gms::feature view_virtual_columns { *this, "VIEW_VIRTUAL_COLUMNS"sv };
-    gms::feature digest_insensitive_to_expiry { *this, "DIGEST_INSENSITIVE_TO_EXPIRY"sv };
-    gms::feature cdc { *this, "CDC"sv };
-    gms::feature nonfrozen_udts { *this, "NONFROZEN_UDTS"sv };
-    gms::feature hinted_handoff_separate_connection { *this, "HINTED_HANDOFF_SEPARATE_CONNECTION"sv };
-    gms::feature lwt { *this, "LWT"sv };
-    gms::feature per_table_partitioners { *this, "PER_TABLE_PARTITIONERS"sv };
-    gms::feature per_table_caching { *this, "PER_TABLE_CACHING"sv };
-    gms::feature digest_for_null_values { *this, "DIGEST_FOR_NULL_VALUES"sv };
-    gms::feature correct_idx_token_in_secondary_index { *this, "CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX"sv };
     gms::feature alternator_streams { *this, "ALTERNATOR_STREAMS"sv };
     gms::feature alternator_ttl { *this, "ALTERNATOR_TTL"sv };
     gms::feature range_scan_data_variant { *this, "RANGE_SCAN_DATA_VARIANT"sv };

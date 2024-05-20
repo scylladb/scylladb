@@ -2998,12 +2998,6 @@ SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_4567) {
 
     BOOST_CHECK(!r1.equal(column_kind::regular_column, *s, r2, *s));
 
-    auto compute_legacy_hash = [&] (const row& r, const query::column_id_vector& columns) {
-        auto hasher = legacy_xx_hasher_without_null_digest{};
-        max_timestamp ts;
-        appending_hash<row>{}(hasher, r, *s, column_kind::regular_column, columns, ts);
-        return hasher.finalize_uint64();
-    };
     auto compute_hash = [&] (const row& r, const query::column_id_vector& columns) {
         auto hasher = xx_hasher{};
         max_timestamp ts;
@@ -3018,9 +3012,6 @@ SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_4567) {
     // Additional test for making sure that {"", NULL, "bbb"} is not equal to {"", "bbb", NULL}
     // due to ignoring NULL in a hash
     BOOST_CHECK_NE(compute_hash(r2, { 0, 1, 2 }), compute_hash(r3, { 0, 1, 2 }));
-    // Legacy check which shows incorrect handling of NULL values.
-    // These checks are meaningful because legacy hashing is still used for old nodes.
-    BOOST_CHECK_EQUAL(compute_legacy_hash(r1, { 0, 1, 2 }), compute_legacy_hash(r2, { 0, 1, 2 }));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
