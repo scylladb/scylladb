@@ -2081,6 +2081,7 @@ def write_build_file(f,
         seastar_lib_ext = 'so' if modeval['build_seastar_shared_libs'] else 'a'
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
+        abseil_dep = ' '.join(f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs)
         for binary in sorted(build_artifacts):
             if binary in other or binary in wasms:
                 continue
@@ -2126,14 +2127,14 @@ def write_build_file(f,
                 # quickly re-link the test unstripped by adding a "_g"
                 # to the test name, e.g., "ninja build/release/testname_g"
                 link_rule = perf_tests_link_rule if binary.startswith('test/perf/') else tests_link_rule
-                f.write('build $builddir/{}/{}: {}.{} {} | {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
+                f.write('build $builddir/{}/{}: {}.{} {} | {} {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep))
                 f.write('   libs = {}\n'.format(local_libs))
-                f.write('build $builddir/{}/{}_g: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
+                f.write('build $builddir/{}/{}_g: {}.{} {} | {} {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep))
                 f.write('   libs = {}\n'.format(local_libs))
             else:
                 if binary == 'scylla':
                     local_libs += ' ' + "$seastar_testing_libs_{}".format(mode)
-                f.write('build $builddir/{}/{}: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
+                f.write('build $builddir/{}/{}: {}.{} {} | {} {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep))
                 f.write('   libs = {}\n'.format(local_libs))
                 f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
                 f.write(f'build $builddir/{mode}/{binary}.debug: phony $builddir/{mode}/{binary}.stripped\n')
