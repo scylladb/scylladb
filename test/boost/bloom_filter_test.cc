@@ -13,6 +13,11 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/sstable_utils.hh"
 
+#include "types/types.hh"
+#include "utils/bloom_filter.hh"
+#include "utils/i_filter.hh"
+#include "utils/large_bitset.hh"
+
 SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components_and_reload_reclaimed_components) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
@@ -175,5 +180,42 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
         // limit available memory to the sstables_manager to test reclaiming.
         // this will set the reclaim threshold to 100 bytes.
         .available_memory = 1000
+    });
+}
+
+// Test correctness of folding method
+SEASTAR_TEST_CASE(test_bloom_filter_folding) {
+    return test_env::do_with_async([](test_env& env) {
+        const int hashes = 5;
+
+        for (auto [orig_num_bits, new_num_bits] : {
+                 // test downsizing to a value aligned up to 64
+                 std::pair{6400, 1600},
+                 // test downsizing to a value not aligned up to 64
+                 {6400, 800}}) {
+
+            // Create a filter
+            large_bitset orig_bitset(orig_num_bits);
+            auto orig_filter = std::make_unique<utils::filter::murmur3_bloom_filter>(hashes, std::move(orig_bitset), utils::filter_format::m_format);
+
+            // Create a smaller filter that will be used to verify the folding result
+            large_bitset expected_bitset(new_num_bits);
+            auto expected_filter = std::make_unique<utils::filter::murmur3_bloom_filter>(hashes, std::move(expected_bitset), utils::filter_format::m_format);
+
+            // update both filters with the same keys
+            for (int i = 0; i < 50; i++) {
+                auto key = int32_type->decompose(i);
+                orig_filter->add(key);
+                expected_filter->add(key);
+            }
+
+            // fold the original filter into new_num_bits
+            orig_filter->fold(new_num_bits);
+
+            // verify the folded orig_filter against expected_filter
+            BOOST_REQUIRE_EQUAL(orig_filter->memory_size(), expected_filter->memory_size());
+            BOOST_REQUIRE_EQUAL(orig_filter->bits().size(), expected_filter->bits().size());
+            BOOST_REQUIRE(orig_filter->bits().get_storage() == expected_filter->bits().get_storage());
+        }
     });
 }
