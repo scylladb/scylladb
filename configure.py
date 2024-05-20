@@ -443,6 +443,7 @@ scylla_tests = set([
     'test/boost/auth_test',
     'test/boost/batchlog_manager_test',
     'test/boost/big_decimal_test',
+    'test/boost/bloom_filter_test',
     'test/boost/broken_sstable_test',
     'test/boost/bytes_ostream_test',
     'test/boost/cache_algorithm_test',
