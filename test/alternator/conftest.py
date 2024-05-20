@@ -15,6 +15,7 @@ import requests
 import re
 from util import create_test_table, is_aws, scylla_log
 from urllib.parse import urlparse
+from functools import cache
 
 # Test that the Boto libraries are new enough. These tests want to test a
 # large variety of DynamoDB API features, and to do this we need a new-enough
@@ -59,6 +60,39 @@ def pytest_collection_modifyitems(config, items):
         if "veryslow" in item.keywords:
             item.add_marker(skip_veryslow)
 
+# When testing Alternator running with --alternator-enforce-authorization=1,
+# we need to find a valid username and secret key to use in the connection.
+# Alternator allows any CQL role as the username any CQL role, and the key
+# is that role's password's salted hash. We can read a valid role/hash
+# from the appropriate system table, but can't do it with Alternator (because
+# we don't know yet the secret key!), so we need to do it with CQL.
+@cache
+def get_valid_alternator_role(url):
+    from cassandra.cluster import Cluster
+    from cassandra.auth import PlainTextAuthProvider
+    auth_provider = PlainTextAuthProvider(
+        username='cassandra', password='cassandra')
+    with (
+        Cluster([urlparse(url).hostname], auth_provider=auth_provider,
+            connect_timeout = 60, control_connection_timeout = 60) as cluster,
+        cluster.connect() as session
+    ):
+        # Newer Scylla places the "roles" table in the "system" keyspace, but
+        # older versions used "system_auth_v2" or "system_auth"
+        for ks in ['system', 'system_auth_v2', 'system_auth']:
+            try:
+                # We could have looked for any role/salted_hash pair, but we
+                # already know a role "cassandra" exists (we just used it to
+                # connect to CQL!), so let's just use that role.
+                role = 'cassandra'
+                salted_hash = list(session.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{role}'"))[0].salted_hash
+                return (role, salted_hash)
+            except:
+                pass
+    # If we couldn't find a valid role, let's hope that
+    # alternator-enforce-authorization is not enabled so anything will work
+    return ('unknown_user', 'unknown_secret')
+
 # "dynamodb" fixture: set up client object for communicating with the DynamoDB
 # API. Currently this chooses either Amazon's DynamoDB in the default region
 # or a local Alternator installation on http://localhost:8080 - depending on the
@@ -87,8 +121,9 @@ def dynamodb(request):
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
         verify = not request.config.getoption('https')
+        user, secret = get_valid_alternator_role(local_url)
         return boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
-            region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
+            region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
             config=boto_config.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)))
 
 def new_dynamodb_session(request, dynamodb):
@@ -99,8 +134,9 @@ def new_dynamodb_session(request, dynamodb):
         return boto3.resource('dynamodb', config=conf)
     if host.hostname == 'localhost':
         conf = conf.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300))
+    user, secret = get_valid_alternator_role(dynamodb.meta.client._endpoint.host)
     return ses.resource('dynamodb', endpoint_url=dynamodb.meta.client._endpoint.host, verify=host.scheme != 'http',
-        region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
+        region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
         config=conf)
 
 @pytest.fixture(scope="session")
@@ -125,8 +161,9 @@ def dynamodbstreams(request):
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
         verify = not request.config.getoption('https')
+        user, secret = get_valid_alternator_role(local_url)
         return boto3.client('dynamodbstreams', endpoint_url=local_url, verify=verify,
-            region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
+            region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
             config=boto_config.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)))
 
 # A function-scoped autouse=True fixture allows us to test after every test

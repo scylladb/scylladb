@@ -97,13 +97,6 @@ run.wait_for_services(pid, [
     lambda: check_alternator(alternator_url),
 ])
 
-# Set up the the proper authentication credentials needed by the Alternator
-# test. Currently this can only be done through CQL, which is why above we
-# needed to make sure CQL is available.
-cluster = run.get_cql_cluster(ip)
-cluster.connect().execute("INSERT INTO system_auth_v2.roles (role, salted_hash) VALUES ('alternator', 'secret_pass')")
-cluster.shutdown()
-
 # Finally run pytest:
 success = run.run_pytest(sys.path[0], ['--url', alternator_url] + sys.argv[1:])
 

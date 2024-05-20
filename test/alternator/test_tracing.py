@@ -240,9 +240,9 @@ def test_slow_query_log(with_slow_query_logging, test_table_s, dynamodb):
     while time.time() < start_time + 60:
         results = full_scan(slow_query_table, ConsistentRead=False)
         put_item_found = any("PutItem" in result['parameters'] and p in result['parameters']
-                and result['username'] == "alternator" for result in results)
+                and result['username'] == "cassandra" for result in results)
         delete_item_found = any("DeleteItem" in result['parameters'] and p in result['parameters']
-                and result['username'] == "alternator" for result in results)
+                and result['username'] == "cassandra" for result in results)
         if put_item_found and delete_item_found:
             return
         else:

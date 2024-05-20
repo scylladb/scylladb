@@ -40,7 +40,7 @@ def test_expired_signature(dynamodb, test_table):
     headers = {'Content-Type': 'application/x-amz-json-1.0',
                'X-Amz-Date': '20170101T010101Z',
                'X-Amz-Target': 'DynamoDB_20120810.DescribeEndpoints',
-               'Authorization': 'AWS4-HMAC-SHA256 Credential=alternator/2/3/4/aws4_request SignedHeaders=x-amz-date;host Signature=123'
+               'Authorization': 'AWS4-HMAC-SHA256 Credential=cassandra/2/3/4/aws4_request SignedHeaders=x-amz-date;host Signature=123'
     }
     response = requests.post(url, headers=headers, verify=False)
     assert not response.ok
@@ -67,7 +67,7 @@ def test_signature_too_futuristic(dynamodb, test_table):
     headers = {'Content-Type': 'application/x-amz-json-1.0',
                'X-Amz-Date': '30200101T010101Z',
                'X-Amz-Target': 'DynamoDB_20120810.DescribeEndpoints',
-               'Authorization': 'AWS4-HMAC-SHA256 Credential=alternator/2/3/4/aws4_request SignedHeaders=x-amz-date;host Signature=123'
+               'Authorization': 'AWS4-HMAC-SHA256 Credential=cassandra/2/3/4/aws4_request SignedHeaders=x-amz-date;host Signature=123'
     }
     response = requests.post(url, headers=headers, verify=False)
     assert not response.ok
