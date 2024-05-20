@@ -10,6 +10,7 @@
 
 #include <stdexcept>
 #include <fmt/format.h>
+#include <optional>
 
 #include <boost/test/included/unit_test.hpp>
 #include <deque>
