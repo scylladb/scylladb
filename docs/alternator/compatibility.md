@@ -117,9 +117,9 @@ request. Alternator can then validate the authenticity and authorization of
 each request using a known list of authorized key pairs.
 
 In the current implementation, the user stores the list of allowed key pairs
-in the `system_auth_v2.roles` table: The access key ID is the `role` column, and
+in the `system.roles` table: The access key ID is the `role` column, and
 the secret key is the `salted_hash`, i.e., the secret key can be found by
-`SELECT salted_hash from system_auth_v2.roles WHERE role = ID;`.
+`SELECT salted_hash from system.roles WHERE role = ID;`.
 
 <!--- REMOVE IN FUTURE VERSIONS - Remove the note below in version 6.1 -->
 

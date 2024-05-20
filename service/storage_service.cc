@@ -11,7 +11,6 @@
 
 #include "storage_service.hh"
 #include "compaction/task_manager_module.hh"
-#include "db/system_auth_keyspace.hh"
 #include "gc_clock.hh"
 #include "raft/raft.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
@@ -651,7 +650,7 @@ future<> storage_service::topology_state_load() {
     co_await _qp.container().invoke_on_all([] (cql3::query_processor& qp) {
         // auth-v2 gets enabled when consistent topology changes are enabled
         // (see topology::upgrade_state_type::done above) as we use the same migration procedure
-        qp.auth_version = db::system_auth_keyspace::version_t::v2;
+        qp.auth_version = db::system_keyspace::auth_version_t::v2;
     });
 
     co_await _sl_controller.invoke_on_all([this] (qos::service_level_controller& sl_controller) {
@@ -1269,7 +1268,7 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
         insert_join_request_mutations.emplace_back(std::move(sl_status_mutation));
         
         insert_join_request_mutations.emplace_back(
-                co_await _sys_ks.local().make_auth_version_mutation(guard.write_timestamp(), db::system_auth_keyspace::version_t::v2));
+                co_await _sys_ks.local().make_auth_version_mutation(guard.write_timestamp(), db::system_keyspace::auth_version_t::v2));
 
         topology_change change{std::move(insert_join_request_mutations)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,

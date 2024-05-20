@@ -341,7 +341,7 @@ The `--authenticator` command lines option allows to provide the authenticator c
 
 #### `--authorizer AUTHORIZER`
 
-The `--authorizer` command lines option allows to provide the authorizer class ScyllaDB will use. By default ScyllaDB uses the `AllowAllAuthorizer` which allows any action to any user. The second option is using the `CassandraAuthorizer` parameter, which stores permissions in `system_auth_v2.permissions` table.
+The `--authorizer` command lines option allows to provide the authorizer class ScyllaDB will use. By default ScyllaDB uses the `AllowAllAuthorizer` which allows any action to any user. The second option is using the `CassandraAuthorizer` parameter, which stores permissions in `system.permissions` table.
 
 **Since: 2.3**
 
