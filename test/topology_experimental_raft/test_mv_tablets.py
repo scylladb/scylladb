@@ -11,6 +11,8 @@ from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier
 from test.pylib.internal_types import ServerInfo
 from test.topology.conftest import skip_mode
 
+from .test_alternator import get_alternator, alternator_config, full_query
+
 import pytest
 import asyncio
 import logging
@@ -134,46 +136,10 @@ async def test_tablet_mv_simple_6node(manager: ManagerClient):
     assert [(3,2)] == list(await cql.run_async("SELECT * FROM test.tv WHERE c=3"))
     await cql.run_async("DROP KEYSPACE test")
 
-# Convenience function to open a connection to Alternator usable by the
-# AWS SDK. When more than one test needs it, we can move this function to
-# a separate library file. Until then, let's just have it in front of the
-# only test that needs it.
-import boto3
-import botocore
-alternator_config = {
-    'alternator_port': 8000,
-    'alternator_write_isolation': 'only_rmw_uses_lwt',
-}
-def get_alternator(ip):
-    url = f"http://{ip}:{alternator_config['alternator_port']}"
-    return boto3.resource('dynamodb', endpoint_url=url,
-        region_name='us-east-1',
-        aws_access_key_id='alternator',
-        aws_secret_access_key='secret_pass',
-        config=botocore.client.Config(
-            retries={"max_attempts": 0},
-            read_timeout=300)
-    )
-
-# Alternator convenience function for fetching the entire result set of a
-# query into an array of items.
-def full_query(table, ConsistentRead=True, **kwargs):
-    response = table.query(ConsistentRead=ConsistentRead, **kwargs)
-    items = response['Items']
-    while 'LastEvaluatedKey' in response:
-        response = table.query(ExclusiveStartKey=response['LastEvaluatedKey'],
-            ConsistentRead=ConsistentRead, **kwargs)
-        items.extend(response['Items'])
-    return items
-
 async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
     await asyncio.gather(*errs)
 
-# FIXME: boto3 is NOT async. So this test is not async. We could use
-# the aioboto3 library to write a really asynchronous test, or implement
-# an async wrapper to the boto3 functions ourselves (e.g., run them in a
-# separate thread) ourselves.
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
