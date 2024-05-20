@@ -394,7 +394,7 @@ test_env::reusable_sst(schema_ptr schema, shared_sstable sst) {
 
 future<shared_sstable>
 test_env::reusable_sst(shared_sstable sst) {
-    return reusable_sst(sst->get_schema(), std::move(sst));
+    return reusable_sst(sst->get_schema(), sst);
 }
 
 future<shared_sstable>
