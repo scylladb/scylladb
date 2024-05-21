@@ -1625,25 +1625,26 @@ get_view_natural_endpoint(
         }
     }
 
+    auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
     for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
         if (use_legacy_self_pairing) {
+            auto it = std::find(base_endpoints.begin(), base_endpoints.end(),
+                view_endpoint);
             // If this base replica is also one of the view replicas, we use
             // ourselves as the view replica.
-            if (view_endpoint == me) {
+            if (view_endpoint == me && it != base_endpoints.end()) {
                 return topology.my_address();
             }
             // We have to remove any endpoint which is shared between the base
             // and the view, as it will select itself and throw off the counts
             // otherwise.
-            auto it = std::find(base_endpoints.begin(), base_endpoints.end(),
-                view_endpoint);
             if (it != base_endpoints.end()) {
                 base_endpoints.erase(it);
-            } else if (!network_topology || topology.get_datacenter(view_endpoint) == my_datacenter) {
+            } else if (!network_topology || view_topology.get_datacenter(view_endpoint) == my_datacenter) {
                 view_endpoints.push_back(view_endpoint);
             }
         } else {
-            if (!network_topology || topology.get_datacenter(view_endpoint) == my_datacenter) {
+            if (!network_topology || view_topology.get_datacenter(view_endpoint) == my_datacenter) {
                 view_endpoints.push_back(view_endpoint);
             }
         }
@@ -1658,7 +1659,7 @@ get_view_natural_endpoint(
         return {};
     }
     auto replica = view_endpoints[base_it - base_endpoints.begin()];
-    return topology.get_node(replica).endpoint();
+    return view_topology.get_node(replica).endpoint();
 }
 
 static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator::effective_replication_map_ptr ermp,
@@ -1715,6 +1716,7 @@ future<> view_update_generator::mutate_MV(
 {
     auto base_ermp = base->table().get_effective_replication_map();
     static constexpr size_t max_concurrent_updates = 128;
+    co_await utils::get_local_injector().inject("delay_before_get_view_natural_endpoint", 8000ms);
     co_await max_concurrent_for_each(view_updates, max_concurrent_updates,
             [this, base_token, &stats, &cf_stats, tr_state, &pending_view_updates, allow_hints, wait_for_all, base_ermp] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
