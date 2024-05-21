@@ -4119,7 +4119,26 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             auto& table_erms = pending_table_erms[this_shard_id()];
             for (auto it = table_erms.begin(); it != table_erms.end(); ) {
                 auto& cf = db.find_column_family(it->first);
+<<<<<<< HEAD
                 cf.update_effective_replication_map(std::move(it->second));
+=======
+                co_await cf.update_effective_replication_map(std::move(it->second));
+                co_await utils::get_local_injector().inject("delay_after_erm_update", [&cf, &ss] (auto& handler) -> future<> {
+                    auto& ss_ = ss;
+                    const auto ks_name = handler.get("ks_name");
+                    const auto cf_name = handler.get("cf_name");
+                    assert(ks_name);
+                    assert(cf_name);
+                    if (cf.schema()->ks_name() != *ks_name || cf.schema()->cf_name() != *cf_name) {
+                        co_return;
+                    }
+
+                    co_await sleep_abortable(std::chrono::seconds{5}, ss_._abort_source);
+                });
+                if (cf.uses_tablets()) {
+                    register_tablet_split_candidate(it->first);
+                }
+>>>>>>> ed95782bf2 (mv: handle different ERMs for base and view table)
                 it = table_erms.erase(it);
             }
         });
