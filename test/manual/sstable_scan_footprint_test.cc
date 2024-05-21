@@ -317,8 +317,10 @@ int main(int argc, char** argv) {
         db_cfg.sstable_format(app.configuration()["sstable-format"].as<std::string>());
 
         do_with_cql_env([] (cql_test_env& env) {
-            return with_scheduling_group(env.local_db().get_statement_scheduling_group(), [&] {
-                return seastar::async([&] {
+            return get_scheduling_groups().then([&env] (auto groups) {
+                seastar::thread_attributes attr;
+                attr.sched_group = groups.statement_scheduling_group;
+                return seastar::async(std::move(attr), [&] {
                     test_main_thread(env);
                 });
             });
