@@ -30,12 +30,13 @@ sstring service_level_controller::default_service_level_name = "default";
 
 
 
-service_level_controller::service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, service_level_options default_service_level_config):
+service_level_controller::service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config):
         _sl_data_accessor(nullptr),
         _auth_service(auth_service),
         _token_metadata(tm),
         _last_successful_config_update(seastar::lowres_clock::now()),
-        _logged_intervals(0)
+        _logged_intervals(0),
+        _early_abort_subscription(as.subscribe([this] () noexcept { do_abort(); }))
 
 {
     if (this_shard_id() == global_controller) {
@@ -97,9 +98,9 @@ future<> service_level_controller::reload_distributed_data_accessor(cql3::query_
     set_distributed_data_accessor(std::move(accessor));
 }
 
-future<> service_level_controller::drain() {
+void service_level_controller::do_abort() noexcept {
     if (this_shard_id() != global_controller) {
-        co_return;
+        return;
     }
 
     // abort the loop of the distributed data checking if it is running
@@ -110,6 +111,18 @@ future<> service_level_controller::drain() {
     abort_group0_operations();
     
     _global_controller_db->notifications_serializer.broken();
+}
+
+future<> service_level_controller::stop() {
+    if (this_shard_id() != global_controller) {
+        co_return;
+    }
+
+    if (*_early_abort_subscription) {
+        // Abort source didn't fire, so do it now
+        do_abort();
+    }
+
     try {
         co_await std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>());
     } catch (const broken_semaphore& ignored) {
@@ -117,10 +130,6 @@ future<> service_level_controller::drain() {
     } catch (const exceptions::unavailable_exception& ignored) {
     } catch (const exceptions::read_timeout_exception& ignored) {
     }
-}
-
-future<> service_level_controller::stop() {
-    return drain();
 }
 
 void service_level_controller::abort_group0_operations() {

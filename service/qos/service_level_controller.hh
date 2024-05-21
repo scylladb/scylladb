@@ -94,8 +94,10 @@ private:
     std::chrono::time_point<seastar::lowres_clock> _last_successful_config_update;
     unsigned _logged_intervals;
     atomic_vector<qos_configuration_change_subscriber*> _subscribers;
+    optimized_optional<abort_source::subscription> _early_abort_subscription;
+    void do_abort() noexcept;
 public:
-    service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, service_level_options default_service_level_config);
+    service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config);
 
     /**
      * this function must be called *once* from any shard before any other functions are called.
@@ -130,12 +132,6 @@ public:
      * or not.
      */
     future<> remove_service_level(sstring name, bool remove_static);
-
-    /**
-     * stops the distributed updater
-     * @return a future that is resolved when the updates stopped
-     */
-    future<> drain();
 
     /**
      * stops all ongoing operations if exists

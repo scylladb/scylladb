@@ -1180,7 +1180,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             //starting service level controller
             qos::service_level_options default_service_level_configuration;
-            sl_controller.start(std::ref(auth_service), std::ref(token_metadata), default_service_level_configuration).get();
+            sl_controller.start(std::ref(auth_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), default_service_level_configuration).get();
             sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
             auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
                 sl_controller.stop().get();
@@ -1894,6 +1894,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
                 lifecycle_notifier.local().register_subscriber(&controller);
             }).get();
+            auto unsubscribe_sl_controller = defer_verbose_shutdown("service level controller subscription", [&lifecycle_notifier] {
+                sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
+                    return lifecycle_notifier.local().unregister_subscriber(&controller);
+                }).get();
+            });
 
             supervisor::notify("starting batchlog manager");
             db::batchlog_manager_config bm_cfg;
@@ -2034,13 +2039,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_done(ctx).get();
             supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
-
-            auto drain_sl_controller = defer_verbose_shutdown("service level controller update loop", [&lifecycle_notifier] {
-                sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
-                    return lifecycle_notifier.local().unregister_subscriber(&controller);
-                }).get();
-                sl_controller.invoke_on_all(&qos::service_level_controller::drain).get();
-            });
 
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
                 ss.local().drain_on_shutdown().get();
