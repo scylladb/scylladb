@@ -666,6 +666,10 @@ private:
     storage_group* storage_group_for_id(size_t i) const {
         return storage_group_manager::storage_group_for_id(schema(), i);
     }
+
+    size_t tablet_id_for_token(dht::token t) const noexcept {
+        return tablet_map().get_tablet_id(t).value();
+    }
 public:
     tablet_storage_group_manager(table& t, const locator::effective_replication_map& erm)
         : _t(t)
@@ -714,9 +718,6 @@ public:
     }
     size_t log2_storage_groups() const override {
         return log2ceil(tablet_map().tablet_count());
-    }
-    size_t storage_group_id_for_token(dht::token t) const noexcept {
-        return storage_group_of(t).first;
     }
     storage_group* storage_group_for_token(dht::token token) const noexcept override {
         return storage_group_for_id(storage_group_of(token).first);
@@ -924,8 +925,8 @@ utils::chunked_vector<compaction_group*> tablet_storage_group_manager::compactio
     utils::chunked_vector<compaction_group*> ret;
     auto cmp = dht::token_comparator();
 
-    size_t candidate_start = tr.start() ? storage_group_id_for_token(tr.start()->value()) : size_t(0);
-    size_t candidate_end = tr.end() ? storage_group_id_for_token(tr.end()->value()) : (tablet_count() - 1);
+    size_t candidate_start = tr.start() ? tablet_id_for_token(tr.start()->value()) : size_t(0);
+    size_t candidate_end = tr.end() ? tablet_id_for_token(tr.end()->value()) : (tablet_count() - 1);
 
     while (candidate_start <= candidate_end) {
         auto it = _storage_groups.find(candidate_start++);
