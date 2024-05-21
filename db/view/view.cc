@@ -1606,6 +1606,7 @@ get_view_natural_endpoint(const sstring& keyspace_name,
         }
     }
 
+<<<<<<< HEAD
     for (auto&& view_endpoint : erm->get_natural_endpoints(view_token)) {
         // If this base replica is also one of the view replicas, we use
         // ourselves as the view replica.
@@ -1621,6 +1622,30 @@ get_view_natural_endpoint(const sstring& keyspace_name,
             base_endpoints.erase(it);
         } else if (!network_topology || topology.get_datacenter(view_endpoint) == my_datacenter) {
             view_endpoints.push_back(view_endpoint);
+=======
+    auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
+    for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
+        if (use_legacy_self_pairing) {
+            auto it = std::find(base_endpoints.begin(), base_endpoints.end(),
+                view_endpoint);
+            // If this base replica is also one of the view replicas, we use
+            // ourselves as the view replica.
+            if (view_endpoint == me && it != base_endpoints.end()) {
+                return topology.my_address();
+            }
+            // We have to remove any endpoint which is shared between the base
+            // and the view, as it will select itself and throw off the counts
+            // otherwise.
+            if (it != base_endpoints.end()) {
+                base_endpoints.erase(it);
+            } else if (!network_topology || view_topology.get_datacenter(view_endpoint) == my_datacenter) {
+                view_endpoints.push_back(view_endpoint);
+            }
+        } else {
+            if (!network_topology || view_topology.get_datacenter(view_endpoint) == my_datacenter) {
+                view_endpoints.push_back(view_endpoint);
+            }
+>>>>>>> ed95782bf2 (mv: handle different ERMs for base and view table)
         }
     }
 
@@ -1630,7 +1655,12 @@ get_view_natural_endpoint(const sstring& keyspace_name,
         // This node is not a base replica of this key, so we return empty
         return {};
     }
+<<<<<<< HEAD
     return view_endpoints[base_it - base_endpoints.begin()];
+=======
+    auto replica = view_endpoints[base_it - base_endpoints.begin()];
+    return view_topology.get_node(replica).endpoint();
+>>>>>>> ed95782bf2 (mv: handle different ERMs for base and view table)
 }
 
 static future<> apply_to_remote_endpoints(gms::inet_address target, inet_address_vector_topology_change&& pending_endpoints,
@@ -1679,6 +1709,7 @@ future<> mutate_MV(
         wait_for_all_updates wait_for_all)
 {
     static constexpr size_t max_concurrent_updates = 128;
+    co_await utils::get_local_injector().inject("delay_before_get_view_natural_endpoint", 8000ms);
     co_await max_concurrent_for_each(view_updates, max_concurrent_updates,
             [base_token, &stats, &cf_stats, tr_state, &pending_view_updates, allow_hints, wait_for_all] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());

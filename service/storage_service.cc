@@ -1543,6 +1543,37 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                 ks.update_effective_replication_map(std::move(it->second));
                 it = erms.erase(it);
             }
+<<<<<<< HEAD
+=======
+
+            auto& table_erms = pending_table_erms[this_shard_id()];
+            for (auto it = table_erms.begin(); it != table_erms.end(); ) {
+                auto& cf = db.find_column_family(it->first);
+                co_await cf.update_effective_replication_map(std::move(it->second));
+                co_await utils::get_local_injector().inject("delay_after_erm_update", [&cf, &ss] (auto& handler) -> future<> {
+                    auto& ss_ = ss;
+                    const auto ks_name = handler.get("ks_name");
+                    const auto cf_name = handler.get("cf_name");
+                    assert(ks_name);
+                    assert(cf_name);
+                    if (cf.schema()->ks_name() != *ks_name || cf.schema()->cf_name() != *cf_name) {
+                        co_return;
+                    }
+
+                    co_await sleep_abortable(std::chrono::seconds{5}, ss_._abort_source);
+                });
+                if (cf.uses_tablets()) {
+                    register_tablet_split_candidate(it->first);
+                }
+                it = table_erms.erase(it);
+            }
+
+            auto& session_mgr = get_topology_session_manager();
+            session_mgr.initiate_close_of_sessions_except(open_sessions);
+            for (auto id : open_sessions) {
+                session_mgr.create_session(id);
+            }
+>>>>>>> ed95782bf2 (mv: handle different ERMs for base and view table)
         });
     } catch (...) {
         // applying the changes on all shards should never fail
