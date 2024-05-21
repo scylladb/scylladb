@@ -57,13 +57,13 @@ Set a Superuser
 The default ScyllaDB superuser role is ``cassandra`` with password ``cassandra``. Using the default
 superuser is unsafe and may significantly impact performance. 
 
-If you haven't created a custom superuser while enablint authentication, you should create a custom superuser
+If you haven't created a custom superuser while enabling authentication, you should create a custom superuser
 before creating additional roles. 
 See :doc:`Creating a Custom Superuser </operating-scylla/security/create-superuser/>` for instructions.
 
-.. warning::
+.. note::
    
-   We highly recommend creating a custom superuser to ensure security and avoid performance degradation.
+   We recommend creating a custom superuser to improve security.
 
 .. _roles:
 

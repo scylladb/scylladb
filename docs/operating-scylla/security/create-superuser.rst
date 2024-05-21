@@ -6,12 +6,7 @@ The default ScyllaDB superuser role is ``cassandra`` with password ``cassandra``
 Users with the ``cassandra`` role have full access to the database and can run 
 any CQL command on the database resources.
 
-During login, the credentials for the default superuser ``cassandra`` are read with 
-a consistency level of QUORUM, whereas those for all other roles are read at LOCAL_ONE. 
-QUORUM may significantly impact performance, especially in multi-datacenter deployments.
-
-To prevent performance degradation and ensure better security, we highly recommend creating 
-a custom superuser. You should:
+To improve security, we recommend creating a custom superuser. You should:
 
 #. Use the default ``cassandra`` superuser to log in.
 #. Create a custom superuser.
