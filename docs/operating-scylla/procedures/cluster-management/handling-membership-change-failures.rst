@@ -70,11 +70,46 @@ Step One: Determining Host IDs of Ghost Members
 If you cannot determine the ghost members' host ID using the suggestions above, use the method described below.
 
 #. Make sure there are no ongoing membership changes.
-#. Execute the following CQL query on one of your nodes to obtain the host IDs of all token ring members:
+
+#. Execute the following CQL query on one of your nodes to retrieve the Raft group 0 ID:
 
    .. code-block:: cql
     
-    select peer, host_id, up from system.cluster_status;
+    select value from system.scylla_local where key = 'raft_group0_id'
+
+   For example:
+
+   .. code-block:: cql
+    
+    cqlsh> select value from system.scylla_local where key = 'raft_group0_id';
+
+     value
+    --------------------------------------
+     607fef80-c276-11ed-a6f6-3075f294cc65
+
+#. Use the obtained Raft group 0 ID to query the set of all cluster members' host IDs (which includes the ghost members), by executing the following query:
+
+   .. code-block:: cql
+    
+    select server_id from system.raft_state where group_id = <group0_id>
+
+   replace ``<group0_id>`` with the group 0 ID that you obtained. For example:
+
+   .. code-block:: cql
+    
+    cqlsh> select server_id from system.raft_state where group_id = 607fef80-c276-11ed-a6f6-3075f294cc65;
+
+     server_id
+    --------------------------------------
+     26a9badc-6e96-4b86-a8df-5173e5ab47fe
+     7991e7f5-692e-45a0-8ae5-438be5bc7c4f
+     aff11c6d-fbe7-4395-b7ca-3912d7dba2c6
+
+#. Execute the following CQL query to obtain the host IDs of all token ring members:
+
+   .. code-block:: cql
+    
+    select host_id, up from system.cluster_status;
 
    For example:
 
@@ -83,24 +118,27 @@ If you cannot determine the ghost members' host ID using the suggestions above, 
     cqlsh> select peer, host_id, up from system.cluster_status;
 
      peer      | host_id                              | up
-     -----------+--------------------------------------+-------
-     127.0.0.3 | 42405b3b-487e-4759-8590-ddb9bdcebdc5 | False
-     127.0.0.1 | 4e3ee715-528f-4dc9-b10f-7cf294655a9e |  True
-     127.0.0.2 | 225a80d0-633d-45d2-afeb-a5fa422c9bd5 |  True
+    -----------+--------------------------------------+-------
+     127.0.0.3 |                                 null | False
+     127.0.0.1 | 26a9badc-6e96-4b86-a8df-5173e5ab47fe |  True
+     127.0.0.2 | 7991e7f5-692e-45a0-8ae5-438be5bc7c4f |  True
 
    The output of this query is similar to the output of ``nodetool status``.
 
-   We included the ``up`` column to see which nodes are down.
+   We included the ``up`` column to see which nodes are down and the ``peer`` column to see their IP addresses.
 
-   In this example, one of the 3 nodes tried to decommission but crashed while it was leaving the token ring. The node is in a partially left state and will refuse to restart, but other nodes still consider it as a normal member. We'll have to use ``removenode`` to clean up after it.
+   In this example, one of the nodes tried to decommission and crashed as soon as it left the token ring but before it left the Raft group. Its entry will show up in ``system.cluster_status`` queries with ``host_id = null``, like above, until the cluster is restarted.
 
-#. A host ID belongs to a ghost member if it appears in the ``system.cluster_status`` query but does not correspond to any remaining node in your cluster.
+#. A host ID belongs to a ghost member if:
+
+   * It appears in the ``system.raft_state`` query but not in the ``system.cluster_status`` query,
+   * Or it appears in the ``system.cluster_status`` query but does not correspond to any remaining node in your cluster.
+
+   In our example, the ghost member's host ID was ``aff11c6d-fbe7-4395-b7ca-3912d7dba2c6`` because it appeared in the ``system.raft_state`` query but not in the ``system.cluster_status`` query.
 
    If you're unsure whether a given row in the ``system.cluster_status`` query corresponds to a node in your cluster, you can connect to each node in the cluster and execute ``select host_id from system.local`` (or search the node's logs) to obtain that node's host ID, collecting the host IDs of all nodes in your cluster. Then check if each host ID from the ``system.cluster_status`` query appears in your collected set; if not, it's a ghost member.
 
    A good rule of thumb is to look at the members marked as down (``up = False`` in ``system.cluster_status``) - ghost members are eventually marked as down by the remaining members of the cluster. But remember that a real member might also be marked as down if it was shutdown or partitioned away from the rest of the cluster. If in doubt, connect to each node and collect their host IDs, as described in the previous paragraph.
-
-   In our example, the ghost member's host ID is ``42405b3b-487e-4759-8590-ddb9bdcebdc5`` because it is the only member marked as down and we can verify that the other two rows appearing in ``system.cluster_status`` belong to the remaining 2 nodes in the cluster.
 
 In some cases, even after a failed topology change, there may be no ghost members left - for example, if a bootstrapping node crashed very early in the procedure or a decommissioning node crashed after it committed the membership change but before it finalized its own shutdown steps.
 
