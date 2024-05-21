@@ -8,6 +8,9 @@
 
 #define BOOST_TEST_MODULE core
 
+#include <stdexcept>
+#include <fmt/format.h>
+
 #include <boost/test/included/unit_test.hpp>
 #include <deque>
 #include <random>
@@ -108,11 +111,14 @@ BOOST_AUTO_TEST_CASE(test_random_walk) {
 }
 
 class exception_safety_checker {
-    uint64_t _live_objects = 0;
-    uint64_t _countdown = std::numeric_limits<uint64_t>::max();
+    int64_t _live_objects = 0;
+    int64_t _countdown = std::numeric_limits<int64_t>::max();
 public:
     bool ok() const {
         return !_live_objects;
+    }
+    int64_t live_objects() const {
+        return _live_objects;
     }
     void set_countdown(unsigned x) {
         _countdown = x;
@@ -121,6 +127,9 @@ public:
         if (!_countdown--) { // auto-clears
             throw "ouch";
         }
+        ++_live_objects;
+    }
+    void add_live_object_noexcept() noexcept {
         ++_live_objects;
     }
     void del_live_object() {
@@ -137,7 +146,9 @@ public:
     exception_safe_class(const exception_safe_class& x) : _esc(x._esc) {
         _esc.add_live_object();
     }
-    exception_safe_class(exception_safe_class&&) = default;
+    exception_safe_class(exception_safe_class&& x) noexcept : _esc(x._esc) {
+        _esc.add_live_object_noexcept();
+    }
     ~exception_safe_class() {
         _esc.del_live_object();
     }
@@ -240,4 +251,116 @@ BOOST_AUTO_TEST_CASE(test_amoritzed_reserve) {
     BOOST_REQUIRE_EQUAL(v.capacity(), 8);
     amortized_reserve(v, 1);
     BOOST_REQUIRE_EQUAL(v.capacity(), 8);
+}
+
+BOOST_AUTO_TEST_CASE(tests_insertion_exception_safety) {
+    constexpr size_t chunk_size = 512;
+    using chunked_vector = utils::chunked_vector<exception_safe_class, chunk_size>;
+    size_t max_chunk_capacity = chunked_vector::max_chunk_capacity();
+
+    // FIXME: convert to seastar test infstrature and use test::random
+    // for reproducibility
+    std::random_device r;
+    auto seed = r();
+    BOOST_TEST_MESSAGE(fmt::format("random-seed={}", seed));
+    auto rand = std::default_random_engine(seed);
+    auto size_dist = std::uniform_int_distribution<size_t>(1, 4 * max_chunk_capacity);
+
+    auto checker = exception_safety_checker();
+    auto count = size_dist(rand);
+    BOOST_TEST_MESSAGE(fmt::format("count={}", count));
+    checker.set_countdown(count - 1);
+    try {
+        chunked_vector v;
+        for (size_t i = 0; i < count; i++) {
+            v.emplace_back(checker);
+        }
+        BOOST_REQUIRE(false);
+    } catch (...) {
+        BOOST_REQUIRE_EQUAL(checker.live_objects(), 0);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(tests_insertion_exception_safety_with_reserve) {
+    constexpr size_t chunk_size = 512;
+    using chunked_vector = utils::chunked_vector<exception_safe_class, chunk_size>;
+    size_t max_chunk_capacity = chunked_vector::max_chunk_capacity();
+
+    // FIXME: convert to seastar test infstrature and use test::random
+    // for reproducibility
+    std::random_device r;
+    auto seed = r();
+    BOOST_TEST_MESSAGE(fmt::format("random-seed={}", seed));
+    auto rand = std::default_random_engine(seed);
+    auto size_dist = std::uniform_int_distribution<size_t>(1, 4 * max_chunk_capacity);
+    auto count = size_dist(rand);
+    BOOST_TEST_MESSAGE(fmt::format("count={}", count));
+    auto checker = exception_safety_checker();
+    checker.set_countdown(count - 1);
+    try {
+        chunked_vector v;
+        auto reserve_count = size_dist(rand);
+        BOOST_TEST_MESSAGE(fmt::format("reserve_count={}", reserve_count));
+        v.reserve(reserve_count);
+        for (size_t i = 0; i < count; i++) {
+            v.emplace_back(checker);
+        }
+        BOOST_REQUIRE(false);
+    } catch (...) {
+        BOOST_REQUIRE_EQUAL(checker.live_objects(), 0);
+    }
+}
+
+// Reproduces https://github.com/scylladb/scylladb/issues/18635
+BOOST_AUTO_TEST_CASE(tests_fill_constructor_exception_safety) {
+    constexpr size_t chunk_size = 512;
+    using chunked_vector = utils::chunked_vector<exception_safe_class, chunk_size>;
+    size_t max_chunk_capacity = chunked_vector::max_chunk_capacity();
+
+    // FIXME: convert to seastar test infstrature and use test::random
+    // for reproducibility
+    std::random_device r;
+    auto seed = r();
+    BOOST_TEST_MESSAGE(fmt::format("random-seed={}", seed));
+    auto rand = std::default_random_engine(seed);
+    auto size_dist = std::uniform_int_distribution<size_t>(1, 4 * max_chunk_capacity);
+    auto count = size_dist(rand);
+    BOOST_TEST_MESSAGE(fmt::format("count={}", count));
+    auto checker = exception_safety_checker();
+    auto filler = std::optional<exception_safe_class>(checker);
+    checker.set_countdown(count - 1);
+    try {
+        chunked_vector v(count, *filler);
+        BOOST_REQUIRE(false);
+    } catch (...) {
+        filler.reset();
+        BOOST_REQUIRE_EQUAL(checker.live_objects(), 0);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(tests_copy_constructor_exception_safety) {
+    constexpr size_t chunk_size = 512;
+    using chunked_vector = utils::chunked_vector<exception_safe_class, chunk_size>;
+    size_t max_chunk_capacity = chunked_vector::max_chunk_capacity();
+
+    // FIXME: convert to seastar test infstrature and use test::random
+    // for reproducibility
+    std::random_device r;
+    auto seed = r();
+    BOOST_TEST_MESSAGE(fmt::format("random-seed={}", seed));
+    auto rand = std::default_random_engine(seed);
+    auto size_dist = std::uniform_int_distribution<size_t>(1, 4 * max_chunk_capacity);
+    auto count = size_dist(rand);
+    BOOST_TEST_MESSAGE(fmt::format("count={}", count));
+    auto checker = exception_safety_checker();
+    chunked_vector src(count, exception_safe_class(checker));
+
+    checker.set_countdown(count - 1);
+    try {
+        chunked_vector v(src);
+        BOOST_REQUIRE(false);
+    } catch (...) {
+        src.clear();
+        BOOST_REQUIRE_EQUAL(checker.live_objects(), 0);
+    }
 }
