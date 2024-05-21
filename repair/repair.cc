@@ -2144,22 +2144,22 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
             auto range = tmap.get_token_range(id);
             auto& replicas = info.replicas;
+
+            if (primary_replica_only) {
+                const auto pr = select_primary_ranges_within_dc ? tmap.get_primary_replica_within_dc(id, erm->get_topology(), mydc) : tmap.get_primary_replica(id);
+                if (pr.host == myhostid) {
+                    metas.push_back(repair_tablet_meta{id, range, myhostid, pr.shard, replicas});
+                }
+                return make_ready_future<>();
+            }
+
             bool found = false;
             shard_id master_shard_id;
             // Repair all tablets belong to this node
             for (auto& r : replicas) {
-                if (select_primary_ranges_within_dc) {
-                    auto dc = erm->get_topology().get_datacenter(r.host);
-                    if (dc != mydc) {
-                        continue;
-                    }
-                }
                 if (r.host == myhostid) {
                     master_shard_id = r.shard;
                     found = true;
-                    break;
-                }
-                if (primary_replica_only) {
                     break;
                 }
             }
