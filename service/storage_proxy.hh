@@ -230,8 +230,10 @@ public:
     query::tombstone_limit get_tombstone_limit() const;
     inet_address_vector_replica_set get_live_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const;
 
+    void update_view_update_backlog();
+
     // Get information about this node's view update backlog. It combines information from all local shards.
-    db::view::update_backlog get_view_update_backlog() const;
+    db::view::update_backlog get_view_update_backlog();
 
     // Get information about a remote node's view update backlog. Information about remote backlogs is constantly updated
     // using gossip and by passing the information in each MUTATION_DONE rpc call response.

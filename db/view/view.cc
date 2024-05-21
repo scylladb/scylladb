@@ -1782,7 +1782,7 @@ future<> view_update_generator::mutate_MV(
                             sem_units, this] (future<>&& f) mutable {
                 --stats.writes;
                 sem_units = nullptr;
-                _proxy.local().get_view_update_backlog();
+                _proxy.local().update_view_update_backlog();
                 if (f.failed()) {
                     ++stats.view_updates_failed_local;
                     ++cf_stats.total_view_updates_failed_local;
@@ -1819,7 +1819,7 @@ future<> view_update_generator::mutate_MV(
                 [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
                  sem_units, apply_update_synchronously, this] (future<>&& f) mutable {
                 sem_units = nullptr;
-                _proxy.local().get_view_update_backlog();
+                _proxy.local().update_view_update_backlog();
                 if (f.failed()) {
                     stats.view_updates_failed_remote += updates_pushed_remote;
                     cf_stats.total_view_updates_failed_remote += updates_pushed_remote;
@@ -2628,8 +2628,11 @@ future<> view_builder::wait_until_built(const sstring& ks_name, const sstring& v
     });
 }
 
-update_backlog node_update_backlog::add_fetch(unsigned shard, update_backlog backlog) {
-    _backlogs[shard].backlog.store(backlog, std::memory_order_relaxed);
+void node_update_backlog::add(update_backlog backlog) {
+    _backlogs[this_shard_id()].backlog.store(backlog, std::memory_order_relaxed);
+}
+
+update_backlog node_update_backlog::fetch() {
     auto now = clock::now();
     if (now >= _last_update.load(std::memory_order_relaxed) + _interval) {
         _last_update.store(now, std::memory_order_relaxed);
@@ -2642,7 +2645,11 @@ update_backlog node_update_backlog::add_fetch(unsigned shard, update_backlog bac
         _max.store(new_max, std::memory_order_relaxed);
         return new_max;
     }
-    return std::max(backlog, _max.load(std::memory_order_relaxed));
+    return std::max(fetch_shard(this_shard_id()), _max.load(std::memory_order_relaxed));
+}
+
+update_backlog node_update_backlog::fetch_shard(unsigned shard) {
+    return _backlogs[shard].backlog.load(std::memory_order_relaxed);
 }
 
 future<bool> view_builder::check_view_build_ongoing(const locator::token_metadata& tm, const sstring& ks_name, const sstring& cf_name) {

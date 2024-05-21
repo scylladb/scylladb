@@ -46,7 +46,9 @@ public:
             , _max(update_backlog::no_backlog()) {
     }
 
-    update_backlog add_fetch(unsigned shard, update_backlog backlog);
+    update_backlog fetch();
+    void add(update_backlog backlog);
+    update_backlog fetch_shard(unsigned shard);
 
     // Exposed for testing only.
     update_backlog load() const {
