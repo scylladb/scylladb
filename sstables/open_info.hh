@@ -76,7 +76,7 @@ struct sstable_open_config {
     // filter, meaning that the SSTable will be opened on every single-partition
     // read.
     bool load_bloom_filter = true;
-    // Mimicks behavior when a SSTable is streamed to a given shard, where SSTable
+    // Mimics behavior when a SSTable is streamed to a given shard, where SSTable
     // writer considers the shard that created the SSTable as its owner.
     bool current_shard_as_sstable_owner = false;
 };
