@@ -44,6 +44,7 @@
 #include "streaming/consumer.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/all.hh>
+#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_address_map.hh"
