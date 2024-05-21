@@ -43,18 +43,20 @@ attach_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &,
         std::optional<service::group0_guard> guard) const {
-    return state.get_service_level_controller().get_distributed_service_level(_service_level).then([this] (qos::service_levels_info sli) {
-        if (sli.empty()) {
-            throw qos::nonexistant_service_level_exception(_service_level);
-        }
-    }).then([&state, this] () {
-        return state.get_client_state().get_auth_service()->underlying_role_manager().set_attribute(_role_name, "service_level", _service_level).then([] {
-            using void_result_msg = cql_transport::messages::result_message::void_message;
-            using result_msg = cql_transport::messages::result_message;
-            return ::static_pointer_cast<result_msg>(make_shared<void_result_msg>());
-        });
-    });
+    if (guard) {
+        release_guard(std::move(*guard));
+    }
+    auto sli = co_await state.get_service_level_controller().get_distributed_service_level(_service_level);
+    if (sli.empty()) {
+        throw qos::nonexistant_service_level_exception(_service_level);
+    }
 
+    co_await state.get_client_state().get_auth_service()->underlying_role_manager().
+            set_attribute(_role_name, "service_level", _service_level);
+
+    using void_result_msg = cql_transport::messages::result_message::void_message;
+    using result_msg = cql_transport::messages::result_message;
+    co_return ::static_pointer_cast<result_msg>(make_shared<void_result_msg>());
 }
 }
 }

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <exception>
 #include <seastar/core/coroutine.hh>
 #include "auth/resource.hh"
 #include "auth/service.hh"
@@ -437,23 +438,23 @@ future<> create_role(
         std::string_view name,
         const role_config& config,
         const authentication_options& options) {
-    return ser.underlying_role_manager().create(name, config).then([&ser, name, &options] {
-        if (!auth::any_authentication_options(options)) {
-            return make_ready_future<>();
-        }
-
-        return futurize_invoke(
-                &validate_authentication_options_are_supported,
-                options,
-                ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
-            return ser.underlying_authenticator().create(name, options);
-        }).handle_exception([&ser, name](std::exception_ptr ep) {
-            // Roll-back.
-            return ser.underlying_role_manager().drop(name).then([ep = std::move(ep)] {
-                std::rethrow_exception(ep);
-            });
-        });
-    });
+    co_await ser.underlying_role_manager().create(name, config);
+    if (!auth::any_authentication_options(options)) {
+        co_return;
+    }
+    std::exception_ptr ep;
+    try {
+        validate_authentication_options_are_supported(options,
+                ser.underlying_authenticator().supported_options());
+        co_await ser.underlying_authenticator().create(name, options);
+    } catch (...) {
+        ep = std::current_exception();
+    }
+    if (ep) {
+        // Roll-back.
+        co_await ser.underlying_role_manager().drop(name);
+        std::rethrow_exception(std::move(ep));
+    }
 }
 
 future<> alter_role(
@@ -461,36 +462,26 @@ future<> alter_role(
         std::string_view name,
         const role_config_update& config_update,
         const authentication_options& options) {
-    return ser.underlying_role_manager().alter(name, config_update).then([&ser, name, &options] {
-        if (!any_authentication_options(options)) {
-            return make_ready_future<>();
-        }
-
-        return futurize_invoke(
-                &validate_authentication_options_are_supported,
-                options,
-                ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
-            return ser.underlying_authenticator().alter(name, options);
-        });
-    });
+    co_await ser.underlying_role_manager().alter(name, config_update);
+    if (!any_authentication_options(options)) {
+        co_return;
+    }
+    validate_authentication_options_are_supported(options,
+            ser.underlying_authenticator().supported_options());
+    co_await ser.underlying_authenticator().alter(name, options);
 }
 
 future<> drop_role(const service& ser, std::string_view name) {
-    return do_with(make_role_resource(name), [&ser, name](const resource& r) {
-        auto& a = ser.underlying_authorizer();
-
-        return when_all_succeed(
-                a.revoke_all(name),
-                a.revoke_all(r))
-                    .discard_result()
-                    .handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
-        });
-    }).then([&ser, name] {
-        return ser.underlying_authenticator().drop(name);
-    }).then([&ser, name] {
-        return ser.underlying_role_manager().drop(name);
-    });
+    auto& a = ser.underlying_authorizer();
+    auto r = make_role_resource(name);
+    try {
+        co_await a.revoke_all(name);
+        co_await a.revoke_all(r);
+    } catch (const unsupported_authorization_operation&) {
+        // Nothing.
+    }
+    co_await ser.underlying_authenticator().drop(name);
+    co_await ser.underlying_role_manager().drop(name);
 }
 
 future<bool> has_role(const service& ser, std::string_view grantee, std::string_view name) {
@@ -513,9 +504,8 @@ future<> grant_permissions(
         std::string_view role_name,
         permission_set perms,
         const resource& r) {
-    return validate_role_exists(ser, role_name).then([&ser, role_name, perms, &r] {
-        return ser.underlying_authorizer().grant(role_name, perms, r);
-    });
+    co_await validate_role_exists(ser, role_name);
+    co_await ser.underlying_authorizer().grant(role_name, perms, r);
 }
 
 future<> grant_applicable_permissions(const service& ser, std::string_view role_name, const resource& r) {
@@ -534,9 +524,8 @@ future<> revoke_permissions(
         std::string_view role_name,
         permission_set perms,
         const resource& r) {
-    return validate_role_exists(ser, role_name).then([&ser, role_name, perms, &r] {
-        return ser.underlying_authorizer().revoke(role_name, perms, r);
-    });
+    co_await validate_role_exists(ser, role_name);
+    co_await ser.underlying_authorizer().revoke(role_name, perms, r);
 }
 
 future<std::vector<permission_details>> list_filtered_permissions(
