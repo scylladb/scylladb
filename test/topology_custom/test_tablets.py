@@ -8,6 +8,8 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_all_tablet_replicas
+from test.topology.util import wait_for_cql_and_get_hosts
+import time
 import pytest
 import logging
 import asyncio
@@ -142,6 +144,28 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
 
     logger.info(f"Checking {rf_to} re-allocated replicas")
     await check_allocated_replica(rf_to)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="Issue #18786, reading from mutation fragments crashes the node")
+async def test_tablet_mutation_fragments_sanity(manager: ManagerClient):
+    cfg = {'enable_user_defined_functions': False,
+           'experimental_features': ['tablets']}
+    servers = await manager.servers_add(3, config=cfg)
+
+    cql = manager.get_cql()
+
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    logger.info("Populating table")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in range(4)])
+
+    for s in servers:
+        host_id = await manager.get_host_id(s.server_id)
+        host = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 30)
+        for k in range(4):
+            await cql.run_async(f"SELECT partition_region FROM MUTATION_FRAGMENTS(test.test) WHERE pk={k}", host=host[0])
 
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
