@@ -1779,8 +1779,10 @@ future<> view_update_generator::mutate_MV(
                     mut.s->ks_name(), mut.s->cf_name(), base_token, view_token);
             local_view_update = _proxy.local().mutate_mv_locally(mut.s, *mut_ptr, tr_state, db::commitlog::force_sync::no).then_wrapped(
                     [s = mut.s, &stats, &cf_stats, tr_state, base_token, view_token, my_address, mut_ptr = std::move(mut_ptr),
-                            sem_units] (future<>&& f) {
+                            sem_units, this] (future<>&& f) mutable {
                 --stats.writes;
+                sem_units = nullptr;
+                _proxy.local().get_view_update_backlog();
                 if (f.failed()) {
                     ++stats.view_updates_failed_local;
                     ++cf_stats.total_view_updates_failed_local;
@@ -1815,7 +1817,9 @@ future<> view_update_generator::mutate_MV(
             schema_ptr s = mut.s;
             future<> remote_view_update = apply_to_remote_endpoints(_proxy.local(), std::move(view_ermp), *target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
                 [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
-                 sem_units, apply_update_synchronously] (future<>&& f) mutable {
+                 sem_units, apply_update_synchronously, this] (future<>&& f) mutable {
+                sem_units = nullptr;
+                _proxy.local().get_view_update_backlog();
                 if (f.failed()) {
                     stats.view_updates_failed_remote += updates_pushed_remote;
                     cf_stats.total_view_updates_failed_remote += updates_pushed_remote;
