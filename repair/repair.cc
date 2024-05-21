@@ -2122,6 +2122,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         auto mydc = erm->get_topology().get_datacenter();
         bool select_primary_ranges_within_dc = false;
         // If the user specified the ranges option, ignore the primary_replica_only option.
+        // Since the ranges are requested explicitly.
         if (!ranges_specified.empty()) {
             primary_replica_only = false;
         }
@@ -2158,11 +2159,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
                     found = true;
                     break;
                 }
-                // If users use both the primary_replica_only and the ranges
-                // option to select which ranges to repair, prefer the more
-                // sophisticated ranges option, since the ranges the requested
-                // explicitly.
-                if (primary_replica_only && ranges_specified.empty()) {
+                if (primary_replica_only) {
                     break;
                 }
             }
