@@ -31,10 +31,10 @@ Procedure
 
        cqlsh -u cassandra -p cassandra
 
-   .. warning::
+   .. note::
 
-      Before proceeding  to the next step, we highly recommend creating a custom superuser 
-      to ensure security and prevent performance degradation.
+      Before proceeding  to the next step, we recommend creating a custom superuser
+      to improve security.
       See :doc:`Creating a Custom Superuser </operating-scylla/security/create-superuser/>` for instructions.
 
 #. If you want to create users and roles, continue to :doc:`Enable Authorization </operating-scylla/security/enable-authorization>`.
