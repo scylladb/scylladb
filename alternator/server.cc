@@ -21,6 +21,7 @@
 #include "utils/rjson.hh"
 #include "auth.hh"
 #include <cctype>
+#include <string_view>
 #include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
 #include "utils/overloaded_functor.hh"
@@ -33,8 +34,6 @@ using request = http::request;
 using reply = http::reply;
 
 namespace alternator {
-
-static constexpr auto TARGET = "X-Amz-Target";
 
 inline std::vector<std::string_view> split(std::string_view text, char separator) {
     std::vector<std::string_view> tokens;
@@ -385,10 +384,10 @@ static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_
 
 future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request> req) {
     _executor._stats.total_operations++;
-    sstring target = req->get_header(TARGET);
-    std::vector<std::string_view> split_target = split(target, '.');
-    //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)
-    std::string op = split_target.empty() ? std::string() : std::string(split_target.back());
+    sstring target = req->get_header("X-Amz-Target");
+    // target is DynamoDB API version followed by a dot '.' and operation type (e.g. CreateTable)
+    auto dot = target.find('.');
+    std::string_view op = (dot == sstring::npos) ? std::string_view() : std::string_view(target).substr(dot+1);
     // JSON parsing can allocate up to roughly 2x the size of the raw
     // document, + a couple of bytes for maintenance.
     // TODO: consider the case where req->content_length is missing. Maybe
