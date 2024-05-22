@@ -97,5 +97,9 @@ size_t get_bitset_size(int64_t num_elements, int buckets_per);
 
 filter_ptr create_filter(int hash, large_bitset&& bitset, filter_format format);
 filter_ptr create_filter(int hash, int64_t num_elements, int buckets_per, filter_format format);
+
+// Fold the filter if the size of the filter that was based on the estimated
+// parameters differs largely from the size computed from the actual parameters.
+void maybe_fold_filter(filter_ptr& filter, int64_t num_elements, int buckets_per);
 }
 }
