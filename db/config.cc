@@ -1083,6 +1083,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , alternator_ttl_period_in_seconds(this, "alternator_ttl_period_in_seconds", value_status::Used,
         60*60*24,
         "The default period for Alternator's expiration scan. Alternator attempts to scan every table within that period.")
+    , alternator_listen_backlog(this, "alternator_listen_backlog", value_status::Used, 100, "To handle a large number of connections, it is advisable to increase the value of the listen_backlog parameter in the Alternator HTTP server.")
     , alternator_describe_endpoints(this, "alternator_describe_endpoints", liveness::LiveUpdate, value_status::Used,
         "",
         "Overrides the behavior of Alternator's DescribeEndpoints operation. "
