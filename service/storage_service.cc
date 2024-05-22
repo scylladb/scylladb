@@ -503,6 +503,11 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         case node_state::bootstrapping:
             if (rs.ring.has_value()) {
                 if (ip && !is_me(*ip)) {
+                    utils::get_local_injector().inject("crash-before-bootstrapping-node-added", [] {
+                        rtlogger.error("crash-before-bootstrapping-node-added hit, killing the node");
+                        _exit(1);
+                    });
+
                     // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
                     sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, host_id, {}));
                 }
