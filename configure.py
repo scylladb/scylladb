@@ -2098,28 +2098,26 @@ def write_build_file(f,
                     has_thrift = True
                     objs += dep.objects('$builddir/' + mode + '/gen')
                 if isinstance(dep, Antlr3Grammar):
-                    objs += dep.objects('$builddir/' + mode + '/gen')
+                    objs += dep.objects(f'$builddir/{mode}/gen')
                 if isinstance(dep, Json2Code):
-                    objs += dep.objects('$builddir/' + mode + '/gen')
+                    objs += dep.objects(f'$builddir/{mode}/gen')
                 if dep.endswith('.rs'):
                     has_rust = True
                     idx = dep.rindex('/src/')
                     obj = dep[:idx].replace('rust/','') + '.o'
-                    objs.append('$builddir/' + mode + '/gen/rust/' + obj)
+                    objs.append(f'$builddir/{mode}/gen/rust/{obj}')
             if has_rust:
-                objs.append('$builddir/' + mode +'/rust-' + mode + '/librust_combined.a')
-            local_libs = '$seastar_libs_{} $libs'.format(mode)
+                objs.append(f'$builddir/{mode}/rust-{mode}/librust_combined.a')
+            local_libs = f'$seastar_libs_{mode} $libs'
             if has_thrift:
                 local_libs += ' ' + maybe_static(args.staticthrift, '-lthrift')
                 local_libs += ' ' + maybe_static(args.staticboost, '-lboost_system')
-            objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
-                'abseil/' + x for x in abseil_libs
-            ]])
+            objs.extend([f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs])
             if binary in tests:
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                 if binary not in tests_not_using_seastar_test_framework:
-                    local_libs += ' ' + "$seastar_testing_libs_{}".format(mode)
+                    local_libs += ' ' + f"$seastar_testing_libs_{mode}"
                 else:
                     local_libs += ' ' + '-lgnutls' + ' ' + '-lboost_unit_test_framework'
                 # Our code's debugging information is huge, and multiplied
