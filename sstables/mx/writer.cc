@@ -1470,6 +1470,7 @@ void writer::consume_end_of_stream() {
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
     close_data_writer();
     _sst.write_summary();
+    utils::i_filter::maybe_fold_filter(_sst._components->filter, _num_partitions_consumed, _schema.bloom_filter_fp_chance());
     _sst.write_filter();
     _sst.write_statistics();
     _sst.write_compression();
