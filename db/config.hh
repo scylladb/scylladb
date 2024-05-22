@@ -367,6 +367,7 @@ public:
     named_value<uint32_t> alternator_streams_time_window_s;
     named_value<uint32_t> alternator_timeout_in_ms;
     named_value<double> alternator_ttl_period_in_seconds;
+    named_value<int> alternator_listen_backlog;
 
     named_value<bool> abort_on_ebadf;
 
