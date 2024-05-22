@@ -260,9 +260,8 @@ public:
     // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
     storage_group* storage_group_for_id(const schema_ptr&, size_t i) const;
 
-    // Caller must keep the current effective_replication_map_ptr valid
-    // until the storage_group_manager finishes update_effective_replication_map
-    virtual future<> update_effective_replication_map(const locator::effective_replication_map& erm) = 0;
+    // Must update atomically the replication map (using apply_erm) and internal storage state (to reflect new erm).
+    virtual future<> update_effective_replication_map(noncopyable_function<void()> apply_erm, const locator::effective_replication_map& erm) = 0;
 
     virtual compaction_group& compaction_group_for_token(dht::token token) const noexcept = 0;
     virtual utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const = 0;
