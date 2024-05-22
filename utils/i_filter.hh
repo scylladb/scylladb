@@ -57,5 +57,10 @@ struct i_filter {
      * @return the size of the smallest filter (in bytes), according to the conditions described at get_filter()
      */
     static size_t get_filter_size(int64_t num_elements, double max_false_pos_prob);
+
+    /**
+     * Fold the given filter if it is too large for the given num_elements and FP rate.
+     */
+    static void maybe_fold_filter(filter_ptr& filter, int64_t num_elements, double max_false_pos_probability);
 };
 }

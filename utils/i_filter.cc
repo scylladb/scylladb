@@ -41,6 +41,16 @@ size_t i_filter::get_filter_size(int64_t num_elements, double max_false_pos_prob
     return filter::get_bitset_size(num_elements, spec.buckets_per_element) / 8;
 }
 
+void i_filter::maybe_fold_filter(filter_ptr& filter, int64_t num_elements, double max_false_pos_probability) {
+    if (max_false_pos_probability == 1.0) {
+        return;
+    }
+
+    int buckets_per_element = bloom_calculations::max_buckets_per_element(num_elements);
+    auto spec = bloom_calculations::compute_bloom_spec(buckets_per_element, max_false_pos_probability);
+    filter::maybe_fold_filter(filter, num_elements, spec.buckets_per_element);
+}
+
 hashed_key make_hashed_key(bytes_view b) {
     std::array<uint64_t, 2> h;
     utils::murmur_hash::hash3_x64_128(b, 0, h);
