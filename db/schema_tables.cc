@@ -1294,7 +1294,6 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     schema_ptr s = keyspaces();
     // compare before/after schemas of the affected keyspaces only
     std::set<sstring> keyspaces;
-    std::set<table_id> column_families;
     std::unordered_map<keyspace_name, table_selector> affected_tables;
     bool has_tablet_mutations = false;
     for (auto&& mutation : mutations) {
@@ -1309,7 +1308,6 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
         }
 
         keyspaces.emplace(std::move(keyspace_name));
-        column_families.emplace(mutation.column_family_id());
         // We must force recalculation of schema version after the merge, since the resulting
         // schema may be a mix of the old and new schemas, with the exception of entries
         // that originate from group 0.
