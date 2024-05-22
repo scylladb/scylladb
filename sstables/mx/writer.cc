@@ -11,12 +11,9 @@
 #include "encoding_stats.hh"
 #include "schema/schema.hh"
 #include "mutation/mutation_fragment.hh"
-#include "vint-serialization.hh"
 #include "sstables/types.hh"
 #include "sstables/mx/types.hh"
-#include "db/config.hh"
 #include "mutation/atomic_cell.hh"
-#include "utils/exceptions.hh"
 #include "db/large_data_handler.hh"
 
 #include <functional>
