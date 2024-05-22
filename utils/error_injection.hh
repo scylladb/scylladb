@@ -403,7 +403,7 @@ public:
     // Avoid adding a sleep continuation in the chain for disabled error injection
     template <typename Clock, typename Duration, typename Func>
     [[gnu::always_inline]]
-    std::result_of_t<Func()> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline,
+    std::invoke_result_t<Func> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline,
                 Func&& func) {
         if (is_enabled(name)) {
             if (is_one_shot(name)) {
@@ -573,7 +573,7 @@ public:
     // Avoid adding a continuation in the chain for disabled error injections
     template <typename Clock, typename Duration, typename Func>
     [[gnu::always_inline]]
-    std::result_of_t<Func()> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline,
+    std::invoke_result_t<Func> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline,
                 Func&& func) {
         return func();
     }

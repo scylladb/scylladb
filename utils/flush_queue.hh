@@ -57,7 +57,7 @@ private:
 
     template<typename Func, typename Arg>
     static auto call_helper(Func&& func, future<Arg> f) {
-        using futurator = futurize<std::result_of_t<Func(Arg&&)>>;
+        using futurator = futurize<std::invoke_result_t<Func, Arg&&>>;
         try {
             return futurator::invoke(std::forward<Func>(func), f.get());
         } catch (...) {
@@ -67,7 +67,7 @@ private:
 
     template<typename Func, typename... Args>
     static auto call_helper(Func&& func, future<std::tuple<Args...>> f) {
-        using futurator = futurize<std::result_of_t<Func(std::tuple<Args&&...>)>>;
+        using futurator = futurize<std::invoke_result_t<Func, std::tuple<Args&&...>>>;
         try {
             return futurator::invoke(std::forward<Func>(func), f.get());
         } catch (...) {
@@ -116,7 +116,7 @@ public:
         _gate.enter();
         _map[rp].count++;
 
-        using futurator = futurize<std::result_of_t<Func()>>;
+        using futurator = futurize<std::invoke_result_t<Func>>;
 
         return futurator::invoke(std::forward<Func>(func)).then_wrapped([this, rp, post = std::forward<Post>(post)](typename futurator::type f) mutable {
             auto i = _map.find(rp);

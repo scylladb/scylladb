@@ -125,7 +125,7 @@ void register_handler(messaging_service *ms, messaging_verb verb, Func &&func) {
 template <typename MsgIn, typename... MsgOut>
 auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
-    using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
+    using futurator = futurize<std::invoke_result_t<decltype(rpc_handler), rpc_protocol::client&, MsgOut...>>;
     if (ms->is_shutting_down()) {
         return futurator::make_exception_future(rpc::closed_error());
     }
@@ -148,7 +148,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOu
 template <typename MsgIn, typename Timeout, typename... MsgOut>
 auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, Timeout timeout, MsgOut&&... msg) {
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
-    using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
+    using futurator = futurize<std::invoke_result_t<decltype(rpc_handler), rpc_protocol::client&, MsgOut...>>;
     if (ms->is_shutting_down()) {
         return futurator::make_exception_future(rpc::closed_error());
     }
@@ -173,7 +173,7 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr i
 template <typename MsgIn, typename... MsgOut>
 auto send_message_cancellable(messaging_service* ms, messaging_verb verb, msg_addr id, abort_source& as, MsgOut&&... msg) {
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
-    using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
+    using futurator = futurize<std::invoke_result_t<decltype(rpc_handler), rpc_protocol::client&, MsgOut...>>;
     if (ms->is_shutting_down()) {
         return futurator::make_exception_future(rpc::closed_error());
     }
