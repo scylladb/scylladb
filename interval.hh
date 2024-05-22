@@ -76,7 +76,7 @@ public:
     using bound = interval_bound<T>;
 
     template <typename Transformer>
-    using transformed_type = typename std::remove_cv_t<std::remove_reference_t<std::result_of_t<Transformer(T)>>>;
+    using transformed_type = typename std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Transformer, T>>>;
 private:
     optional<bound> _start;
     optional<bound> _end;

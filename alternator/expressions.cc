@@ -28,7 +28,7 @@
 
 namespace alternator {
 
-template <typename Func, typename Result = std::result_of_t<Func(expressionsParser&)>>
+template <typename Func, typename Result = std::invoke_result_t<Func, expressionsParser&>>
 static Result do_with_parser(std::string_view input, Func&& f) {
     expressionsLexer::InputStreamType input_stream{
         reinterpret_cast<const ANTLR_UINT8*>(input.data()),
@@ -43,7 +43,7 @@ static Result do_with_parser(std::string_view input, Func&& f) {
     return result;
 }
 
-template <typename Func, typename Result = std::result_of_t<Func(expressionsParser&)>>
+template <typename Func, typename Result = std::invoke_result_t<Func, expressionsParser&>>
 static Result parse(const char* input_name, std::string_view input, Func&& f) {
     if (input.length() > 4096) {
         throw expressions_syntax_error(format("{} expression size {} exceeds allowed maximum 4096.",

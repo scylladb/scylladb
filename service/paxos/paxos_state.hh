@@ -46,7 +46,7 @@ private:
         // are no waiters.
         ///
         template<typename Func>
-        futurize_t<std::result_of_t<Func()>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {
+        futurize_t<std::invoke_result_t<Func>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {
             return with_semaphore(get_semaphore_for_key(key), 1, timeout - clock_type::now(), std::move(func)).finally([key, this] {
                 release_semaphore_for_key(key);
             });
@@ -68,7 +68,7 @@ private:
     // protects access to system.paxos
     template<typename Func>
     static
-    futurize_t<std::result_of_t<Func()>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {
+    futurize_t<std::invoke_result_t<Func>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {
         return _paxos_table_lock.with_locked_key(key, timeout, std::move(func));
     }
 

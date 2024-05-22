@@ -59,26 +59,26 @@ requires std::invocable<Func, Args&&...>
 auto do_io_check(const io_error_handler& error_handler, Func&& func, Args&&... args) noexcept {
     return futurize_invoke(func, std::forward<Args>(args)...).handle_exception([&error_handler] (auto ep) {
         error_handler(ep);
-        return futurize<std::result_of_t<Func(Args&&...)>>::make_exception_future(ep);
+        return futurize<std::invoke_result_t<Func, Args&&...>>::make_exception_future(ep);
     });
 }
 
 template<typename Func, typename... Args>
-auto commit_io_check(Func&& func, Args&&... args) noexcept(is_future<std::result_of_t<Func(Args&&...)>>::value) {
+auto commit_io_check(Func&& func, Args&&... args) noexcept(is_future<std::invoke_result_t<Func, Args&&...>>::value) {
     return do_io_check(commit_error_handler, std::forward<Func>(func), std::forward<Args>(args)...);
 }
 
 template<typename Func, typename... Args>
-auto sstable_io_check(const io_error_handler& error_handler, Func&& func, Args&&... args) noexcept(is_future<std::result_of_t<Func(Args&&...)>>::value) {
+auto sstable_io_check(const io_error_handler& error_handler, Func&& func, Args&&... args) noexcept(is_future<std::invoke_result_t<Func, Args&&...>>::value) {
     return do_io_check(error_handler, std::forward<Func>(func), std::forward<Args>(args)...);
 }
 
 template<typename Func, typename... Args>
-auto io_check(const io_error_handler& error_handler, Func&& func, Args&&... args) noexcept(is_future<std::result_of_t<Func(Args&&...)>>::value) {
+auto io_check(const io_error_handler& error_handler, Func&& func, Args&&... args) noexcept(is_future<std::invoke_result_t<Func, Args&&...>>::value) {
     return do_io_check(error_handler, general_disk_error, std::forward<Func>(func), std::forward<Args>(args)...);
 }
 
 template<typename Func, typename... Args>
-auto io_check(Func&& func, Args&&... args) noexcept(is_future<std::result_of_t<Func(Args&&...)>>::value) {
+auto io_check(Func&& func, Args&&... args) noexcept(is_future<std::invoke_result_t<Func, Args&&...>>::value) {
     return do_io_check(general_disk_error_handler, std::forward<Func>(func), std::forward<Args>(args)...);
 }

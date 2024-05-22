@@ -13,6 +13,7 @@
 #include "mutation_fragment_stream_validator.hh"
 #include "tombstone_gc.hh"
 #include "full_position.hh"
+#include <type_traits>
 
 static inline bool has_ck_selector(const query::clustering_row_ranges& ranges) {
     // Like PK range, an empty row range, should be considered an "exclude all" restriction
@@ -515,7 +516,7 @@ public:
             _last_dk = *_dk;
             _dk = &_last_dk;
         }
-        if constexpr (std::is_same_v<std::result_of_t<decltype(&GCConsumer::consume_end_of_stream)(GCConsumer&)>, void>) {
+        if constexpr (std::is_void_v<std::invoke_result_t<decltype(&GCConsumer::consume_end_of_stream), GCConsumer&>>) {
             gc_consumer.consume_end_of_stream();
             return consumer.consume_end_of_stream();
         } else {

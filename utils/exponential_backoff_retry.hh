@@ -63,7 +63,7 @@ private:
 public:
     template<typename Func>
     static auto do_until_value(std::chrono::milliseconds base_sleep_time, std::chrono::milliseconds max_sleep_time, seastar::abort_source& as, Func f) {
-        using type_helper = retry_type_helper<std::result_of_t<Func()>>;
+        using type_helper = retry_type_helper<std::invoke_result_t<Func>>;
 
         auto r = exponential_backoff_retry(base_sleep_time, max_sleep_time);
         return seastar::do_with(std::move(r), [&as, f = std::move(f)] (exponential_backoff_retry& r) mutable {

@@ -110,7 +110,7 @@ public:
 private:
     template <typename Func>
     struct concrete_allocating_function : public allocating_function {
-        using futurator = futurize<std::result_of_t<Func()>>;
+        using futurator = futurize<std::invoke_result_t<Func>>;
         typename futurator::promise_type pr;
         Func func;
     public:
@@ -311,7 +311,7 @@ public:
     // We disallow future-returning functions here, because otherwise memory may be available
     // when we start executing it, but no longer available in the middle of the execution.
     requires (!is_future<std::invoke_result_t<Func>>::value)
-    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout);
+    futurize_t<std::invoke_result_t<Func>> run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout);
 
     // returns a pointer to the largest region (in terms of memory usage) that sits below this
     // region group. This includes the regions owned by this region group as well as all of its
@@ -561,7 +561,7 @@ template <typename Func>
 // We disallow future-returning functions here, because otherwise memory may be available
 // when we start executing it, but no longer available in the middle of the execution.
 requires (!is_future<std::invoke_result_t<Func>>::value)
-futurize_t<std::result_of_t<Func()>>
+futurize_t<std::invoke_result_t<Func>>
 region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
     bool blocked = 
         !_blocked_requests.empty()
