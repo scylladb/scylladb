@@ -186,6 +186,25 @@ protected:
     token_metadata_ptr _tmptr;
     size_t _replication_factor;
     std::unique_ptr<abort_source> _validity_abort_source;
+
+    template <std::ranges::range ResultSet, std::ranges::range SourceSet>
+    requires (std::same_as<std::ranges::range_value_t<ResultSet>, gms::inet_address> && std::same_as<std::ranges::range_value_t<SourceSet>, host_id>)
+    static ResultSet resolve_endpoints(const SourceSet& host_ids, const token_metadata& tm) {
+        ResultSet result{};
+        result.reserve(host_ids.size());
+        for (const auto& host_id: host_ids) {
+            result.push_back(resolve_endpoint(host_id, tm));
+        }
+        return result;
+    }
+
+    template <std::ranges::range ResultSet, std::ranges::range SourceSet>
+    requires (std::same_as<std::ranges::range_value_t<ResultSet>, gms::inet_address> && std::same_as<std::ranges::range_value_t<SourceSet>, host_id>)
+    ResultSet resolve_endpoints(const SourceSet& host_ids) const {
+        return resolve_endpoints<ResultSet>(host_ids, *_tmptr);
+    }
+
+    friend class abstract_replication_strategy;
 public:
     effective_replication_map(replication_strategy_ptr, token_metadata_ptr, size_t replication_factor) noexcept;
     effective_replication_map(effective_replication_map&&) noexcept = default;
@@ -270,6 +289,17 @@ public:
 
     dht::shard_replica_set shard_for_writes(const schema& s, dht::token t) const {
         return get_sharder(s).shard_for_writes(t);
+    }
+
+    static gms::inet_address resolve_endpoint(const locator::host_id& host_id, const token_metadata& tm) {
+        // Empty host_id is used as a marker for local address.
+        // The reason for this hack is that we need local_strategy to
+        // work before the local host_id is loaded from the system.local table.
+        return host_id ? tm.get_endpoint_for_host_id(host_id) : tm.get_topology().my_address();
+    }
+
+    gms::inet_address resolve_endpoint(const locator::host_id& host_id) const {
+        return resolve_endpoint(host_id, *_tmptr);
     }
 };
 

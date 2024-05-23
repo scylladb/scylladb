@@ -20,19 +20,6 @@
 
 namespace locator {
 
-template <typename ResultSet, typename SourceSet>
-static ResultSet resolve_endpoints(const SourceSet& host_ids, const token_metadata& tm) {
-    ResultSet result{};
-    result.reserve(host_ids.size());
-    for (const auto& host_id: host_ids) {
-        // Empty host_id is used as a marker for local address.
-        // The reason for this hack is that we need local_strategy to
-        // work before the local host_id is loaded from the system.local table.
-        result.push_back(host_id ? tm.get_endpoint_for_host_id(host_id) : tm.get_topology().my_address());
-    }
-    return result;
-}
-
 logging::logger rslogger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
@@ -70,7 +57,7 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
 
 future<endpoint_set> abstract_replication_strategy::calculate_natural_ips(const token& search_token, const token_metadata& tm) const {
     const auto host_ids = co_await calculate_natural_endpoints(search_token, tm);
-    co_return resolve_endpoints<endpoint_set>(host_ids, tm);
+    co_return effective_replication_map::resolve_endpoints<endpoint_set>(host_ids, tm);
 }
 
 using strategy_class_registry = class_registry<
@@ -125,7 +112,7 @@ inet_address_vector_topology_change vnode_effective_replication_map::get_pending
     const auto* pending_endpoints = find_token(_pending_endpoints, search_token);
     if (pending_endpoints) {
         // interval_map does not work with std::vector, convert to inet_address_vector_topology_change
-        endpoints = resolve_endpoints<inet_address_vector_topology_change>(*pending_endpoints, *_tmptr);
+        endpoints = resolve_endpoints<inet_address_vector_topology_change>(*pending_endpoints);
     }
     return endpoints;
 }
@@ -135,7 +122,7 @@ inet_address_vector_replica_set vnode_effective_replication_map::get_endpoints_f
     if (endpoints == nullptr) {
         return get_natural_endpoints_without_node_being_replaced(token);
     }
-    return resolve_endpoints<inet_address_vector_replica_set>(*endpoints, *_tmptr);
+    return resolve_endpoints<inet_address_vector_replica_set>(*endpoints);
 }
 
 std::optional<tablet_routing_info> vnode_effective_replication_map::check_locality(const token& token) const {
@@ -506,7 +493,7 @@ host_id_vector_replica_set vnode_effective_replication_map::do_get_replicas(cons
 inet_address_vector_replica_set vnode_effective_replication_map::do_get_natural_endpoints(const token& tok,
     bool is_vnode) const
 {
-    return resolve_endpoints<inet_address_vector_replica_set>(do_get_replicas(tok, is_vnode), *_tmptr);
+    return resolve_endpoints<inet_address_vector_replica_set>(do_get_replicas(tok, is_vnode));
 }
 
 host_id_vector_replica_set vnode_effective_replication_map::get_replicas(const token& tok) const {
