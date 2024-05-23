@@ -154,11 +154,23 @@ gms::inet_address storage_proxy::my_address() const noexcept {
     return _shared_token_metadata.get()->get_topology().my_address();
 }
 
+locator::host_id storage_proxy::my_host_id() const noexcept {
+    return _shared_token_metadata.get()->get_topology().my_host_id();
+}
+
 bool storage_proxy::is_me(gms::inet_address addr) const noexcept {
     return local_db().get_token_metadata().get_topology().is_me(addr);
 }
 
+bool storage_proxy::is_me(locator::host_id hid) const noexcept {
+    return local_db().get_token_metadata().get_topology().is_me(hid);
+}
+
 bool storage_proxy::only_me(const inet_address_vector_replica_set& replicas) const noexcept {
+    return replicas.size() == 1 && is_me(replicas[0]);
+}
+
+bool storage_proxy::only_me(const host_id_vector_replica_set& replicas) const noexcept {
     return replicas.size() == 1 && is_me(replicas[0]);
 }
 

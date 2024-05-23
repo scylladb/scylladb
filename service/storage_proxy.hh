@@ -501,11 +501,14 @@ public:
     future<> stop_remote();
 
     gms::inet_address my_address() const noexcept;
+    locator::host_id my_host_id() const noexcept;
 
     bool is_me(gms::inet_address addr) const noexcept;
+    bool is_me(locator::host_id hid) const noexcept;
 
 private:
     bool only_me(const inet_address_vector_replica_set& replicas) const noexcept;
+    bool only_me(const host_id_vector_replica_set& replicas) const noexcept;
 
     // Throws an error if remote is not initialized.
     const struct remote& remote() const;
