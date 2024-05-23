@@ -2603,8 +2603,9 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
         auto permit = semaphore.make_permit();
         const size_t buffer_size = 1024;
         std::deque<mutation_fragment_v2> mfs;
-        auto dk0 = ss.make_pkey(0);
-        auto dk1 = ss.make_pkey(1);
+        auto dks = ss.make_pkeys(2);
+        const auto& dk0 = dks[0];
+        const auto& dk1 = dks[1];
 
         mfs.emplace_back(*ss.schema(), permit, partition_start(dk0, tombstone{}));
 
