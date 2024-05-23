@@ -101,7 +101,6 @@ async def start_writes(cql: Session, concurrency: int = 3):
 
     async def do_writes(worker_id: int):
         write_count = 0
-        last_error = None
         while not stop_event.is_set():
             start_time = time.time()
             try:
@@ -109,10 +108,8 @@ async def start_writes(cql: Session, concurrency: int = 3):
                 write_count += 1
             except Exception as e:
                 logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
-                last_error = e
+                raise
         logger.info(f"Worker #{worker_id} did {write_count} successful writes")
-        if last_error is not None:
-            raise last_error
 
     tasks = [asyncio.create_task(do_writes(worker_id)) for worker_id in range(concurrency)]
 
