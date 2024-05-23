@@ -56,7 +56,7 @@ future<> raft_service_level_distributed_data_accessor::do_raft_command(service::
     co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &as);
 }
 
-static void validate_state(const std::optional<service::group0_guard>& guard) {
+static void validate_state(const service::raft_group0_client& group0_client, const std::optional<service::group0_guard>& guard) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "raft_service_level_distributed_data_accessor: must be executed on shard 0");
     }
@@ -64,10 +64,14 @@ static void validate_state(const std::optional<service::group0_guard>& guard) {
     if (!guard) {
         on_internal_error(logger, "raft_service_level_distributed_data_accessor: guard must be present");
     }
+
+    if (group0_client.in_recovery()) {
+        throw exceptions::invalid_request_exception("The cluster is in recovery mode. Changes to service levels are not allowed.");
+    }
 }
 
 future<> raft_service_level_distributed_data_accessor::set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const {   
-    validate_state(guard);
+    validate_state(_group0_client, guard);
     
     static sstring insert_query = format("INSERT INTO {}.{} (service_level, timeout, workload_type) VALUES (?, ?, ?);", db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2);
     data_value workload = slo.workload == qos::service_level_options::workload_type::unspecified
@@ -86,7 +90,7 @@ future<> raft_service_level_distributed_data_accessor::drop_service_level(sstrin
         guard = co_await _group0_client.start_operation(&as);
     }
 
-    validate_state(guard);
+    validate_state(_group0_client, guard);
 
     static sstring delete_query = format("DELETE FROM {}.{} WHERE service_level= ?;", db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2);
     
