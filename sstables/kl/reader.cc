@@ -17,6 +17,7 @@
 #include "concrete_types.hh"
 #include "utils/assert.hh"
 #include "utils/to_string.hh"
+#include "utils/value_or_reference.hh"
 
 namespace sstables {
 namespace kl {
@@ -1138,6 +1139,8 @@ class sstable_mutation_reader : public mp_row_consumer_reader_k_l {
     using DataConsumeRowsContext = kl::data_consume_rows_context;
     using Consumer = mp_row_consumer_k_l;
     static_assert(RowConsumer<Consumer>);
+    value_or_reference<query::partition_slice> _slice_holder;
+    const query::partition_slice& _slice;
     Consumer _consumer;
     bool _will_likely_slice = false;
     bool _read_enabled = true;
@@ -1146,7 +1149,6 @@ class sstable_mutation_reader : public mp_row_consumer_reader_k_l {
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
     const dht::partition_range& _pr;
-    const query::partition_slice& _slice;
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
@@ -1155,19 +1157,20 @@ public:
                             schema_ptr schema,
                             reader_permit permit,
                             const dht::partition_range& pr,
-                            const query::partition_slice& slice,
+                            value_or_reference<query::partition_slice> slice,
                             tracing::trace_state_ptr trace_state,
                             streamed_mutation::forwarding fwd,
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon)
             : mp_row_consumer_reader_k_l(std::move(schema), permit, std::move(sst))
-            , _consumer(this, _schema, std::move(permit), slice, std::move(trace_state), fwd, _sst)
+            , _slice_holder(std::move(slice))
+            , _slice(_slice_holder.get())
+            , _consumer(this, _schema, std::move(permit), _slice, std::move(trace_state), fwd, _sst)
             // FIXME: I want to add `&& fwd_mr == mutation_reader::forwarding::no` below
             // but can't because many call sites use the default value for
             // `mutation_reader::forwarding` which is `yes`.
             , _single_partition_read(pr.is_singular())
             , _pr(pr)
-            , _slice(slice)
             , _fwd(fwd)
             , _fwd_mr(fwd_mr)
             , _monitor(mon) { }
@@ -1489,6 +1492,22 @@ public:
     }
 };
 
+static mutation_reader make_reader(
+        shared_sstable sstable,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& range,
+        value_or_reference<query::partition_slice> slice,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        read_monitor& monitor) {
+    return make_mutation_reader<sstable_mutation_reader>(
+        std::move(sstable), std::move(schema), std::move(permit), range,
+        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor);
+}
+
+
 mutation_reader make_reader(
         shared_sstable sstable,
         schema_ptr schema,
@@ -1499,9 +1518,24 @@ mutation_reader make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor) {
-    return make_mutation_reader<sstable_mutation_reader>(
-        std::move(sstable), std::move(schema), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, monitor);
+    return make_reader(
+        std::move(sstable), std::move(schema), std::move(permit), range, value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor);
 }
+
+mutation_reader make_reader(
+        shared_sstable sstable,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& range,
+        query::partition_slice&& slice,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        read_monitor& monitor) {
+    return make_reader(
+        std::move(sstable), std::move(schema), std::move(permit), range, value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor);
+}
+
 
 class crawling_sstable_mutation_reader : public mp_row_consumer_reader_k_l {
     using DataConsumeRowsContext = kl::data_consume_rows_context;
