@@ -17,6 +17,12 @@ import shutil
 from scylla_util import *
 from subprocess import run
 
+
+def has_zstd():
+    coredump_version = out('coredumpctl --version').split('\n')
+    features = coredump_version[1].split(' ')
+    return '+ZSTD' in features
+
 if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
@@ -24,7 +30,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Optimize coredump settings for Scylla.')
     parser.add_argument('--dump-to-raiddir', action='store_true', default=False,
                         help='store coredump to /var/lib/scylla')
-    parser.add_argument('--compress', action='store_true', default=False,
+    # Enable compress by default when zstd support available
+    parser.add_argument('--compress', action='store_true', default=has_zstd(),
                         help='enable compress on systemd-coredump')
     args = parser.parse_args()
 
