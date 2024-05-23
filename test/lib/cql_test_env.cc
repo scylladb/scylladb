@@ -28,6 +28,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/coroutine.hh>
 #include "service/migration_manager.hh"
+#include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/tablet_allocator.hh"
 #include "compaction/compaction_manager.hh"
 #include "message/messaging_service.hh"
@@ -44,7 +45,6 @@
 #include "schema/schema_builder.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
-#include "unit_test_service_levels_accessor.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/node_view_update_backlog.hh"
 #include "db/view/view_update_generator.hh"
@@ -881,10 +881,10 @@ private:
                 }
             });
 
-            _sl_controller.invoke_on_all([this] (qos::service_level_controller& service) {
+            _sl_controller.invoke_on_all([this, &group0_client] (qos::service_level_controller& service) {
                 qos::service_level_controller::service_level_distributed_data_accessor_ptr service_level_data_accessor =
                         ::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
-                                make_shared<qos::unit_test_service_levels_accessor>(_sl_controller, _sys_dist_ks));
+                                make_shared<qos::raft_service_level_distributed_data_accessor>(_qp.local(), group0_client));
                 return service.set_distributed_data_accessor(std::move(service_level_data_accessor));
             }).get();
 
