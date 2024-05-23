@@ -38,12 +38,45 @@ def test_group_by_partition(cql, table1):
 
 # Adding a LIMIT should be honored.
 # Reproduces #17237 - more results than the limit were generated.
-@pytest.mark.xfail(reason="issue #17237")
 def test_group_by_partition_with_limit(cql, table1):
     # "LIMIT 1" should return only one of the two matches (0,0,0,1) and
     # (1,0,0,5). The partition key 1 happens to be the first one in
     # murmur3 order, so this is what should be returned.
     assert {(1,0,0,5)} == set(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p LIMIT 1'))
+
+def test_group_by_partition_count_with_limit(cql, test_keyspace):
+    def execute_query(qry):
+        # Test with a fetch size smaller than the number of rows in the result set
+        stmt = cql.prepare(qry)
+        stmt.fetch_size = 3
+        return list(cql.execute(stmt))
+    with new_test_table(cql, test_keyspace, "a int, b int, c int, PRIMARY KEY (a, b)") as table:
+        # Insert a number rows into the table. 29, 31, 37, 41 as well as
+        # 293, 317, 379, 419 are prime numbers and essentially magic numbers,
+        # but they guaranteed to have no common factors with each other and
+        # with LIMIT values we are going to use. They are also high enough to
+        # avoid accidental collisions with the LIMIT values.
+        for i in range(29):
+            cql.execute(f"INSERT INTO {table} (a,b,c) VALUES (293,{i+1},293);");
+        for i in range(31):
+            cql.execute(f"INSERT INTO {table} (a,b,c) VALUES (317,{i+1},317);");
+        for i in range(37):
+            cql.execute(f"INSERT INTO {table} (a,b,c) VALUES (379,{i+1},379);");
+        for i in range(41):
+            cql.execute(f"INSERT INTO {table} (a,b,c) VALUES (419,{i+1},419);");
+
+        assert [379, 293, 419, 317] == list(map(lambda x: x[0], execute_query(f'SELECT a FROM {table} GROUP BY a')))
+
+        # Testing up to 5 to ensure that the correct results are returned if fewer
+        # results are generated than the LIMIT
+        for i in range(1,6):
+            query_result = [x[0] for x in execute_query(f'SELECT a FROM {table} GROUP BY a LIMIT {i}')]
+            assert query_result == [379, 293, 419, 317][:i]
+
+        assert [37, 29, 41, 31] == [x[0] for x in execute_query(f'SELECT COUNT(a) FROM {table} GROUP BY a')]
+
+        for i in range(1,5):
+            assert [37, 29, 41, 31][:i] == [x[0] for x in execute_query(f'SELECT COUNT(a) FROM {table} GROUP BY a LIMIT {i}')]
 
 # Try the same restricting the scan to a single partition instead of a
 # whole-table scan. We should get just one row (the first row in the
@@ -74,7 +107,6 @@ def test_group_by_clustering_prefix(cql, table1):
 
 # Adding a LIMIT should be honored.
 # Reproduces #5362 - fewer results than the limit were generated.
-@pytest.mark.xfail(reason="issue #5362")
 def test_group_by_clustering_prefix_with_limit(cql, table1):
     results = list(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p,c1'))
     assert len(results) == 4
@@ -149,7 +181,6 @@ def test_group_by_count(cql, table1):
 # Adding a LIMIT should be honored.
 # Reproduces #5361 - more results than the limit were generated (seems the
 # limit was outright ignored).
-@pytest.mark.xfail(reason="issue #5361")
 def test_group_by_count_with_limit(cql, table1):
     results = list(cql.execute(f'SELECT p,c1,count(*) FROM {table1} GROUP BY p,c1'))
     assert len(results) == 4
@@ -186,7 +217,6 @@ def test_group_by_v_and_sum(cql, table1):
 # Adding a LIMIT should be honored.
 # Reproduces #5361 - more results than the limit were generated (seems the
 # limit was outright ignored).
-@pytest.mark.xfail(reason="issue #5361")
 def test_group_by_v_and_sum_with_limit(cql, table1):
     results = list(cql.execute(f'SELECT p,v,sum(v) FROM {table1} GROUP BY p,c1'))
     assert len(results) == 4
