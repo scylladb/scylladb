@@ -10,6 +10,7 @@
 #include "cql3/query_processor.hh"
 #include "db/consistency_level_type.hh"
 #include <seastar/core/abort_source.hh>
+#include "exceptions/exceptions.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "db/system_keyspace.hh"
 #include "types/types.hh"
@@ -55,7 +56,7 @@ future<> raft_service_level_distributed_data_accessor::do_raft_command(service::
     co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &as);
 }
 
-future<> raft_service_level_distributed_data_accessor::set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const {   
+static void validate_state(const std::optional<service::group0_guard>& guard) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "raft_service_level_distributed_data_accessor: must be executed on shard 0");
     }
@@ -63,6 +64,10 @@ future<> raft_service_level_distributed_data_accessor::set_service_level(sstring
     if (!guard) {
         on_internal_error(logger, "raft_service_level_distributed_data_accessor: guard must be present");
     }
+}
+
+future<> raft_service_level_distributed_data_accessor::set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const {   
+    validate_state(guard);
     
     static sstring insert_query = format("INSERT INTO {}.{} (service_level, timeout, workload_type) VALUES (?, ?, ?);", db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2);
     data_value workload = slo.workload == qos::service_level_options::workload_type::unspecified
@@ -81,13 +86,7 @@ future<> raft_service_level_distributed_data_accessor::drop_service_level(sstrin
         guard = co_await _group0_client.start_operation(&as);
     }
 
-    if (this_shard_id() != 0) {
-        on_internal_error(logger, "raft_service_level_distributed_data_accessor: must be executed on shard 0");
-    }
-
-    if (!guard) {
-        on_internal_error(logger, "raft_service_level_distributed_data_accessor: guard must be present");
-    }
+    validate_state(guard);
 
     static sstring delete_query = format("DELETE FROM {}.{} WHERE service_level= ?;", db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2);
     
