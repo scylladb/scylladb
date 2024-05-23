@@ -475,7 +475,7 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
         auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices, limit);
         coordinator_result<void> result_void = co_await utils::result_do_until(
                 [&p, &builder, limit] {
-                    return p->is_exhausted() || (limit && *limit <= builder.result_set_size());
+                    return p->is_exhausted() || (limit && *limit < builder.result_set_size());
                 },
                 [&p, &builder, page_size, now, timeout] {
                     return p->fetch_page_result(builder, page_size, now, timeout);

@@ -77,10 +77,7 @@ def test_distinct_limit(cql, test_keyspace):
 # Test combination of SELECT DISTINCT, COUNT, GROUP BY and LIMIT. 
 # COUNT + GROUP BY means generate one count per partition, and the
 # SELECT DISTINCT simply hands the counter just one row per partition
-# to count, so all the counts come up 1. Adding a LIMIT to all of
-# this exposes the same bug of limiting COUNT + GROUP BY, without the
-# SELECT DISTINCT, reported in issue #5361:
-@pytest.mark.xfail(reason="issue #5361")
+# to count, so all the counts come up 1.
 def test_distinct_count_group_by_limit(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
         stmt = cql.prepare(f"insert into {table} (p, c, v) values (?, ?, ?)")
