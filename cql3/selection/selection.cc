@@ -503,10 +503,12 @@ selection::collect_metadata(const schema& schema, const std::vector<prepared_sel
 }
 
 result_set_builder::result_set_builder(const selection& s, gc_clock::time_point now,
-                                       std::vector<size_t> group_by_cell_indices)
+                                       std::vector<size_t> group_by_cell_indices,
+                                       uint64_t limit)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
     , _group_by_cell_indices(std::move(group_by_cell_indices))
+    , _limit(limit)
     , _last_group(_group_by_cell_indices.size())
     , _group_began(false)
     , _now(now)
@@ -577,8 +579,10 @@ void result_set_builder::flush_selectors() {
         // handled by process_current_row
         return;
     }
-    _result_set->add_row(_selectors->get_output_row());
-    _selectors->reset();
+    if (_result_set->size() < _limit) {
+        _result_set->add_row(_selectors->get_output_row());
+        _selectors->reset();
+    }
 }
 
 void result_set_builder::complete_row() {
@@ -788,6 +792,10 @@ api::timestamp_type result_set_builder::timestamp_of(size_t idx) {
 
 int32_t result_set_builder::ttl_of(size_t idx) {
     return _ttls[idx];
+}
+
+size_t result_set_builder::result_set_size() const {
+    return _result_set->size();
 }
 
 bytes_opt result_set_builder::get_value(data_type t, query::result_atomic_cell_view c) {

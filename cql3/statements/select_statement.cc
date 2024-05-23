@@ -449,7 +449,9 @@ select_statement::do_execute(query_processor& qp,
                     *command, key_ranges))) {
         f = execute_without_checking_exception_message_non_aggregate_unpaged(qp, command, std::move(key_ranges), state, options, now);
     } else {
-        f = execute_without_checking_exception_message_aggregate_or_paged(qp, command, std::move(key_ranges), state, options, now, page_size, aggregate, nonpaged_filtering);
+        f = execute_without_checking_exception_message_aggregate_or_paged(qp, command,
+            std::move(key_ranges), state, options, now, page_size, aggregate,
+            nonpaged_filtering, parsed_limit.has_value() ? parsed_limit.value() : query::max_rows);
     }
 
     if (!tablet_info.has_value()) {
@@ -465,7 +467,8 @@ select_statement::do_execute(query_processor& qp,
 future<::shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute_without_checking_exception_message_aggregate_or_paged(query_processor& qp,
         lw_shared_ptr<query::read_command> command, dht::partition_range_vector&& key_ranges, service::query_state& state,
-        const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering) const {
+        const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering,
+        uint64_t limit) const {
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     auto timeout = db::timeout_clock::now() + timeout_duration;
@@ -473,8 +476,11 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
             state, options, command, std::move(key_ranges), _restrictions_need_filtering ? _restrictions : nullptr);
 
     if (aggregate || nonpaged_filtering) {
-        auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices);
-        coordinator_result<void> result_void = co_await utils::result_do_until([&p] {return p->is_exhausted();},
+        auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices, limit);
+        coordinator_result<void> result_void = co_await utils::result_do_until(
+                [&p, &builder, limit] {
+                    return p->is_exhausted() || (limit < builder.result_set_size());
+                },
                 [&p, &builder, page_size, now, timeout] {
                     return p->fetch_page_result(builder, page_size, now, timeout);
                 }
