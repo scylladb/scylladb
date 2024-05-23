@@ -219,3 +219,38 @@ SEASTAR_TEST_CASE(test_bloom_filter_folding) {
         }
     });
 }
+
+// Test bloom filter loading from i_filter interface to verify that the fold size is computed properly
+SEASTAR_TEST_CASE(test_bloom_filter_fold_size_computation) {
+    return test_env::do_with_async([](test_env& env) {
+        double max_false_pos_prob = 0.1;
+        auto estimated_partition_count = 6000;
+        auto actual_partition_count = 800;
+
+        // Create a filter with estimated partition
+        utils::filter_ptr orig_filter = utils::i_filter::get_filter(estimated_partition_count, max_false_pos_prob, utils::filter_format::m_format);
+        auto orig_bf = static_cast<utils::filter::bloom_filter*>(orig_filter.get());
+        auto orig_size = orig_bf->bits().memory_size();
+        auto orig_num_bits = orig_bf->bits().size();
+        BOOST_REQUIRE_EQUAL(orig_size, utils::i_filter::get_filter_size(estimated_partition_count, max_false_pos_prob));
+
+        // update filters with keys
+        for (int i = 0; i < actual_partition_count; i++) {
+            auto key = int32_type->decompose(i);
+            orig_filter->add(key);
+        }
+
+        // try fold the original filter into actual_partition_count
+        utils::i_filter::maybe_fold_filter(orig_filter, actual_partition_count, max_false_pos_prob);
+
+        auto expected_folded_size = utils::i_filter::get_filter_size(actual_partition_count, max_false_pos_prob);
+        auto actual_folded_size = orig_bf->bits().memory_size();
+        auto folded_num_bits = orig_bf->bits().size();
+
+        // verify that the filter has been folded down
+        BOOST_REQUIRE(expected_folded_size <= actual_folded_size && actual_folded_size < orig_size);
+        // verify the filter is folded to a bitmap whose size is aligned to 64 and is a factor of original size
+        BOOST_REQUIRE_EQUAL(folded_num_bits % 64, 0);
+        BOOST_REQUIRE_EQUAL(orig_num_bits % folded_num_bits, 0);
+    });
+}
