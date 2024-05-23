@@ -883,7 +883,7 @@ future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, v
         }
         mlogger.info("Create new view: {}", view);
         return seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts] {
-            auto mutations = db::schema_tables::make_create_view_mutations(keyspace, std::move(view), ts);
+            auto mutations = db::schema_tables::make_create_view_mutations(keyspace, view, ts);
             // We don't have a separate on_before_create_view() listener to
             // call. But a view is also a column family, and we need to call
             // the on_before_create_column_family listener - notably, to
