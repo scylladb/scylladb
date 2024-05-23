@@ -217,6 +217,10 @@ public:
         _sst->_total_reclaimable_memory.reset();
     }
 
+    future<> read_filter() noexcept {
+        return _sst->read_filter();
+    }
+
     void write_filter() {
         _sst->_recognized_components.insert(component_type::Filter);
         _sst->write_filter();
@@ -232,6 +236,10 @@ public:
 
     void reload_reclaimed_components() {
         _sst->reload_reclaimed_components().get();
+    }
+
+    utils::filter_ptr& get_filter() {
+        return _sst->_components->filter;
     }
 };
 

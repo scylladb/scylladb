@@ -13,6 +13,7 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/sstable_utils.hh"
 
+#include "readers/from_mutations_v2.hh"
 #include "types/types.hh"
 #include "utils/bloom_filter.hh"
 #include "utils/i_filter.hh"
@@ -252,5 +253,43 @@ SEASTAR_TEST_CASE(test_bloom_filter_fold_size_computation) {
         // verify the filter is folded to a bitmap whose size is aligned to 64 and is a factor of original size
         BOOST_REQUIRE_EQUAL(folded_num_bits % 64, 0);
         BOOST_REQUIRE_EQUAL(orig_num_bits % folded_num_bits, 0);
+    });
+}
+
+SEASTAR_TEST_CASE(test_bloom_filter_folding_during_write) {
+    return test_env::do_with_async([](test_env& env) {
+        // The estimated and actual counts chosen here allow the original Bloom filter
+        // to perfectly fold into the required bitmap size for the actual partition count.
+        // This is done to simplify the test verification.
+        auto estimated_partition_count = 1200;
+        auto actual_partition_count = 295;
+
+        // Generate mutations for the table
+        simple_schema ss;
+        auto s = ss.schema();
+        std::vector<mutation> mutations;
+        auto pks = ss.make_pkeys(actual_partition_count);
+        mutations.reserve(actual_partition_count);
+        for (auto pk : pks) {
+            auto mut = mutation(s, pk);
+            mut.partition().apply_insert(*s, ss.make_ckey(1), ss.new_timestamp());
+            mutations.push_back(std::move(mut));
+        }
+
+        auto permit = env.make_reader_permit();
+        auto mr = make_flat_mutation_reader_from_mutations_v2(s, permit, mutations);
+        auto close_mr = deferred_close(mr);
+        auto writer_cfg = env.manager().configure_writer();
+        auto sst = make_sstable_easy(env, std::move(mr), std::move(writer_cfg), sstables::get_highest_sstable_version(), estimated_partition_count);
+
+        // verify the filter was folded down to the size derived from actual_partition_count;
+        auto expected_filter_size = utils::i_filter::get_filter_size(actual_partition_count, s->bloom_filter_fp_chance()) + 4; // 4 for the number of hashes
+        BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), expected_filter_size);
+
+        // At this point the write_filter() has already succeeded. Test read_filter as well.
+        auto test_sst = sstables::test(sst);
+        test_sst.get_filter().reset();
+        BOOST_REQUIRE_NO_THROW(test_sst.read_filter().get());
+        BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), expected_filter_size);
     });
 }
