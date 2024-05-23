@@ -38,25 +38,6 @@ def new_service_level(cql, timeout=None, workload_type=None, role=None):
         cql.execute(f"DETACH SERVICE LEVEL FROM {attach_to}")
         cql.execute(f"DROP SERVICE LEVEL IF EXISTS {sl}")
 
-# Some of the service levels operations depends on controller's update
-# which currently are done in 10s intervals.
-# To not do plain 10s sleeps in tests, you should use this function 
-# to wait as little as possible.
-def try_until_success(f, timeout, step_sleep = 0.5):
-    start_time = time.time()
-    last_exception = None
-
-    while time.time() - start_time < timeout:
-        try:
-            f()
-            return
-        except Exception as e:
-            last_exception = e
-            time.sleep(step_sleep)
-
-    if last_exception is not None:
-        raise last_exception
-
 # Test that setting service level timeouts correctly sets the timeout parameter
 def test_set_service_level_timeouts(scylla_only, cql):
     with new_service_level(cql) as sl:
@@ -98,23 +79,20 @@ def test_list_effective_service_level(scylla_only, cql):
                 with new_service_level(cql, workload_type=workload_type, role=r2) as sl2:
                     cql.execute(f"GRANT {r2} TO {r1}")
 
-                    def check_list_effective_statament():
-                        list_r1 = cql.execute(f"LIST EFFECTIVE SERVICE LEVEL OF {r1}")
-                        for row in list_r1:
-                            if row.service_level_option == "timeout":
-                                assert row.effective_service_level == sl1
-                                assert row.value == "10s"
-                            if row.service_level_option == "workload_type":
-                                assert row.effective_service_level == sl2
-                                assert row.value == "batch"
+                    list_r1 = cql.execute(f"LIST EFFECTIVE SERVICE LEVEL OF {r1}")
+                    for row in list_r1:
+                        if row.service_level_option == "timeout":
+                            assert row.effective_service_level == sl1
+                            assert row.value == "10s"
+                        if row.service_level_option == "workload_type":
+                            assert row.effective_service_level == sl2
+                            assert row.value == "batch"
 
-                        list_r2 = cql.execute(f"LIST EFFECTIVE SERVICE LEVEL OF {r2}")
-                        for row in list_r2:
-                            if row.service_level_option == "timeout":
-                                assert row.effective_service_level == sl2
-                                assert row.value == None
-                            if row.service_level_option == "workload_type":
-                                assert row.effective_service_level == sl2
-                                assert row.value == "batch"
-
-                    try_until_success(check_list_effective_statament, 11)
+                    list_r2 = cql.execute(f"LIST EFFECTIVE SERVICE LEVEL OF {r2}")
+                    for row in list_r2:
+                        if row.service_level_option == "timeout":
+                            assert row.effective_service_level == sl2
+                            assert row.value == None
+                        if row.service_level_option == "workload_type":
+                            assert row.effective_service_level == sl2
+                            assert row.value == "batch"
