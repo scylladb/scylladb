@@ -10,6 +10,7 @@
 #include "locator/tablets.hh"
 #include "locator/tablet_metadata_guard.hh"
 #include "locator/tablet_sharder.hh"
+#include "locator/token_metadata.hh"
 #include "locator/token_range_splitter.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
@@ -553,23 +554,17 @@ class tablet_effective_replication_map : public effective_replication_map {
     tablet_sharder _sharder;
     mutable const tablet_map* _tmap = nullptr;
 private:
-    inet_address_vector_replica_set to_replica_set(const tablet_replica_set& replicas) const {
-        inet_address_vector_replica_set result;
+    host_id_vector_replica_set to_host_set(const tablet_replica_set& replicas, bool filter_out_left_nodes = false) const {
+        host_id_vector_replica_set result;
         result.reserve(replicas.size());
         auto& topo = _tmptr->get_topology();
         for (auto&& replica : replicas) {
-            auto* node = topo.find_node(replica.host);
-            if (node && !node->left()) {
-                result.emplace_back(node->endpoint());
+            if (filter_out_left_nodes) {
+                auto* node = topo.find_node(replica.host);
+                if (!node || node->left()) {
+                    continue;
+                }
             }
-        }
-        return result;
-    }
-
-    host_id_vector_replica_set to_host_set(const tablet_replica_set& replicas) const {
-        host_id_vector_replica_set result;
-        result.reserve(replicas.size());
-        for (auto&& replica : replicas) {
             result.emplace_back(replica.host);
         }
         return result;
@@ -620,12 +615,8 @@ public:
         return to_host_set(get_replicas_for_write(search_token));
     }
 
-    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override {
-        return to_replica_set(get_replicas_for_write(search_token));
-    }
-
-    virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override {
-        auto result = get_natural_endpoints(search_token);
+    virtual host_id_vector_replica_set get_natural_hosts_without_node_being_replaced(const token& search_token) const override {
+        auto result = get_replicas(search_token);
         maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
         return result;
     }
@@ -647,7 +638,7 @@ public:
         return ret;
     }
 
-    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {
+    virtual host_id_vector_topology_change get_pending_hosts(const token& search_token) const override {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto&& info = tablets.get_tablet_transition_info(tablet);
@@ -663,14 +654,14 @@ public:
                 }
                 tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
                                     search_token, _table, tablet, *info->pending_replica);
-                return {_tmptr->get_endpoint_for_host_id(info->pending_replica->host)};
+                return {info->pending_replica->host};
             case write_replica_set_selector::next:
                 return {};
         }
         on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
     }
 
-    virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override {
+    virtual host_id_vector_replica_set get_hosts_for_reading(const token& search_token) const override {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto&& info = tablets.get_tablet_transition_info(tablet);
@@ -687,8 +678,8 @@ public:
             }
             on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->reads)));
         });
-        tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
-        auto result = to_replica_set(replicas);
+        tablet_logger.trace("host_id_vector_replica_set({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        auto result = to_host_set(replicas);
         maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
         return result;
     }

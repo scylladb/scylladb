@@ -240,18 +240,23 @@ public:
     /// new replica.
     ///
     /// The returned addresses are present in the topology object associated with this instance.
-    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const = 0;
+    inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const;
 
     /// Returns a subset of replicas returned by get_natural_endpoints() without the pending replica.
-    virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_natural_hosts_without_node_being_replaced(const token& search_token) const = 0;
+    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const {
+        return resolve_endpoints<inet_address_vector_replica_set>(get_natural_hosts_without_node_being_replaced(search_token));
+    }
 
     /// Returns the set of pending replicas for a given token.
     /// Pending replica is a replica which gains ownership of data.
     /// Non-empty only during topology change.
-    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const = 0;
+    virtual host_id_vector_topology_change get_pending_hosts(const token& search_token) const  = 0;
+    inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const;
 
     /// Returns a list of nodes to which a read request should be directed.
-    virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_hosts_for_reading(const token& search_token) const = 0;
+    inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const;
 
     /// Returns replicas for a given token.
     /// During topology change returns replicas which should be targets for writes, excluding the pending replica.
@@ -355,10 +360,9 @@ private:
     friend class abstract_replication_strategy;
     friend class effective_replication_map_factory;
 public: // effective_replication_map
-    inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override;
-    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
-    inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
-    inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override;
+    host_id_vector_replica_set get_natural_hosts_without_node_being_replaced(const token& search_token) const override;
+    host_id_vector_topology_change get_pending_hosts(const token& search_token) const override;
+    host_id_vector_replica_set get_hosts_for_reading(const token& search_token) const override;
     host_id_vector_replica_set get_replicas(const token& search_token) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
@@ -566,6 +570,6 @@ private:
 
 void maybe_remove_node_being_replaced(const token_metadata&,
                                       const abstract_replication_strategy&,
-                                      inet_address_vector_replica_set& natural_endpoints);
+                                      host_id_vector_replica_set& natural_endpoints);
 
 }

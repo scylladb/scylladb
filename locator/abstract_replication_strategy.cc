@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "inet_address_vectors.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "utils/class_registrator.hh"
@@ -68,15 +69,15 @@ sstring abstract_replication_strategy::to_qualified_class_name(std::string_view 
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);
 }
 
-inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints_without_node_being_replaced(const token& search_token) const {
-    inet_address_vector_replica_set natural_endpoints = get_natural_endpoints(search_token);
+host_id_vector_replica_set vnode_effective_replication_map::get_natural_hosts_without_node_being_replaced(const token& search_token) const {
+    auto natural_endpoints = get_replicas(search_token);
     maybe_remove_node_being_replaced(*_tmptr, *_rs, natural_endpoints);
     return natural_endpoints;
 }
 
 void maybe_remove_node_being_replaced(const token_metadata& tm,
                                       const abstract_replication_strategy& rs,
-                                      inet_address_vector_replica_set& natural_endpoints) {
+                                      host_id_vector_replica_set& natural_endpoints) {
     if (tm.is_any_node_being_replaced() &&
         rs.allow_remove_node_being_replaced_from_natural_endpoints()) {
         // When a new node is started to replace an existing dead node, we want
@@ -90,8 +91,7 @@ void maybe_remove_node_being_replaced(const token_metadata& tm,
         // LocalStrategy because LocalStrategy always returns the node itself
         // as the natural_endpoints and the node will not appear in the
         // pending_endpoints.
-        auto it = boost::range::remove_if(natural_endpoints, [&] (gms::inet_address& p) {
-            const auto host_id = tm.get_host_id(p);
+        auto it = boost::range::remove_if(natural_endpoints, [&] (const auto& host_id) {
             return tm.is_being_replaced(host_id);
         });
         natural_endpoints.erase(it, natural_endpoints.end());
@@ -107,22 +107,28 @@ static const std::unordered_set<locator::host_id>* find_token(const ring_mapping
     return it != ring_mapping.end() ? &it->second : nullptr;
 }
 
-inet_address_vector_topology_change vnode_effective_replication_map::get_pending_endpoints(const token& search_token) const {
-    inet_address_vector_topology_change endpoints;
-    const auto* pending_endpoints = find_token(_pending_endpoints, search_token);
-    if (pending_endpoints) {
-        // interval_map does not work with std::vector, convert to inet_address_vector_topology_change
-        endpoints = resolve_endpoints<inet_address_vector_topology_change>(*pending_endpoints);
-    }
-    return endpoints;
+inet_address_vector_topology_change effective_replication_map::get_pending_endpoints(const token& search_token) const {
+        return resolve_endpoints<inet_address_vector_topology_change>(get_pending_hosts(search_token));
 }
 
-inet_address_vector_replica_set vnode_effective_replication_map::get_endpoints_for_reading(const token& token) const {
+host_id_vector_topology_change vnode_effective_replication_map::get_pending_hosts(const token& search_token) const {
+    const auto* pending_endpoints = find_token(_pending_endpoints, search_token);
+    if (pending_endpoints) {
+        return boost::copy_range<host_id_vector_topology_change>(*pending_endpoints);
+    }
+    return {};
+}
+
+inet_address_vector_replica_set effective_replication_map::get_endpoints_for_reading(const token& search_token) const {
+    return resolve_endpoints<inet_address_vector_replica_set>(get_hosts_for_reading(search_token));
+}
+
+host_id_vector_replica_set vnode_effective_replication_map::get_hosts_for_reading(const token& token) const {
     const auto* endpoints = find_token(_read_endpoints, token);
     if (endpoints == nullptr) {
-        return get_natural_endpoints_without_node_being_replaced(token);
+        return get_natural_hosts_without_node_being_replaced(token);
     }
-    return resolve_endpoints<inet_address_vector_replica_set>(*endpoints);
+    return boost::copy_range<host_id_vector_replica_set>(*endpoints);
 }
 
 std::optional<tablet_routing_info> vnode_effective_replication_map::check_locality(const token& token) const {
@@ -500,8 +506,8 @@ host_id_vector_replica_set vnode_effective_replication_map::get_replicas(const t
     return do_get_replicas(tok, false);
 }
 
-inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints(const token& search_token) const {
-    return do_get_natural_endpoints(search_token, false);
+inet_address_vector_replica_set effective_replication_map::get_natural_endpoints(const token& search_token) const {
+    return resolve_endpoints<inet_address_vector_replica_set>(get_replicas(search_token));
 }
 
 stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
