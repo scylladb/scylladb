@@ -573,6 +573,35 @@ void topology::sort_by_proximity(inet_address address, inet_address_vector_repli
     }));
 }
 
+void topology::sort_by_proximity(const host_id& hid, host_id_vector_replica_set& hosts) const {
+    if (!_sort_by_proximity) {
+        return;
+    }
+    auto get_node = [&] (const host_id& ep) {
+        if (auto node = find_node(ep)) {
+            return node;
+        } else if (!ep || ep == _cfg.this_host_id) {
+            if (!this_node()) {
+                on_internal_error(tlogger, format("topology[{}]: this_node is null when resolving node {}. this_host_id={}", fmt::ptr(this), ep, _cfg.this_host_id));
+            }
+            return this_node();
+        } else {
+            throw std::runtime_error(format("Requested location for node {} not in topology. this_host_id={} backtrace {}", ep, _cfg.this_host_id, lazy_backtrace()));
+        }
+    };
+    auto n = get_node(hid);
+    auto nodes = boost::copy_range<utils::small_vector<const node*, 3>>(hosts | boost::adaptors::transformed([&] (const host_id& ep) {
+        return get_node(ep);
+    }));
+    std::sort(nodes.begin(), nodes.end(), [this, n] (const node* n1, const node* n2) {
+        return compare_nodes_proximity(n, n1, n2) < 0;
+    });
+    hosts.clear();
+    hosts = boost::copy_range<host_id_vector_replica_set>(nodes | boost::adaptors::transformed([&] (const node* n) {
+        return n->host_id();
+    }));
+}
+
 std::weak_ordering topology::compare_nodes_proximity(const node* address, const node* a1, const node* a2) const {
     const auto& loc = address->dc_rack();
     const auto& loc1 = a1->dc_rack();

@@ -164,7 +164,7 @@ bool storage_proxy::is_me(gms::inet_address addr) const noexcept {
 }
 
 bool storage_proxy::is_me(locator::host_id hid) const noexcept {
-    return local_db().get_token_metadata().get_topology().is_me(hid);
+    return !hid || local_db().get_token_metadata().get_topology().is_me(hid);
 }
 
 bool storage_proxy::only_me(const inet_address_vector_replica_set& replicas) const noexcept {
@@ -2338,34 +2338,6 @@ bool paxos_response_handler::learned(gms::inet_address ep) {
         }
     }
     return false;
-}
-
-static inet_address_vector_replica_set
-replica_ids_to_endpoints(const locator::token_metadata& tm, const std::vector<locator::host_id>& replica_ids) {
-    inet_address_vector_replica_set endpoints;
-    endpoints.reserve(replica_ids.size());
-
-    for (const auto& replica_id : replica_ids) {
-        if (auto endpoint_opt = tm.get_endpoint_for_host_id_if_known(replica_id)) {
-            endpoints.push_back(*endpoint_opt);
-        }
-    }
-
-    return endpoints;
-}
-
-static std::vector<locator::host_id>
-endpoints_to_replica_ids(const locator::token_metadata& tm, const inet_address_vector_replica_set& endpoints) {
-    std::vector<locator::host_id> replica_ids;
-    replica_ids.reserve(endpoints.size());
-
-    for (const auto& endpoint : endpoints) {
-        if (auto replica_id_opt = tm.get_host_id_if_known(endpoint)) {
-            replica_ids.push_back(*replica_id_opt);
-        }
-    }
-
-    return replica_ids;
 }
 
 query::max_result_size storage_proxy::get_max_result_size(const query::partition_slice& slice) const {
@@ -4950,7 +4922,7 @@ public:
 
 class abstract_read_executor : public enable_shared_from_this<abstract_read_executor> {
 protected:
-    using targets_iterator = inet_address_vector_replica_set::iterator;
+    using targets_iterator = host_id_vector_replica_set::iterator;
     using digest_resolver_ptr = ::shared_ptr<digest_read_resolver>;
     using data_resolver_ptr = ::shared_ptr<data_read_resolver>;
     // Clock type for measuring timeouts.
@@ -4966,9 +4938,9 @@ protected:
     dht::partition_range _partition_range;
     db::consistency_level _cl;
     size_t _block_for;
-    inet_address_vector_replica_set _targets;
+    host_id_vector_replica_set _targets;
     // Targets that were successfully used for a data or digest request
-    inet_address_vector_replica_set _used_targets;
+    host_id_vector_replica_set _used_targets;
     promise<result<foreign_ptr<lw_shared_ptr<query::result>>>> _result_promise;
     tracing::trace_state_ptr _trace_state;
     lw_shared_ptr<replica::column_family> _cf;
@@ -4991,7 +4963,7 @@ public:
     abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
             locator::effective_replication_map_ptr ermp,
             lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
-            inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
+            host_id_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
                            _schema(std::move(s)), _proxy(std::move(proxy))
                          , _effective_replication_map_ptr(std::move(ermp))
                          , _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
@@ -5008,7 +4980,7 @@ public:
     ///
     /// Only filled after the request is finished, call only after
     /// execute()'s future is ready.
-    inet_address_vector_replica_set used_targets() const {
+    const host_id_vector_replica_set& used_targets() const {
         return _used_targets;
     }
 
@@ -5056,8 +5028,9 @@ protected:
     }
     void make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         auto start = latency_clock::now();
-        for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
+        for (const auto& hid : boost::make_iterator_range(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
+            auto ep = hid ? get_topology().get_node(hid).endpoint() : get_topology().my_address();
             (void)make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
                 std::exception_ptr ex;
                 try {
@@ -5082,9 +5055,10 @@ protected:
     }
     void make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout, bool want_digest) {
         auto start = latency_clock::now();
-        for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
+        for (const auto& hid : boost::make_iterator_range(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
-            (void)make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) {
+            auto ep = hid ? get_topology().get_node(hid).endpoint() : get_topology().my_address();
+            (void)make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, hid, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) {
                 std::exception_ptr ex;
                 try {
                   if (!f.failed()) {
@@ -5092,7 +5066,7 @@ protected:
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().data_read_completed.get_ep_stat(get_topology(), ep);
-                    _used_targets.push_back(ep);
+                    _used_targets.push_back(hid);
                     register_request_latency(latency_clock::now() - start);
                     return;
                   } else {
@@ -5109,9 +5083,10 @@ protected:
     }
     void make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         auto start = latency_clock::now();
-        for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
+        for (const auto& hid : boost::make_iterator_range(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
-            (void)make_digest_request(ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f) {
+            auto ep = hid ? get_topology().get_node(hid).endpoint() : get_topology().my_address();
+            (void)make_digest_request(ep, timeout).then_wrapped([this, resolver, hid, ep, start, exec = shared_from_this()] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f) {
                 std::exception_ptr ex;
                 try {
                   if (!f.failed()) {
@@ -5119,7 +5094,7 @@ protected:
                     _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v), std::get<3>(std::move(v)));
                     ++_proxy->get_stats().digest_read_completed.get_ep_stat(get_topology(), ep);
-                    _used_targets.push_back(ep);
+                    _used_targets.push_back(hid);
                     register_request_latency(latency_clock::now() - start);
                     return;
                   } else {
@@ -5380,7 +5355,7 @@ class never_speculating_read_executor : public abstract_read_executor {
 public:
     never_speculating_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
             locator::effective_replication_map_ptr ermp,
-            lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit,
+            lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, host_id_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit,
             db::per_partition_rate_limit::info rate_limit_info) :
                                         abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(ermp), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state), std::move(permit), rate_limit_info) {
         _block_for = _targets.size();
@@ -5461,22 +5436,22 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         db::consistency_level cl,
         db::read_repair_decision repair_decision,
         tracing::trace_state_ptr trace_state,
-        const inet_address_vector_replica_set& preferred_endpoints,
+        const host_id_vector_replica_set& preferred_endpoints,
         bool& is_read_non_local,
         service_permit permit) {
     const dht::token& token = pr.start()->value().token();
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
-    std::optional<gms::inet_address> extra_replica;
+    std::optional<locator::host_id> extra_replica;
 
-    inet_address_vector_replica_set all_replicas = get_endpoints_for_reading(schema->ks_name(), *erm, token);
+    auto all_replicas = get_endpoints_for_reading(schema->ks_name(), *erm, token);
     // Check for a non-local read before heat-weighted load balancing
     // reordering of endpoints happens. The local endpoint, if
     // present, is always first in the list, as get_endpoints_for_reading()
     // orders the list by proximity to the local endpoint.
-    is_read_non_local |= !all_replicas.empty() && all_replicas.front() != erm->get_topology().my_address();
+    is_read_non_local |= !all_replicas.empty() && !is_me(all_replicas.front());
 
     auto cf = _db.local().find_column_family(schema).shared_from_this();
-    inet_address_vector_replica_set target_replicas = filter_replicas_for_read(cl, *erm, all_replicas, preferred_endpoints, repair_decision,
+    auto target_replicas = filter_replicas_for_read(cl, *erm, all_replicas, preferred_endpoints, repair_decision,
             retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
             _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr);
 
@@ -5636,7 +5611,6 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     // not once per partition.
     bool is_read_non_local = false;
 
-    const auto& tm = erm->get_token_metadata();
     for (auto&& pr: partition_ranges) {
         if (!pr.is_singular()) {
             co_await coroutine::return_exception(std::runtime_error("mixed singular and non singular range are not supported"));
@@ -5644,8 +5618,9 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
         auto token_range = dht::token_range::make_singular(pr.start()->value().token());
         auto it = query_options.preferred_replicas.find(token_range);
-        const auto replicas = it == query_options.preferred_replicas.end()
-            ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(tm, it->second);
+        host_id_vector_replica_set empty_replica_set;
+        const auto& replicas = it == query_options.preferred_replicas.end()
+            ? empty_replica_set : it->second;
 
         auto r_read_executor = get_read_executor(cmd, erm, schema, std::move(pr), cl, repair_decision,
                                                  query_options.trace_state, replicas, is_read_non_local,
@@ -5676,7 +5651,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         auto timeout = query_options.timeout(*this);
         auto handle_completion = [&] (std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
                 auto& [rex, token_range] = executor_and_token_range;
-                used_replicas.emplace(std::move(token_range), endpoints_to_replica_ids(tm, rex->used_targets()));
+                used_replicas.emplace(std::move(token_range), rex->used_targets());
                 auto latency = rex->max_request_latency();
                 if (latency) {
                     rex->get_cf()->add_coordinator_read_latency(*latency);
@@ -5719,10 +5694,10 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
 bool storage_proxy::is_worth_merging_for_range_query(
         const locator::topology& topo,
-        inet_address_vector_replica_set& merged,
-        inet_address_vector_replica_set& l1,
-        inet_address_vector_replica_set& l2) const {
-    auto has_remote_node = [&topo, my_dc = topo.get_datacenter()] (inet_address_vector_replica_set& l) {
+        host_id_vector_replica_set& merged,
+        host_id_vector_replica_set& l1,
+        host_id_vector_replica_set& l2) const {
+    auto has_remote_node = [&topo, my_dc = topo.get_datacenter()] (const auto& l) {
         for (auto&& ep : l) {
             if (my_dc != topo.get_datacenter(ep)) {
                 return true;
@@ -5760,15 +5735,14 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     auto p = shared_from_this();
     auto& cf= _db.local().find_column_family(schema);
     auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
-    const auto& tm = erm->get_token_metadata();
 
     if (_features.range_scan_data_variant) {
         cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
     }
 
-    const auto preferred_replicas_for_range = [&preferred_replicas, &tm] (const dht::partition_range& r) {
+    const auto preferred_replicas_for_range = [&preferred_replicas] (const dht::partition_range& r) {
         auto it = preferred_replicas.find(r.transform(std::mem_fn(&dht::ring_position::token)));
-        return it == preferred_replicas.end() ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(tm, it->second);
+        return it == preferred_replicas.end() ? host_id_vector_replica_set{} :  it->second;
     };
     const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
 
@@ -5786,9 +5760,9 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
 
         while (i != ranges.end()) {
             dht::partition_range& range = *i;
-            inet_address_vector_replica_set live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range));
-            inet_address_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
-            inet_address_vector_replica_set filtered_endpoints = filter_replicas_for_read(cl, *erm, live_endpoints, merged_preferred_replicas, pcf);
+            auto live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range));
+            auto merged_preferred_replicas = preferred_replicas_for_range(*i);
+            auto filtered_endpoints = filter_replicas_for_read(cl, *erm, live_endpoints, merged_preferred_replicas, pcf);
             std::vector<dht::token_range> merged_ranges{to_token_range(range)};
             ++i;
 
@@ -5802,8 +5776,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 {
                     const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
                     dht::partition_range& next_range = *i;
-                    inet_address_vector_replica_set next_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(next_range));
-                    inet_address_vector_replica_set next_filtered_endpoints = filter_replicas_for_read(cl, *erm, next_endpoints, current_range_preferred_replicas, pcf);
+                    auto next_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(next_range));
+                    auto next_filtered_endpoints = filter_replicas_for_read(cl, *erm, next_endpoints, current_range_preferred_replicas, pcf);
 
                     // Origin has this to say here:
                     // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
@@ -5840,15 +5814,15 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                         break;
                     }
 
-                    inet_address_vector_replica_set merged = intersection(live_endpoints, next_endpoints);
-                    inet_address_vector_replica_set current_merged_preferred_replicas = intersection(merged_preferred_replicas, current_range_preferred_replicas);
+                    auto merged = intersection(live_endpoints, next_endpoints);
+                    auto current_merged_preferred_replicas = intersection(merged_preferred_replicas, current_range_preferred_replicas);
 
                     // Check if there is enough endpoint for the merge to be possible.
                     if (!is_sufficient_live_nodes(cl, *erm, merged)) {
                         break;
                     }
 
-                    inet_address_vector_replica_set filtered_merged = filter_replicas_for_read(cl, *erm, merged, current_merged_preferred_replicas, pcf);
+                    auto filtered_merged = filter_replicas_for_read(cl, *erm, merged, current_merged_preferred_replicas, pcf);
 
                     // Estimate whether merging will be a win or not
                     if (filtered_merged.empty()
@@ -5857,7 +5831,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                         break;
                     } else if (pcf) {
                         // check that merged set hit rate is not to low
-                        auto find_min = [this, pcf] (const inet_address_vector_replica_set& range) {
+                        auto find_min = [this, erm, pcf] (const auto& range) {
                             if (only_me(range)) {
                                 // The `min_element` call below would return the same thing, but thanks to this branch
                                 // we avoid having to access `remote` - so we can perform local queries without `remote`.
@@ -5867,11 +5841,12 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                             // There are nodes other than us in `range`.
                             struct {
                                 const gms::gossiper& g;
+                                const locator::topology& topo;
                                 replica::column_family* cf = nullptr;
-                                float operator()(const gms::inet_address& ep) const {
-                                    return float(cf->get_hit_rate(g, ep).rate);
+                                float operator()(const locator::host_id& ep) const {
+                                    return float(cf->get_hit_rate(g, topo.get_node(ep).endpoint()).rate);
                                 }
-                            } ep_to_hr{remote().gossiper(), pcf};
+                            } ep_to_hr{remote().gossiper(), erm->get_topology(), pcf};
 
                             if (range.empty()) {
                                 on_internal_error(slogger, "empty range passed to `find_min`");
@@ -5938,7 +5913,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 // 1) The list of replicas is determined for each vnode
                 // separately and thus this makes lookups more convenient.
                 // 2) On the next page the ranges might not be merged.
-                auto replica_ids = endpoints_to_replica_ids(tm, e->used_targets());
+                const auto& replica_ids = e->used_targets();
                 for (auto& r : ranges_per_exec[e.get()]) {
                     used_replicas.emplace(std::move(r), replica_ids);
                 }
@@ -6398,23 +6373,35 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, i
     }
 }
 
-inet_address_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
-    auto endpoints = erm.get_endpoints_for_reading(token);
-    auto it = boost::range::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this)));
+void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, host_id_vector_replica_set& eps) const {
+    topo.sort_by_proximity(my_host_id(), eps);
+    // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
+    auto it = boost::range::find(eps, my_host_id());
+    if (it != eps.end() && it != eps.begin()) {
+        std::iter_swap(it, eps.begin());
+    }
+}
+
+host_id_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
+    auto endpoints = erm.get_hosts_for_reading(token);
+    const auto& topo = erm.get_topology();
+    auto it = boost::range::remove_if(endpoints, std::not_fn([this, &topo] (const locator::host_id& hid) {
+        return !hid || is_me(hid) || is_alive(topo.get_node(hid).endpoint());
+    }));
     endpoints.erase(it, endpoints.end());
     sort_endpoints_by_proximity(erm.get_topology(), endpoints);
     return endpoints;
 }
 
 // `live_endpoints` must already contain only replicas for this query; the function only filters out some of them.
-inet_address_vector_replica_set
+host_id_vector_replica_set
 storage_proxy::filter_replicas_for_read(
         db::consistency_level cl,
         const locator::effective_replication_map& erm,
-        inet_address_vector_replica_set live_endpoints,
-        const inet_address_vector_replica_set& preferred_endpoints,
+        host_id_vector_replica_set live_endpoints,
+        const host_id_vector_replica_set& preferred_endpoints,
         db::read_repair_decision repair_decision,
-        std::optional<gms::inet_address>* extra,
+        std::optional<locator::host_id>* extra,
         replica::column_family* cf) const {
     if (live_endpoints.empty() || only_me(live_endpoints)) {
         // `db::filter_for_query` would return the same thing, but thanks to this branch we avoid having
@@ -6428,12 +6415,12 @@ storage_proxy::filter_replicas_for_read(
     return db::filter_for_query(cl, erm, std::move(live_endpoints), preferred_endpoints, repair_decision, gossiper, extra, cf);
 }
 
-inet_address_vector_replica_set
+host_id_vector_replica_set
 storage_proxy::filter_replicas_for_read(
         db::consistency_level cl,
         const locator::effective_replication_map& erm,
-        const inet_address_vector_replica_set& live_endpoints,
-        const inet_address_vector_replica_set& preferred_endpoints,
+        const host_id_vector_replica_set& live_endpoints,
+        const host_id_vector_replica_set& preferred_endpoints,
         replica::column_family* cf) const {
     return filter_replicas_for_read(cl, erm, live_endpoints, preferred_endpoints, db::read_repair_decision::NONE, nullptr, cf);
 }
@@ -6442,10 +6429,21 @@ bool storage_proxy::is_alive(const gms::inet_address& ep) const {
     return _remote ? _remote->is_alive(ep) : is_me(ep);
 }
 
+/*
 inet_address_vector_replica_set storage_proxy::intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2) {
     inet_address_vector_replica_set inter;
     inter.reserve(l1.size());
     std::remove_copy_if(l1.begin(), l1.end(), std::back_inserter(inter), [&l2] (const gms::inet_address& a) {
+        return std::find(l2.begin(), l2.end(), a) == l2.end();
+    });
+    return inter;
+}
+*/
+
+host_id_vector_replica_set storage_proxy::intersection(const host_id_vector_replica_set& l1, const host_id_vector_replica_set& l2) {
+    host_id_vector_replica_set inter;
+    inter.reserve(l1.size());
+    std::remove_copy_if(l1.begin(), l1.end(), std::back_inserter(inter), [&l2] (const auto& a) {
         return std::find(l2.begin(), l2.end(), a) == l2.end();
     });
     return inter;

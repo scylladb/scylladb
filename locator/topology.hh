@@ -298,7 +298,7 @@ public:
     // Get dc/rack location of a node identified by host_id
     // The specified node must exist.
     const endpoint_dc_rack& get_location(host_id id) const {
-        return find_node(id)->dc_rack();
+        return id ? find_node(id)->dc_rack() : get_location();
     }
     // Get dc/rack location of a node identified by endpoint
     // The specified node must exist.
@@ -350,6 +350,7 @@ public:
      * address.
      */
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
+    void sort_by_proximity(const host_id& hid, host_id_vector_replica_set& hosts) const;
 
     void for_each_node(std::function<void(const node*)> func) const;
 

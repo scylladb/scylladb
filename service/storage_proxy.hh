@@ -88,7 +88,7 @@ class migration_manager;
 struct hint_wrapper;
 struct read_repair_mutation;
 
-using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
+using replicas_per_token_range = std::unordered_map<dht::token_range, host_id_vector_replica_set>;
 
 struct query_partition_key_range_concurrent_result {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> result;
@@ -343,10 +343,11 @@ private:
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
     void sort_endpoints_by_proximity(const locator::topology& topo, inet_address_vector_replica_set& eps) const;
-    inet_address_vector_replica_set get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const;
-    inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, inet_address_vector_replica_set live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<gms::inet_address>* extra, replica::column_family*) const;
+    void sort_endpoints_by_proximity(const locator::topology& topo, host_id_vector_replica_set& eps) const;
+    host_id_vector_replica_set get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const;
+    host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, host_id_vector_replica_set live_endpoints, const host_id_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<locator::host_id>* extra, replica::column_family*) const;
     // As above with read_repair_decision=NONE, extra=nullptr.
-    inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set& live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, replica::column_family*) const;
+    host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const host_id_vector_replica_set& live_endpoints, const host_id_vector_replica_set& preferred_endpoints, replica::column_family*) const;
     bool is_alive(const gms::inet_address&) const;
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             locator::effective_replication_map_ptr ermp,
@@ -355,7 +356,7 @@ private:
             db::consistency_level cl,
             db::read_repair_decision repair_decision,
             tracing::trace_state_ptr trace_state,
-            const inet_address_vector_replica_set& preferred_endpoints,
+            const host_id_vector_replica_set& preferred_endpoints,
             bool& is_bounced_read,
             service_permit permit);
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_result_local(
@@ -379,7 +380,7 @@ private:
             dht::partition_range_vector partition_ranges,
             db::consistency_level cl,
             coordinator_query_options optional_params);
-    static inet_address_vector_replica_set intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2);
+    static host_id_vector_replica_set intersection(const host_id_vector_replica_set& l1, const host_id_vector_replica_set& l2);
     future<result<query_partition_key_range_concurrent_result>> query_partition_key_range_concurrent(clock_type::time_point timeout,
             locator::effective_replication_map_ptr erm,
             lw_shared_ptr<query::read_command> cmd,
@@ -456,9 +457,9 @@ private:
      */
     bool is_worth_merging_for_range_query(
         const locator::topology& topo,
-        inet_address_vector_replica_set& merged,
-        inet_address_vector_replica_set& l1,
-        inet_address_vector_replica_set& l2) const;
+        host_id_vector_replica_set& merged,
+        host_id_vector_replica_set& l1,
+        host_id_vector_replica_set& l2) const;
 
 public:
     storage_proxy(distributed<replica::database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,

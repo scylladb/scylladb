@@ -559,13 +559,18 @@ private:
         result.reserve(replicas.size());
         auto& topo = _tmptr->get_topology();
         for (auto&& replica : replicas) {
+            auto& host = replica.host;
+            if (!host || topo.is_me(host)) {
+                result.emplace_back(topo.my_host_id());
+                continue;
+            }
             if (filter_out_left_nodes) {
-                auto* node = topo.find_node(replica.host);
+                auto* node = topo.find_node(host);
                 if (!node || node->left()) {
                     continue;
                 }
             }
-            result.emplace_back(replica.host);
+            result.emplace_back(host);
         }
         return result;
     }

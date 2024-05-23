@@ -1693,7 +1693,7 @@ mutation_fragments_select_statement::do_query(
     auto res = co_await replica::mutation_dump::dump_mutations(sp.get_db(), schema, _underlying_schema, partition_ranges, *cmd, optional_params.timeout(sp));
     service::replicas_per_token_range last_replicas;
     if (this_node) {
-        last_replicas.emplace(dht::token_range::make_open_ended_both_sides(), std::vector<locator::host_id>{this_node});
+        last_replicas.emplace(dht::token_range::make_open_ended_both_sides(), host_id_vector_replica_set({this_node}));
     }
     co_return service::storage_proxy_coordinator_query_result{std::move(res), std::move(last_replicas), {}};
 }
