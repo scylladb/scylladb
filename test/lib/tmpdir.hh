@@ -8,9 +8,8 @@
 
 #pragma once
 
+#include <filesystem>
 #include <fmt/format.h>
-
-#include <seastar/util/std-compat.hh>
 
 namespace fs = std::filesystem;
 

@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <filesystem>
 
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>

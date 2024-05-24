@@ -45,6 +45,7 @@
 
 #include <cstdio>
 #include <list>
+#include <optional>
 #include <unordered_map>
 #include <tuple>
 #include <assert.h>
