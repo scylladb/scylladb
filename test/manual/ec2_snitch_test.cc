@@ -7,12 +7,12 @@
  */
 
 
+#include <filesystem>
 #include <string>
 #include <boost/test/unit_test.hpp>
 #include <seastar/http/response_parser.hh>
 #include <seastar/net/api.hh>
 #include <seastar/testing/test_case.hh>
-#include <seastar/util/std-compat.hh>
 #include "locator/snitch_base.hh"
 
 namespace fs = std::filesystem;

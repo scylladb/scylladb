@@ -14,6 +14,7 @@
 #include <fmt/ranges.h>
 #include <vector>
 #include <algorithm>
+#include <optional>
 
 //---------------------------------------------------------------------------------------------
 
