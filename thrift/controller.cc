@@ -60,7 +60,10 @@ future<> thrift_controller::do_start_server() {
     if (_server) {
         return make_ready_future<>();
     }
-    return seastar::async([this] {
+
+    seastar::thread_attributes attr;
+    attr.sched_group = _sched_group;
+    return seastar::async(std::move(attr), [this] {
         auto tserver = std::make_unique<distributed<thrift_server>>();
         _addr.reset();
 

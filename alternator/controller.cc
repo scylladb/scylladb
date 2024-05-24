@@ -64,7 +64,9 @@ std::vector<socket_address> controller::listen_addresses() const {
 }
 
 future<> controller::start_server() {
-    return seastar::async([this] {
+    seastar::thread_attributes attr;
+    attr.sched_group = _sched_group;
+    return seastar::async(std::move(attr), [this] {
         _listen_addresses.clear();
 
         auto preferred = _config.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;

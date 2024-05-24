@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/coroutine/switch_to.hh>
 #include "timeout_config.hh"
 #include "redis/controller.hh"
 #include "redis/keyspace_utils.hh"
@@ -120,6 +121,7 @@ std::vector<socket_address> controller::listen_addresses() const {
 
 future<> controller::start_server()
 {
+    co_await coroutine::switch_to(_sched_group);
     // 1. Create keyspace/tables used by redis API if not exists.
     // 2. Initialize the redis query processor.
     // 3. Listen on the redis transport port.

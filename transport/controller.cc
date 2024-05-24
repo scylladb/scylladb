@@ -214,7 +214,9 @@ future<> controller::do_start_server() {
         return make_ready_future<>();
     }
 
-    return seastar::async([this] {
+    seastar::thread_attributes attr;
+    attr.sched_group = _sched_group;
+    return seastar::async(std::move(attr), [this] {
         auto cserver = std::make_unique<sharded<cql_server>>();
 
         auto& cfg = _config;
