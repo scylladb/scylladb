@@ -113,7 +113,9 @@ future<> thrift_controller::request_stop_server() {
         throw std::runtime_error(format("Thrift server is starting, try again later"));
     }
 
-    return do_stop_server().finally([this] { _ops_sem.signal(); });
+    return with_scheduling_group(_sched_group, [this] {
+        return do_stop_server();
+    }).finally([this] { _ops_sem.signal(); });
 }
 
 future<> thrift_controller::do_stop_server() {

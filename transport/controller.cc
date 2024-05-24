@@ -289,7 +289,9 @@ future<> controller::request_stop_server() {
         throw std::runtime_error(format("CQL server is starting, try again later"));
     }
 
-    return do_stop_server().finally([this] { _ops_sem.signal(); });
+    return with_scheduling_group(_sched_group, [this] {
+        return do_stop_server();
+    }).finally([this] { _ops_sem.signal(); });
 }
 
 future<> controller::do_stop_server() {

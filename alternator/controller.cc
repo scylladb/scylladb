@@ -160,7 +160,9 @@ future<> controller::stop_server() {
 }
 
 future<> controller::request_stop_server() {
-    return stop_server();
+    return with_scheduling_group(_sched_group, [this] {
+        return stop_server();
+    });
 }
 
 }
