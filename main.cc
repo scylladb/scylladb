@@ -1718,12 +1718,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             };
 
-            auto start_cql = [&dbcfg] (cql_transport::controller& controller, std::any& stop_cql, const char* what) {
+            auto start_cql = [] (cql_transport::controller& controller, std::any& stop_cql, const char* what) {
                 supervisor::notify(fmt::format("starting {}", what));
-                with_scheduling_group(dbcfg.statement_scheduling_group, [&controller] {
-                    return controller.start_server();
-                }).get();
-
+                controller.start_server().get();
                 // FIXME -- this should be done via client hooks instead
                 stop_cql = defer_verbose_shutdown(what, [&controller] {
                     controller.stop_server().get();
@@ -1987,10 +1984,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             std::any stop_rpc;
             if (cfg->start_rpc()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [&thrift_ctl] {
-                    return thrift_ctl.start_server();
-                }).get();
-
+                thrift_ctl.start_server().get();
                 // FIXME -- this should be done via client hooks instead
                 stop_rpc = defer_verbose_shutdown("rpc server", [&thrift_ctl] {
                     thrift_ctl.stop_server().get();
@@ -2007,9 +2001,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             std::any stop_expiration_service;
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [&alternator_ctl] () mutable {
-                    return alternator_ctl.start_server();
-                }).get();
+                alternator_ctl.start_server().get();
                 // Start the expiration service on all shards.
                 // Currently we only run it if Alternator is enabled, because
                 // only Alternator uses it for its TTL feature. But in the
@@ -2029,9 +2021,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [&redis_ctl] {
-                    return redis_ctl.start_server();
-                }).get();
+                redis_ctl.start_server().get();
             }
             ss.local().register_protocol_server(redis_ctl);
 
