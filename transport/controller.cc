@@ -30,7 +30,8 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
         const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket,
         seastar::scheduling_group sg)
-    : _ops_sem(1)
+    : protocol_server(sg)
+    , _ops_sem(1)
     , _auth_service(auth)
     , _mnotifier(mn)
     , _lifecycle_notifier(elc_notif)

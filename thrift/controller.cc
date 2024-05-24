@@ -19,7 +19,8 @@ thrift_controller::thrift_controller(distributed<replica::database>& db, sharded
         sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy,
         seastar::scheduling_group sg)
-    : _ops_sem(1)
+    : protocol_server(sg)
+    , _ops_sem(1)
     , _db(db)
     , _auth_service(auth)
     , _qp(qp)

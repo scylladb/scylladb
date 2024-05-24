@@ -34,7 +34,8 @@ controller::controller(
         sharded<qos::service_level_controller>& sl_controller,
         const db::config& config,
         seastar::scheduling_group sg)
-    : _gossiper(gossiper)
+    : protocol_server(sg)
+    , _gossiper(gossiper)
     , _proxy(proxy)
     , _mm(mm)
     , _sys_dist_ks(sys_dist_ks)

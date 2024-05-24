@@ -19,6 +19,8 @@ struct client_data;
 
 // Abstraction for a server serving some kind of user-facing protocol.
 class protocol_server {
+protected:
+    seastar::scheduling_group _sched_group;
 public:
     virtual ~protocol_server() = default;
     /// Name of the server, can be different or the same as than the protocol it serves.
@@ -44,4 +46,6 @@ public:
     virtual future<utils::chunked_vector<client_data>> get_client_data() {
         return make_ready_future<utils::chunked_vector<client_data>>(utils::chunked_vector<client_data>());
     }
+
+    protocol_server(seastar::scheduling_group sg) noexcept : _sched_group(std::move(sg)) {}
 };
