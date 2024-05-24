@@ -503,4 +503,81 @@ template group0_command raft_group0_client::prepare_command(broadcast_table_quer
 template group0_command raft_group0_client::prepare_command(write_mutations change, std::string_view description);
 template group0_command raft_group0_client::prepare_command(mixed_change change, group0_guard& guard, std::string_view description);
 
+api::timestamp_type mutations_collector::write_timestamp() const {
+    if (!_guard) {
+        on_internal_error(logger, "mutations_collector: write_timestamp without guard taken");
+    }
+    return _guard->write_timestamp();
+}
+
+void mutations_collector::add_mutation(mutation m) {
+    _muts.push_back(std::move(m));
+}
+
+void mutations_collector::add_mutations(std::vector<mutation> ms) {
+    _muts.insert(_muts.end(),
+            std::make_move_iterator(ms.begin()),
+            std::make_move_iterator(ms.end()));
+}
+
+void mutations_collector::add_generator(generator_func f) {
+    _generators.push_back(std::move(f));
+}
+
+static future<> add_write_mutations_entry(
+        ::service::raft_group0_client& group0_client,
+        std::string_view description,
+        std::vector<canonical_mutation> muts,
+        ::service::group0_guard group0_guard,
+        seastar::abort_source* as,
+        std::optional<::service::raft_timeout> timeout) {
+    logger.trace("add_write_mutations_entry: {} mutations with description {}",
+            muts.size(), description);
+    auto group0_cmd = group0_client.prepare_command(
+        ::service::write_mutations{
+            .mutations{std::move(muts)},
+        },
+        group0_guard,
+        description
+    );
+    return group0_client.add_entry(std::move(group0_cmd), std::move(group0_guard), as, timeout);
+}
+
+future<> mutations_collector::materialize_mutations() {
+    auto t = _guard->write_timestamp();
+    for (auto& generator : _generators) {
+        auto g = generator(t);
+        while (auto mut = co_await g()) {
+            _muts.push_back(std::move(*mut));
+        }
+    }
+}
+
+future<> mutations_collector::announce(::service::raft_group0_client& group0_client, std::string_view description, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
+    if (_muts.size() == 0 && _generators.size() == 0) {
+        co_return;
+    }
+    if (!_guard) {
+        on_internal_error(logger, "mutations_collector: trying to announce without guard");
+    }
+    // common case, don't bother with generators as we would have only 1-2 mutations,
+    // when producer expects substantial number or size of mutations it should use generator
+    if (_generators.size() == 0) {
+        std::vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
+        co_return co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), &as, timeout);
+    }
+    // raft doesn't support streaming so we need to materialize all mutations in memory
+    co_await materialize_mutations();
+    if (_muts.empty()) {
+        co_return;
+    }
+    std::vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
+    _muts.clear();
+    co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), &as, timeout);
+}
+
+future<std::pair<std::vector<mutation>, ::service::group0_guard>> mutations_collector::extract() && {
+    co_await materialize_mutations();
+    co_return std::make_pair(std::move(_muts), std::move(*_guard));
+}
 }
