@@ -329,7 +329,7 @@ const resource_set& password_authenticator::protected_resources() const {
         credentials_map credentials{};
         credentials[USERNAME_KEY] = sstring(username);
         credentials[PASSWORD_KEY] = sstring(password);
-        return this->authenticate(credentials);
+        return authenticate(credentials);
     });
 }
 

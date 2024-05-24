@@ -226,7 +226,7 @@ future<> standard_role_manager::migrate_legacy_metadata() {
                     std::move(config),
                     ::service::mutations_collector::unused(),
                     [this](const auto& name, const auto& config, auto& mc) {
-                return this->create_or_replace(name, config, mc);
+                return create_or_replace(name, config, mc);
             });
         }).finally([results] {});
     }).then([] {
@@ -241,7 +241,7 @@ future<> standard_role_manager::start() {
     return once_among_shards([this] {
         return futurize_invoke([this] () {
             if (legacy_mode(_qp)) {
-                return this->create_legacy_metadata_tables_if_missing();
+                return create_legacy_metadata_tables_if_missing();
             }
             return make_ready_future<>();
         }).then([this] {
@@ -251,15 +251,15 @@ future<> standard_role_manager::start() {
                         _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
                         if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get()) {
-                            if (this->legacy_metadata_exists()) {
+                            if (legacy_metadata_exists()) {
                                 log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                             }
 
                             return;
                         }
 
-                        if (this->legacy_metadata_exists()) {
-                            this->migrate_legacy_metadata().get();
+                        if (legacy_metadata_exists()) {
+                            migrate_legacy_metadata().get();
                             return;
                         }
                     }
@@ -294,12 +294,12 @@ future<> standard_role_manager::create_or_replace(std::string_view role_name, co
 
 future<>
 standard_role_manager::create(std::string_view role_name, const role_config& c, ::service::mutations_collector& mc) {
-    return this->exists(role_name).then([this, role_name, &c, &mc](bool role_exists) {
+    return exists(role_name).then([this, role_name, &c, &mc](bool role_exists) {
         if (role_exists) {
             throw role_already_exists(role_name);
         }
 
-        return this->create_or_replace(role_name, c, mc);
+        return create_or_replace(role_name, c, mc);
     });
 }
 
@@ -342,7 +342,7 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
 }
 
 future<> standard_role_manager::drop(std::string_view role_name, ::service::mutations_collector& mc) {
-    if (!co_await this->exists(role_name)) {
+    if (!co_await exists(role_name)) {
         throw nonexistant_role(role_name);
     }
     // First, revoke this role from all roles that are members of it.
@@ -361,20 +361,20 @@ future<> standard_role_manager::drop(std::string_view role_name, ::service::muta
                 members->end(),
                 [this, role_name, &mc] (const cql3::untyped_result_set_row& member_row) -> future<> {
                     const sstring member = member_row.template get_as<sstring>("member");
-                    co_await this->modify_membership(member, role_name, membership_change::remove, mc);
+                    co_await modify_membership(member, role_name, membership_change::remove, mc);
                 }
         );
     };
     // In parallel, revoke all roles that this role is members of.
     const auto revoke_members_of = [this, grantee = role_name, &mc] () -> future<> {
-        const role_set granted_roles = co_await this->query_granted(
+        const role_set granted_roles = co_await query_granted(
                 grantee,
                 recursive_role_query::no);
         co_await parallel_for_each(
                 granted_roles.begin(),
                 granted_roles.end(),
                 [this, grantee, &mc](const sstring& role_name) {
-            return this->modify_membership(grantee, role_name, membership_change::remove, mc);
+            return modify_membership(grantee, role_name, membership_change::remove, mc);
         });
     };
     // Delete all attributes for that role
@@ -504,7 +504,7 @@ standard_role_manager::modify_membership(
 future<>
 standard_role_manager::grant(std::string_view grantee_name, std::string_view role_name, ::service::mutations_collector& mc) {
     const auto check_redundant = [this, role_name, grantee_name] {
-        return this->query_granted(
+        return query_granted(
                 grantee_name,
                 recursive_role_query::yes).then([role_name, grantee_name](role_set roles) {
             if (roles.contains(sstring(role_name))) {
@@ -516,7 +516,7 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
     };
 
     const auto check_cycle = [this, role_name, grantee_name] {
-        return this->query_granted(
+        return query_granted(
                 role_name,
                 recursive_role_query::yes).then([role_name, grantee_name](role_set roles) {
             if (roles.contains(sstring(grantee_name))) {
@@ -528,18 +528,18 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
     };
 
     return when_all_succeed(check_redundant(), check_cycle()).then_unpack([this, role_name, grantee_name, &mc] {
-        return this->modify_membership(grantee_name, role_name, membership_change::add, mc);
+        return modify_membership(grantee_name, role_name, membership_change::add, mc);
     });
 }
 
 future<>
 standard_role_manager::revoke(std::string_view revokee_name, std::string_view role_name, ::service::mutations_collector& mc) {
-    return this->exists(role_name).then([role_name](bool role_exists) {
+    return exists(role_name).then([role_name](bool role_exists) {
         if (!role_exists) {
             throw nonexistant_role(sstring(role_name));
         }
     }).then([this, revokee_name, role_name, &mc] {
-        return this->query_granted(
+        return query_granted(
                 revokee_name,
                 recursive_role_query::no).then([revokee_name, role_name](role_set roles) {
             if (!roles.contains(sstring(role_name))) {
@@ -548,7 +548,7 @@ standard_role_manager::revoke(std::string_view revokee_name, std::string_view ro
 
             return make_ready_future<>();
         }).then([this, revokee_name, role_name, &mc] {
-            return this->modify_membership(revokee_name, role_name, membership_change::remove, mc);
+            return modify_membership(revokee_name, role_name, membership_change::remove, mc);
         });
     });
 }

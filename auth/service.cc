@@ -311,7 +311,7 @@ future<permission_set> service::get_permissions(const role_or_anonymous& maybe_r
 }
 
 future<bool> service::has_superuser(std::string_view role_name) const {
-    return this->get_roles(std::move(role_name)).then([this](role_set roles) {
+    return get_roles(std::move(role_name)).then([this](role_set roles) {
         return do_with(std::move(roles), [this](const role_set& roles) {
             return do_with(false, roles.begin(), [this, &roles](bool& any_super, auto& iter) {
                 return do_until(
