@@ -1737,7 +1737,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes).get();
 
-            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes);
+            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
 
             std::any stop_maintenance_auth_service;
             std::any stop_maintenance_cql;
@@ -1966,7 +1966,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
 
             ss.local().register_protocol_server(cql_server_ctl);
 
@@ -1981,7 +1981,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_transport_controller(ctx).get();
             });
 
-            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss, proxy);
+            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss, proxy, dbcfg.statement_scheduling_group);
 
             ss.local().register_protocol_server(thrift_ctl);
 
@@ -2002,7 +2002,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_rpc_controller(ctx).get();
             });
 
-            alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, *cfg);
+            alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, *cfg, dbcfg.statement_scheduling_group);
             sharded<alternator::expiration_service> es;
             std::any stop_expiration_service;
 
@@ -2027,7 +2027,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             ss.local().register_protocol_server(alternator_ctl);
 
-            redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper);
+            redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&redis_ctl] {
                     return redis_ctl.start_server();

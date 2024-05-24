@@ -32,7 +32,8 @@ controller::controller(
         sharded<service::memory_limiter>& memory_limiter,
         sharded<auth::service>& auth_service,
         sharded<qos::service_level_controller>& sl_controller,
-        const db::config& config)
+        const db::config& config,
+        seastar::scheduling_group sg)
     : _gossiper(gossiper)
     , _proxy(proxy)
     , _mm(mm)

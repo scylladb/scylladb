@@ -64,7 +64,8 @@ private:
     seastar::future<> listen(seastar::sharded<auth::service>& auth_service, db::config& cfg);
 public:
     controller(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<auth::service>& auth_service,
-            seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& gossiper);
+            seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& gossiper,
+            seastar::scheduling_group sg);
     ~controller();
     virtual sstring name() const override;
     virtual sstring protocol() const override;

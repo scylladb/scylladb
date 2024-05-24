@@ -20,7 +20,8 @@ static logging::logger slogger("controller");
 namespace redis {
 
 controller::controller(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<auth::service>& auth_service,
-        seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& gossiper)
+        seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& gossiper,
+        seastar::scheduling_group sg)
     : _proxy(proxy)
     , _db(proxy.local().data_dictionary())
     , _auth_service(auth_service)
