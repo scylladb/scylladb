@@ -219,10 +219,32 @@ class load_balancer {
         size_t streaming_write_load = 0;
 
         // Tablets which still have a replica on this shard which are candidates for migrating away from this shard.
-        std::unordered_set<global_tablet_id> candidates;
+        // Grouped by table. Used when _use_table_aware_balancing == true.
+        // The set of candidates per table may be empty.
+        std::unordered_map<table_id, std::unordered_set<global_tablet_id>> candidates;
+        // For all tables. Used when _use_table_aware_balancing == false.
+        std::unordered_set<global_tablet_id> candidates_all_tables;
 
         future<> clear_gently() {
-            return utils::clear_gently(candidates);
+            co_await utils::clear_gently(candidates);
+            co_await utils::clear_gently(candidates_all_tables);
+        }
+
+        bool has_candidates() const {
+            for (const auto& [table, tablets] : candidates) {
+                if (!tablets.empty()) {
+                    return true;
+                }
+            }
+            return !candidates_all_tables.empty();
+        }
+
+        size_t candidate_count() const {
+            size_t result = 0;
+            for (const auto& [table, tablets] : candidates) {
+                result += tablets.size();
+            }
+            return result + candidates_all_tables.size();
         }
     };
 
@@ -431,6 +453,7 @@ class load_balancer {
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
+    bool _use_table_aware_balancing = true;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -491,6 +514,10 @@ public:
         lblogger.info("Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s)",
                       plan.size(), plan.tablet_migration_count(), plan.resize_decision_count());
         co_return std::move(plan);
+    }
+
+    void set_use_table_aware_balancing(bool use_table_aware_balancing) {
+        _use_table_aware_balancing = use_table_aware_balancing;
     }
 
     const locator::table_load_stats* load_stats_for_table(table_id id) const {
@@ -652,10 +679,60 @@ public:
         return utils::get_local_injector().enter("tablet_allocator_shuffle");
     }
 
-    shard_id rand_shard(shard_id shard_count) const {
+    size_t rand_int() const {
         static thread_local std::default_random_engine re{std::random_device{}()};
-        static thread_local std::uniform_int_distribution<shard_id> dist;
-        return dist(re) % shard_count;
+        static thread_local std::uniform_int_distribution<size_t> dist;
+        return dist(re);
+    }
+
+    shard_id rand_shard(shard_id shard_count) const {
+        return rand_int() % shard_count;
+    }
+
+    table_id pick_table(const std::unordered_map<table_id, std::unordered_set<global_tablet_id>>& candidates) {
+        if (!_use_table_aware_balancing) {
+            on_internal_error(lblogger, "pick_table() called when table-aware balancing is disabled");
+        }
+        size_t total = 0;
+        for (auto&& [table, tablets] : candidates) {
+            total += tablets.size();
+        }
+        ssize_t candidate_index = rand_int() % total;
+        for (auto&& [table, tablets] : candidates) {
+            candidate_index -= tablets.size();
+            if (candidate_index <= 0 && !tablets.empty()) {
+                return table;
+            }
+        }
+        on_internal_error(lblogger, "No candidate table");
+    }
+
+    global_tablet_id peek_candidate(shard_load& shard_info) {
+        if (_use_table_aware_balancing) {
+            auto table = pick_table(shard_info.candidates);
+            return *shard_info.candidates[table].begin();
+        }
+
+        return *shard_info.candidates_all_tables.begin();
+    }
+
+    void erase_candidate(shard_load& shard_info, global_tablet_id tablet) {
+        if (_use_table_aware_balancing) {
+            shard_info.candidates[tablet.table].erase(tablet);
+            if (shard_info.candidates[tablet.table].empty()) {
+                shard_info.candidates.erase(tablet.table);
+            }
+        } else {
+            shard_info.candidates_all_tables.erase(tablet);
+        }
+    }
+
+    void add_candidate(shard_load& shard_info, global_tablet_id tablet) {
+        if (_use_table_aware_balancing) {
+            shard_info.candidates[tablet.table].insert(tablet);
+        } else {
+            shard_info.candidates_all_tables.insert(tablet);
+        }
     }
 
     future<migration_plan> make_node_plan(node_load_map& nodes, host_id host, node_load& node_load) {
@@ -724,7 +801,7 @@ public:
                 break;
             }
 
-            if (src_info.candidates.empty()) {
+            if (!src_info.has_candidates()) {
                 lblogger.debug("No more candidates on shard {} of {}", src, host);
                 max_load = std::max(max_load, src_info.tablet_count);
                 src_shards.pop_back();
@@ -732,7 +809,7 @@ public:
                 continue;
             }
 
-            auto tablet = *src_info.candidates.begin();
+            global_tablet_id tablet = peek_candidate(src_info);
 
             // Emit migration.
 
@@ -756,7 +833,7 @@ public:
 
             for (auto&& r : src_tinfo.replicas) {
                 if (nodes.contains(r.host)) {
-                    nodes[r.host].shards[r.shard].candidates.erase(tablet);
+                    erase_candidate(nodes[r.host].shards[r.shard], tablet);
                 }
             }
 
@@ -813,8 +890,8 @@ public:
             if (lblogger.is_enabled(seastar::log_level::debug)) {
                 shard_id shard = 0;
                 for (auto&& shard_load : node_load.shards) {
-                    lblogger.debug("shard {}: all tablets: {}, candidates: {}", tablet_replica{host, shard},
-                                   shard_load.tablet_count, shard_load.candidates.size());
+                    lblogger.debug("shard {}: all tablets: {}, candidates: {}", tablet_replica {host, shard},
+                                   shard_load.tablet_count, shard_load.candidate_count());
                     shard++;
                 }
             }
@@ -868,7 +945,7 @@ public:
             auto src_shard = src_node_info.shards_by_load.back();
             auto src = tablet_replica{src_host, src_shard};
             auto&& src_shard_info = src_node_info.shards[src_shard];
-            if (src_shard_info.candidates.empty()) {
+            if (!src_shard_info.has_candidates()) {
                 lblogger.debug("shard {} ran out of candidates with {} tablets remaining.", src, src_shard_info.tablet_count);
                 src_node_info.shards_by_load.pop_back();
                 continue;
@@ -877,8 +954,9 @@ public:
                 std::push_heap(src_node_info.shards_by_load.begin(), src_node_info.shards_by_load.end(), src_node_info.shards_by_load_cmp());
             });
 
-            auto source_tablet = *src_shard_info.candidates.begin();
-            src_shard_info.candidates.erase(source_tablet);
+            global_tablet_id source_tablet = peek_candidate(src_shard_info);
+            erase_candidate(src_shard_info, source_tablet);
+
             auto& tmap = tmeta.get_tablet_map(source_tablet.table);
 
             // Pick a target node.
@@ -1065,7 +1143,7 @@ public:
 
             for (auto&& r : src_tinfo.replicas) {
                 if (nodes.contains(r.host)) {
-                    nodes[r.host].shards[r.shard].candidates.erase(source_tablet);
+                    erase_candidate(nodes[r.host].shards[r.shard], source_tablet);
                 }
             }
 
@@ -1290,7 +1368,7 @@ public:
                     }
                     shard_load_info.tablet_count += 1;
                     if (!trinfo) { // migrating tablets are not candidates
-                        shard_load_info.candidates.emplace(global_tablet_id {table, tid});
+                        add_candidate(shard_load_info, global_tablet_id {table, tid});
                     }
                 }
 
@@ -1322,6 +1400,7 @@ class tablet_allocator_impl : public tablet_allocator::impl
     replica::database& _db;
     load_balancer_stats_manager _load_balancer_stats;
     bool _stopped = false;
+    bool _use_tablet_aware_balancing = true;
 public:
     tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
             : _config(std::move(cfg))
@@ -1349,7 +1428,12 @@ public:
 
     future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
         load_balancer lb(tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes(), std::move(skiplist));
+        lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
         co_return co_await lb.make_plan();
+    }
+
+    void set_use_tablet_aware_balancing(bool use_tablet_aware_balancing) {
+        _use_tablet_aware_balancing = use_tablet_aware_balancing;
     }
 
     void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
@@ -1429,6 +1513,10 @@ future<> tablet_allocator::stop() {
 
 future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats, std::unordered_set<host_id> skiplist) {
     return impl().balance_tablets(std::move(tm), std::move(load_stats), std::move(skiplist));
+}
+
+void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balancing) {
+    impl().set_use_tablet_aware_balancing(use_tablet_aware_balancing);
 }
 
 future<locator::tablet_map> tablet_allocator::split_tablets(locator::token_metadata_ptr tm, table_id table) {
