@@ -121,16 +121,13 @@ future<> controller::start_server()
     // 1. Create keyspace/tables used by redis API if not exists.
     // 2. Initialize the redis query processor.
     // 3. Listen on the redis transport port.
-    return redis::maybe_create_keyspace(_proxy, _db, _mm, _cfg, _gossiper).then([this] {
-        return _query_processor.start(std::ref(_proxy),
-                seastar::sharded_parameter([&] { return _proxy.local().data_dictionary(); }));
-    }).then([this] {
-        return _query_processor.invoke_on_all([] (auto& processor) {
-            return processor.start();
-        });
-    }).then([this] {
-        return listen(_auth_service, _cfg);
+    co_await redis::maybe_create_keyspace(_proxy, _db, _mm, _cfg, _gossiper);
+    co_await _query_processor.start(std::ref(_proxy),
+            seastar::sharded_parameter([&] { return _proxy.local().data_dictionary(); }));
+    co_await _query_processor.invoke_on_all([] (auto& processor) {
+        return processor.start();
     });
+    co_await listen(_auth_service, _cfg);
 }
 
 future<> controller::stop_server()
