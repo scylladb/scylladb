@@ -18,7 +18,6 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/smp.hh>
 
-#include "schema/schema_registry.hh"
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
 
