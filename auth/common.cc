@@ -202,4 +202,17 @@ future<> announce_mutations(
     co_await announce_mutations_with_guard(group0_client, std::move(cmuts), std::move(group0_guard), as, timeout);
 }
 
+future<> collect_mutations(
+        cql3::query_processor& qp,
+        ::service::mutations_collector& collector,
+        const sstring query_string,
+        std::vector<data_value_or_unset> values) {
+    auto muts = co_await qp.get_mutations_internal(
+            query_string,
+            internal_distributed_query_state(),
+            collector.write_timestamp(),
+            std::move(values));
+    collector.add_mutations(std::move(muts));
+}
+
 }

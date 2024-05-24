@@ -104,4 +104,10 @@ future<> announce_mutations(
         seastar::abort_source* as,
         std::optional<::service::raft_timeout> timeout);
 
+// Appends mutations to a collector, they will be applied later on all nodes via group0 mechanism.
+future<> collect_mutations(
+        cql3::query_processor& qp,
+        ::service::mutations_collector& collector,
+        const sstring query_string,
+        std::vector<data_value_or_unset> values);
 }
