@@ -1714,6 +1714,7 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], seastar_cxx_ld_flags)),
         '-DSeastar_CXX_DIALECT=gnu++20',
         '-DSeastar_API_LEVEL=7',
+        '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
         '-DSeastar_SCHEDULING_GROUPS_COUNT=16',
