@@ -10,6 +10,7 @@
 
 #include <concepts>
 #include <map>
+#include <optional>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
