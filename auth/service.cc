@@ -134,6 +134,7 @@ static future<> validate_role_exists(const service& ser, std::string_view role_n
 service::service(
         utils::loading_cache_config c,
         cql3::query_processor& qp,
+        ::service::raft_group0_client& g0,
         ::service::migration_notifier& mn,
         std::unique_ptr<authorizer> z,
         std::unique_ptr<authenticator> a,
@@ -142,6 +143,7 @@ service::service(
             : _loading_cache_config(std::move(c))
             , _permissions_cache(nullptr)
             , _qp(qp)
+            , _group0_client(g0)
             , _mnotifier(mn)
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
@@ -165,6 +167,7 @@ service::service(
             : service(
                       std::move(c),
                       qp,
+                      g0,
                       mn,
                       create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
                       create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm),
@@ -222,6 +225,7 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
 }
 
 future<> service::stop() {
+    _as.request_abort();
     // Only one of the shards has the listener registered, but let's try to
     // unregister on each one just to make sure.
     return _mnotifier.unregister_listener(_migration_listener.get()).then([this] {
@@ -586,6 +590,10 @@ future<std::vector<permission_details>> list_filtered_permissions(
             });
         });
     });
+}
+
+future<> announce_mutations(service& ser, ::service::mutations_collector&& mc) {
+    return ser.announce_mutations(std::move(mc));
 }
 
 future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {

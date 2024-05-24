@@ -79,6 +79,8 @@ class service final : public seastar::peering_sharded_service<service> {
 
     cql3::query_processor& _qp;
 
+    ::service::raft_group0_client& _group0_client;
+
     ::service::migration_notifier& _mnotifier;
 
     authorizer::ptr_type _authorizer;
@@ -99,10 +101,13 @@ class service final : public seastar::peering_sharded_service<service> {
 
     maintenance_socket_enabled _used_by_maintenance_socket;
 
+    abort_source _as;
+
 public:
     service(
             utils::loading_cache_config,
             cql3::query_processor&,
+            ::service::raft_group0_client&,
             ::service::migration_notifier&,
             std::unique_ptr<authorizer>,
             std::unique_ptr<authenticator>,
@@ -172,6 +177,10 @@ public:
 
     cql3::query_processor& query_processor() const noexcept {
         return _qp;
+    }
+
+    future<> announce_mutations(::service::mutations_collector&& mc) {
+        return std::move(mc).announce(_group0_client, "auth", _as, ::service::raft_timeout{});
     }
 
 private:
@@ -335,6 +344,10 @@ future<std::vector<permission_details>> list_filtered_permissions(
         permission_set,
         std::optional<std::string_view> role_name,
         const std::optional<std::pair<resource, recursive_permissions>>& resource_filter);
+
+
+// Finalizes write operations performed in auth by committing mutations via raft group0.
+future<> announce_mutations(service& ser, ::service::mutations_collector&& mc);
 
 // Migrates data from old keyspace to new one which supports linearizable writes via raft.
 future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as);
