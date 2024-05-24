@@ -3324,15 +3324,29 @@ future<system_keyspace::topology_requests_entry> system_keyspace::get_topology_r
     co_return topology_request_row_to_entry(id, row);
 }
 
-future<system_keyspace::topology_requests_entries> system_keyspace::get_topology_request_entries() {
-    auto rs = co_await execute_cql(
-        format("SELECT * FROM system.{}", TOPOLOGY_REQUESTS));
+future<system_keyspace::topology_requests_entries> system_keyspace::get_topology_request_entries(db_clock::time_point end_time_limit) {
+    // Running requests.
+    auto rs_running = co_await execute_cql(
+        format("SELECT * FROM system.{} WHERE done = false ALLOW FILTERING", TOPOLOGY_REQUESTS));
+
+
+    // Requests which finished after end_time_limit.
+    auto rs_done = co_await execute_cql(
+        format("SELECT * FROM system.{} WHERE end_time > {} ALLOW FILTERING", TOPOLOGY_REQUESTS, end_time_limit.time_since_epoch().count()));
 
     topology_requests_entries m;
-    for (const auto& row: *rs) {
+    for (const auto& row: *rs_done) {
         auto id = row.get_as<utils::UUID>("id");
-        m[id] = topology_request_row_to_entry(id, row);
+        m.emplace(id, topology_request_row_to_entry(id, row));
     }
+
+    for (const auto& row: *rs_running) {
+        auto id = row.get_as<utils::UUID>("id");
+        // If a topology request finishes between the reads, it may be contained in both row sets.
+        // Keep the latest info.
+        m.emplace(id, topology_request_row_to_entry(id, row));
+    }
+
     co_return m;
 }
 

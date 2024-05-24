@@ -210,3 +210,14 @@ async def test_node_ops_tasks_tree(manager: ManagerClient):
     servers, vt_ids = await check_rebuild_tasks_tree(manager, tm, module_name, servers, vt_ids)
     servers, vt_ids = await check_remove_node_tasks_tree(manager, tm, module_name, servers, vt_ids)
     servers, vt_ids = await check_decommission_tasks_tree(manager, tm, module_name, servers, vt_ids)
+
+@pytest.mark.asyncio
+async def test_node_ops_tasks_ttl(manager: ManagerClient):
+    """Test node ops virtual tasks' ttl."""
+    module_name = "node_ops"
+    tm = TaskManagerClient(manager.api)
+
+    servers = [await manager.server_add() for _ in range(2)]
+    [await tm.set_task_ttl(server.ip_addr, 3) for server in servers]
+    time.sleep(3)
+    await get_new_virtual_tasks_statuses(tm, module_name, servers, [], expected_task_num=0)

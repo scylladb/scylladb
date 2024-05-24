@@ -430,7 +430,7 @@ public:
     }
 
     seastar::abort_source& abort_source() noexcept;
-protected:
+public:
     std::chrono::seconds get_task_ttl() const noexcept;
 private:
     future<> update_task_ttl() noexcept {

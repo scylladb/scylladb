@@ -40,9 +40,9 @@ static std::set<tasks::task_id> get_pending_ids(service::topology& topology) {
     return ids;
 }
 
-static future<db::system_keyspace::topology_requests_entries> get_entries(db::system_keyspace& sys_ks, service::topology& topology) {
+static future<db::system_keyspace::topology_requests_entries> get_entries(db::system_keyspace& sys_ks, service::topology& topology, std::chrono::seconds ttl) {
     // Started requests.
-    auto entries = co_await sys_ks.get_topology_request_entries();
+    auto entries = co_await sys_ks.get_topology_request_entries(db_clock::now() - ttl);
 
     // Pending requests.
     for (auto& id : get_pending_ids(topology)) {
@@ -89,7 +89,7 @@ tasks::task_manager::task_group node_ops_virtual_task::get_group() const noexcep
 future<std::set<tasks::task_id>> node_ops_virtual_task::get_ids() const {
     db::system_keyspace& sys_ks = _ss._sys_ks.local();
     service::topology& topology = _ss._topology_state_machine._topology;
-    co_return boost::copy_range<std::set<tasks::task_id>>(co_await get_entries(sys_ks, topology) | boost::adaptors::map_keys);
+    co_return boost::copy_range<std::set<tasks::task_id>>(co_await get_entries(sys_ks, topology, get_task_manager().get_task_ttl()) | boost::adaptors::map_keys);
 }
 
 future<tasks::is_abortable> node_ops_virtual_task::is_abortable() const {
@@ -117,7 +117,7 @@ future<> node_ops_virtual_task::abort(tasks::task_id id) noexcept {
 future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
     db::system_keyspace& sys_ks = _ss._sys_ks.local();
     service::topology& topology = _ss._topology_state_machine._topology;
-    co_return boost::copy_range<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, topology)
+    co_return boost::copy_range<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, topology, get_task_manager().get_task_ttl())
             | boost::adaptors::transformed([] (const auto& e) {
         auto id = e.first;
         auto& entry = e.second;
