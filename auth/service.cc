@@ -629,7 +629,7 @@ future<> announce_mutations(service& ser, ::service::mutations_collector&& mc) {
 future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {
     // FIXME: if this function fails it may leave partial data in the new tables
     // that should be cleared
-    auto gen = [&sys_ks] (api::timestamp_type& ts) -> mutations_generator {
+    auto gen = [&sys_ks] (api::timestamp_type ts) -> ::service::mutations_generator {
         auto& qp = sys_ks.query_processor();
         for (const auto& cf_name : std::vector<sstring>{
                 "roles", "role_members", "role_attributes", "role_permissions"}) {

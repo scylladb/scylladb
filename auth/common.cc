@@ -137,7 +137,7 @@ static future<> announce_mutations_with_guard(
 future<> announce_mutations_with_batching(
         ::service::raft_group0_client& group0_client,
         start_operation_func_t start_operation_func,
-        std::function<mutations_generator(api::timestamp_type& t)> gen,
+        std::function<::service::mutations_generator(api::timestamp_type t)> gen,
         seastar::abort_source* as,
         std::optional<::service::raft_timeout> timeout) {
     // account for command's overhead, it's better to use smaller threshold than constantly bounce off the limit
