@@ -2001,7 +2001,7 @@ future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded
         } catch (const seastar::abort_requested_exception&) {
             throw;
         } catch (...) {
-            rtlogger.error("the fiber tracking readiness of upgrade to raft toplogy got an unexpected error: {}", std::current_exception());
+            rtlogger.error("the fiber tracking readiness of upgrade to raft topology got an unexpected error: {}", std::current_exception());
         }
 
         co_await sleep_abortable(std::chrono::seconds(1), _group0_as);
@@ -2030,7 +2030,7 @@ future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded
         } catch (const seastar::abort_requested_exception&) {
             throw;
         } catch (...) {
-            rtlogger.error("the fiber tracking progress of upgrade to raft toplogy got an unexpected error. "
+            rtlogger.error("the fiber tracking progress of upgrade to raft topology got an unexpected error. "
                     "Will not report in logs when upgrade has completed. Error: {}", std::current_exception());
         }
     }

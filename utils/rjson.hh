@@ -363,7 +363,7 @@ inline bytes base64_decode(const value& v) {
     return ::base64_decode(std::string_view(v.GetString(), v.GetStringLength()));
 }
 
-// A writer which allows writing json into an std::ostream in a streamin manner.
+// A writer which allows writing json into an std::ostream in a streaming manner.
 //
 // It is a wrapper around rapidjson::Writer, with a more convenient API.
 class streaming_writer {

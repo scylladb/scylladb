@@ -1557,7 +1557,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     });
 
     // First drop views and *only then* the tables, if interleaved it can lead
-    // to a mv not finding its schema when snapshoting since the main table
+    // to a mv not finding its schema when snapshotting since the main table
     // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
     auto& db = proxy.local().get_db();
     co_await max_concurrent_for_each(views_diff.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) {

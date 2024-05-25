@@ -862,7 +862,7 @@ future<> manager::perform_migration() {
     }
 
     manager_logger.info("Migration of hinted handoff to host ID is starting");
-    // Step 1. Prevent acceping incoming hints.
+    // Step 1. Prevent accepting incoming hints.
     _state.set(state::migrating);
 
     // Step 2. Make sure during the migration there is no draining process and we don't await any sync points.
