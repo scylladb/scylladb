@@ -323,7 +323,7 @@ For the same reason as RMW command, the transaction is not supported
 currently.
 
 > In fact, some commands (e.g. MSET of STRINGs) are also not supported,
-> which also need the transcation mechanism.
+> which also need the transaction mechanism.
 
 ### 5.4 Time to Live (TTL)
 
