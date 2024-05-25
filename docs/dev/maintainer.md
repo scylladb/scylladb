@@ -178,7 +178,7 @@ latest submodules.
     commit log editor for every submodule to show that commits are being
     updated.
  3. Edit the submodule update commits with any necessary additional
-    imformation. For example, amend the message with `Fixes` tags.
+    information. For example, amend the message with `Fixes` tags.
  4. Use `git push` to publish your work.
 
 By default refresh-submodules.sh will refresh all submodules from their
