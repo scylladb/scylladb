@@ -75,7 +75,7 @@
                "items":{
                   "type":"double"
                },
-               "description":"One, five and fifteen mintues rates"
+               "description":"One, five and fifteen minutes rates"
             },
             "mean_rate": {
                "type":"double",
