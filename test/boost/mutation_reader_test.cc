@@ -12,6 +12,7 @@
 #include <source_location>
 
 #include <fmt/ranges.h>
+#include <fmt/std.h>
 
 #include <seastar/core/sleep.hh>
 #include <seastar/core/do_with.hh>
@@ -37,6 +38,7 @@
 #include "test/lib/simple_position_reader_queue.hh"
 #include "test/lib/fragment_scatterer.hh"
 #include "test/lib/key_utils.hh"
+#include "test/lib/test_utils.hh"
 
 #include "dht/sharder.hh"
 #include "schema/schema_builder.hh"

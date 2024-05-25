@@ -45,9 +45,8 @@ struct fmt::formatter<db::hints::sync_point::host_id_or_addr> {
 
 namespace db::hints {
 std::ostream& operator<<(std::ostream& out, const sync_point& sp) {
-    out << "{regular_per_shard_rps: " << sp.regular_per_shard_rps
-        << ", mv_per_shard_rps: " << sp.mv_per_shard_rps
-        << "}";
+    fmt::print(out, "{{regular_per_shard_rps: {}, mv_per_shard_rps: {}}}",
+               sp.regular_per_shard_rps, sp.mv_per_shard_rps);
     return out;
 }
 

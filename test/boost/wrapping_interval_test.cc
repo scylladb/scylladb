@@ -10,6 +10,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "boost/icl/interval_map.hpp"
+#include <fmt/ranges.h>
 #include <unordered_set>
 
 #include "schema/schema_builder.hh"
