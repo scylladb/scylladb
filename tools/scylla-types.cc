@@ -10,6 +10,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <seastar/core/coroutine.hh>
 
+#include <fmt/ranges.h>
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "schema/schema_builder.hh"
@@ -21,6 +22,14 @@ using namespace seastar;
 using namespace tools::utils;
 
 namespace bpo = boost::program_options;
+
+namespace std {
+// required by boost::lexical_cast<std::string>(vector<string>), which is in turn used
+// by boost::program_option for printing out the default value of an option
+static std::ostream& operator<<(std::ostream& os, const std::vector<sstring>& v) {
+    return os << fmt::format("{}", v);
+}
+}
 
 namespace {
 

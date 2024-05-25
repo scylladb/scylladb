@@ -8,11 +8,14 @@
 
 
 #include <boost/test/unit_test.hpp>
+#include <fmt/std.h>
+#include <fmt/ranges.h>
 #include <stdlib.h>
 #include <iostream>
 
 #include "seastarx.hh"
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/test_utils.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
 #include "service/qos/service_level_controller.hh"

@@ -7,8 +7,10 @@
  */
 
 #include "test/lib/scylla_test_case.hh"
+#include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 
 #include "compound.hh"
 #include "compound_compat.hh"
