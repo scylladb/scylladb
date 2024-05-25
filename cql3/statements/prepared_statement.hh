@@ -33,7 +33,7 @@ struct invalidated_prepared_usage_attempt {
 
 class prepared_statement : public seastar::weakly_referencable<prepared_statement> {
 public:
-    typedef seastar::checked_ptr<seastar::weak_ptr<prepared_statement>> checked_weak_ptr;
+    typedef seastar::checked_ptr<seastar::weak_ptr<const prepared_statement>> checked_weak_ptr;
 
 public:
     const seastar::shared_ptr<cql_statement> statement;
@@ -51,7 +51,7 @@ public:
 
     prepared_statement(seastar::shared_ptr<cql_statement>&& statement_);
 
-    checked_weak_ptr checked_weak_from_this() {
+    checked_weak_ptr checked_weak_from_this() const {
         return checked_weak_ptr(this->weak_from_this());
     }
 };

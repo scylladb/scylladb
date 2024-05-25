@@ -35,7 +35,7 @@ namespace tracing {
 
 extern logging::logger trace_state_logger;
 
-using prepared_checked_weak_ptr = seastar::checked_ptr<seastar::weak_ptr<cql3::statements::prepared_statement>>;
+using prepared_checked_weak_ptr = seastar::checked_ptr<seastar::weak_ptr<const cql3::statements::prepared_statement>>;
 
 class trace_state final {
 public:
