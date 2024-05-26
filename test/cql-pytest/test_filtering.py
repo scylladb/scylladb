@@ -442,14 +442,13 @@ def test_multi_column_relation_tuples_null_check(cql, test_keyspace):
          with pytest.raises(InvalidRequest, match='Invalid null value in condition for column'): 
                 cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2, 3), (2, 1, null))')      
 
-#This test shows how Scylla handles invalid number of items in one of the tuples of multi-column relation.
-#If the number of items is lesser than required, Scylla throws "Expected {} elements in value tuple, but got {}"
-#But if the number of items is greater than required, Scylla throws different error: 
-#"Invalid list literal for in((b,c,d)): value (1, 2, 3, 4) is not of type frozen<tuple<int, int, int>>"
+# This test shows how Scylla handles invalid number of items in one of the tuples of multi-column relation.
+# As far as #13241 is fixed, Scylla throws "Expected {} elements in value tuple, but got {}" if tuple sizes aren't equal.
 # Reproduces #13217
+# Reproduses #13241
 def test_multi_column_relation_wrong_number_of_items_in_tuple(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b, c, d)') as table:
-        with pytest.raises(InvalidRequest, match='elements in value tuple, but got'):
+        with pytest.raises(InvalidRequest):
             cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2), (2, 1, 4))')
-        with pytest.raises(InvalidRequest, match='Invalid list literal for in'):
+        with pytest.raises(InvalidRequest):
             cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2, 3, 4, 5), (2, 1, 4))')
