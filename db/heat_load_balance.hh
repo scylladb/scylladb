@@ -27,6 +27,7 @@
  */
 #include <vector>
 #include <cassert>
+#include <fmt/ranges.h>
 #include <boost/range/adaptor/map.hpp>
 #include "log.hh"
 
