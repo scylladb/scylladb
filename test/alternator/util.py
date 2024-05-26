@@ -9,6 +9,7 @@ import random
 import collections
 import time
 import re
+import os
 import requests
 import pytest
 from contextlib import contextmanager
@@ -123,8 +124,11 @@ def multiset(items):
     return collections.Counter([freeze(item) for item in items])
 
 # NOTE: alternator_Test prefix contains a capital letter on purpose,
-#in order to validate case sensitivity in alternator
-test_table_prefix = 'alternator_Test_'
+# in order to validate case sensitivity in alternator.
+# We also add the process id, in case two independent pytest invocations
+# run in parallel and happen to try to create a table at exactly the same
+# time.
+test_table_prefix = 'alternator_Test_' + str(os.getpid()) + '_'
 def unique_table_name():
     current_ms = int(round(time.time() * 1000))
     # If unique_table_name() is called twice in the same millisecond...
