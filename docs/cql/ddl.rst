@@ -289,6 +289,14 @@ For instance::
 
 The supported options are the same as :ref:`creating a keyspace <create-keyspace-statement>`.
 
+
+.. note::
+
+   To guarantee data consistency during RF alter:
+
+     * Increment or decrement RF per DC by **one** at a time.
+     * See :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`.
+
 .. _drop-keyspace-statement:
 
 DROP KEYSPACE
