@@ -16,6 +16,9 @@ Restoring a keyspace from a backup requires all snapshot files of the tables, an
    The procedure restores each node using the backup file of the **same node**.
    If this is not the case, one should use other restoration methods tools like :doc:`sstableloader </operating-scylla/procedures/cassandra-to-scylla-migration-process/>`. This procedure is much slower than restoring to the same topology cluster.
 
+   The procedure also assumes that the restored sstables do not contain any deleted or altered columns, allowing to recreate the schema using ``cqlsh``.
+   Otherwise, the schema should be restored from the ``system_schema`` keyspace, in the same full-backup snapshot.
+
 .. _restore-procedure:
 
 ---------
