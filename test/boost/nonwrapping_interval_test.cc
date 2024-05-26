@@ -11,11 +11,14 @@
 #include <boost/test/unit_test.hpp>
 #include "boost/icl/interval.hpp"
 #include "boost/icl/interval_map.hpp"
+#include <fmt/ranges.h>
 #include <unordered_set>
 
 #include "schema/schema_builder.hh"
 
 #include "locator/token_metadata.hh"
+
+#include "test/lib/test_utils.hh"
 
 using ring_position = dht::ring_position;
 

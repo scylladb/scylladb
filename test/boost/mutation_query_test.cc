@@ -7,6 +7,8 @@
  */
 
 
+#include <fmt/ranges.h>
+
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
@@ -21,6 +23,7 @@
 #include "test/lib/result_set_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/test_utils.hh"
 
 #include "querier.hh"
 #include "mutation_query.hh"

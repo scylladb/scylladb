@@ -11,11 +11,14 @@
 
 #include <vector>
 
+#include <fmt/ranges.h>
+
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/util.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/test_utils.hh"
 
 using namespace cql3;
 

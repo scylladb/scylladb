@@ -32,6 +32,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/test_utils.hh"
 #include "utils/ranges.hh"
 
 #include "readers/from_mutations_v2.hh"

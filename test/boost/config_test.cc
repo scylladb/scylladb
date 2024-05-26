@@ -10,8 +10,10 @@
 #include <boost/test/unit_test.hpp>
 #include <stdlib.h>
 #include <iostream>
+#include <fmt/ranges.h>
 
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/test_utils.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
 #include "db/config.hh"

@@ -12,6 +12,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <utility>
+#include <fmt/ranges.h>
 #include "cql3/expr/expression.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"

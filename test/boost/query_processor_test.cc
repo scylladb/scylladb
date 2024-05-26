@@ -11,12 +11,14 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/test/unit_test.hpp>
+#include <fmt/ranges.h>
 #include <iterator>
 #include <stdint.h>
 
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/test_utils.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/metrics_api.hh>

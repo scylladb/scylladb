@@ -17,6 +17,8 @@
 #include <set>
 #include <deque>
 
+#include <fmt/ranges.h>
+
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>

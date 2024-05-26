@@ -466,8 +466,6 @@ template <> struct fmt::formatter<mutation> : fmt::formatter<string_view> {
     auto format(const mutation&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-std::ostream& operator<<(std::ostream& os, const mutation& m);
-
 // Splits the source mutation into multiple mutations so that their size
 // does not exceed the max_size limit.
 // The size of a mutation is calculated as the sum of the memory_usage()
