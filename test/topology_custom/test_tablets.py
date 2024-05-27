@@ -148,6 +148,11 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
     logger.info(f"Checking {rf_to} re-allocated replicas")
     await check_allocated_replica(rf_to)
 
+    if direction != 'up':
+        # Don't check fragments for up/none changes, scylla crashes when checking nodes
+        # that (validly) miss the replica, see scylladb/scylladb#18786
+        return
+
     fragments = { pk: set() for pk in random.sample(range(128), 17) }
     for s in servers:
         host_id = await manager.get_host_id(s.server_id)
