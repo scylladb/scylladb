@@ -33,13 +33,13 @@ struct invalidated_prepared_usage_attempt {
 
 class prepared_statement : public seastar::weakly_referencable<prepared_statement> {
 public:
-    typedef seastar::checked_ptr<seastar::weak_ptr<prepared_statement>> checked_weak_ptr;
+    typedef seastar::checked_ptr<seastar::weak_ptr<const prepared_statement>> checked_weak_ptr;
 
 public:
     const seastar::shared_ptr<cql_statement> statement;
     const std::vector<seastar::lw_shared_ptr<column_specification>> bound_names;
-    std::vector<uint16_t> partition_key_bind_indices;
-    std::vector<sstring> warnings;
+    const std::vector<uint16_t> partition_key_bind_indices;
+    const std::vector<sstring> warnings;
 
     prepared_statement(seastar::shared_ptr<cql_statement> statement_, std::vector<seastar::lw_shared_ptr<column_specification>> bound_names_,
                        std::vector<uint16_t> partition_key_bind_indices, std::vector<sstring> warnings = {});
@@ -51,7 +51,7 @@ public:
 
     prepared_statement(seastar::shared_ptr<cql_statement>&& statement_);
 
-    checked_weak_ptr checked_weak_from_this() {
+    checked_weak_ptr checked_weak_from_this() const {
         return checked_weak_ptr(this->weak_from_this());
     }
 };
