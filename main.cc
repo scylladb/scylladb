@@ -1586,7 +1586,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             debug::the_stream_manager = &stream_manager;
             supervisor::notify("starting streaming service");
-            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
             auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
                 // FIXME -- keep the instances alive, just call .stop on them
                 stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
@@ -1624,7 +1624,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // both)
             supervisor::notify("starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
-            repair.start(std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(raft_address_map), std::ref(bm), std::ref(sys_dist_ks), std::ref(sys_ks), std::ref(view_update_generator), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
+            repair.start(std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(raft_address_map), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
@@ -1683,17 +1683,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_task_manager_test(ctx).get();
             });
 #endif
-            supervisor::notify("starting sstables loader");
-            sst_loader.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(messaging)).get();
-            auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {
-                sst_loader.stop().get();
-            });
-            api::set_server_sstables_loader(ctx, sst_loader).get();
-            auto stop_sstl_api = defer_verbose_shutdown("sstables loader API", [&ctx] {
-                api::unset_server_sstables_loader(ctx).get();
-            });
-
-
             gossiper.local().register_(ss.local().shared_from_this());
             auto stop_listening = defer_verbose_shutdown("storage service notifications", [&gossiper, &ss] {
                 gossiper.local().unregister_(ss.local().shared_from_this()).get();
@@ -1800,6 +1789,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator)).get();
             auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
                 view_builder.stop().get();
+            });
+
+            supervisor::notify("starting sstables loader");
+            sst_loader.start(std::ref(db), std::ref(messaging), std::ref(view_builder)).get();
+            auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {
+                sst_loader.stop().get();
+            });
+            api::set_server_sstables_loader(ctx, sst_loader).get();
+            auto stop_sstl_api = defer_verbose_shutdown("sstables loader API", [&ctx] {
+                api::unset_server_sstables_loader(ctx).get();
             });
 
             /*

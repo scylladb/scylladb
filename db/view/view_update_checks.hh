@@ -16,19 +16,14 @@ namespace replica {
 class table;
 }
 
-namespace db {
-
-class system_distributed_keyspace;
-
-}
-
 namespace locator {
 class token_metadata;
 }
 
 namespace db::view {
+class view_builder;
 
-future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata& tm, const replica::table& t,
+future<bool> check_needs_view_update_path(view_builder& vb, const locator::token_metadata& tm, const replica::table& t,
         streaming::stream_reason reason);
 
 }

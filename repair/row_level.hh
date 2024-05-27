@@ -92,9 +92,8 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<service::storage_proxy>& _sp;
     sharded<service::raft_address_map>& _addr_map;
     sharded<db::batchlog_manager>& _bm;
-    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::system_keyspace>& _sys_ks;
-    sharded<db::view::view_update_generator>& _view_update_generator;
+    sharded<db::view::view_builder>& _view_builder;
     shared_ptr<repair::task_manager_module> _repair_module;
     service::migration_manager& _mm;
     node_ops_metrics _node_ops_metrics;
@@ -122,9 +121,8 @@ public:
             sharded<service::storage_proxy>& sp,
             sharded<service::raft_address_map>& addr_map,
             sharded<db::batchlog_manager>& bm,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::system_keyspace>& sys_ks,
-            sharded<db::view::view_update_generator>& vug,
+            sharded<db::view::view_builder>& vb,
             tasks::task_manager& tm,
             service::migration_manager& mm, size_t max_repair_memory);
     ~repair_service();
@@ -180,8 +178,7 @@ public:
     netw::messaging_service& get_messaging() noexcept { return _messaging; }
     sharded<replica::database>& get_db() noexcept { return _db; }
     service::migration_manager& get_migration_manager() noexcept { return _mm; }
-    sharded<db::system_distributed_keyspace>& get_sys_dist_ks() noexcept { return _sys_dist_ks; }
-    sharded<db::view::view_update_generator>& get_view_update_generator() noexcept { return _view_update_generator; }
+    sharded<db::view::view_builder>& get_view_builder() noexcept { return _view_builder; }
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
