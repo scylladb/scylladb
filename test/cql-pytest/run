@@ -22,7 +22,7 @@ if '--vnodes' in sys.argv:
     sys.argv.remove('--vnodes')
     def run_without_tablets(pid, dir):
         (c, e) = run_without_tablets.orig_cmd(pid, dir)
-        c.remove('--experimental-features=tablets')
+        c.remove('--enable-tablets=true')
         return (c, e)
     run_without_tablets.orig_cmd = cmd
     cmd = run_without_tablets

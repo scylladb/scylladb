@@ -11,8 +11,7 @@ extra_scylla_config_options:
     experimental_features: [
                              udf,
                              alternator-streams,
-                             keyspace-storage-options,
-                             tablets
+                             keyspace-storage-options
     ],
     alternator_port: 8000,
     query_tombstone_page_limit: 1000,
@@ -20,5 +19,6 @@ extra_scylla_config_options:
     alternator_enforce_authorization: True,
     alternator_timeout_in_ms: 30000,
     alternator_ttl_period_in_seconds: 0.5,
-    alternator_streams_time_window_s: 0
+    alternator_streams_time_window_s: 0,
+    enable_tablets: True
   }

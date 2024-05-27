@@ -618,3 +618,6 @@ maintenance_socket: ignore
 # replication_strategy_warn_list:
 #  - SimpleStrategy
 # replication_strategy_fail_list:
+
+# This enables tablets on newly created keyspaces
+enable_tablets: true

@@ -5696,9 +5696,7 @@ SEASTAR_TEST_CASE(test_setting_synchronous_updates_property) {
 static
 cql_test_config tablet_cql_test_config() {
     cql_test_config c;
-    c.db_config->experimental_features({
-            db::experimental_features_t::feature::TABLETS,
-        }, db::config::config_source::CommandLine);
+    c.db_config->enable_tablets.set(true);
     return c;
 }
 
