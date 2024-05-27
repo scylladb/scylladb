@@ -113,16 +113,10 @@ extern std::mutex boost_logger_mutex;
 
 }
 
-namespace internal {
-
-template <typename T, typename Char = char>
-concept formattable = fmt::is_formattable<std::remove_reference_t<T>, Char>::value;
-
-}
-
 namespace std {
 
-template <::internal::formattable T>
+template <typename T>
+requires fmt::is_formattable<T>::value
 std::ostream& boost_test_print_type(std::ostream& os, const T& p) {
     fmt::print(os, "{}", p);
     return os;
