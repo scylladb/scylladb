@@ -303,8 +303,10 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                     return make_ready_future<>();
                 }
 
-                return this->send_one_mutation(std::move(m)).then([this, ctx_ptr] {
-                    ++this->shard_stats().sent;
+                const auto mutation_size = m.fm.representation().size();
+                return this->send_one_mutation(std::move(m)).then([this, ctx_ptr, mutation_size] {
+                    ++this->shard_stats().sent_total;
+                    this->shard_stats().sent_hints_bytes_total += mutation_size;
                 }).handle_exception([this, ctx_ptr] (auto eptr) {
                     manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
                     ++this->shard_stats().send_errors;
