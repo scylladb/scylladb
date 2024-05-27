@@ -19,21 +19,23 @@ def get_expected_tombstone_gc_mode(rf, tablets):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rf", [1, 2])
-@pytest.mark.parametrize("tablets", ["true", "false"])
+@pytest.mark.parametrize("tablets", [True, False])
 async def test_default_tombstone_gc(manager, rf, tablets):
     servers = [await manager.server_add(), await manager.server_add()]
     cql = manager.cql
-    async with new_test_keyspace(cql, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{'initial': {rf}}}") as keyspace:
+    tablets_enabled = "true" if tablets else "false"
+    async with new_test_keyspace(cql, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
         async with new_test_table(cql, keyspace, "p int primary key, x int") as table:
             check_tombstone_gc_mode(cql, table, get_expected_tombstone_gc_mode(rf, tablets))
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rf", [1, 2])
-@pytest.mark.parametrize("tablets", ["true", "false"])
+@pytest.mark.parametrize("tablets", [True, False])
 async def test_default_tombstone_gc_does_not_override(manager, rf, tablets):
     servers = [await manager.server_add(), await manager.server_add()]
     cql = manager.cql
-    async with new_test_keyspace(cql, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{'initial': {rf}}}") as keyspace:
+    tablets_enabled = "true" if tablets else "false"
+    async with new_test_keyspace(cql, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
         async with new_test_table(cql, keyspace, "p int primary key, x int", " with tombstone_gc = {'mode': 'disabled'}") as table:
             await cql.run_async(f"ALTER TABLE {table} add y int")
             check_tombstone_gc_mode(cql, table, "disabled")
