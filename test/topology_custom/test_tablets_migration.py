@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 async def test_tablet_transition_sanity(manager: ManagerClient, action):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets']}
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
     host_ids = []
     servers = []
 
@@ -104,7 +104,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
         pytest.skip('Failing source during target cleanup is pointless')
 
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets']}
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
     host_ids = []
     servers = []
 
@@ -246,7 +246,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
 @pytest.mark.asyncio
 async def test_tablet_back_and_forth_migration(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets', 'consistent-topology-changes']}
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
     host_ids = []
     servers = []
 

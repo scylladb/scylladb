@@ -632,7 +632,7 @@ future<> storage_service::topology_state_load() {
     std::unordered_set<raft::server_id> prev_normal = boost::copy_range<std::unordered_set<raft::server_id>>(_topology_state_machine._topology.normal_nodes | boost::adaptors::map_keys);
 
     std::unordered_set<locator::host_id> tablet_hosts;
-    if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+    if (_db.local().get_config().enable_tablets()) {
         tablet_hosts = co_await replica::read_required_hosts(_qp);
     }
 
@@ -706,7 +706,7 @@ future<> storage_service::topology_state_load() {
 
         auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::nullopt, std::move(prev_normal));
 
-        if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+        if (_db.local().get_config().enable_tablets()) {
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
             tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
         }
@@ -5143,7 +5143,7 @@ void storage_service::on_update_tablet_metadata() {
 }
 
 future<> storage_service::load_tablet_metadata() {
-    if (!_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+    if (!_db.local().get_config().enable_tablets()) {
         return make_ready_future<>();
     }
     return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) -> future<> {
@@ -5228,7 +5228,7 @@ void storage_service::start_tablet_split_monitor() {
     if (this_shard_id() != 0) {
         return;
     }
-    if (!_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+    if (!_db.local().get_config().enable_tablets()) {
         return;
     }
     slogger.info("Starting the tablet split monitor...");

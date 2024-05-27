@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bool):
     """Test basic topology operations using the topology coordinator."""
-    cfg = {'experimental_features': ['tablets'] if tablets_enabled else []}
+    cfg = {'enable_tablets' : tablets_enabled}
 
     logger.info("Bootstrapping first node")
     servers = [await manager.server_add(config=cfg)]

@@ -159,7 +159,7 @@ void migration_manager::init_messaging_service()
             auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
             if (options->group0_snapshot_transfer) {
                 cm.emplace_back(co_await db::system_keyspace::get_group0_history(db));
-                if (proxy.local().local_db().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+                if (proxy.local().local_db().get_config().enable_tablets()) {
                     for (auto&& m: co_await replica::read_tablet_mutations(db)) {
                         cm.emplace_back(std::move(m));
                     }

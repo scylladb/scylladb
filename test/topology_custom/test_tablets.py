@@ -23,8 +23,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
 async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
-    cfg = {'enable_user_defined_functions': False,
-           'experimental_features': ['tablets']}
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
     servers = await manager.servers_add(2, config=cfg)
 
     cql = manager.get_cql()
@@ -42,7 +41,7 @@ async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_tablet_cannot_decommision_below_replication_factor(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets']}
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
     servers = await manager.servers_add(4, config=cfg)
 
     logger.info("Creating table")
@@ -71,7 +70,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
 
 async def test_reshape_with_tablets(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'experimental_features': ['tablets']}
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
     server = (await manager.servers_add(1, config=cfg, cmdline=['--smp', '1']))[0]
 
     logger.info("Creating table")
@@ -108,8 +107,7 @@ async def test_reshape_with_tablets(manager: ManagerClient):
 @pytest.mark.xfail(reason="Scaling not implemented yet")
 @pytest.mark.asyncio
 async def test_tablet_rf_change(manager: ManagerClient, direction):
-    cfg = {'enable_user_defined_functions': False,
-           'experimental_features': ['tablets']}
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
     servers = await manager.servers_add(3, config=cfg)
 
     cql = manager.get_cql()
@@ -167,10 +165,7 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
 # from is migrated away.
 @pytest.mark.asyncio
 async def test_saved_readers_tablet_migration(manager: ManagerClient, mode):
-    cfg = {
-            'enable_user_defined_functions': False,
-            'experimental_features': ['tablets'],
-    }
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
 
     if mode != "release":
         cfg['error_injections_at_startup'] = [{'name': 'querier-cache-ttl-seconds', 'value': 999999999}]
