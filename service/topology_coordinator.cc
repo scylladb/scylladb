@@ -2471,9 +2471,11 @@ future<> topology_coordinator::start_tablet_load_stats_refresher() {
         } catch (...) {
             rtlogger.warn("Found error while refreshing load stats for tablets: {}, retrying...", std::current_exception());
         }
+        auto refresh_interval = utils::get_local_injector().is_enabled("short_tablet_stats_refresh_interval") ?
+                std::chrono::seconds(1) : tablet_load_stats_refresh_interval;
         if (sleep && can_proceed()) {
             try {
-                co_await seastar::sleep_abortable(tablet_load_stats_refresh_interval, _as);
+                co_await seastar::sleep_abortable(refresh_interval, _as);
             } catch (...) {
                 rtlogger.debug("raft topology: Tablet load stats refresher: sleep failed: {}", std::current_exception());
             }
