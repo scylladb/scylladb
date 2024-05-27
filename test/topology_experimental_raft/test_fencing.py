@@ -50,8 +50,8 @@ def send_errors_metric(metrics: ScyllaMetrics):
     return metrics.get('scylla_hints_manager_send_errors')
 
 
-def sent_metric(metrics: ScyllaMetrics):
-    return metrics.get('scylla_hints_manager_sent')
+def sent_total_metric(metrics: ScyllaMetrics):
+    return metrics.get('scylla_hints_manager_sent_total')
 
 
 def all_hints_metrics(metrics: ScyllaMetrics) -> list[str]:
@@ -166,7 +166,7 @@ async def test_fence_hints(request, manager: ManagerClient):
     logger.info(f"Waiting for failed hints on {host0}")
     async def at_least_one_hint_failed():
         metrics_data = await manager.metrics.query(s0.ip_addr)
-        if sent_metric(metrics_data) > 0:
+        if sent_total_metric(metrics_data) > 0:
             pytest.fail(f"Unexpected successful hints; metrics on {s0}: {all_hints_metrics(metrics_data)}")
         if send_errors_metric(metrics_data) >= 1:
             return True
@@ -187,9 +187,9 @@ async def test_fence_hints(request, manager: ManagerClient):
     logger.info(f"Waiting for sent hints on {host0}")
     async def exactly_one_hint_sent():
         metrics_data = await manager.metrics.query(s0.ip_addr)
-        if sent_metric(metrics_data) > 1:
+        if sent_total_metric(metrics_data) > 1:
             pytest.fail(f"Unexpected more than 1 successful hints; metrics on {s0}: {all_hints_metrics(metrics_data)}")
-        if sent_metric(metrics_data) == 1:
+        if sent_total_metric(metrics_data) == 1:
             return True
         logger.info(f"Metrics on {s0}: {all_hints_metrics(metrics_data)}")
     await wait_for(exactly_one_hint_sent, time.time() + 60)

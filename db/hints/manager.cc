@@ -171,8 +171,11 @@ void manager::register_metrics(const sstring& group_name) {
         sm::make_counter("dropped", _stats.dropped,
                         sm::description("Number of dropped hints.")),
 
-        sm::make_counter("sent", _stats.sent,
+        sm::make_counter("sent_total", _stats.sent_total,
                         sm::description("Number of sent hints.")),
+
+        sm::make_counter("sent_bytes_total", _stats.sent_hints_bytes_total,
+                        sm::description("The total size of the sent hints (in bytes)")),
 
         sm::make_counter("discarded", _stats.discarded,
                         sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.).")),
