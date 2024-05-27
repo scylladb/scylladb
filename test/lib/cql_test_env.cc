@@ -311,6 +311,10 @@ public:
         return _db.local();
     }
 
+    virtual sharded<locator::shared_token_metadata>& shared_token_metadata() override {
+        return _token_metadata;
+    }
+
     cql3::query_processor& local_qp() override {
         return _qp.local();
     }
