@@ -3276,6 +3276,7 @@ future<> repair_service::cleanup_history(tasks::task_id repair_id) {
 }
 
 future<> repair_service::load_history() {
+  try {
     co_await get_db().local().get_tables_metadata().parallel_for_each_table(coroutine::lambda([&] (table_id table_uuid, lw_shared_ptr<replica::table> table) -> future<> {
         auto shard = utils::uuid_xor_to_uint32(table_uuid.uuid()) % smp::count;
         if (shard != this_shard_id()) {
@@ -3304,6 +3305,11 @@ future<> repair_service::load_history() {
             }
         });
     }));
+  } catch (const abort_requested_exception&) {
+    // Ignore
+  } catch (...) {
+    rlogger.warn("Failed to update repair history time: {}.  Ignored", std::current_exception());
+  }
 }
 
 repair_meta_ptr repair_service::get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {
