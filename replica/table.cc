@@ -198,9 +198,11 @@ table::add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& reader
         return;
     }
     reserve_fn(boost::accumulate(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::memtable_count)), uint64_t(0)));
-    // TODO: implement a incremental reader selector for memtable, using existing reader_selector interface for combined_reader.
+    auto token_range = range.transform(std::mem_fn(&dht::ring_position::token));
     for (compaction_group& cg : compaction_groups()) {
-        add_memtables_from_cg(cg);
+        if (cg.token_range().overlaps(token_range, dht::token_comparator())) {
+            add_memtables_from_cg(cg);
+        }
     }
 }
 
