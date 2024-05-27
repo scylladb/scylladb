@@ -170,13 +170,14 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
     std::map<sstring, sstring> options;
     const auto& old_options = old->strategy_options();
     auto sc = get_replication_strategy_class();
-    std::optional<unsigned> initial_tablets;
     if (sc) {
-        initial_tablets = get_initial_tablets(*sc, old->initial_tablets().has_value());
         options = prepare_options(*sc, tm, get_replication_options(), old_options);
     } else {
         sc = old->strategy_name();
         options = old_options;
+    }
+    std::optional<unsigned> initial_tablets = get_initial_tablets(*sc, old->initial_tablets().has_value());
+    if (!initial_tablets) {
         initial_tablets = old->initial_tablets();
     }
 
