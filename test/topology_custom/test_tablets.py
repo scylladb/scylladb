@@ -110,6 +110,8 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
     cfg = {'enable_user_defined_functions': False,
            'experimental_features': ['tablets']}
     servers = await manager.servers_add(3, config=cfg)
+    for s in servers:
+        await manager.api.disable_tablet_balancing(s.ip_addr)
 
     cql = manager.get_cql()
     res = await cql.run_async("SELECT data_center FROM system.local")
@@ -145,6 +147,20 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
 
     logger.info(f"Checking {rf_to} re-allocated replicas")
     await check_allocated_replica(rf_to)
+
+    fragments = { pk: set() for pk in random.sample(range(128), 17) }
+    for s in servers:
+        host_id = await manager.get_host_id(s.server_id)
+        host = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 30)
+        await read_barrier(manager.get_cql(), host[0]) # scylladb/scylladb#18199
+        for k in fragments:
+            res = await cql.run_async(f"SELECT partition_region FROM MUTATION_FRAGMENTS(test.test) WHERE pk={k}", host=host[0])
+            for fragment in res:
+                if fragment.partition_region == 0: # partition start
+                    fragments[k].add(host_id)
+    logger.info("Checking fragments")
+    for k in fragments:
+        assert len(fragments[k]) == rf_to, f"Found mutations for {k} key on {fragments[k]} hosts, but expected only {rf_to} of them"
 
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
