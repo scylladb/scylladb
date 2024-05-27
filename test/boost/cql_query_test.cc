@@ -4819,8 +4819,6 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
             e.execute_prepared(id, {cql3_pk, cql3_ck, cql3_value}).get();
         }
 
-        auto& db = e.local_db();
-
         const auto make_expected_row = [&] (int ck) -> std::vector<bytes_opt> {
             return {raw_pk, int32_type->decompose(ck), raw_value};
         };
@@ -4831,10 +4829,12 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
         db_config->max_memory_for_unlimited_query_soft_limit.set(256, utils::config_file::config_source::CommandLine);
         db_config->max_memory_for_unlimited_query_hard_limit.set(1024, utils::config_file::config_source::CommandLine);
 
+        auto groups = get_scheduling_groups().get();
+
         for (auto is_paged : {true, false}) {
             for (auto is_reversed : {true, false}) {
-                for (auto scheduling_group : {db.get_statement_scheduling_group(), db.get_streaming_scheduling_group(), default_scheduling_group()}) {
-                    const auto should_fail = !is_paged && scheduling_group == db.get_statement_scheduling_group();
+                for (auto scheduling_group : {groups.statement_scheduling_group, groups.streaming_scheduling_group, default_scheduling_group()}) {
+                    const auto should_fail = !is_paged && scheduling_group == groups.statement_scheduling_group;
                     testlog.info("checking: is_paged={}, is_reversed={}, scheduling_group={}, should_fail={}", is_paged, is_reversed, scheduling_group.name(), should_fail);
                     const auto select_query = format("SELECT * FROM test WHERE pk = {} ORDER BY ck {};", pk, is_reversed ? "DESC" : "ASC");
 
@@ -5057,7 +5057,8 @@ SEASTAR_THREAD_TEST_CASE(test_query_unselected_columns) {
 
     do_with_cql_env_thread([] (cql_test_env& e) {
         // Sanity test, this test-case has to run in the statement group that is != default group.
-        BOOST_REQUIRE(e.local_db().get_statement_scheduling_group() == current_scheduling_group());
+        auto groups = get_scheduling_groups().get();
+        BOOST_REQUIRE(groups.statement_scheduling_group == current_scheduling_group());
         BOOST_REQUIRE(default_scheduling_group() != current_scheduling_group());
 
         e.execute_cql("CREATE TABLE tbl (pk int, ck int, v text, PRIMARY KEY (pk, ck))").get();

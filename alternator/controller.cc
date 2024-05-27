@@ -32,8 +32,10 @@ controller::controller(
         sharded<service::memory_limiter>& memory_limiter,
         sharded<auth::service>& auth_service,
         sharded<qos::service_level_controller>& sl_controller,
-        const db::config& config)
-    : _gossiper(gossiper)
+        const db::config& config,
+        seastar::scheduling_group sg)
+    : protocol_server(sg)
+    , _gossiper(gossiper)
     , _proxy(proxy)
     , _mm(mm)
     , _sys_dist_ks(sys_dist_ks)
@@ -62,7 +64,9 @@ std::vector<socket_address> controller::listen_addresses() const {
 }
 
 future<> controller::start_server() {
-    return seastar::async([this] {
+    seastar::thread_attributes attr;
+    attr.sched_group = _sched_group;
+    return seastar::async(std::move(attr), [this] {
         _listen_addresses.clear();
 
         auto preferred = _config.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
@@ -156,7 +160,9 @@ future<> controller::stop_server() {
 }
 
 future<> controller::request_stop_server() {
-    return stop_server();
+    return with_scheduling_group(_sched_group, [this] {
+        return stop_server();
+    });
 }
 
 }

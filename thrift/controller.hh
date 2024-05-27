@@ -46,7 +46,7 @@ class thrift_controller : public protocol_server {
     future<> do_stop_server();
 
 public:
-    thrift_controller(distributed<replica::database>&, sharded<auth::service>&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy);
+    thrift_controller(distributed<replica::database>&, sharded<auth::service>&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy, seastar::scheduling_group sg);
     virtual sstring name() const override;
     virtual sstring protocol() const override;
     virtual sstring protocol_version() const override;

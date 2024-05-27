@@ -306,21 +306,17 @@ future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snap
 }
 
 void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl) {
-    ss::start_native_transport.set(r, [&ctx, &ctl](std::unique_ptr<http::request> req) {
+    ss::start_native_transport.set(r, [&ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
-            return with_scheduling_group(ctx.db.local().get_statement_scheduling_group(), [&ctl] {
-                return ctl.start_server();
-            });
+            return ctl.start_server();
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::stop_native_transport.set(r, [&ctx, &ctl](std::unique_ptr<http::request> req) {
+    ss::stop_native_transport.set(r, [&ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
-            return with_scheduling_group(ctx.db.local().get_statement_scheduling_group(), [&ctl] {
-                return ctl.request_stop_server();
-            });
+            return ctl.request_stop_server();
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -342,21 +338,17 @@ void unset_transport_controller(http_context& ctx, routes& r) {
 }
 
 void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl) {
-    ss::stop_rpc_server.set(r, [&ctx, &ctl](std::unique_ptr<http::request> req) {
+    ss::stop_rpc_server.set(r, [&ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
-            return with_scheduling_group(ctx.db.local().get_statement_scheduling_group(), [&ctl] {
-                return ctl.request_stop_server();
-            });
+            return ctl.request_stop_server();
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::start_rpc_server.set(r, [&ctx, &ctl](std::unique_ptr<http::request> req) {
+    ss::start_rpc_server.set(r, [&ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
-            return with_scheduling_group(ctx.db.local().get_statement_scheduling_group(), [&ctl] {
-                return ctl.start_server();
-            });
+            return ctl.start_server();
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });

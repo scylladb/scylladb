@@ -17,8 +17,10 @@ static logging::logger clogger("thrift_controller");
 
 thrift_controller::thrift_controller(distributed<replica::database>& db, sharded<auth::service>& auth,
         sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
-        sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy)
-    : _ops_sem(1)
+        sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy,
+        seastar::scheduling_group sg)
+    : protocol_server(sg)
+    , _ops_sem(1)
     , _db(db)
     , _auth_service(auth)
     , _qp(qp)
@@ -58,7 +60,10 @@ future<> thrift_controller::do_start_server() {
     if (_server) {
         return make_ready_future<>();
     }
-    return seastar::async([this] {
+
+    seastar::thread_attributes attr;
+    attr.sched_group = _sched_group;
+    return seastar::async(std::move(attr), [this] {
         auto tserver = std::make_unique<distributed<thrift_server>>();
         _addr.reset();
 
@@ -108,7 +113,9 @@ future<> thrift_controller::request_stop_server() {
         throw std::runtime_error(format("Thrift server is starting, try again later"));
     }
 
-    return do_stop_server().finally([this] { _ops_sem.signal(); });
+    return with_scheduling_group(_sched_group, [this] {
+        return do_stop_server();
+    }).finally([this] { _ops_sem.signal(); });
 }
 
 future<> thrift_controller::do_stop_server() {
