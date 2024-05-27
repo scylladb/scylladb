@@ -111,7 +111,6 @@ struct experimental_features_t {
         ALTERNATOR_STREAMS,
         BROADCAST_TABLES,
         KEYSPACE_STORAGE_OPTIONS,
-        TABLETS,
     };
     static std::map<sstring, feature> map(); // See enum_option.
     static std::vector<enum_option<experimental_features_t>> all();
@@ -495,6 +494,7 @@ public:
 
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
     named_value<double> topology_barrier_stall_detector_threshold_seconds;
+    named_value<bool> enable_tablets;
 
     static const sstring default_tls_priority;
 private:

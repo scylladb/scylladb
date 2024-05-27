@@ -60,9 +60,7 @@ void verify_tablet_metadata_persistence(cql_test_env& env, const tablet_metadata
 static
 cql_test_config tablet_cql_test_config() {
     cql_test_config c;
-    c.db_config->experimental_features({
-            db::experimental_features_t::feature::TABLETS,
-        }, db::config::config_source::CommandLine);
+    c.db_config->enable_tablets(true);
     c.initial_tablets = 2;
     return c;
 }
