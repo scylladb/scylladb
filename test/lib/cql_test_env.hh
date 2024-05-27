@@ -139,6 +139,8 @@ public:
 
     virtual replica::database& local_db() = 0;
 
+    virtual sharded<locator::shared_token_metadata>& shared_token_metadata() = 0;
+
     virtual cql3::query_processor& local_qp() = 0;
 
     virtual distributed<replica::database>& db() = 0;

@@ -144,12 +144,28 @@ public:
         return _nodes.at(node).load();
     }
 
+    uint64_t total_load() const {
+        uint64_t total = 0;
+        for (auto&& n : _nodes) {
+            total += n.second.load();
+        }
+        return total;
+    }
+
     uint64_t get_avg_shard_load(host_id node) const {
         if (!_nodes.contains(node)) {
             return 0;
         }
         auto& n = _nodes.at(node);
         return div_ceil(n.load(), n._shards.size());
+    }
+
+    double get_real_avg_shard_load(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        auto& n = _nodes.at(node);
+        return double(n.load()) / n._shards.size();
     }
 
     // Returns the difference in tablet count between highest-loaded shard and lowest-loaded shard.
