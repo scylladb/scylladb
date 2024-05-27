@@ -100,6 +100,20 @@ def test_alter_changes_initial_tablets(cql, skip_without_tablets):
         assert res.initial_tablets == 2
 
 
+def test_alter_changes_initial_tablets_short(cql, skip_without_tablets):
+    ksdef = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        orig_rep = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name = '{keyspace}'").one()
+
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH tablets = {{'initial': 2}};")
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert res.initial_tablets == 2
+
+        # Test that replication parameters didn't change
+        rep = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert rep.replication == orig_rep.replication
+
+
 # Test that initial number of tablets is preserved in describe
 def test_describe_initial_tablets(cql, skip_without_tablets):
     ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
