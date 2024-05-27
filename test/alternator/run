@@ -32,7 +32,7 @@ remove_scylla_options = []
 # temporary usefulness, and should eventually be removed.
 if '--vnodes' in sys.argv:
     sys.argv.remove('--vnodes')
-    remove_scylla_options.append('--experimental-features=tablets')
+    remove_scylla_options.append('--enable-tablets=true')
 
 if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)

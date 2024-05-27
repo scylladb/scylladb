@@ -4576,7 +4576,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     // used by default on new Alternator tables. Change this initialization
     // to 0 enable tablets by default, with automatic number of tablets.
     std::optional<unsigned> initial_tablets;
-    if (sp.get_db().local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+    if (sp.get_db().local().get_config().enable_tablets()) {
         auto it = tags_map.find(INITIAL_TABLETS_TAG_KEY);
         if (it != tags_map.end()) {
             // Tag set. If it's a valid number, use it. If not - e.g., it's

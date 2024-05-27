@@ -563,8 +563,7 @@ int scylla_simple_query_main(int argc, char** argv) {
             db_cfg->enable_cache(enable_cache);
             cql_test_config cfg(db_cfg);
             if (app.configuration().contains("tablets")) {
-                cfg.db_config->experimental_features({db::experimental_features_t::feature::TABLETS},
-                                                      db::config::config_source::CommandLine);
+                cfg.db_config->enable_tablets.set(true);
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
             }
           return do_with_cql_env_thread([&app] (auto&& env) {

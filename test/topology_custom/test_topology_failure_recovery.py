@@ -20,8 +20,7 @@ async def inject_error_on(manager, error_name, servers):
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
-    cfg = {'enable_user_defined_functions': False,
-           'experimental_features': ['tablets']}
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
 
     logs = [await manager.server_open_log(srv.server_id) for srv in servers]
