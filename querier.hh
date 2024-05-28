@@ -145,10 +145,13 @@ public:
 ///     page. It should be dropped instead and a new one should be created
 ///     instead.
 class querier : public querier_base {
+    static thread_local logger::rate_limit row_tombstone_warn_rate_limit;
+    static thread_local logger::rate_limit cell_tombstone_warn_rate_limit;
+
     lw_shared_ptr<compact_for_query_state_v2> _compaction_state;
 
 private:
-    void maybe_log_tombstone_warning(std::string_view what, uint64_t live, uint64_t dead);
+    void maybe_log_tombstone_warning(std::string_view what, uint64_t live, uint64_t dead, logger::rate_limit& rl);
 
 public:
     querier(const mutation_source& ms,
@@ -191,8 +194,9 @@ public:
             maybe_log_tombstone_warning(
                     "rows",
                     cstats.static_rows.live + cstats.clustering_rows.live,
-                    cstats.static_rows.dead + cstats.clustering_rows.dead + cstats.range_tombstones);
-            maybe_log_tombstone_warning("cells", cstats.live_cells(), cstats.dead_cells());
+                    cstats.static_rows.dead + cstats.clustering_rows.dead + cstats.range_tombstones,
+                    row_tombstone_warn_rate_limit);
+            maybe_log_tombstone_warning("cells", cstats.live_cells(), cstats.dead_cells(), cell_tombstone_warn_rate_limit);
             return std::move(fut);
         });
     }
