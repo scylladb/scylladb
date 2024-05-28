@@ -71,6 +71,8 @@ public:
     virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const = 0;
     virtual future<> atomic_delete_complete(atomic_delete_context ctx) const = 0;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) = 0;
+    // Free space available in the underlying storage.
+    virtual future<uint64_t> free_space() const = 0;
 
     virtual sstring prefix() const  = 0;
 };
