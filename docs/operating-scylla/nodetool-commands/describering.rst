@@ -2,14 +2,28 @@ Nodetool describering
 =====================
 
 **describering** - :code:`<keyspace>`- Shows the partition ranges of a given keyspace.
-
 For example:
 
 .. code-block:: shell
 
    nodetool describering nba
 
-Example output (for three node cluster on AWS):
+If :doc:`tablets </architecture/tablets>` are enabled for your keyspace, you
+need to additionally specify the table name. The command will display the ring
+of the table.
+
+.. code:: shell
+
+   nodetool describering <keyspace> <table>
+
+For example:
+
+.. code-block:: shell
+
+   nodetool describering nba player_name
+
+
+Example output (for a three-node cluster on AWS with tablets disabled):
 
 .. code-block:: shell
 
