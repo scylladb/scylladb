@@ -86,6 +86,7 @@ public:
 using host2ip_t = std::function<future<gms::inet_address> (locator::host_id)>;
 
 class repair_service : public seastar::peering_sharded_service<repair_service> {
+    sharded<service::topology_state_machine>& _tsm;
     distributed<gms::gossiper>& _gossiper;
     netw::messaging_service& _messaging;
     sharded<replica::database>& _db;
@@ -116,7 +117,8 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     future<> uninit_ms_handlers();
 
 public:
-    repair_service(distributed<gms::gossiper>& gossiper,
+    repair_service(sharded<service::topology_state_machine>& tsm,
+            distributed<gms::gossiper>& gossiper,
             netw::messaging_service& ms,
             sharded<replica::database>& db,
             sharded<service::storage_proxy>& sp,
