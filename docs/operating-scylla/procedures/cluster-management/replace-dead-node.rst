@@ -190,7 +190,7 @@ In this case, the node's data will be cleaned after restart. To remedy this, you
 
 #. Start Scylla Server
 
-   .. include:: /rst_include/scylla-commands-stop-index.rst
+   .. include:: /rst_include/scylla-commands-start-index.rst
 
 Sometimes the public/ private IP of instance is changed after restart. If so refer to the Replace Procedure_ above.
 
