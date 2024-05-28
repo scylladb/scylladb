@@ -15,6 +15,7 @@ from test.topology.util import trigger_snapshot, wait_until_topology_upgrade_fin
 from test.topology.conftest import skip_mode
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
+from cassandra.protocol import InvalidRequest
 
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,14 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
     recovery_result = await cql.run_async("LIST ALL SERVICE LEVELS")
     assert sl_v1 not in [sl.service_level for sl in recovery_result]
     assert set([sl.service_level for sl in recovery_result]) == set(sls)
+
+    logging.info("Checking changes to service levels are forbidden during recovery")
+    with pytest.raises(InvalidRequest, match="The cluster is in recovery mode. Changes to service levels are not allowed."):
+        await cql.run_async(f"CREATE SERVICE LEVEL sl_{unique_name()}")
+    with pytest.raises(InvalidRequest, match="The cluster is in recovery mode. Changes to service levels are not allowed."):
+        await cql.run_async(f"ALTER SERVICE LEVEL {sls[0]} WITH timeout = 1h")
+    with pytest.raises(InvalidRequest, match="The cluster is in recovery mode. Changes to service levels are not allowed."):
+        await cql.run_async(f"DROP SERVICE LEVEL {sls[0]}")
 
     logging.info("Restoring cluster to normal status")
     await asyncio.gather(*(delete_raft_topology_state(cql, h) for h in hosts))
