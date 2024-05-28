@@ -70,10 +70,19 @@ public:
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
+<<<<<<< HEAD
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
         return sstable_directory::delete_with_pending_deletion_log;
     }
     virtual future<> remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) override;
+=======
+    virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
+    virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
+    virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
+    virtual future<uint64_t> free_space() const override {
+        return seastar::fs_avail(prefix());
+    }
+>>>>>>> 51c7ee889e (sstables: Allow to get free space from underlying storage)
 
     virtual sstring prefix() const override { return _dir; }
 };
@@ -467,10 +476,20 @@ public:
     virtual future<> destroy(const sstable& sst) override {
         return make_ready_future<>();
     }
+<<<<<<< HEAD
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
         return delete_with_system_keyspace;
     }
     virtual future<> remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) override;
+=======
+    virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
+    virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
+    virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
+    virtual future<uint64_t> free_space() const override {
+        // assumes infinite space on s3 (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
+        return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
+    }
+>>>>>>> 51c7ee889e (sstables: Allow to get free space from underlying storage)
 
     virtual sstring prefix() const override { return _location; }
 };
