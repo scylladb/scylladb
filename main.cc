@@ -1435,6 +1435,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 raft_gr.stop().get();
             });
 
+            sharded<service::topology_state_machine> tsm;
+            tsm.start().get();
+            auto stop_tsm = defer_verbose_shutdown("topology_state_machine", [&tsm] {
+                tsm.stop().get();
+            });
+
             supervisor::notify("initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1442,7 +1448,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(feature_service), std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
-                std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(qp), std::ref(sl_controller)).get();
+                std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(qp), std::ref(sl_controller),
+                std::ref(tsm)).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
