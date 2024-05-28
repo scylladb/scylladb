@@ -223,7 +223,8 @@ reader_consumer_v2 time_window_compaction_strategy::make_interposer_consumer(con
 }
 
 compaction_descriptor
-time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const {
+time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
+    auto mode = cfg.mode;
     std::vector<shared_sstable> single_window;
     std::vector<shared_sstable> multi_window;
 
@@ -296,7 +297,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             }
             // reuse STCS reshape logic which will only compact similar-sized files, to increase overall efficiency
             // when reshaping time buckets containing a huge amount of files
-            auto desc = size_tiered_compaction_strategy(_stcs_options).get_reshaping_job(std::move(ssts), schema, mode);
+            auto desc = size_tiered_compaction_strategy(_stcs_options).get_reshaping_job(std::move(ssts), schema, cfg);
             if (!desc.sstables.empty()) {
                 return desc;
             }
