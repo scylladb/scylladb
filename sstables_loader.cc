@@ -8,6 +8,7 @@
 
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/rpc/rpc.hh>
 #include "sstables_loader.hh"
@@ -406,6 +407,8 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     } else {
         _loading_new_sstables = true;
     }
+
+    co_await coroutine::switch_to(_sched_group);
 
     sstring load_and_stream_desc = fmt::format("{}", load_and_stream);
     const auto& rs = _db.local().find_keyspace(ks_name).get_replication_strategy();
