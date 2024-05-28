@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tablets_enabled", ["true", "false"])
+@pytest.mark.parametrize("tablets_enabled", [True, False])
 async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bool):
     """Test basic topology operations using the topology coordinator."""
     cfg = {'experimental_features' : ['tablets']} if tablets_enabled else {}
