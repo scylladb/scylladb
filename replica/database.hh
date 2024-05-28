@@ -114,6 +114,13 @@ namespace gms {
 class gossiper;
 }
 
+<<<<<<< HEAD
+=======
+namespace api {
+class autocompaction_toggle_guard;
+}
+
+>>>>>>> b8bd4c51c2 (replica: don't expose compaction_group to reshape task)
 namespace db {
 class commitlog;
 class config;
@@ -1159,6 +1166,9 @@ public:
     compaction::table_state& as_table_state() const noexcept;
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
+    compaction::table_state& table_state_for_sstable(const sstables::shared_sstable& sst) const noexcept {
+        return compaction_group_for_sstable(sst).as_table_state();
+    }
 
     // Uncoditionally erase sst from `sstables_requiring_cleanup`
     // Returns true iff sst was found and erased.

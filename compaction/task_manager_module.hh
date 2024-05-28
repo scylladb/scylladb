@@ -584,6 +584,11 @@ private:
     sstables::compaction_sstable_creator_fn _creator;
     std::function<bool (const sstables::shared_sstable&)> _filter;
     uint64_t& _total_shard_size;
+<<<<<<< HEAD
+=======
+
+    future<> reshape_compaction_group(compaction::table_state& t, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info);
+>>>>>>> b8bd4c51c2 (replica: don't expose compaction_group to reshape task)
 public:
     shard_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
