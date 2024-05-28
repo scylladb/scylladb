@@ -3504,10 +3504,10 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
 }
 
 static compaction_descriptor get_reshaping_job(sstables::compaction_strategy& cs, const std::vector<shared_sstable>& input,
-                                               const schema_ptr& s, reshape_mode mode) {
+                                               const schema_ptr& s, reshape_mode mode, uint64_t free_storage_space = std::numeric_limits<uint64_t>::max()) {
     reshape_config cfg {
         .mode = mode,
-        .free_storage_space = std::numeric_limits<uint64_t>::max(),
+        .free_storage_space = free_storage_space,
     };
     return cs.get_reshaping_job(input, s, cfg);
 }
@@ -3879,6 +3879,45 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
 
             check_mode_correctness(reshape_mode::strict);
             check_mode_correctness(reshape_mode::relaxed);
+        }
+
+        {
+            // create set of 256 disjoint ssts that spans multiple windows (essentially what happens in off-strategy during node op)
+
+            std::vector<sstables::shared_sstable> sstables;
+            sstables.reserve(disjoint_sstable_count);
+            for (auto i = 0U; i < disjoint_sstable_count; i++) {
+                std::vector<mutation> muts;
+                muts.reserve(5);
+                for (auto j = 0; j < 5; j++) {
+                    muts.push_back(make_row(i, std::chrono::hours(j * 8)));
+                }
+                auto sst = make_sstable_containing(sst_gen, std::move(muts));
+                sstables.push_back(std::move(sst));
+            }
+
+            auto job_size = [] (auto&& sst_range) {
+                return boost::accumulate(sst_range | boost::adaptors::transformed(std::mem_fn(&sstable::bytes_on_disk)), uint64_t(0));
+            };
+            auto free_space_for_reshaping_sstables = [&job_size] (auto&& sst_range) {
+                return job_size(std::move(sst_range)) * (time_window_compaction_strategy::reshape_target_space_overhead * 100);
+            };
+
+            // all sstables can be reshaped in a single round if there's enough space
+            {
+                uint64_t free_space = free_space_for_reshaping_sstables(boost::make_iterator_range(sstables));
+                BOOST_REQUIRE(get_reshaping_job(cs, sstables, s, reshape_mode::strict, free_space).sstables.size() == sstables.size());
+            }
+
+            // only a subset can be reshaped in a single round to respect the 10% space overhead
+            {
+                const size_t sstables_that_fit_in_target_overhead = 10;
+                uint64_t free_space = free_space_for_reshaping_sstables(boost::make_iterator_range(sstables.begin(), sstables.begin() + sstables_that_fit_in_target_overhead));
+                auto target_space_overhead = free_space * time_window_compaction_strategy::reshape_target_space_overhead;
+                auto job = get_reshaping_job(cs, sstables, s, reshape_mode::strict, free_space);
+                BOOST_REQUIRE(job.sstables.size() < sstables.size());
+                BOOST_REQUIRE(job_size(boost::make_iterator_range(job.sstables)) <= target_space_overhead);
+            }
         }
     });
 }
