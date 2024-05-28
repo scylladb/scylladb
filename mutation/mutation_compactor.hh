@@ -113,15 +113,26 @@ struct compaction_stats {
     struct row_stats {
         uint64_t live = 0;
         uint64_t dead = 0;
+        compact_and_expire_result cell_stats;
 
-        void operator+=(bool is_live) {
+        void add_row(const compact_and_expire_result& new_cell_stats, bool force_live = false) {
+            const auto is_live = new_cell_stats.is_live() || force_live;
             live += is_live;
             dead += !is_live;
+            cell_stats += new_cell_stats;
         }
         uint64_t total() const {
             return live + dead;
         }
     };
+
+    uint64_t live_cells() const {
+        return static_rows.cell_stats.live_cells + clustering_rows.cell_stats.live_cells;
+    }
+    uint64_t dead_cells() const {
+        return static_rows.cell_stats.dead_cells + clustering_rows.cell_stats.dead_cells +
+            static_rows.cell_stats.collection_tombstones + clustering_rows.cell_stats.collection_tombstones;
+    }
 
     uint64_t partitions = 0;
     row_stats static_rows;
@@ -370,9 +381,10 @@ public:
             _collector->start_collecting_static_row();
         }
         auto gc_before = get_gc_before();
-        bool is_live = sr.cells().compact_and_expire(_schema, column_kind::static_column, row_tombstone(current_tombstone),
+        auto res = sr.cells().compact_and_expire(_schema, column_kind::static_column, row_tombstone(current_tombstone),
                 _query_time, _can_gc, gc_before, _collector.get());
-        _stats.static_rows += is_live;
+        _stats.static_rows.add_row(res);
+        const auto is_live = res.is_live();
         if constexpr (sstable_compaction()) {
             _collector->consume_static_row([this, &gc_consumer, current_tombstone] (static_row&& sr_garbage) {
                 partition_is_not_empty_for_gc_consumer(gc_consumer);
@@ -419,10 +431,11 @@ public:
             }
         }
         auto gc_before = get_gc_before();
-        bool is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, _can_gc, gc_before, _collector.get());
-        is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, gc_before, cr.marker(),
+        const bool marker_is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, _can_gc, gc_before, _collector.get());
+        const auto res = cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, gc_before, cr.marker(),
                 _collector.get());
-        _stats.clustering_rows += is_live;
+        _stats.clustering_rows.add_row(res, marker_is_live);
+        const auto is_live = res.is_live() || marker_is_live;
 
         if constexpr (sstable_compaction()) {
             _collector->consume_clustering_row([this, &gc_consumer, t] (clustering_row&& cr_garbage) {
