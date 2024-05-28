@@ -30,6 +30,7 @@ class compaction_strategy_impl;
 class sstable;
 class sstable_set;
 struct compaction_descriptor;
+class storage;
 
 class compaction_strategy {
     ::shared_ptr<compaction_strategy_impl> _compaction_strategy_impl;
@@ -121,11 +122,13 @@ public:
     //
     // The caller should also pass a maximum number of SSTables which is the maximum amount of
     // SSTables that can be added into a single job.
-    compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const;
+    compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const;
 
 };
 
 // Creates a compaction_strategy object from one of the strategies available.
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options);
+
+future<reshape_config> make_reshape_config(const sstables::storage& storage, reshape_mode mode);
 
 }
