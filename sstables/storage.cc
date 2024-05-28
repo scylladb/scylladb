@@ -74,6 +74,9 @@ public:
         return sstable_directory::delete_with_pending_deletion_log;
     }
     virtual future<> remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) override;
+    virtual future<uint64_t> free_space() const override {
+        return seastar::fs_avail(prefix());
+    }
 
     virtual sstring prefix() const override { return _dir; }
 };
@@ -471,6 +474,10 @@ public:
         return delete_with_system_keyspace;
     }
     virtual future<> remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) override;
+    virtual future<uint64_t> free_space() const override {
+        // assumes infinite space on s3 (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
+        return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
+    }
 
     virtual sstring prefix() const override { return _location; }
 };
