@@ -211,7 +211,8 @@ public:
         sharded<cdc::generation_service>& cdc_gs,
         sharded<db::view::view_builder>& view_builder,
         cql3::query_processor& qp,
-        sharded<qos::service_level_controller>& sl_controller);
+        sharded<qos::service_level_controller>& sl_controller,
+        topology_state_machine& topology_state_machine);
 
     // Needed by distributed<>
     future<> stop();
@@ -824,7 +825,7 @@ public:
     }
 private:
      // State machine that is responsible for topology change
-    topology_state_machine _topology_state_machine;
+    topology_state_machine& _topology_state_machine;
 
     future<> _topology_change_coordinator = make_ready_future<>();
     future<> topology_change_coordinator_fiber(raft::server&, raft::term_t, cdc::generation_service&, sharded<db::system_distributed_keyspace>&, abort_source&);
