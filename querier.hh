@@ -189,6 +189,7 @@ public:
                     "rows",
                     cstats.static_rows.live + cstats.clustering_rows.live,
                     cstats.static_rows.dead + cstats.clustering_rows.dead + cstats.range_tombstones);
+            maybe_log_tombstone_warning("cells", cstats.live_cells(), cstats.dead_cells());
             return std::move(fut);
         });
     }
