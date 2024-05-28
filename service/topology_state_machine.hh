@@ -226,6 +226,8 @@ struct topology_state_machine {
     using topology_type = topology;
     topology_type _topology;
     condition_variable event;
+
+    future<> await_not_busy();
 };
 
 // Raft leader uses this command to drive bootstrap process on other nodes

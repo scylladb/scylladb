@@ -6217,14 +6217,8 @@ future<> storage_service::await_topology_quiesced() {
         co_return;
     }
 
-    group0_guard guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-
-    while (_topology_state_machine._topology.is_busy()) {
-        rtlogger.debug("await_topology_quiesced(): topology is busy");
-        release_guard(std::move(guard));
-        co_await _topology_state_machine.event.wait();
-        guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-    }
+    co_await _group0->group0_server().read_barrier(&_group0_as);
+    co_await _topology_state_machine.await_not_busy();
 }
 
 future<join_node_request_result> storage_service::join_node_request_handler(join_node_request_params params) {
