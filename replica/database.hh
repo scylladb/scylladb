@@ -116,10 +116,6 @@ namespace gms {
 class gossiper;
 }
 
-namespace compaction {
-class shard_reshaping_compaction_task_impl;
-}
-
 namespace api {
 class autocompaction_toggle_guard;
 }
@@ -1003,9 +999,6 @@ public:
                                         std::optional<tasks::task_info> info = std::nullopt,
                                         do_flush = do_flush::yes);
     unsigned estimate_pending_compactions() const;
-    size_t get_compaction_group_id_for_sstable(const sstables::shared_sstable& sst) const noexcept {
-        return compaction_group_for_sstable(sst).group_id();
-    }
 
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
@@ -1209,7 +1202,6 @@ public:
 
     friend class distributed_loader;
     friend class table_populator;
-    friend class compaction::shard_reshaping_compaction_task_impl;
 
 private:
     timer<> _off_strategy_trigger;
@@ -1222,6 +1214,9 @@ public:
     compaction::table_state& try_get_table_state_with_static_sharding() const;
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
+    compaction::table_state& table_state_for_sstable(const sstables::shared_sstable& sst) const noexcept {
+        return compaction_group_for_sstable(sst).as_table_state();
+    }
 
     // Uncoditionally erase sst from `sstables_requiring_cleanup`
     // Returns true iff sst was found and erased.
