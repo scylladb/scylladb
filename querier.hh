@@ -147,6 +147,9 @@ public:
 class querier : public querier_base {
     lw_shared_ptr<compact_for_query_state_v2> _compaction_state;
 
+private:
+    void maybe_log_tombstone_warning(std::string_view what, uint64_t live, uint64_t dead);
+
 public:
     querier(const mutation_source& ms,
             schema_ptr schema,
@@ -182,17 +185,10 @@ public:
                     cstats.clustering_rows.live,
                     cstats.clustering_rows.dead,
                     cstats.range_tombstones);
-            auto dead = cstats.static_rows.dead + cstats.clustering_rows.dead + cstats.range_tombstones;
-            if (_qr_config.tombstone_warn_threshold > 0 && dead >= _qr_config.tombstone_warn_threshold) {
-                auto live = cstats.static_rows.live + cstats.clustering_rows.live;
-                if (_range->is_singular()) {
-                    qrlogger.warn("Read {} live rows and {} tombstones for {}.{} partition key \"{}\" {} (see tombstone_warn_threshold)",
-                                  live, dead, _schema->ks_name(), _schema->cf_name(), _range->start()->value().key()->with_schema(*_schema), (*_range));
-                } else {
-                    qrlogger.warn("Read {} live rows and {} tombstones for {}.{} <partition-range-scan> {} (see tombstone_warn_threshold)",
-                                  live, dead, _schema->ks_name(), _schema->cf_name(), (*_range));
-                }
-            }
+            maybe_log_tombstone_warning(
+                    "rows",
+                    cstats.static_rows.live + cstats.clustering_rows.live,
+                    cstats.static_rows.dead + cstats.clustering_rows.dead + cstats.range_tombstones);
             return std::move(fut);
         });
     }
