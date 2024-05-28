@@ -9,6 +9,7 @@
 #pragma once
 
 #include <map>
+#include <variant>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
 
