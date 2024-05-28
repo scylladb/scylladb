@@ -230,6 +230,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 
     size_t offstrategy_threshold = std::max(schema->min_compaction_threshold(), 4);
     size_t max_sstables = std::max(schema->max_compaction_threshold(), int(offstrategy_threshold));
+    const uint64_t target_job_size = cfg.free_storage_space * reshape_target_space_overhead;
 
     if (mode == reshape_mode::relaxed) {
         offstrategy_threshold = max_sstables;
@@ -261,22 +262,40 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             multi_window.size(), !multi_window.empty() && sstable_set_overlapping_count(schema, multi_window) == 0,
             single_window.size(), !single_window.empty() && sstable_set_overlapping_count(schema, single_window) == 0);
 
-    auto need_trimming = [max_sstables, schema, &is_disjoint] (const std::vector<shared_sstable>& ssts) {
-        // All sstables can be compacted at once if they're disjoint, given that partitioned set
-        // will incrementally open sstables which translates into bounded memory usage.
-        return ssts.size() > max_sstables && !is_disjoint(ssts);
+    auto get_job_size = [] (const std::vector<shared_sstable>& ssts) {
+        return boost::accumulate(ssts | boost::adaptors::transformed(std::mem_fn(&sstable::bytes_on_disk)), uint64_t(0));
+    };
+
+    // Targets a space overhead of 10%. All disjoint sstables can be compacted together as long as they won't
+    // cause an overhead above target. Otherwise, the job targets a maximum of #max_threshold sstables.
+    auto need_trimming = [&] (const std::vector<shared_sstable>& ssts, const uint64_t job_size, bool is_disjoint) {
+        const size_t min_sstables = 2;
+        auto is_above_target_size = job_size > target_job_size;
+
+        return (ssts.size() > max_sstables && !is_disjoint) ||
+               (ssts.size() > min_sstables && is_above_target_size);
+    };
+
+    auto maybe_trim_job = [&need_trimming] (std::vector<shared_sstable>& ssts, uint64_t job_size, bool is_disjoint) {
+        while (need_trimming(ssts, job_size, is_disjoint)) {
+            auto sst = ssts.back();
+            ssts.pop_back();
+            job_size -= sst->bytes_on_disk();
+        }
     };
 
     if (!multi_window.empty()) {
+        auto disjoint = is_disjoint(multi_window);
+        auto job_size = get_job_size(multi_window);
         // Everything that spans multiple windows will need reshaping
-        if (need_trimming(multi_window)) {
+        if (need_trimming(multi_window, job_size, disjoint)) {
             // When trimming, let's keep sstables with overlapping time window, so as to reduce write amplification.
             // For example, if there are N sstables spanning window W, where N <= 32, then we can produce all data for W
             // in a single compaction round, removing the need to later compact W to reduce its number of files.
             boost::partial_sort(multi_window, multi_window.begin() + max_sstables, [](const shared_sstable &a, const shared_sstable &b) {
                 return a->get_stats_metadata().max_timestamp < b->get_stats_metadata().max_timestamp;
             });
-            multi_window.resize(max_sstables);
+            maybe_trim_job(multi_window, job_size, disjoint);
         }
         compaction_descriptor desc(std::move(multi_window));
         desc.options = compaction_type_options::make_reshape();
@@ -295,6 +314,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
                 std::copy(ssts.begin(), ssts.end(), std::back_inserter(single_window));
                 continue;
             }
+
             // reuse STCS reshape logic which will only compact similar-sized files, to increase overall efficiency
             // when reshaping time buckets containing a huge amount of files
             auto desc = size_tiered_compaction_strategy(_stcs_options).get_reshaping_job(std::move(ssts), schema, cfg);
@@ -304,6 +324,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
         }
     }
     if (!single_window.empty()) {
+        maybe_trim_job(single_window, get_job_size(single_window), all_disjoint);
         compaction_descriptor desc(std::move(single_window));
         desc.options = compaction_type_options::make_reshape();
         return desc;
