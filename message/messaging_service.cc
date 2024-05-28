@@ -384,7 +384,7 @@ void messaging_service::do_start_listen() {
             so.streaming_domain = sdomain;
             return std::unique_ptr<rpc_protocol_server_wrapper>(
                     [this, &so, &a, limits] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
-                if (_cfg.encrypt == encrypt_what::none) {
+                if (_cfg.encrypt == encrypt_what::none && !_credentials) {
                     return nullptr;
                 }
                 if (!_credentials) {
