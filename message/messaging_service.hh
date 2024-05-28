@@ -268,6 +268,7 @@ public:
         rack,
         dc,
         all,
+        transitional, // encrypt all outgoing, but do not enforce incoming.
     };
 
     enum class compress_what {

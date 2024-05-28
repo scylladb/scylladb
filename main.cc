@@ -1381,6 +1381,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mscfg.encrypt = netw::messaging_service::encrypt_what::dc;
             } else if (encrypt == "rack") {
                 mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
+            } else if (encrypt == "transitional") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::transitional;
             }
 
             if (!cfg->inter_dc_tcp_nodelay()) {
