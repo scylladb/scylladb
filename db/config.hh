@@ -396,7 +396,6 @@ public:
     named_value<bool> cdc_dont_rewrite_streams;
     named_value<tri_mode_restriction> strict_allow_filtering;
     named_value<tri_mode_restriction> strict_is_not_null_in_views;
-    named_value<bool> reversed_reads_auto_bypass_cache;
     named_value<bool> enable_cql_config_updates;
     named_value<bool> enable_parallelized_aggregation;
 
