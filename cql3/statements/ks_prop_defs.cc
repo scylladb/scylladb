@@ -133,7 +133,7 @@ std::optional<unsigned> ks_prop_defs::get_initial_tablets(const sstring& strateg
             assert(!ret.has_value());
             return ret;
         } else {
-            throw exceptions::configuration_exception(sstring("Tablets enabled value must be true or false; found ") + it->second);
+            throw exceptions::configuration_exception(sstring("Tablets enabled value must be true or false; found: ") + enabled);
         }
     }
 
