@@ -33,6 +33,7 @@ class sstables_loader : public seastar::peering_sharded_service<sstables_loader>
     sharded<replica::database>& _db;
     netw::messaging_service& _messaging;
     sharded<db::view::view_builder>& _view_builder;
+    seastar::scheduling_group _sched_group;
 
     // Note that this is obviously only valid for the current shard. Users of
     // this facility should elect a shard to be the coordinator based on any
@@ -49,10 +50,12 @@ class sstables_loader : public seastar::peering_sharded_service<sstables_loader>
 public:
     sstables_loader(sharded<replica::database>& db,
             netw::messaging_service& messaging,
-            sharded<db::view::view_builder>& vb)
+            sharded<db::view::view_builder>& vb,
+            seastar::scheduling_group sg)
         : _db(db)
         , _messaging(messaging)
         , _view_builder(vb)
+        , _sched_group(std::move(sg))
     {
     }
 
