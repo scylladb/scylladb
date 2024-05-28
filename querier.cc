@@ -443,15 +443,18 @@ future<> querier_base::close() noexcept {
     return std::visit(variant_closer{*this}, _reader);
 }
 
-void querier::maybe_log_tombstone_warning(std::string_view what, uint64_t live, uint64_t dead) {
+thread_local logger::rate_limit querier::row_tombstone_warn_rate_limit{std::chrono::seconds(10)};
+thread_local logger::rate_limit querier::cell_tombstone_warn_rate_limit{std::chrono::seconds(10)};
+
+void querier::maybe_log_tombstone_warning(std::string_view what, uint64_t live, uint64_t dead, logger::rate_limit& rl) {
     if (!_qr_config.tombstone_warn_threshold || dead < _qr_config.tombstone_warn_threshold) {
         return;
     }
     if (_range->is_singular()) {
-        qrlogger.warn("Read {} live {} and {} dead {}/tombstones for {}.{} partition key \"{}\" {} (see tombstone_warn_threshold)",
+        qrlogger.log(log_level::warn, rl, "Read {} live {} and {} dead {}/tombstones for {}.{} partition key \"{}\" {} (see tombstone_warn_threshold)",
                       live, what, dead, what, _schema->ks_name(), _schema->cf_name(), _range->start()->value().key()->with_schema(*_schema), (*_range));
     } else {
-        qrlogger.warn("Read {} live {} and {} dead {}/tombstones for {}.{} <partition-range-scan> {} (see tombstone_warn_threshold)",
+        qrlogger.log(log_level::warn, rl, "Read {} live {} and {} dead {}/tombstones for {}.{} <partition-range-scan> {} (see tombstone_warn_threshold)",
                       live, what, dead, what, _schema->ks_name(), _schema->cf_name(), (*_range));
     }
 }
