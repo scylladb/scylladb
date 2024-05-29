@@ -1274,8 +1274,8 @@ bool reader_concurrency_semaphore::has_available_units(const resources& r) const
     return (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) || _resources.count == _initial_resources.count;
 }
 
-bool reader_concurrency_semaphore::all_need_cpu_permits_are_awaiting() const {
-    return _stats.need_cpu_permits == _stats.awaits_permits;
+bool reader_concurrency_semaphore::cpu_concurrency_limit_reached() const {
+    return (_stats.need_cpu_permits - _stats.awaits_permits) >= _cpu_concurrency();
 }
 
 std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_view queue_name) {
@@ -1358,7 +1358,7 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) 
         return {can_admit::no, reason::ready_list};
     }
 
-    if (!all_need_cpu_permits_are_awaiting()) {
+    if (cpu_concurrency_limit_reached()) {
         return {can_admit::no, reason::need_cpu_permits};
     }
 
