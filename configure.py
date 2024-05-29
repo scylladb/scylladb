@@ -1753,15 +1753,11 @@ def configure_seastar(build_dir, mode, mode_config):
 
 
 def configure_abseil(build_dir, mode, mode_config):
-    # for sanitizer cflags
-    seastar_flags = query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',
-                                        mode_config['build_seastar_shared_libs'],
-                                        args.staticcxx)
-    seastar_cflags = seastar_flags['seastar_cflags']
+    abseil_cflags = mode_config['lib_cflags']
+    if '-DSANITIZE' in mode_config['cxxflags']:
+        abseil_cflags += ' -fsanitize=address -fsanitize=undefined -fno-sanitize=vptr'
+    abseil_cflags = abseil_cflags.strip()
 
-    abseil_build_dir = os.path.join(build_dir, mode, 'abseil')
-
-    abseil_cflags = seastar_cflags + ' ' + modes[mode]['cxx_ld_flags']
     # We want to "undo" coverage for abseil if we have it enabled, as we are not
     # interested in the coverage of the abseil library. these flags were previously
     # added to cxx_ld_flags
@@ -1780,6 +1776,7 @@ def configure_abseil(build_dir, mode, mode_config):
         '-DABSL_PROPAGATE_CXX_STD=ON',
     ]
 
+    abseil_build_dir = os.path.join(build_dir, mode, 'abseil')
     abseil_cmd = ['cmake', '-G', 'Ninja', real_relpath('abseil', abseil_build_dir)] + abseil_cmake_args
 
     os.makedirs(abseil_build_dir, exist_ok=True)
