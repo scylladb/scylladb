@@ -2000,6 +2000,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_count) {
             100,
             utils::updateable_value<uint32_t>(serialize_multiplier),
             utils::updateable_value<uint32_t>(kill_multiplier),
+            utils::updateable_value<uint32_t>(1),
             reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
