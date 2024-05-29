@@ -205,7 +205,7 @@ private:
 
     bool has_available_units(const resources& r) const;
 
-    bool all_need_cpu_permits_are_awaiting() const;
+    bool cpu_concurrency_limit_reached() const;
 
     [[nodiscard]] std::exception_ptr check_queue_size(std::string_view queue_name);
 
