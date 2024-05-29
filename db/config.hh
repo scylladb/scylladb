@@ -373,6 +373,11 @@ public:
     named_value<uint64_t> max_memory_for_unlimited_query_hard_limit;
     named_value<uint32_t> reader_concurrency_semaphore_serialize_limit_multiplier;
     named_value<uint32_t> reader_concurrency_semaphore_kill_limit_multiplier;
+<<<<<<< HEAD
+=======
+    named_value<uint32_t> reader_concurrency_semaphore_cpu_concurrency;
+    named_value<int> maintenance_reader_concurrency_semaphore_count_limit;
+>>>>>>> c7317be09a (db/config: introduce reader_concurrency_semahore_cpu_concurrency)
     named_value<uint32_t> twcs_max_window_count;
     named_value<unsigned> initial_sstable_loading_concurrency;
     named_value<bool> enable_3_1_0_compatibility_mode;
