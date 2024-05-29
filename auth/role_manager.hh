@@ -76,6 +76,7 @@ public:
 };
 
 using role_set = std::unordered_set<sstring>;
+using role_to_directly_granted_map = std::multimap<sstring, sstring>;
 
 enum class recursive_role_query { yes, no };
 
@@ -143,6 +144,22 @@ public:
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
     virtual future<role_set> query_granted(std::string_view grantee, recursive_role_query) = 0;
+
+    /// \returns map of directly granted roles for all roles
+    ///
+    /// Example:
+    /// GRANT role2 TO role1
+    /// GRANT role3 TO role1
+    /// GRANT role3 TO role2
+    ///
+    /// Will return map:
+    /// {
+    ///   (role1, role2),
+    ///   (role1, role3),
+    ///   (role2, role3)
+    /// }
+    ///  
+    virtual future<role_to_directly_granted_map> query_all_directly_granted() = 0;
 
     virtual future<role_set> query_all() = 0;
 

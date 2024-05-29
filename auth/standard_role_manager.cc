@@ -21,12 +21,15 @@
 #include <seastar/core/thread.hh>
 
 #include "auth/common.hh"
+#include "auth/role_manager.hh"
 #include "auth/roles-metadata.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
+#include "seastar/core/loop.hh"
+#include "seastar/coroutine/maybe_yield.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "utils/class_registrator.hh"
 #include "service/migration_manager.hh"
@@ -581,6 +584,20 @@ future<role_set> standard_role_manager::query_granted(std::string_view grantee_n
             [this, grantee_name, recurse](role_set& roles) {
         return collect_roles(_qp, grantee_name, recurse, roles).then([&roles] { return roles; });
     });
+}
+
+future<role_to_directly_granted_map> standard_role_manager::query_all_directly_granted() {
+    const sstring query = format("SELECT * FROM {}.{}",
+            get_auth_ks_name(_qp),
+            meta::role_members_table::name);
+
+    role_to_directly_granted_map roles_map;
+    co_await _qp.query_internal(query, [&roles_map] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        roles_map.insert({row.get_as<sstring>("member"), row.get_as<sstring>("role")});
+        co_return stop_iteration::no;
+    });
+
+    co_return roles_map;
 }
 
 future<role_set> standard_role_manager::query_all() {

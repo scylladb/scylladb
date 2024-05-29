@@ -73,6 +73,10 @@ future<role_set> maintenance_socket_role_manager::query_granted(std::string_view
     return operation_not_supported_exception<role_set>("QUERY GRANTED");
 }
 
+future<role_to_directly_granted_map> maintenance_socket_role_manager::query_all_directly_granted() {
+    return operation_not_supported_exception<role_to_directly_granted_map>("QUERY ALL DIRECTLY GRANTED");
+}
+
 future<role_set> maintenance_socket_role_manager::query_all() {
     return operation_not_supported_exception<role_set>("QUERY ALL");
 }
