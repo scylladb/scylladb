@@ -91,7 +91,6 @@ private:
     static constexpr shard_id global_controller = 0;
 
     std::map<sstring, service_level> _service_levels_db;
-    std::unordered_map<sstring, sstring> _role_to_service_level;
     service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
