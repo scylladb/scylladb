@@ -62,7 +62,7 @@ async def test_mv_topology_change(manager: ManagerClient):
     # replication maps for base and view will change after the writes start but before they finish
     tasks = [asyncio.create_task(do_writes(i, repeat=False)) for i in range(concurrency)]
 
-    server = await manager.server_add(config=cfg)
+    server = await manager.server_add()
 
     await asyncio.gather(*tasks)
 
