@@ -265,6 +265,9 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
     await cql.run_async(f"CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled':true}}")
 
     stmt = cql.prepare(f"INSERT INTO {ks_name}.tbl (pk, v) VALUES (?, 0)")
+    # FIXME: this function is used by tests that use clusters with at least 3 nodes and restart nodes sequentially.
+    # Therefore, RF=3 and CL=2 should work, but they don't. Some writes fail because CL=2 is not satisfied.
+    # We should investigate why it happens and increase CL to 2 if possible.
     stmt.consistency_level = ConsistencyLevel.ONE
 
     async def do_writes():
@@ -287,6 +290,15 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
 
     tasks = [asyncio.create_task(do_writes()) for _ in range(concurrency)]
 
+    def restart(new_cql: Session):
+        nonlocal cql
+        nonlocal tasks
+        logger.info("Restarting write workers")
+        assert stop_event.is_set()
+        stop_event.clear()
+        cql = new_cql
+        tasks = [asyncio.create_task(do_writes()) for _ in range(concurrency)]
+
     async def verify():
         generations = await cql.run_async("SELECT * FROM system_distributed.cdc_streams_descriptions_v2")
 
@@ -298,13 +310,13 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
             timestamp = stream_to_timestamp[log_entry.cdc_stream_id]
             assert timestamp <= datetime_from_uuid1(log_entry.cdc_time)
 
-    async def finish_and_verify():
+    async def stop_and_verify():
         logger.info("Stopping write workers")
         stop_event.set()
         await asyncio.gather(*tasks)
         await verify()
 
-    return finish_and_verify
+    return restart, stop_and_verify
 
 def log_run_time(f):
     @functools.wraps(f)
