@@ -3217,13 +3217,22 @@ future<> repair_service::start() {
 }
 
 future<> repair_service::stop() {
+  try {
+    rlogger.debug("Stopping repair task module");
     co_await _repair_module->stop();
+    rlogger.debug("Waiting on load_history_done");
     co_await std::move(_load_history_done);
+    rlogger.debug("Uninitializing messaging service handlers");
     co_await uninit_ms_handlers();
     if (this_shard_id() == 0) {
+        rlogger.debug("Unregistering gossiper helper");
         co_await _gossiper.local().unregister_(_gossip_helper);
     }
     _stopped = true;
+    rlogger.info("Stopped repair_service");
+  } catch (...) {
+    on_fatal_internal_error(rlogger, format("Failed stopping repair_service: {}", std::current_exception()));
+  }
 }
 
 repair_service::~repair_service() {
@@ -3266,6 +3275,7 @@ future<> repair_service::cleanup_history(tasks::task_id repair_id) {
 }
 
 future<> repair_service::load_history() {
+  try {
     co_await get_db().local().get_tables_metadata().parallel_for_each_table(coroutine::lambda([&] (table_id table_uuid, lw_shared_ptr<replica::table> table) -> future<> {
         auto shard = utils::uuid_xor_to_uint32(table_uuid.uuid()) % smp::count;
         if (shard != this_shard_id()) {
@@ -3294,6 +3304,11 @@ future<> repair_service::load_history() {
             }
         });
     }));
+  } catch (const abort_requested_exception&) {
+    // Ignore
+  } catch (...) {
+    rlogger.warn("Failed to update repair history time: {}.  Ignored", std::current_exception());
+  }
 }
 
 repair_meta_ptr repair_service::get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {
