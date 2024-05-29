@@ -1021,7 +1021,17 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
     stmt.global_req_id = mc.new_group0_state_id();
 
     auto [ce, warnings] = co_await stmt.prepare_schema_mutations(*this, state, options, mc);
-
+    // We are creating something.
+    if (!mc.empty()) {
+        // Internal queries don't trigger auto-grant. Statements which don't require
+        // auto-grant use default nop grant_permissions_to_creator implementation.
+        // Additional implicit assumption is that prepare_schema_mutations returns
+        // empty mutations vector when resource doesn't need to be created (e.g. already exists).
+        auto& client_state = state.get_client_state();
+        if (!client_state.is_internal()) {
+            co_await stmt.grant_permissions_to_creator(client_state, mc);
+        }
+    }
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
     ::shared_ptr<messages::result_message> result;

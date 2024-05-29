@@ -242,6 +242,10 @@ public:
     future<> commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) &&;
     // For rare cases where collector is used but announce logic is replaced with a custom one.
     future<std::pair<std::vector<mutation>, ::service::group0_guard>> extract() &&;
+
+    // Checks if any mutations or generators were added. Note that when generator is
+    // added it still can return no mutations.
+    bool empty() const;
 };
 
 }

@@ -64,10 +64,6 @@ public:
         return std::nullopt;
     }
 
-    virtual bool is_schema_change() const {
-        return false;
-    }
-
     virtual bool is_exception() const {
         return false;
     }
