@@ -992,6 +992,14 @@ future<> table::parallel_foreach_compaction_group(std::function<future<>(compact
     });
 }
 
+future<> table::safe_foreach_sstable(const sstables::sstable_set& set, noncopyable_function<future<>(const sstables::shared_sstable&)> action) {
+    auto deletion_guard = co_await get_units(_sstable_deletion_sem, 1);
+
+    co_await set.for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
+        return action(sst);
+    });
+}
+
 future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
     utils::chunked_vector<sstables::sstable_files_snapshot> ret;
 
@@ -1006,12 +1014,12 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
 
         auto set = cg->make_sstable_set();
 
-        for (auto all_sstables = set->all(); auto& sst : *all_sstables) {
+        co_await safe_foreach_sstable(*set, [&] (const sstables::shared_sstable& sst) -> future<> {
            ret.push_back({
                .sst = sst,
                .files = co_await sst->readable_file_for_all_components(),
            });
-        }
+        });
     }
 
     co_return std::move(ret);
@@ -1026,7 +1034,7 @@ table::clone_tablet_storage(locator::tablet_id tid) {
     auto* sg = storage_group_for_id(tid.value());
     co_await sg->flush();
     auto set = sg->make_sstable_set();
-    co_await set->for_each_sstable_gently([this, &ret] (const sstables::shared_sstable& sst) -> future<> {
+    co_await safe_foreach_sstable(*set, [&] (const sstables::shared_sstable& sst) -> future<> {
         ret.push_back(co_await sst->clone(calculate_generation_for_new_table()));
     });
     co_return ret;
