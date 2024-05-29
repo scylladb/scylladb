@@ -336,6 +336,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
         max_inactive_queue_length(),
         _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
         _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
+        _cfg.reader_concurrency_semaphore_cpu_concurrency,
         reader_concurrency_semaphore::register_metrics::yes)
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
@@ -346,6 +347,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value(uint32_t(1)),
             reader_concurrency_semaphore::register_metrics::yes)
     // No limits, just for accounting.
     , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction", reader_concurrency_semaphore::register_metrics::no)

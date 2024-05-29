@@ -188,6 +188,7 @@ private:
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
+    utils::updateable_value<uint32_t> _cpu_concurrency;
     stats _stats;
     std::optional<seastar::metrics::metric_groups> _metrics;
     bool _stopped = false;
@@ -279,7 +280,20 @@ public:
             size_t max_queue_length,
             utils::updateable_value<uint32_t> serialize_limit_multiplier,
             utils::updateable_value<uint32_t> kill_limit_multiplier,
+            utils::updateable_value<uint32_t> cpu_concurrency,
             register_metrics metrics);
+
+    reader_concurrency_semaphore(
+            int count,
+            ssize_t memory,
+            sstring name,
+            size_t max_queue_length,
+            utils::updateable_value<uint32_t> serialize_limit_multiplier,
+            utils::updateable_value<uint32_t> kill_limit_multiplier,
+            register_metrics metrics)
+        : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length,
+                std::move(serialize_limit_multiplier), std::move(kill_limit_multiplier), utils::updateable_value<uint32_t>(1), metrics)
+    { }
 
     /// Create a semaphore with practically unlimited count and memory.
     ///
@@ -297,9 +311,10 @@ public:
             size_t max_queue_length = std::numeric_limits<size_t>::max(),
             utils::updateable_value<uint32_t> serialize_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value<uint32_t> kill_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value<uint32_t> cpu_concurrency = utils::updateable_value<uint32_t>(1),
             register_metrics metrics = register_metrics::no)
         : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler),
-                std::move(kill_limit_multipler), register_metrics::no)
+                std::move(kill_limit_multipler), std::move(cpu_concurrency), register_metrics::no)
     {}
 
     virtual ~reader_concurrency_semaphore();

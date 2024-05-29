@@ -983,14 +983,22 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
 namespace sm = seastar::metrics;
 static const sm::label class_label("class");
 
-reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t memory, sstring name, size_t max_queue_length,
-            utils::updateable_value<uint32_t> serialize_limit_multiplier, utils::updateable_value<uint32_t> kill_limit_multiplier, register_metrics metrics)
+reader_concurrency_semaphore::reader_concurrency_semaphore(
+        int count,
+        ssize_t memory,
+        sstring name,
+        size_t max_queue_length,
+        utils::updateable_value<uint32_t> serialize_limit_multiplier,
+        utils::updateable_value<uint32_t> kill_limit_multiplier,
+        utils::updateable_value<uint32_t> cpu_concurrency,
+        register_metrics metrics)
     : _initial_resources(count, memory)
     , _resources(count, memory)
     , _name(std::move(name))
     , _max_queue_length(max_queue_length)
     , _serialize_limit_multiplier(std::move(serialize_limit_multiplier))
     , _kill_limit_multiplier(std::move(kill_limit_multiplier))
+    , _cpu_concurrency(cpu_concurrency)
 {
     if (metrics == register_metrics::yes) {
         _metrics.emplace();
@@ -1055,6 +1063,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value(uint32_t(1)),
             metrics) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
