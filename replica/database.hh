@@ -610,6 +610,13 @@ private:
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
 
+    // Safely iterate through SSTables, with deletion guard taken to make sure they're not
+    // removed during iteration.
+    // WARNING: Be careful that the action doesn't perform an operation that will itself
+    // take the deletion guard, as that will cause a deadlock. For example, memtable flush
+    // can wait on compaction (backpressure) which in turn takes deletion guard on completion.
+    future<> safe_foreach_sstable(const sstables::sstable_set&, noncopyable_function<future<>(const sstables::shared_sstable&)> action);
+
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
     }
