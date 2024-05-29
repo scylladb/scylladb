@@ -968,15 +968,45 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     maybe_admit_waiters();
 }
 
+<<<<<<< HEAD
 reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t memory, sstring name, size_t max_queue_length,
             utils::updateable_value<uint32_t> serialize_limit_multiplier, utils::updateable_value<uint32_t> kill_limit_multiplier)
     : _initial_resources(count, memory)
     , _resources(count, memory)
+=======
+namespace sm = seastar::metrics;
+static const sm::label class_label("class");
+
+reader_concurrency_semaphore::reader_concurrency_semaphore(
+        utils::updateable_value<int> count,
+        ssize_t memory,
+        sstring name,
+        size_t max_queue_length,
+        utils::updateable_value<uint32_t> serialize_limit_multiplier,
+        utils::updateable_value<uint32_t> kill_limit_multiplier,
+        utils::updateable_value<uint32_t> cpu_concurrency,
+        register_metrics metrics)
+    : _initial_resources(count, memory)
+    , _resources(count, memory)
+    , _count_observer(count.observe([this] (const int& new_count) { set_resources({new_count, _initial_resources.memory}); }))
+>>>>>>> 59faa6d4ff (reader_concurrency_semaphore: add cpu_concurrency constructor parameter)
     , _name(std::move(name))
     , _max_queue_length(max_queue_length)
     , _serialize_limit_multiplier(std::move(serialize_limit_multiplier))
     , _kill_limit_multiplier(std::move(kill_limit_multiplier))
+<<<<<<< HEAD
 { }
+=======
+    , _cpu_concurrency(cpu_concurrency)
+{
+    if (metrics == register_metrics::yes) {
+        _metrics.emplace();
+        _metrics->add_group("database", {
+                sm::make_counter("sstable_read_queue_overloads", _stats.total_reads_shed_due_to_overload,
+                               sm::description("Counts the number of times the sstable read queue was overloaded. "
+                                               "A non-zero value indicates that we have to drop read requests because they arrive faster than we can serve them."),
+                               {class_label(_name)}),
+>>>>>>> 59faa6d4ff (reader_concurrency_semaphore: add cpu_concurrency constructor parameter)
 
 reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring name)
     : reader_concurrency_semaphore(
@@ -985,7 +1015,13 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             std::move(name),
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+<<<<<<< HEAD
             utils::updateable_value(std::numeric_limits<uint32_t>::max())) {}
+=======
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value(uint32_t(1)),
+            metrics) {}
+>>>>>>> 59faa6d4ff (reader_concurrency_semaphore: add cpu_concurrency constructor parameter)
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
     assert(!_stats.waiters);
