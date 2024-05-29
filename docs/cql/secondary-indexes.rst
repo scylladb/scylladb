@@ -40,7 +40,7 @@ Creating a secondary index on a table uses the ``CREATE INDEX`` statement:
 
 .. code-block::
    
-   create_index_statement: CREATE INDEX [ `index_name` ]
+   create_index_statement: CREATE INDEX [IF NOT EXISTS] [ `index_name` ]
                          :     ON `table_name` '(' `index_identifier` ')'
                          :     [ USING `string` [ WITH OPTIONS = `map_literal` ] ]
    index_identifier: `column_name`
