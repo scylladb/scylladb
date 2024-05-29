@@ -441,10 +441,13 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
 }
 
 void mutation_reader_merger::prepare_forwardable_readers() {
-    _next.reserve(_halted_readers.size() + _fragment_heap.size() + _next.size());
+    auto prepare_single_reader = _single_reader.reader != reader_iterator{};
+
+    _next.reserve(_halted_readers.size() + _fragment_heap.size() + _next.size() +
+        prepare_single_reader + in_gallop_mode());
 
     std::move(_halted_readers.begin(), _halted_readers.end(), std::back_inserter(_next));
-    if (_single_reader.reader != reader_iterator{}) {
+    if (prepare_single_reader) {
         _next.emplace_back(std::exchange(_single_reader.reader, {}), _single_reader.last_kind);
     }
     if (in_gallop_mode()) {
