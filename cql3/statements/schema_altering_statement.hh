@@ -63,6 +63,7 @@ protected:
 
 public:
     virtual future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const = 0;
+    mutable utils::UUID global_req_id;
 };
 
 }

@@ -15,19 +15,23 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "db/config.hh"
+#include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
 
 #include "replica/tablets.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "locator/tablets.hh"
 #include "service/tablet_allocator.hh"
+#include "locator/tablet_replication_strategy.hh"
 #include "locator/tablet_sharder.hh"
 #include "locator/load_sketch.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/error_injection.hh"
 #include "utils/to_string.hh"
+#include "service/topology_coordinator.hh"
 
 using namespace locator;
 using namespace replica;
@@ -2331,4 +2335,359 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter) {
             {bound{dks[0], true}, bound{dks[1], false}},
             {bound{dks[1], true}, bound{dks[2], false}},
             {bound{dks[2], true}, bound{dks[3], false}}});
+
+}
+
+static locator::endpoint_dc_rack make_endpoint_dc_rack(gms::inet_address endpoint) {
+    // This resembles rack_inferring_snitch dc/rack generation which is
+    // still in use by this test via token_metadata internals
+    auto dc = std::to_string(uint8_t(endpoint.bytes()[1]));
+    auto rack = std::to_string(uint8_t(endpoint.bytes()[2]));
+    return locator::endpoint_dc_rack{dc, rack};
+}
+
+struct calculate_tablet_replicas_for_new_rf_config
+{
+    struct ring_point {
+        double point;
+        inet_address host;
+        host_id id = host_id::create_random_id();
+    };
+    std::vector<ring_point> ring_points;
+    std::map<sstring, sstring> options;
+    std::map<sstring, sstring> new_dc_rep_factor;
+    std::map<sstring, size_t> expected_rep_factor;
+};
+
+static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_config const& test_config)
+{
+    auto my_address = gms::inet_address("localhost");
+    // Create the RackInferringSnitch
+    snitch_config cfg;
+    cfg.listen_address = my_address;
+    cfg.broadcast_address = my_address;
+    cfg.name = "RackInferringSnitch";
+    sharded<snitch_ptr> snitch;
+    snitch.start(cfg).get();
+    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+    snitch.invoke_on_all(&snitch_ptr::start).get();
+
+    static constexpr size_t tablet_count = 8;
+
+    std::vector<unsigned> nodes_shard_count(test_config.ring_points.size(), 3);
+
+    locator::token_metadata::config tm_cfg;
+    tm_cfg.topo_cfg.this_endpoint = test_config.ring_points[0].host;
+    tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
+    tm_cfg.topo_cfg.this_host_id = test_config.ring_points[0].id;
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
+
+    // Initialize the token_metadata
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        auto& topo = tm.get_topology();
+        for (const auto& [ring_point, endpoint, id] : test_config.ring_points) {
+            std::unordered_set<token> tokens;
+            tokens.insert({dht::token::kind::key, tests::d2t(ring_point / test_config.ring_points.size())});
+            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
+            tm.update_host_id(id, endpoint);
+            co_await tm.update_normal_tokens(std::move(tokens), id);
+        }
+    }).get();
+
+    locator::replication_strategy_params params(test_config.options, tablet_count);
+
+    auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
+        "NetworkTopologyStrategy", params);
+
+    auto tablet_aware_ptr = ars_ptr->maybe_as_tablet_aware();
+    BOOST_REQUIRE(tablet_aware_ptr);
+
+    auto s = schema_builder("ks", "tb")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("v", utf8_type)
+        .build();
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        for (size_t i = 0; i < test_config.ring_points.size(); ++i) {
+            auto& [ring_point, endpoint, id] = test_config.ring_points[i];
+            tm.update_host_id(id, endpoint);
+            tm.update_topology(id, make_endpoint_dc_rack(endpoint), std::nullopt, nodes_shard_count[i]);
+        }
+        return make_ready_future<>();
+    }).get();
+
+    auto allocated_map = tablet_aware_ptr->allocate_tablets_for_new_table(s, stm.get(), 0).get();
+
+    BOOST_REQUIRE_EQUAL(allocated_map.tablet_count(), tablet_count);
+
+    auto host_id_to_dc = [&stm](const locator::host_id& ep) -> std::optional<sstring> {
+        auto node = stm.get()->get_topology().find_node(ep);
+        if (node == nullptr) {
+            return std::nullopt;
+        }
+        return node->dc_rack().dc;
+    };
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        tablet_metadata tab_meta;
+        auto table = s->id();
+        tab_meta.set_tablet_map(table, allocated_map);
+        tm.set_tablets(std::move(tab_meta));
+        return make_ready_future<>();
+    }).get();
+
+    std::map<sstring, size_t> initial_rep_factor;
+    for (auto const& [dc, shard_count] : test_config.options) {
+        initial_rep_factor[dc] = std::stoul(shard_count);
+    }
+
+    auto tablets = stm.get()->tablets().get_tablet_map(s->id());
+    BOOST_REQUIRE_EQUAL(tablets.tablet_count(), tablet_count);
+    for (auto tb : tablets.tablet_ids()) {
+        const locator::tablet_info& ti = tablets.get_tablet_info(tb);
+
+        std::map<sstring, size_t> dc_replicas_count;
+        for (const auto& r : ti.replicas) {
+            auto dc = host_id_to_dc(r.host);
+            if (dc) {
+                dc_replicas_count[*dc]++;
+            }
+        }
+
+        BOOST_REQUIRE_EQUAL(dc_replicas_count, initial_rep_factor);
+    }
+
+    try {
+        tablet_map old_tablets = stm.get()->tablets().get_tablet_map(s->id());
+        locator::replication_strategy_params params{test_config.new_dc_rep_factor, old_tablets.tablet_count()};
+        auto new_strategy = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
+        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), old_tablets).get();
+
+        auto const& ts = tmap.tablets();
+        BOOST_REQUIRE_EQUAL(ts.size(), tablet_count);
+
+        for (auto tb : tmap.tablet_ids()) {
+            const locator::tablet_info& ti = tmap.get_tablet_info(tb);
+
+            std::map<sstring, size_t> dc_replicas_count;
+            for (const auto& r : ti.replicas) {
+                auto dc = host_id_to_dc(r.host);
+                if (dc) {
+                    dc_replicas_count[*dc]++;
+                }
+            }
+
+            BOOST_REQUIRE_EQUAL(dc_replicas_count, test_config.expected_rep_factor);
+        }
+
+    } catch (exceptions::configuration_exception const& e) {
+        thread_local boost::regex re("Datacenter [0-9]+ doesn't have enough nodes for replication_factor=[0-9]+");
+        boost::cmatch what;
+        if (!boost::regex_search(e.what(), what, re)) {
+            BOOST_FAIL("Unexpected exception: " + std::string(e.what()));
+        }
+    } catch (std::exception const& e) {
+        BOOST_FAIL("Unexpected exception: " + std::string(e.what()));
+    } catch (...) {
+        BOOST_FAIL("Unexpected exception");
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_upsize_one_dc) {
+    calculate_tablet_replicas_for_new_rf_config config;
+    config.ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 4.0,  inet_address("192.100.20.1") },
+            { 7.0,  inet_address("192.100.30.1") },
+    };
+    config.options = {{"100", "2"}};
+    config.new_dc_rep_factor = {{"100", "3"}};
+    config.expected_rep_factor = {{"100", 3}};
+    execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_downsize_one_dc) {
+    calculate_tablet_replicas_for_new_rf_config config;
+    config.ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 4.0,  inet_address("192.100.20.1") },
+            { 7.0,  inet_address("192.100.30.1") },
+    };
+    config.options = {{"100", "3"}};
+    config.new_dc_rep_factor = {{"100", "2"}};
+    config.expected_rep_factor = {{"100", 2}};
+    execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_no_change_one_dc) {
+    calculate_tablet_replicas_for_new_rf_config config;
+    config.ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 4.0,  inet_address("192.100.20.1") },
+            { 7.0,  inet_address("192.100.30.1") },
+    };
+    config.options = {{"100", "3"}};
+    config.new_dc_rep_factor = {{"100", "3"}};
+    config.expected_rep_factor = {{"100", 3}};
+    execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf) {
+    calculate_tablet_replicas_for_new_rf_config config;
+    config.ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 2.0,  inet_address("192.101.10.1") },
+            { 3.0,  inet_address("192.102.10.1") },
+            { 4.0,  inet_address("192.100.20.1") },
+            { 5.0,  inet_address("192.101.20.1") },
+            { 6.0,  inet_address("192.102.20.1") },
+            { 7.0,  inet_address("192.100.30.1") },
+            { 8.0,  inet_address("192.101.30.1") },
+            { 9.0,  inet_address("192.102.30.1") },
+            { 10.0, inet_address("192.101.40.1") },
+            { 11.0, inet_address("192.102.40.1") },
+            { 12.0, inet_address("192.102.40.2") }
+    };
+    config.options = {
+        {"100", "3"},
+        {"101", "2"},
+        {"102", "3"}
+    };
+    config.new_dc_rep_factor = {
+        {"100", "3"},
+        {"101", "4"},
+        {"102", "2"}
+    };
+    config.expected_rep_factor = {
+        {"100", 3},
+        {"101", 4},
+        {"102", 2}
+    };
+
+    execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_not_enough_nodes) {
+
+    calculate_tablet_replicas_for_new_rf_config config;
+    config.ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 4.0,  inet_address("192.100.20.1") },
+            { 7.0,  inet_address("192.100.30.1") },
+    };
+    config.options = {{"100", "3"}};
+    config.new_dc_rep_factor = {{"100", "5"}};
+    config.expected_rep_factor = {{"100", 3}};
+    execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_one_dc) {
+    calculate_tablet_replicas_for_new_rf_config config;
+    config.ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 4.0,  inet_address("192.100.20.1") },
+            { 7.0,  inet_address("192.100.30.1") },
+    };
+    config.options = {{"100", "2"}};
+    config.new_dc_rep_factor = {{"100", "3"}};
+    config.expected_rep_factor = {{"100", 3}};
+    execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_one_dc_1_to_2) {
+    calculate_tablet_replicas_for_new_rf_config config;
+    config.ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 4.0,  inet_address("192.100.20.1") },
+    };
+    config.options = {{"100", "1"}};
+    config.new_dc_rep_factor = {{"100", "2"}};
+    config.expected_rep_factor = {{"100", 2}};
+    execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_one_dc_not_enough_nodes) {
+
+    calculate_tablet_replicas_for_new_rf_config config;
+    config.ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 4.0,  inet_address("192.100.10.2") },
+            { 7.0,  inet_address("192.100.10.3") },
+    };
+    config.options = {{"100", "3"}};
+    config.new_dc_rep_factor = {{"100", "5"}};
+    config.expected_rep_factor = {{"100", 3}};
+    execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_default_rf) {
+    calculate_tablet_replicas_for_new_rf_config config;
+    config.ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 2.0,  inet_address("192.101.10.1") },
+            { 3.0,  inet_address("192.102.10.1") },
+            { 4.0,  inet_address("192.100.20.1") },
+            { 5.0,  inet_address("192.101.20.1") },
+            { 6.0,  inet_address("192.102.20.1") },
+            { 7.0,  inet_address("192.100.30.1") },
+            { 8.0,  inet_address("192.101.30.1") },
+            { 9.0,  inet_address("192.102.30.1") },
+            { 10.0, inet_address("192.100.40.1") },
+            { 11.0, inet_address("192.101.40.1") },
+            { 12.0, inet_address("192.102.40.1") },
+            { 13.0, inet_address("192.102.40.2") }
+    };
+    config.options = {
+        {"100", "3"},
+        {"101", "2"},
+        {"102", "2"}
+    };
+    config.new_dc_rep_factor = {
+        {"100", "4"},
+        {"101", "3"},
+        {"102", "3"},
+    };
+    config.expected_rep_factor = {
+        {"100", 4},
+        {"101", 3},
+        {"102", 3},
+    };
+
+    execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_default_rf_upsize_by_two) {
+    calculate_tablet_replicas_for_new_rf_config config;
+    config.ring_points = {
+            { 1.0,  inet_address("192.100.10.1") },
+            { 2.0,  inet_address("192.101.10.1") },
+            { 3.0,  inet_address("192.102.10.1") },
+            { 4.0,  inet_address("192.100.20.1") },
+            { 5.0,  inet_address("192.101.20.1") },
+            { 6.0,  inet_address("192.102.20.1") },
+            { 7.0,  inet_address("192.100.30.1") },
+            { 8.0,  inet_address("192.101.30.1") },
+            { 9.0,  inet_address("192.102.30.1") },
+            { 10.0, inet_address("192.100.40.1") },
+            { 11.0, inet_address("192.101.40.1") },
+            { 12.0, inet_address("192.102.40.1") },
+            { 13.0, inet_address("192.102.40.2") }
+    };
+    config.options = {
+        {"100", "3"},
+        {"101", "2"},
+        {"102", "1"}
+    };
+    config.new_dc_rep_factor = {
+        {"100", "4"},
+        {"101", "3"},
+        {"102", "3"},
+    };
+    config.expected_rep_factor = {
+        {"100", 4},
+        {"101", 3},
+        {"102", 3},
+    };
+
+    execute_tablet_for_new_rf_test(config);
 }

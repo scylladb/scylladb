@@ -53,7 +53,7 @@ using can_yield = utils::can_yield;
 
 using replication_strategy_config_options = std::map<sstring, sstring>;
 struct replication_strategy_params {
-    const replication_strategy_config_options& options;
+    const replication_strategy_config_options options;
     std::optional<unsigned> initial_tablets;
     explicit replication_strategy_params(const replication_strategy_config_options& o, std::optional<unsigned> it) noexcept : options(o), initial_tablets(it) {}
 };
