@@ -1031,6 +1031,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Start serializing reads after their collective memory consumption goes above $normal_limit * $multiplier.")
     , reader_concurrency_semaphore_kill_limit_multiplier(this, "reader_concurrency_semaphore_kill_limit_multiplier", liveness::LiveUpdate, value_status::Used, 4,
             "Start killing reads after their collective memory consumption goes above $normal_limit * $multiplier.")
+    , reader_concurrency_semaphore_cpu_concurrency(this, "reader_concurrency_semaphore_cpu_concurrency", liveness::LiveUpdate, value_status::Used, 1,
+            "Admit new reads while there are less than this number of requests that need CPU.")
     , twcs_max_window_count(this, "twcs_max_window_count", liveness::LiveUpdate, value_status::Used, 50,
             "The maximum number of compaction windows allowed when making use of TimeWindowCompactionStrategy. A setting of 0 effectively disables the restriction.")
     , initial_sstable_loading_concurrency(this, "initial_sstable_loading_concurrency", value_status::Used, 4u,
