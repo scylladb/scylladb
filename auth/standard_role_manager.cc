@@ -20,12 +20,14 @@
 #include <seastar/core/thread.hh>
 
 #include "auth/common.hh"
+#include "auth/role_manager.hh"
 #include "auth/roles-metadata.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
+#include "seastar/coroutine/maybe_yield.hh"
 #include "utils/class_registrator.hh"
 #include "service/migration_manager.hh"
 #include "password_authenticator.hh"
@@ -559,6 +561,26 @@ future<role_set> standard_role_manager::query_granted(std::string_view grantee_n
             [this, grantee_name, recurse](role_set& roles) {
         return collect_roles(_qp, grantee_name, recurse, roles).then([&roles] { return roles; });
     });
+}
+
+future<direct_roles_map> standard_role_manager::query_all_directly_granted() {
+    const sstring query = format("SELECT * FROM {}.{}",
+            get_auth_ks_name(_qp),
+            meta::role_members_table::name);
+    
+    const auto result = co_await _qp.execute_internal(
+        query,
+        db::consistency_level::LOCAL_ONE,
+        internal_distributed_query_state(),
+        cql3::query_processor::cache_internal::no);
+
+    direct_roles_map roles_map;
+    for (const auto& row: *result) {
+        roles_map.insert({row.get_as<sstring>("member"), row.get_as<sstring>("role")});
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return roles_map;
 }
 
 future<role_set> standard_role_manager::query_all() {
