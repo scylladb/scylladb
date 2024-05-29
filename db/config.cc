@@ -949,7 +949,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\n"
         "* priority_string: GnuTLS priority string controlling TLS algorithms used/allowed.")
     , ssl_storage_port(this, "ssl_storage_port", value_status::Used, 7001,
-        "The SSL port for encrypted communication. Unused unless enabled in encryption_options.")
+        "The SSL port for encrypted communication. Unused unless enabled in server_encryption_options or client_encryption_options. Set to 0 to prevent server from listening on this port.")
     , enable_in_memory_data_store(this, "enable_in_memory_data_store", value_status::Used, false, "Enable in memory mode (system tables are always persisted).")
     , enable_cache(this, "enable_cache", value_status::Used, true, "Enable cache.")
     , enable_commitlog(this, "enable_commitlog", value_status::Used, true, "Enable commitlog.")
