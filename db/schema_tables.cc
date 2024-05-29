@@ -788,11 +788,11 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
         auto rs = co_await db::system_keyspace::query_mutations(db, NAME, table);
         auto s = db.local().find_schema(NAME, table);
         for (auto&& p : rs->partitions()) {
-            auto mut = co_await unfreeze_gently(p.mut(), s);
-            auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
+            auto partition_key = value_cast<sstring>(utf8_type->deserialize(::partition_key(p.mut().key()).get_component(*s, 0)));
             if (!accept_keyspace(partition_key)) {
                 continue;
             }
+            auto mut = co_await unfreeze_gently(p.mut(), s);
             co_yield redact_columns_for_missing_features(std::move(mut), features);
         }
     };
