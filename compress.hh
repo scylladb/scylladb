@@ -9,6 +9,7 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <set>
 
 #include <seastar/core/future.hh>
