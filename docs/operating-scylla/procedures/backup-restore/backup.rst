@@ -29,11 +29,16 @@ With time, SSTables are compacted, but the hard link keeps a copy of each file. 
 
 | 1. Data can only be restored from a snapshot of the table schema, where data exists in a backup. Backup your schema with the following command:
 
-| ``$: cqlsh -e "DESC SCHEMA" > <schema_name.cql>``
+| ``$: cqlsh -e "DESC SCHEMA WITH INTERNALS" > <schema_name.cql>``
 
 For example:
 
-| ``$: cqlsh -e "DESC SCHEMA" > db_schema.cql``
+| ``$: cqlsh -e "DESC SCHEMA WITH INTERNALS" > db_schema.cql``
+
+.. warning::
+
+  To get a proper schema description, you need to use cqlsh at least in version ``6.0.19``. Restoring a schema backup created by
+  an older version of cqlsh may lead to data resurrection or data loss. To check the version of your cqlsh, you can use ``cqlsh --version``.
 
 |
 | 2. Take a snapshot, including every keyspace you want to backup.
