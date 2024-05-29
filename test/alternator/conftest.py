@@ -86,6 +86,8 @@ def get_valid_alternator_role(url):
                 # connect to CQL!), so let's just use that role.
                 role = 'cassandra'
                 salted_hash = list(session.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{role}'"))[0].salted_hash
+                if salted_hash is None:
+                    break
                 return (role, salted_hash)
             except:
                 pass
