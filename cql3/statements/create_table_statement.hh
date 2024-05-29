@@ -71,7 +71,6 @@ public:
 
     future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const override;
 
-
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
     virtual future<> grant_permissions_to_creator(const service::client_state&, service::group0_batch&) const override;
@@ -87,6 +86,8 @@ private:
     void apply_properties_to(schema_builder& builder, const data_dictionary::database) const;
 
     void add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind) const;
+
+    ::shared_ptr<event_t> created_event() const;
 };
 
 class create_table_statement::raw_statement : public raw::cf_statement {

@@ -99,12 +99,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
     try {
         auto ksm = _attrs->as_ks_metadata(_name, tm, feat);
         m = service::prepare_new_keyspace_announcement(qp.db().real_database(), ksm, ts);
-
-        ret = ::make_shared<event::schema_change>(
-                event::schema_change::change_type::CREATED,
-                event::schema_change::target_type::KEYSPACE,
-                keyspace());
-
+        ret = created_event();
         // If the new keyspace uses tablets, as long as there are features
         // which aren't supported by tablets we want to warn the user that
         // they will not be usable on the new keyspace - and suggest how a
@@ -281,6 +276,13 @@ create_keyspace_statement::execute(query_processor& qp, service::query_state& st
 lw_shared_ptr<data_dictionary::keyspace_metadata> create_keyspace_statement::get_keyspace_metadata(const locator::token_metadata& tm, const gms::feature_service& feat) {
     _attrs->validate();
     return _attrs->as_ks_metadata(_name, tm, feat);
+}
+
+::shared_ptr<schema_altering_statement::event_t> create_keyspace_statement::created_event() const {
+    return make_shared<event_t>(
+            event_t::change_type::CREATED,
+            event_t::target_type::KEYSPACE,
+            keyspace());
 }
 
 }

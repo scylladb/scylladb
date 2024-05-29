@@ -51,6 +51,8 @@ private:
     bool type_exists_in(data_dictionary::keyspace ks) const;
     std::optional<user_type> make_type(query_processor& qp) const;
 
+    ::shared_ptr<event_t> created_event() const;
+
 public:
     user_type create_type(data_dictionary::database db) const;
 };

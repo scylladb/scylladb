@@ -367,12 +367,7 @@ create_view_statement::prepare_schema_mutations(query_processor& qp, const query
     auto [definition, warnings] = prepare_view(qp.db());
     try {
         m = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(definition), ts);
-        using namespace cql_transport;
-        ret = ::make_shared<event::schema_change>(
-                event::schema_change::change_type::CREATED,
-                event::schema_change::target_type::TABLE,
-                keyspace(),
-                column_family());
+        ret = created_event();
     } catch (const exceptions::already_exists_exception& e) {
         if (!_if_not_exists) {
             co_return coroutine::exception(std::current_exception());
@@ -388,6 +383,14 @@ create_view_statement::prepare(data_dictionary::database db, cql_stats& stats) {
         throw exceptions::invalid_request_exception(format("Cannot use query parameters in CREATE MATERIALIZED VIEW statements"));
     }
     return std::make_unique<prepared_statement>(make_shared<create_view_statement>(*this));
+}
+
+::shared_ptr<schema_altering_statement::event_t> create_view_statement::created_event() const {
+    return make_shared<event_t>(
+            event_t::change_type::CREATED,
+            event_t::target_type::TABLE,
+            keyspace(),
+            column_family());
 }
 
 }

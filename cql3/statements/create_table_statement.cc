@@ -78,13 +78,7 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, const quer
 
     try {
         m = co_await service::prepare_new_column_family_announcement(qp.proxy(), get_cf_meta_data(qp.db()), ts);
-
-        using namespace cql_transport;
-        ret = ::make_shared<event::schema_change>(
-            event::schema_change::change_type::CREATED,
-            event::schema_change::target_type::TABLE,
-            keyspace(),
-            column_family());
+        ret = created_event();
     } catch (const exceptions::already_exists_exception& e) {
         if (!_if_not_exists) {
             co_return coroutine::exception(std::current_exception());
@@ -493,6 +487,14 @@ std::optional<sstring> check_restricted_table_properties(
         }
    }
     return std::nullopt;
+}
+
+::shared_ptr<schema_altering_statement::event_t> create_table_statement::created_event() const {
+    return make_shared<event_t>(
+            event_t::change_type::CREATED,
+            event_t::target_type::TABLE,
+            keyspace(),
+            column_family());
 }
 
 }

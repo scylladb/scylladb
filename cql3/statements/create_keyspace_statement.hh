@@ -79,6 +79,9 @@ public:
     execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
     lw_shared_ptr<data_dictionary::keyspace_metadata> get_keyspace_metadata(const locator::token_metadata& tm, const gms::feature_service& feat);
+
+private:
+    ::shared_ptr<event_t> created_event() const;
 };
 
 std::vector<sstring> check_against_restricted_replication_strategies(
