@@ -64,6 +64,7 @@
 #include "readers/from_fragments_v2.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/exception_utils.hh"
+#include "test/lib/eventually.hh"
 
 namespace fs = std::filesystem;
 
@@ -3494,25 +3495,35 @@ SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components) {
             // create a bloom filter
             auto sst_test = sstables::test(sst);
             sst_test.create_bloom_filter(100);
+            sst_test.write_filter();
             auto total_reclaimable_memory = sst_test.total_reclaimable_memory_size();
 
             // Test sstable::reclaim_memory_from_components() :
             BOOST_REQUIRE_EQUAL(sst_test.reclaim_memory_from_components(), total_reclaimable_memory);
+            // No more memory to reclaim in the sstable
             BOOST_REQUIRE_EQUAL(sst_test.total_reclaimable_memory_size(), 0);
             BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), 0);
+
+            // Test sstable::reload_reclaimed_components() :
+            // Reloading should load the bloom filter back into memory
+            sst_test.reload_reclaimed_components();
+            // SSTable should have reclaimable memory from the bloom filter
+            BOOST_REQUIRE_EQUAL(sst_test.total_reclaimable_memory_size(), total_reclaimable_memory);
+            BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), total_reclaimable_memory);
         });
     });
 }
 
-std::pair<shared_sstable, size_t> create_sstable_with_bloom_filter(test_env& env, test_env_sstables_manager& sst_mgr, schema_ptr sptr, uint64_t estimated_partitions, sstring tmpdir_path) {
-    auto sst = env.make_sstable(sptr, tmpdir_path, 0);
+std::pair<shared_sstable, size_t> create_sstable_with_bloom_filter(test_env& env, test_env_sstables_manager& sst_mgr, schema_ptr sptr, uint64_t estimated_partitions, sstring tmpdir_path, int64_t generation) {
+    auto sst = env.make_sstable(sptr, tmpdir_path, generation);
     sstables::test(sst).create_bloom_filter(estimated_partitions);
+    sstables::test(sst).write_filter();
     auto sst_bf_memory = sst->filter_memory_size();
     sst_mgr.increment_total_reclaimable_memory_and_maybe_reclaim(sst.get());
     return {sst, sst_bf_memory};
 }
 
-SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_under_pressure) {
+SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         return async([&env, tmpdir_path] {
             simple_schema ss;
@@ -3521,18 +3532,18 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_under_pressure) {
             auto& sst_mgr = env.manager();
 
             // Verify nothing it reclaimed when under threshold
-            auto [sst1, sst1_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 70, tmpdir_path);
+            auto [sst1, sst1_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 70, tmpdir_path, 0);
             BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
             BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
 
-            auto [sst2, sst2_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 20, tmpdir_path);
+            auto [sst2, sst2_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 20, tmpdir_path, 1);
             // Confirm reclaim was still not triggered
             BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
             BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
             BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
 
             // Verify manager reclaims from the largest sst when the total usage crosses thresold.
-            auto [sst3, sst3_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 50, tmpdir_path);
+            auto [sst3, sst3_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 50, tmpdir_path, 2);
             // sst1 has the most reclaimable memory
             BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
             BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
@@ -3540,13 +3551,24 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_under_pressure) {
             BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst1_bf_memory);
 
             // Reclaim should also work on the latest sst being added
-            auto [sst4, sst4_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 100, tmpdir_path);
+            auto [sst4, sst4_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 100, tmpdir_path, 3);
             // sst4 should have been reclaimed
             BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
             BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
             BOOST_REQUIRE_EQUAL(sst3->filter_memory_size(), sst3_bf_memory);
             BOOST_REQUIRE_EQUAL(sst4->filter_memory_size(), 0);
             BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst1_bf_memory + sst4_bf_memory);
+
+            // Test auto reload - disposing sst3 should trigger reload of the
+            // smallest filter in the reclaimed list, which is sst1's bloom filter.
+            shared_sstable::dispose(sst3.release().release());
+            BOOST_REQUIRE(eventually_true([&sst1 = sst1, sst1_bf_memory = sst1_bf_memory] { return sst1->filter_memory_size() == sst1_bf_memory; }));
+
+            // only sst4's bloom filter memory should be reported as reclaimed
+            BOOST_REQUIRE(eventually_true([&sst_mgr, sst4_bf_memory = sst4_bf_memory] { return sst_mgr.get_total_memory_reclaimed() == sst4_bf_memory; }));
+            // sst2 and sst4 remain the same
+            BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+            BOOST_REQUIRE_EQUAL(sst4->filter_memory_size(), 0);
         });
     }, {
         // limit available memory to the sstables_manager to test reclaiming.
@@ -3579,5 +3601,59 @@ SEASTAR_TEST_CASE(test_reclaimed_bloom_filter_deletion_from_disk) {
             // verify the filter doesn't exist in disk anymore
             BOOST_REQUIRE(!file_exists(filter_path).get());
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
+    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+        return async([&env, tmpdir_path] {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+            fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+            return;
+#endif
+            simple_schema ss;
+            auto schema_ptr = ss.schema();
+
+            auto& sst_mgr = env.manager();
+
+            auto [sst1, sst1_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 100, tmpdir_path, 0);
+            // there is sufficient memory for sst1's filter
+            BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+
+            auto [sst2, sst2_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 60, tmpdir_path, 1);
+            // total memory used by the bloom filters has crossed the threshold, so sst1's
+            // filter, which occupies the most memory, will be discarded from memory.
+            BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
+            BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+            BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst1_bf_memory);
+
+            // enable injector that delays reloading a filter
+            utils::get_local_injector().enable("reload_reclaimed_components/pause", true);
+
+            // dispose sst2 to trigger reload of sst1's bloom filter
+            shared_sstable::dispose(sst2.release().release());
+            // _total_reclaimable_memory will be updated when the reload begins; wait for it.
+            BOOST_REQUIRE(eventually_true([&sst_mgr, sst1_bf_memory = sst1_bf_memory] { return sst_mgr.get_total_reclaimable_memory() == sst1_bf_memory; }));
+
+            // now that the reload is midway and paused, create new sst to verify that its
+            // filter gets evicted immediately as the memory that became available is reserved
+            // for sst1's filter reload.
+            auto [sst3, sst3_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 80, tmpdir_path, 2);
+            BOOST_REQUIRE_EQUAL(sst3->filter_memory_size(), 0);
+            // confirm sst1 is not reloaded yet
+            BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
+            BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst1_bf_memory + sst3_bf_memory);
+
+            // resume reloading sst1 filter
+            BOOST_REQUIRE(eventually_true([&sst1 = sst1, sst1_bf_memory = sst1_bf_memory] { return sst1->filter_memory_size() == sst1_bf_memory; }));
+            BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory);
+            BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst3_bf_memory);
+
+            utils::get_local_injector().disable("reload_reclaimed_components/pause");
+        });
+    }, {
+        // limit available memory to the sstables_manager to test reclaiming.
+        // this will set the reclaim threshold to 100 bytes.
+        .available_memory = 1000
     });
 }

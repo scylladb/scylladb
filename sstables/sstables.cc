@@ -32,6 +32,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 
+#include "utils/error_injection.hh"
 #include "dht/sharder.hh"
 #include "types.hh"
 #include "writer.hh"
@@ -1510,7 +1511,7 @@ size_t sstable::total_reclaimable_memory_size() const {
 }
 
 size_t sstable::reclaim_memory_from_components() {
-    size_t total_memory_reclaimed = 0;
+    size_t memory_reclaimed_this_iteration = 0;
 
     if (_components->filter) {
         auto filter_memory_size = _components->filter->memory_size();
@@ -1518,12 +1519,31 @@ size_t sstable::reclaim_memory_from_components() {
             // Discard it from memory by replacing it with an always present variant.
             // No need to remove it from _recognized_components as the filter is still in disk.
             _components->filter = std::make_unique<utils::filter::always_present_filter>();
-            total_memory_reclaimed += filter_memory_size;
+            memory_reclaimed_this_iteration += filter_memory_size;
         }
     }
 
     _total_reclaimable_memory.reset();
-    return total_memory_reclaimed;
+    _total_memory_reclaimed += memory_reclaimed_this_iteration;
+    return memory_reclaimed_this_iteration;
+}
+
+size_t sstable::total_memory_reclaimed() const {
+    return _total_memory_reclaimed;
+}
+
+future<> sstable::reload_reclaimed_components(const io_priority_class& pc) {
+    if (_total_memory_reclaimed == 0) {
+        // nothing to reload
+        co_return;
+    }
+
+    co_await utils::get_local_injector().inject("reload_reclaimed_components/pause", std::chrono::seconds{3});
+
+    co_await read_filter(pc);
+    _total_reclaimable_memory.reset();
+    _total_memory_reclaimed -= _components->filter->memory_size();
+    sstlog.info("Reloaded bloom filter of {}", get_filename());
 }
 
 // This interface is only used during tests, snapshot loading and early initialization.
