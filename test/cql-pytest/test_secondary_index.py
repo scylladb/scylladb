@@ -1749,3 +1749,46 @@ def test_index_filtering2_scan_and_per_partition_limit(cql, test_keyspace, use_i
         cql.execute(stmt, [1, 1, 0, 1])
         cql.execute(stmt, [1, 2, 0, 1])
         assert {(0, 1, 0, 1), (1, 1, 0, 1)} == set(cql.execute(f'SELECT * FROM {table} WHERE v=0 AND z=1 PER PARTITION LIMIT 1 ALLOW FILTERING'))
+
+# Test that when adding an index to a table, queries should not begin to
+# use it before it's fully built because that would yield wrong query
+# results. Reproduces issue #7963.
+# The test is marked cassandra_bug, because Cassandra 4 also fails on it -
+# the ALLOW FILTERING request right after the CREATE INDEX causes an
+# exception in SecondaryIndexManagement and a failed read. This is despite
+# CASSANDRA-8505 claiming that this issue was already fixed in 2015.
+@pytest.mark.xfail(reason="issue #7963")
+def test_unbuilt_index_not_used(cql, test_keyspace, cassandra_bug):
+    # The bigger "count" is the slower the test and the higher the chance
+    # of reproducing the bug #7963. With dev build on my laptop, count=100
+    # is enough for reproducing the failure in 90% of the runs.
+    count = 100
+    with new_test_table(cql, test_keyspace,
+            "p int, c int, v int, PRIMARY KEY (p, c)") as table:
+        stmt = cql.prepare(f"INSERT INTO {table} (p, c, v) VALUES (?, ?, ?)")
+        for i in range(count):
+            cql.execute(stmt, [i, i*10, i*100])
+        assert list(cql.execute(f"SELECT p FROM {table} WHERE v=100 ALLOW FILTERING")) == [(1,)]
+        # Before we add an index, the same query without ALLOW FILTERING is
+        # not allowed:
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+            cql.execute(f"SELECT p FROM {table} WHERE v=100")
+        # Create an index and then, quickly before (usually) the index is
+        # completely built, retry the same query as the above successful
+        # query (the one with ALLOW FILTERING):
+        cql.execute(f"CREATE INDEX ON {table} (v)")
+        # Failure here reproduces #7963: (note that depending on timing, it
+        # might not fail every time even before the bug is fixed)
+        assert list(cql.execute(f"SELECT p FROM {table} WHERE v=100 ALLOW FILTERING")) == [(1,)]
+        # If we retry the same query *without* the ALLOW FILTERING phrase,
+        # this should either be allowed and produce correct results (if the
+        # index has finished building) - or, should complain that ALLOW
+        # FILTERING is needed (as was the case above before we added the index)
+        try:
+            # If query without ALLOW FILTERING works, it must return the
+            # correct results. Failure here reproduces #7963.
+            assert list(cql.execute(f"SELECT p FROM {table} WHERE v=100")) == [(1,)]
+        except InvalidRequest as e:
+            # Or, it's also fine that the query doesn't yet work without ALLOW
+            # FILTERING, if the index wasn't yet built.
+            assert "ALLOW FILTERING" in str(e)
