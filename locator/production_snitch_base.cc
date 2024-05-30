@@ -69,15 +69,14 @@ future<> production_snitch_base::load_property_file() {
     auto f = co_await open_file_dma(_prop_file_name, open_flags::ro);
     auto s = co_await f.size();
     auto tb = co_await f.dma_read_exactly<char>(0, s);
-    _prop_file_contents = std::string(tb.get(), s);
-    parse_property_file();
+    parse_property_file(std::string(tb.get(), s));
 }
 
-void production_snitch_base::parse_property_file() {
+void production_snitch_base::parse_property_file(std::string contents) {
     using namespace boost::algorithm;
 
     std::string line;
-    std::istringstream istrm(_prop_file_contents);
+    std::istringstream istrm(contents);
     std::vector<std::string> split_line;
     _prop_values.clear();
 
