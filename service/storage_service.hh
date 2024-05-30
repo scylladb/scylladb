@@ -818,6 +818,11 @@ private:
     // coordinator fiber
     future<> raft_state_monitor_fiber(raft::server&, sharded<db::system_distributed_keyspace>& sys_dist_ks);
 
+public:
+    bool topology_global_queue_empty() const {
+        return !_topology_state_machine._topology.global_request.has_value();
+    }
+private:
      // State machine that is responsible for topology change
     topology_state_machine _topology_state_machine;
 
@@ -895,6 +900,11 @@ public:
     // It is incompatible with the `join_cluster` method.
     future<> start_maintenance_mode();
 
+    // Waits for a topology request with a given ID to complete and return non empty error string
+    // if request completes with an error
+    future<sstring> wait_for_topology_request_completion(utils::UUID id);
+    future<> wait_for_topology_not_busy();
+
 private:
     future<std::vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<std::vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
@@ -931,9 +941,6 @@ private:
 
     future<> _sstable_cleanup_fiber = make_ready_future<>();
     future<> sstable_cleanup_fiber(raft::server& raft, sharded<service::storage_proxy>& proxy) noexcept;
-    // Waits for a topology request with a given ID to complete and return non empty error string
-    // if request completes with an error
-    future<sstring> wait_for_topology_request_completion(utils::UUID id);
 
     // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
     abort_source _group0_as;

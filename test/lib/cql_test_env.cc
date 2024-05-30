@@ -747,13 +747,6 @@ private:
                 _tablet_allocator.stop().get();
             });
 
-            _qp.invoke_on_all([this, &group0_client] (cql3::query_processor& qp) {
-                qp.start_remote(_mm.local(), _forward_service.local(), group0_client);
-            }).get();
-            auto stop_qp_remote = defer([this] {
-                _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
-            });
-
             service::raft_group0 group0_service{
                     abort_sources.local(), _group0_registry.local(), _ms,
                     _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client};
@@ -784,6 +777,13 @@ private:
             smp::invoke_on_all([&] {
                 return db::initialize_virtual_tables(_db, _ss, _gossiper, _group0_registry, _sys_ks, *cfg);
             }).get();
+
+            _qp.invoke_on_all([this, &group0_client] (cql3::query_processor& qp) {
+                qp.start_remote(_mm.local(), _forward_service.local(), _ss.local(), group0_client);
+            }).get();
+            auto stop_qp_remote = defer([this] {
+                _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
+            });
 
             _cm.invoke_on_all([&](compaction_manager& cm) {
                 auto cl = _db.local().commitlog();

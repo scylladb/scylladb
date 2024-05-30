@@ -114,8 +114,10 @@ public:
     topology_mutation_builder& set_tablet_balancing_enabled(bool);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_committed_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
+    topology_mutation_builder& set_new_keyspace_rf_change_data(const sstring &ks_name, const std::map<sstring, sstring> &rf_per_dc);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
     topology_mutation_builder& set_global_topology_request(global_topology_request);
+    topology_mutation_builder& set_global_topology_request_id(const utils::UUID&);
     topology_mutation_builder& set_upgrade_state(topology::upgrade_state_type);
     topology_mutation_builder& add_enabled_features(const std::set<sstring>& value);
     topology_mutation_builder& add_ignored_nodes(const std::unordered_set<raft::server_id>& value);
@@ -124,6 +126,7 @@ public:
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del_session();
     topology_mutation_builder& del_global_topology_request();
+    topology_mutation_builder& del_global_topology_request_id();
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };

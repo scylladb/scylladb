@@ -20,6 +20,7 @@
 #include "auth/service.hh"
 #include "cdc/generation.hh"
 #include "db/system_auth_keyspace.hh"
+#include "cql3/statements/ks_prop_defs.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
 #include "dht/boot_strapper.hh"
@@ -29,10 +30,12 @@
 #include "locator/token_metadata.hh"
 #include "locator/network_topology_strategy.hh"
 #include "message/messaging_service.hh"
+#include "mutation/async_utils.hh"
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
 #include "service/qos/service_level_controller.hh"
+#include "service/migration_manager.hh"
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group0.hh"
@@ -41,6 +44,7 @@
 #include "service/topology_state_machine.hh"
 #include "topology_mutation.hh"
 #include "utils/error_injection.hh"
+#include "utils/stall_free.hh"
 #include "utils/to_string.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 
@@ -756,6 +760,84 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         case global_topology_request::cleanup:
             co_await start_cleanup_on_dirty_nodes(std::move(guard), true);
             break;
+        case global_topology_request::keyspace_rf_change: {
+            rtlogger.info("keyspace_rf_change requested");
+            while (true) {
+                sstring ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
+                auto& ks = _db.find_keyspace(ks_name);
+                auto tmptr = get_token_metadata_ptr();
+                std::unordered_map<sstring, sstring> saved_ks_props = *_topo_sm._topology.new_keyspace_rf_change_data;
+                cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
+
+                auto repl_opts = new_ks_props.get_replication_options();
+                repl_opts.erase(cql3::statements::ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
+                utils::UUID req_uuid = *_topo_sm._topology.global_request_id;
+                std::vector<canonical_mutation> updates;
+                sstring error;
+                size_t unimportant_init_tablet_count = 2; // must be a power of 2
+                locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
+
+                for (const auto& table : ks.metadata()->tables()) {
+                    try {
+                        locator::tablet_map old_tablets = tmptr->tablets().get_tablet_map(table->id());
+                        locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
+                        auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
+                        new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table, tmptr, old_tablets);
+                    } catch (const std::exception& e) {
+                        error = e.what();
+                        rtlogger.error("Couldn't process global_topology_request::keyspace_rf_change, error: {},"
+                                       "desired new ks opts: {}", error, new_ks_props.get_replication_options());
+                        updates.clear(); // remove all tablets mutations ...
+                        break;           // ... and only create mutations deleting the global req
+                    }
+
+                    replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table->id());
+                    co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
+                        auto last_token = new_tablet_map.get_last_token(tablet_id);
+                        updates.emplace_back(co_await make_canonical_mutation_gently(
+                                replica::tablet_mutation_builder(guard.write_timestamp(), table->id())
+                                        .set_new_replicas(last_token, tablet_info.replicas)
+                                        .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                                        .set_transition(last_token, locator::tablet_transition_kind::rebuild)
+                                        .build()
+                        ));
+                        co_await coroutine::maybe_yield();
+                    });
+                }
+
+                updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+                                                             .set_transition_state(topology::transition_state::tablet_migration)
+                                                             .set_version(_topo_sm._topology.version + 1)
+                                                             .del_global_topology_request()
+                                                             .del_global_topology_request_id()
+                                                             .build()));
+                updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_uuid)
+                                                             .done(error)
+                                                             .build()));
+                if (error.empty()) {
+                    const sstring strategy_name = "NetworkTopologyStrategy";
+                    auto ks_md = keyspace_metadata::new_keyspace(ks_name, strategy_name, repl_opts,
+                                                                 new_ks_props.get_initial_tablets(strategy_name, true),
+                                                                 new_ks_props.get_durable_writes(), new_ks_props.get_storage_options());
+                    auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                    for (auto& m: schema_muts) {
+                        updates.emplace_back(m);
+                    }
+                }
+
+                sstring reason = format("ALTER tablets KEYSPACE called with options: {}", saved_ks_props);
+                rtlogger.trace("do update {} reason {}", updates, reason);
+                mixed_change change{std::move(updates)};
+                group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
+                try {
+                    co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), &_as);
+                    break;
+                } catch (group0_concurrent_modification&) {
+                    rtlogger.info("handle_global_request(): concurrent modification, retrying");
+                }
+            }
+            break;
+        }
         }
     }
 
@@ -1379,7 +1461,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             topology_mutation_builder builder(ts);
             topology_request_tracking_mutation_builder rtbuilder(_topo_sm._topology.find(id)->second.request_id);
             auto node_builder = builder.with_node(id).del("topology_request");
-            rtbuilder.done(fmt::format("Canceled. Dead nodes: {}", dead_nodes));
+            auto done_msg = fmt::format("Canceled. Dead nodes: {}", dead_nodes);
+            rtbuilder.done(done_msg);
+            if (_topo_sm._topology.global_request_id) {
+                try {
+                    utils::UUID uuid = utils::UUID{*_topo_sm._topology.global_request_id};
+                    topology_request_tracking_mutation_builder rt_global_req_builder{uuid};
+                    rt_global_req_builder.done(done_msg)
+                                         .set("end_time", db_clock::now());
+                    muts.emplace_back(rt_global_req_builder.build());
+                } catch (...) {
+                    rtlogger.warn("failed to cancel topology global request: {}", std::current_exception());
+                }
+            }
             switch (req) {
                 case topology_request::replace:
                 [[fallthrough]];

@@ -48,4 +48,7 @@ std::vector<clustering_key> generate_clustering_keys(size_t n, schema_ptr s, boo
 // Overload for a single key
 clustering_key generate_clustering_key(schema_ptr s, bool allow_prefix = false, std::optional<key_size> size = {});
 
+// Double to unsigned long conversion
+int64_t d2t(double d);
+
 } // namespace tests
