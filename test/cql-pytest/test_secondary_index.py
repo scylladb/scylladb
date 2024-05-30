@@ -1751,7 +1751,7 @@ def test_index_filtering2_scan_and_per_partition_limit(cql, test_keyspace, use_i
         assert {(0, 1, 0, 1), (1, 1, 0, 1)} == set(cql.execute(f'SELECT * FROM {table} WHERE v=0 AND z=1 PER PARTITION LIMIT 1 ALLOW FILTERING'))
 
 # Test that when adding an index to a table, queries should not begin to
-# use it before it's fully built because that would yield wrong query
+# use it before it's fully built - otherwise we would get wrong query
 # results. Reproduces issue #7963.
 # The test is marked cassandra_bug, because Cassandra 4 also fails on it -
 # the ALLOW FILTERING request right after the CREATE INDEX causes an
@@ -1792,3 +1792,167 @@ def test_unbuilt_index_not_used(cql, test_keyspace, cassandra_bug):
             # Or, it's also fine that the query doesn't yet work without ALLOW
             # FILTERING, if the index wasn't yet built.
             assert "ALLOW FILTERING" in str(e)
+
+# Utility function waiting (up to a timeout) for the given index to be built.
+# Uses the "IndexInfo" system table, supported by both Scylla and Cassandra.
+def wait_for_index(cql, keyspace, index_name, timeout_sec=60):
+    start_time = time.time()
+    while time.time() < start_time + timeout_sec:
+        if list(cql.execute(f"SELECT index_name FROM system.\"IndexInfo\" WHERE table_name = '{keyspace}' and index_name = '{index_name}'")):
+            return
+        time.sleep(0.1)
+    pytest.fail(f"Timeout ({timeout_sec} seconds) waiting for index {keyspace}.{index_name}")
+
+# The following test starts a filtering request (with ALLOW FILTERING),
+# pages through the results, and between two pages adds a secondary-index
+# that could be used - or not - for continuing the request, but certainly
+# shouldn't break the request. Reproduces #18992.
+@pytest.mark.xfail(reason="issue #18992")
+def test_paging_and_create_index(cql, test_keyspace):
+    count = 20
+    with new_test_table(cql, test_keyspace,
+            "p int, v int, PRIMARY KEY (p)") as table:
+        stmt = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, ?)")
+        # Add 'count' partitions with v=17 in all of them, so the filter
+        # "WHERE v=17" will return all rows.
+        for i in range(count):
+            cql.execute(stmt, [i, 17])
+        page_size = 7
+        stmt = SimpleStatement(f"SELECT p FROM {table} WHERE v=17 ALLOW FILTERING", fetch_size=page_size)
+        # Save the result of a full query (this would be count rows ordered
+        # by token(p) order) so we can later compare this to what we get
+        # when we insert a CREATE INDEX between pages.
+        expected = list(cql.execute(stmt))
+        # Run the same paged query again but this time use the page-by-page
+        # API, and stick a CREATE INDEX ON v between the first and second page.
+        got = []
+        r = cql.execute(stmt)
+        assert len(r.current_rows) == page_size  # sanity check
+        got.extend(r.current_rows)
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+        # We wait for the index to be built, since we don't want to reproduce
+        # #7963 again here (an index getting used before actually built).
+        wait_for_index(cql, test_keyspace, index_name)
+        while r.has_more_pages:
+            r = cql.execute(stmt, paging_state=r.paging_state)
+            assert len(r.current_rows) <= page_size # sanity check
+            got.extend(r.current_rows)
+        assert expected == got
+
+# This test is the same as the previous one, but in this test the request
+# filters on both v1 and v2 is already using an index for column v2, and
+# now between the pages we add an index for v1. Reproduces #18992.
+@pytest.mark.xfail(reason="issue #18992")
+def test_paging_and_create_index2(cql, test_keyspace):
+    count = 20
+    with new_test_table(cql, test_keyspace,
+            "p int, v1 text, v2 int, PRIMARY KEY (p)") as table:
+        stmt = cql.prepare(f"INSERT INTO {table} (p, v1, v2) VALUES (?, ?, ?)")
+        # Add 'count' partitions with v1="dog", v2=3 in all of them, so the
+        # filter "WHERE v1='dog' AND v2=3" will return all rows.
+        for i in range(count):
+            cql.execute(stmt, [i, "dog", 3])
+        page_size = 7
+        stmt = SimpleStatement(f"SELECT p FROM {table} WHERE v1='dog' AND v2=3 ALLOW FILTERING", fetch_size=page_size)
+        expected = list(cql.execute(stmt))
+        # Create the index on v2, and run the query again, should get the same
+        # results.
+        index_name2 = unique_name()
+        cql.execute(f"CREATE INDEX {index_name2} ON {table}(v2)")
+        wait_for_index(cql, test_keyspace, index_name2)
+        assert expected == list(cql.execute(stmt))
+        # Run the same paged query again but this time use the page-by-page
+        # API, and do a CREATE INDEX ON v1 between the first and second page.
+        # Scylla currently prefers the index for the first column mentioned
+        # in the query, so the risk is that it will switch to using v1 instead
+        # of v2 for the paging and get confused by the paging state.
+        got = []
+        r = cql.execute(stmt)
+        assert len(r.current_rows) == page_size
+        got.extend(r.current_rows)
+        index_name1 = unique_name()
+        cql.execute(f"CREATE INDEX {index_name1} ON {table}(v1)")
+        wait_for_index(cql, test_keyspace, index_name1)
+        while r.has_more_pages:
+            r = cql.execute(stmt, paging_state=r.paging_state)
+            assert len(r.current_rows) <= page_size
+            got.extend(r.current_rows)
+        assert expected == got
+
+# Similar to the previous tests, but here a secondary index which is used
+# for the original request is suddenly deleted between pages. In this test,
+# the query has "ALLOW FILTERING" so the query can continue to work -
+# inefficiently - after the index is deleted. In the following test, we
+# will do the same without ALLOW FILTERING in the query - and we'll see the
+# query can't be resumed after the index is dropped.
+# Reproduces #18992.
+@pytest.mark.xfail(reason="issue #18992")
+def test_paging_and_drop_index_allow_filtering(cql, test_keyspace):
+    count = 20
+    with new_test_table(cql, test_keyspace,
+            "p int, v int, PRIMARY KEY (p)") as table:
+        stmt = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, ?)")
+        # Add 'count' partitions with v=17 in all of them, so the filter v=17
+        # will return all rows.
+        for i in range(count):
+            cql.execute(stmt, [i, 17])
+        page_size = 7
+        stmt = SimpleStatement(f"SELECT p FROM {table} WHERE v=17 ALLOW FILTERING", fetch_size=page_size)
+        expected = list(cql.execute(stmt))
+        # Create the index on v, and run the query again with the index,
+        # should get the same results.
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+        wait_for_index(cql, test_keyspace, index_name)
+        assert expected == list(cql.execute(stmt))
+        # Finally, run the same paged query again but this time use the page-
+        # by-page API, and do a DROP INDEX between the first and second page.
+        # The query still has ALLOW FILTERING to prevent Scylla from rejecting
+        # the query because now (without the index) it needs ALLOW FILTERING.
+        got = []
+        r = cql.execute(stmt)
+        assert len(r.current_rows) == page_size  # sanity check
+        got.extend(r.current_rows)
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        while r.has_more_pages:
+            r = cql.execute(stmt, paging_state=r.paging_state)
+            assert len(r.current_rows) <= page_size # sanity check
+            got.extend(r.current_rows)
+        assert expected == got
+
+# This test is the same as the previous one, except that it uses a query
+# *without* ALLOW FILTERING while an index existed, and when it attempts
+# to get the next page after a DROP INDEX, we expect the usual error
+# message about ALLOW FILTERING being necessary.
+def test_paging_and_drop_index_no_allow_filtering(cql, test_keyspace):
+    count = 20
+    with new_test_table(cql, test_keyspace,
+            "p int, v int, PRIMARY KEY (p)") as table:
+        stmt = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, ?)")
+        for i in range(count):
+            cql.execute(stmt, [i, 17])
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+        wait_for_index(cql, test_keyspace, index_name)
+
+        page_size = 7
+        stmt = SimpleStatement(f"SELECT p FROM {table} WHERE v=17", fetch_size=page_size)
+        expected = list(cql.execute(stmt))
+        # Run the same paged query again but this time use the page-by-page
+        # API, and do a DROP INDEX between the first and second page.
+        got = []
+        r = cql.execute(stmt)
+        assert len(r.current_rows) == page_size
+        got.extend(r.current_rows)
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        # Because the query does not have "ALLOW FILTERING", even if we
+        # could resume this query it would be inefficient without the
+        # index, so the resumed query should fail with an error about
+        # ALLOW FILTERING being needed.
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+            while r.has_more_pages:
+                r = cql.execute(stmt, paging_state=r.paging_state)
+                assert len(r.current_rows) <= page_size
+                got.extend(r.current_rows)
+            assert expected == got
