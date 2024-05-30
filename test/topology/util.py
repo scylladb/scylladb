@@ -304,7 +304,8 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
 
         stream_to_timestamp = { stream: gen.time for gen in generations for stream in gen.streams}
 
-        cdc_log = await cql.run_async(f"SELECT * FROM {ks_name}.tbl_scylla_cdc_log")
+        # FIXME: Doesn't work with all_pages=True (https://github.com/scylladb/scylladb/issues/19101)
+        cdc_log = await cql.run_async(f"SELECT * FROM {ks_name}.tbl_scylla_cdc_log", all_pages=False)
         for log_entry in cdc_log:
             assert log_entry.cdc_stream_id in stream_to_timestamp
             timestamp = stream_to_timestamp[log_entry.cdc_stream_id]

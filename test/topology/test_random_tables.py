@@ -115,7 +115,7 @@ async def test_paged_result(manager, random_tables):
 
     # Check only 1 page
     stmt = SimpleStatement(f"SELECT * FROM {table} ALLOW FILTERING", fetch_size = fetch_size)
-    res = await cql.run_async(stmt)
+    res = await cql.run_async(stmt, all_pages=False)
     assert len(res) == fetch_size
 
     # Check all pages
