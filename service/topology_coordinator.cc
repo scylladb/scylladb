@@ -2413,6 +2413,7 @@ public:
     // Returns true if the upgrade was done, returns false if upgrade was interrupted.
     future<bool> maybe_run_upgrade();
     future<> run();
+    future<> stop();
 
     virtual void on_join_cluster(const gms::inet_address& endpoint) {}
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {};
@@ -2911,6 +2912,47 @@ future<> topology_coordinator::run() {
     co_await std::move(cdc_generation_publisher);
 }
 
+future<> topology_coordinator::stop() {
+    // if topology_coordinator::run() is aborted either because we are not a
+    // leader anymore, or we are shutting down as a leader, we have to handle
+    // futures in _tablets in case any of them failed, before these failures
+    // are checked by future's destructor.
+    co_await coroutine::parallel_for_each(_tablets, [] (auto& tablet) -> future<> {
+        auto& [gid, tablet_state] = tablet;
+        rtlogger.debug("Checking tablet migration state for {}", gid);
+        // we should have at most only a single active barrier for each tablet,
+        // but let's check all of them because we never reset these holders
+        // once they are added as barriers
+        for (auto& [stage, barrier]: tablet_state.barriers) {
+            assert(barrier.has_value());
+            try {
+                co_await std::move(*barrier);
+            } catch (...) {
+                rtlogger.warn("Tablet '{}' migration failed at stage {}: {}",
+                              gid, tablet_transition_stage_to_string(stage), std::current_exception());
+            }
+        }
+
+        if (tablet_state.streaming) {
+            try {
+                co_await std::move(*tablet_state.streaming);
+            } catch (...) {
+                rtlogger.warn("Tablet '{}' migration failed when streaming: {}",
+                              gid, std::current_exception());
+
+            }
+        }
+        if (tablet_state.cleanup) {
+            try {
+                co_await std::move(*tablet_state.cleanup);
+            } catch (...) {
+                rtlogger.warn("Tablet '{}' migration failed when cleanup: {}",
+                              gid, std::current_exception());
+            }
+        }
+    });
+}
+
 future<> run_topology_coordinator(
         seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
         netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
@@ -2952,6 +2994,7 @@ future<> run_topology_coordinator(
         on_fatal_internal_error(rtlogger, format("unhandled exception in topology_coordinator::run: {}", ex));
     }
     co_await lifecycle_notifier.unregister_subscriber(&coordinator);
+    co_await coordinator.stop();
 }
 
 } // namespace service
