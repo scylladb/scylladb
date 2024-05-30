@@ -12,6 +12,12 @@ from cassandra.util import Duration
 
 compactOption = " WITH COMPACT STORAGE"
 
+# Enable compact_storage for all tests
+@pytest.fixture(scope="session")
+def all_tests_compact_storage(compact_storage):
+    pass
+
+
 # ALTER ... DROP COMPACT STORAGE was recently dropped (unless a special
 # flag is used) by Cassandra, and it was never implemented in Scylla, so
 # let's skip its test.

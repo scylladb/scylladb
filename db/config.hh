@@ -485,6 +485,8 @@ public:
 
     named_value<uint32_t> service_levels_interval;
 
+    named_value<bool> enable_create_table_with_compact_storage;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;

@@ -266,6 +266,9 @@ public:
         future<bool> set_value_on_all_shards(sstring, config_source = config_source::Internal) override;
     };
 
+    template<typename T>
+    static T lexical_cast(sstring value);
+
     typedef std::reference_wrapper<config_src> cfg_ref;
 
     config_file(std::initializer_list<cfg_ref> = {});
