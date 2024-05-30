@@ -390,6 +390,12 @@ struct fmt::formatter<data_dictionary::user_types_metadata> {
 };
 
 auto fmt::formatter<data_dictionary::keyspace_metadata>::format(const data_dictionary::keyspace_metadata& m, fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "KSMetaData{{name={}, strategyClass={}, strategyOptions={}, cfMetaData={}, durable_writes={}, userTypes={}}}",
-            m.name(), m.strategy_name(), m.strategy_options(), m.cf_meta_data(), m.durable_writes(), m.user_types());
+    fmt::format_to(ctx.out(), "KSMetaData{{name={}, strategyClass={}, strategyOptions={}, cfMetaData={}, durable_writes={}, tablets=",
+            m.name(), m.strategy_name(), m.strategy_options(), m.cf_meta_data(), m.durable_writes());
+    if (m.initial_tablets()) {
+        fmt::format_to(ctx.out(), "{{\"initial\":{}}}", m.initial_tablets().value());
+    } else {
+        fmt::format_to(ctx.out(), "{{\"enabled\":false}}");
+    }
+    return fmt::format_to(ctx.out(), ", userTypes={}}}", m.user_types());
 }
