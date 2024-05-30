@@ -11,12 +11,9 @@
 #include "encoding_stats.hh"
 #include "schema/schema.hh"
 #include "mutation/mutation_fragment.hh"
-#include "vint-serialization.hh"
 #include "sstables/types.hh"
 #include "sstables/mx/types.hh"
-#include "db/config.hh"
 #include "mutation/atomic_cell.hh"
-#include "utils/exceptions.hh"
 #include "db/large_data_handler.hh"
 
 #include <functional>
@@ -544,6 +541,7 @@ private:
     std::optional<key> _first_key, _last_key;
     index_sampling_state _index_sampling_state;
     bytes_ostream _tmp_bufs;
+    uint64_t _num_partitions_consumed = 0;
 
     const sstable_schema _sst_schema;
 
@@ -924,6 +922,7 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
 
     _sst._components->filter->add(bytes_view(*_partition_key));
     _collector.add_key(bytes_view(*_partition_key));
+    _num_partitions_consumed++;
 
     auto p_key = disk_string_view<uint16_t>();
     p_key.value = bytes_view(*_partition_key);
@@ -1468,6 +1467,7 @@ void writer::consume_end_of_stream() {
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
     close_data_writer();
     _sst.write_summary();
+    utils::i_filter::maybe_fold_filter(_sst._components->filter, _num_partitions_consumed, _schema.bloom_filter_fp_chance());
     _sst.write_filter();
     _sst.write_statistics();
     _sst.write_compression();

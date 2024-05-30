@@ -13,6 +13,7 @@
 #pragma once
 #include "i_filter.hh"
 #include "utils/large_bitset.hh"
+#include <cstddef>
 
 namespace utils {
 namespace filter {
@@ -54,6 +55,10 @@ public:
         return sizeof(_hash_count) + _bitset.memory_size();
     }
 
+    // Downsize the existing bloom filter's bitmap by folding it into new_num_bits.
+    // The folding is done in-place and should be called only on unsealed sstable filters.
+    virtual void fold(const size_t new_num_bits);
+
     static const stats& get_shard_stats() noexcept {
         return _shard_stats;
     }
@@ -87,7 +92,14 @@ struct always_present_filter: public i_filter {
     }
 };
 
+// Get the size of the bitset (in bits, not bytes) for the specific parameters.
+size_t get_bitset_size(int64_t num_elements, int buckets_per);
+
 filter_ptr create_filter(int hash, large_bitset&& bitset, filter_format format);
 filter_ptr create_filter(int hash, int64_t num_elements, int buckets_per, filter_format format);
+
+// Fold the filter if the size of the filter that was based on the estimated
+// parameters differs largely from the size computed from the actual parameters.
+void maybe_fold_filter(filter_ptr& filter, int64_t num_elements, int buckets_per);
 }
 }

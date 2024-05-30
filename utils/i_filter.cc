@@ -7,14 +7,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "log.hh"
 #include "bloom_filter.hh"
 #include "bloom_calculations.hh"
 #include "utils/murmur_hash.hh"
 #include <seastar/core/thread.hh>
 
 namespace utils {
-static logging::logger filterlog("bloom_filter");
 
 filter_ptr i_filter::get_filter(int64_t num_elements, double max_false_pos_probability, filter_format fformat) {
     assert(seastar::thread::running_in_thread());
@@ -30,6 +28,27 @@ filter_ptr i_filter::get_filter(int64_t num_elements, double max_false_pos_proba
     int buckets_per_element = bloom_calculations::max_buckets_per_element(num_elements);
     auto spec = bloom_calculations::compute_bloom_spec(buckets_per_element, max_false_pos_probability);
     return filter::create_filter(spec.K, num_elements, spec.buckets_per_element, fformat);
+}
+
+size_t i_filter::get_filter_size(int64_t num_elements, double max_false_pos_probability) {
+    if (max_false_pos_probability >= 1.0) {
+        return 0;
+    }
+
+    int buckets_per_element = bloom_calculations::max_buckets_per_element(num_elements);
+    auto spec = bloom_calculations::compute_bloom_spec(buckets_per_element, max_false_pos_probability);
+
+    return filter::get_bitset_size(num_elements, spec.buckets_per_element) / 8;
+}
+
+void i_filter::maybe_fold_filter(filter_ptr& filter, int64_t num_elements, double max_false_pos_probability) {
+    if (max_false_pos_probability == 1.0) {
+        return;
+    }
+
+    int buckets_per_element = bloom_calculations::max_buckets_per_element(num_elements);
+    auto spec = bloom_calculations::compute_bloom_spec(buckets_per_element, max_false_pos_probability);
+    filter::maybe_fold_filter(filter, num_elements, spec.buckets_per_element);
 }
 
 hashed_key make_hashed_key(bytes_view b) {

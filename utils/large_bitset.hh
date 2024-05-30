@@ -61,4 +61,6 @@ public:
     const utils::chunked_vector<int_type>& get_storage() const {
         return _storage;
     }
+
+    void shrink(size_t new_nr_bits);
 };
