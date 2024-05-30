@@ -68,9 +68,8 @@ void production_snitch_base::set_prefer_local(bool prefer_local) {
 future<> production_snitch_base::load_property_file() {
     auto f = co_await open_file_dma(_prop_file_name, open_flags::ro);
     auto s = co_await f.size();
-    _prop_file_size = s;
     auto tb = co_await f.dma_read_exactly<char>(0, s);
-    _prop_file_contents = std::string(tb.get(), _prop_file_size);
+    _prop_file_contents = std::string(tb.get(), s);
     parse_property_file();
 }
 

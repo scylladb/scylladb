@@ -89,7 +89,6 @@ protected:
     }
 
 private:
-    size_t _prop_file_size;
     snitch_ptr* _backreference = nullptr;
 protected:
     /*
