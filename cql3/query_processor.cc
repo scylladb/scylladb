@@ -520,9 +520,9 @@ future<> query_processor::stop_remote() {
 }
 
 future<> query_processor::stop() {
-    return _mnotifier.unregister_listener(_migration_subscriber.get()).then([this] {
-        return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
-    });
+    co_await _mnotifier.unregister_listener(_migration_subscriber.get());
+    co_await _authorized_prepared_cache.stop();
+    co_await _prepared_cache.stop();
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> query_processor::execute_with_guard(
