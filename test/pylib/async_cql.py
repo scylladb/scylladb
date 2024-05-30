@@ -77,7 +77,7 @@ def _wrap_future(driver_response_future: ResponseFuture, all_pages: bool = False
 
 
 # TODO: paged result query handling (iterable?)
-def run_async(self, *args, all_pages = False, **kwargs) -> asyncio.Future:
+def run_async(self, *args, all_pages = True, **kwargs) -> asyncio.Future:
     """Execute a CQL query asynchronously by wrapping the driver's future"""
     # The default timeouts should have been more than enough, but in some
     # extreme cases with a very slow debug build running on a slow or very busy
