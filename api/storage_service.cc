@@ -337,16 +337,16 @@ void unset_transport_controller(http_context& ctx, routes& r) {
 }
 
 // NOTE: preserved only for backward compatibility
-void set_rpc_controller(http_context& ctx, routes& r) {
-    ss::is_rpc_server_running.set(r, [] (std::unique_ptr<http::request> req) {
+void set_thrift_controller(http_context& ctx, routes& r) {
+    ss::is_thrift_server_running.set(r, [] (std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [] {
             return make_ready_future<json::json_return_type>(false);
         });
     });
 }
 
-void unset_rpc_controller(http_context& ctx, routes& r) {
-    ss::is_rpc_server_running.unset(r);
+void unset_thrift_controller(http_context& ctx, routes& r) {
+    ss::is_thrift_server_running.unset(r);
 }
 
 void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {

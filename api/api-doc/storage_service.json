@@ -1693,7 +1693,7 @@
                "method":"GET",
                "summary":"Determine if thrift is running",
                "type":"boolean",
-               "nickname":"is_rpc_server_running",
+               "nickname":"is_thrift_server_running",
                "produces":[
                   "application/json"
                ],

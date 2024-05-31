@@ -79,8 +79,8 @@ void set_repair(http_context& ctx, httpd::routes& r, sharded<repair_service>& re
 void unset_repair(http_context& ctx, httpd::routes& r);
 void set_transport_controller(http_context& ctx, httpd::routes& r, cql_transport::controller& ctl);
 void unset_transport_controller(http_context& ctx, httpd::routes& r);
-void set_rpc_controller(http_context& ctx, httpd::routes& r);
-void unset_rpc_controller(http_context& ctx, httpd::routes& r);
+void set_thrift_controller(http_context& ctx, httpd::routes& r);
+void unset_thrift_controller(http_context& ctx, httpd::routes& r);
 void set_snapshot(http_context& ctx, httpd::routes& r, sharded<db::snapshot_ctl>& snap_ctl);
 void unset_snapshot(http_context& ctx, httpd::routes& r);
 seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request = false);

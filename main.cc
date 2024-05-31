@@ -2020,9 +2020,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_transport_controller(ctx).get();
             });
 
-            api::set_rpc_controller(ctx).get();
-            auto stop_rpc_controller = defer_verbose_shutdown("rpc controller API", [&ctx] {
-                api::unset_rpc_controller(ctx).get();
+            api::set_thrift_controller(ctx).get();
+            auto stop_thrift_controller = defer_verbose_shutdown("thrift controller API", [&ctx] {
+                api::unset_thrift_controller(ctx).get();
             });
 
             ss.local().register_protocol_server(alternator_ctl, cfg->alternator_port() || cfg->alternator_https_port()).get();
