@@ -14,10 +14,15 @@ a single keyspace, which are parents of table tasks.
 
 # Time to live of a task
 
-Tasks are kept in task manager for `task_ttl` time after they are
+Root tasks are kept in task manager for `task_ttl` time after they are
 finished. `task_ttl` value can be set in node configuration with
 `--task-ttl-in-seconds` option or changed with task manager API
 (`/task_manager/ttl`).
+
+A task which isn't a root is unregistered immediately after it is
+finished and its status is folded into its parent. When a task
+is being folded into its parent, info about each of its children is
+lost unless the child or any child's descendant failed.
 
 # Internal
 
@@ -50,7 +55,7 @@ Briefly:
 - `/task_manager/abort_task/{task_id}` -
         aborts the task if it's abortable;
 - `/task_manager/wait_task/{task_id}` -
-        waits for the task; gets its status and unregisters it;
+        waits for the task and gets its status;
 - `/task_manager/task_status_recursive/{task_id}` -
         gets statuses of the task and all its descendants in BFS
         order, unregisters the task;
