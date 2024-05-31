@@ -804,7 +804,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , start_rpc(this, "start_rpc", value_status::Unused, false,
         "Starts the Thrift RPC server")
     , rpc_keepalive(this, "rpc_keepalive", value_status::Used, true,
-        "Enable or disable keepalive on client connections (RPC or native).")
+        "Enable or disable keepalive on client connections (CQL native, Redis and the maintenance socket).")
     , cache_hit_rate_read_balancing(this, "cache_hit_rate_read_balancing", value_status::Used, true,
         "This boolean controls whether the replicas for read query will be chosen based on cache hit ratio.")
     /**
