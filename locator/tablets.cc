@@ -245,9 +245,9 @@ dht::token_range tablet_map::get_token_range(tablet_id id) const {
     }
 }
 
-host_id tablet_map::get_primary_replica(tablet_id id) const {
+tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
     const auto info = get_tablet_info(id);
-    return info.replicas.at(size_t(id) % info.replicas.size()).host;
+    return info.replicas.at(size_t(id) % info.replicas.size());
 }
 
 future<std::vector<token>> tablet_map::get_sorted_tokens() const {
