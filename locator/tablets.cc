@@ -250,6 +250,14 @@ tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
     return replicas.at(size_t(id) % replicas.size());
 }
 
+tablet_replica tablet_map::get_primary_replica_within_dc(tablet_id id, const topology& topo, sstring dc) const {
+    const auto replicas = boost::copy_range<tablet_replica_set>(get_tablet_info(id).replicas | boost::adaptors::filtered([&] (const auto& tr) {
+        const auto& node = topo.get_node(tr.host);
+        return node.dc_rack().dc == dc;
+    }));
+    return replicas.at(size_t(id) % replicas.size());
+}
+
 future<std::vector<token>> tablet_map::get_sorted_tokens() const {
     std::vector<token> tokens;
     tokens.reserve(tablet_count());
