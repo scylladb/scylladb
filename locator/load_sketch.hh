@@ -65,33 +65,42 @@ private:
         return trinfo ? trinfo->next : ti.replicas;
     }
 
+    future<> populate_table(const tablet_map& tmap, std::optional<host_id> host) {
+        const topology& topo = _tm->get_topology();
+        co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+            for (auto&& replica : get_replicas_for_tablet_load(ti, tmap.get_tablet_transition_info(tid))) {
+                if (host && *host != replica.host) {
+                    continue;
+                }
+                if (!_nodes.contains(replica.host)) {
+                    _nodes.emplace(replica.host, node_load{topo.find_node(replica.host)->get_shard_count()});
+                }
+                node_load& n = _nodes.at(replica.host);
+                if (replica.shard < n._shards.size()) {
+                    n.load() += 1;
+                    n._shards[replica.shard].load += 1;
+                }
+            }
+            return make_ready_future<>();
+        });
+    }
 public:
     load_sketch(token_metadata_ptr tm)
         : _tm(std::move(tm)) {
     }
 
-    future<> populate(std::optional<host_id> host = std::nullopt) {
-        const topology& topo = _tm->get_topology();
+    future<> populate(std::optional<host_id> host = std::nullopt, std::optional<table_id> only_table = std::nullopt) {
         co_await utils::clear_gently(_nodes);
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
-            co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
-                for (auto&& replica : get_replicas_for_tablet_load(ti, tmap.get_tablet_transition_info(tid))) {
-                    if (host && *host != replica.host) {
-                        continue;
-                    }
-                    if (!_nodes.contains(replica.host)) {
-                        _nodes.emplace(replica.host, node_load{topo.find_node(replica.host)->get_shard_count()});
-                    }
-                    node_load& n = _nodes.at(replica.host);
-                    if (replica.shard < n._shards.size()) {
-                        n.load() += 1;
-                        n._shards[replica.shard].load += 1;
-                    }
-                }
-                return make_ready_future<>();
-            });
+
+        if (only_table) {
+            auto& tmap = _tm->tablets().get_tablet_map(*only_table);
+            co_await populate_table(tmap, host);
+        } else {
+            for (auto&& [table, tmap]: _tm->tablets().all_tables()) {
+                co_await populate_table(tmap, host);
+            }
         }
+
         for (auto&& n : _nodes) {
             std::make_heap(n.second._shards.begin(), n.second._shards.end(), shard_load_cmp());
         }
@@ -135,6 +144,14 @@ public:
         return _nodes.at(node).load();
     }
 
+    uint64_t total_load() const {
+        uint64_t total = 0;
+        for (auto&& n : _nodes) {
+            total += n.second.load();
+        }
+        return total;
+    }
+
     uint64_t get_avg_shard_load(host_id node) const {
         if (!_nodes.contains(node)) {
             return 0;
@@ -143,19 +160,33 @@ public:
         return div_ceil(n.load(), n._shards.size());
     }
 
+    double get_real_avg_shard_load(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        auto& n = _nodes.at(node);
+        return double(n.load()) / n._shards.size();
+    }
+
     // Returns the difference in tablet count between highest-loaded shard and lowest-loaded shard.
     // Returns 0 when shards are perfectly balanced.
     // Returns 1 when shards are imbalanced, but it's not possible to balance them.
     uint64_t get_shard_imbalance(host_id node) const {
-        if (!_nodes.contains(node)) {
-            return 0; // Node has no tablets.
-        }
-        auto& n = _nodes.at(node);
-        min_max_tracker<uint64_t> minmax;
-        for (auto&& s : n._shards) {
-            minmax.update(s.load);
-        }
+        auto minmax = get_shard_minmax(node);
         return minmax.max() - minmax.max();
+    }
+
+    min_max_tracker<uint64_t> get_shard_minmax(host_id node) const {
+        min_max_tracker<uint64_t> minmax;
+        if (_nodes.contains(node)) {
+            auto& n = _nodes.at(node);
+            for (auto&& s: n._shards) {
+                minmax.update(s.load);
+            }
+        } else {
+            minmax.update(0);
+        }
+        return minmax;
     }
 };
 
