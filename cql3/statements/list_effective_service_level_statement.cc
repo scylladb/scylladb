@@ -68,7 +68,7 @@ list_effective_service_level_statement::execute(query_processor& qp, service::qu
 
     auto role_set = co_await role_manager.query_granted(_role_name, auth::recursive_role_query::yes);
     auto& sl_controller = state.get_service_level_controller();
-    auto slo = co_await sl_controller.find_service_level(role_set, qos::include_effective_names::yes);
+    auto slo = co_await sl_controller.find_effective_service_level(role_set, qos::include_effective_names::yes);
 
     if (!slo) {
         throw exceptions::invalid_request_exception(format("Role {} doesn't have assigned any service level", _role_name));

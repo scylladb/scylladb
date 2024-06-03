@@ -53,6 +53,33 @@ struct service_level {
  *      manipulation.
  *      2. Local controllers that act upon the data and facilitates execution in
  *      the service level context
+ *
+ *  Definitions:
+ *  service level - User creates service level with some parameters (timeout/workload type).
+ *                  Then it can be attached to some role, but it's not guaranteed the role
+ *                  will effectively get exactly the same parameter values 
+ *                  as its assigned service level.
+ *
+ *  effective service level - Represents exact values of role's parameters. It's created by
+ *                            merging all service levels attached to all roles which are
+ *                            granted to the user.
+ *
+ *  Example:
+ *      Roles: user_role, r1, r2
+ *          GRANT ROLE r1 TO user_role
+ *          GRANT ROLE r2 TO r1
+ *      Service levels:
+ *          - sl1 (timeout: 1h, workload type: batch)
+ *          - sl2 (timeout: 30 min)
+ *          - ATTACH SERVICE LEVEL sl1 TO user_role
+ *          - ATTACH SERVICE LEVEL sl2 TO r2
+ *
+ *      Effective service level of user_role is (timeout: 30 min, workload_type: batch).
+ *      It gets created by merging all service levels (sl1, sl2) which are attached to
+ *      all roles granted to the user (user_role, r1, r2).
+ *
+ *  For more detail check qos_common.hh (service_level_options::merge_with()) and
+ *  docs/dev/service_levels.md
  */
 class service_level_controller : public peering_sharded_service<service_level_controller>, public service::endpoint_lifecycle_subscriber {
 public:
@@ -167,10 +194,11 @@ public:
     void stop_legacy_update_from_distributed_data();
 
     /**
-     * Updates the service level data from the distributed data store.
+     * Updates the service level cache from the distributed data store.
+     * Must be executed on shard 0.
      * @return a future that is resolved when the update is done
      */
-    future<> update_service_levels_from_distributed_data();
+    future<> update_service_levels_cache();
 
 
     future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists, service::group0_batch& mc);
@@ -186,7 +214,7 @@ public:
      * @return the effective service level options - they may in particular be a combination
      *         of options from multiple service levels
      */
-    future<std::optional<service_level_options>> find_service_level(auth::role_set roles, include_effective_names include_names = include_effective_names::no);
+    future<std::optional<service_level_options>> find_effective_service_level(auth::role_set roles, include_effective_names include_names = include_effective_names::no);
 
     /**
      * Gets the service level data by name.

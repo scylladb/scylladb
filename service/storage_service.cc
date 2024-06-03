@@ -875,7 +875,7 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
 
 future<> storage_service::update_service_levels_cache() {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    co_await _sl_controller.local().update_service_levels_from_distributed_data();
+    co_await _sl_controller.local().update_service_levels_cache();
 }
 
 // Moves the coroutine lambda onto the heap and extends its

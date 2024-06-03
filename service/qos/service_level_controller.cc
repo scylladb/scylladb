@@ -19,6 +19,8 @@
 #include "db/system_keyspace.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/timer.hh>
+#include "seastar/core/future.hh"
+#include "seastar/core/shard_id.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service_level_controller.hh"
@@ -140,7 +142,7 @@ void service_level_controller::abort_group0_operations() {
     }
 }
 
-future<> service_level_controller::update_service_levels_from_distributed_data() {
+future<> service_level_controller::update_service_levels_cache() {
 
     if (!_sl_data_accessor) {
         return make_ready_future();
@@ -231,7 +233,7 @@ void service_level_controller::stop_legacy_update_from_distributed_data() {
     _global_controller_db->dist_data_update_aborter.request_abort();
 }
 
-future<std::optional<service_level_options>> service_level_controller::find_service_level(auth::role_set roles, include_effective_names include_names) {
+future<std::optional<service_level_options>> service_level_controller::find_effective_service_level(auth::role_set roles, include_effective_names include_names) {
     auto& role_manager = _auth_service.local().underlying_role_manager();
 
     // converts a list of roles into the chosen service level.
@@ -341,7 +343,7 @@ void service_level_controller::maybe_start_legacy_update_from_distributed_data(s
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
 
-                    return update_service_levels_from_distributed_data().then_wrapped([this] (future<>&& f){
+                    return update_service_levels_cache().then_wrapped([this] (future<>&& f){
                         try {
                             f.get();
                             _last_successful_config_update = seastar::lowres_clock::now();
