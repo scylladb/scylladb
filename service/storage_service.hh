@@ -329,7 +329,7 @@ public:
     // should only be called via JMX
     future<bool> is_gossip_running();
 
-    void register_protocol_server(protocol_server& server);
+    future<> register_protocol_server(protocol_server& server);
 
     // All pointers are valid.
     const std::vector<protocol_server*>& protocol_servers() const {

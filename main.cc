@@ -1971,7 +1971,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
 
-            ss.local().register_protocol_server(cql_server_ctl);
+            ss.local().register_protocol_server(cql_server_ctl).get();
 
             std::any stop_cql;
 
@@ -1986,7 +1986,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss, proxy, dbcfg.statement_scheduling_group);
 
-            ss.local().register_protocol_server(thrift_ctl);
+            ss.local().register_protocol_server(thrift_ctl).get();
 
             std::any stop_rpc;
             if (cfg->start_rpc()) {
@@ -2023,13 +2023,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     return es.invoke_on_all(&alternator::expiration_service::start);
                 }).get();
             }
-            ss.local().register_protocol_server(alternator_ctl);
+            ss.local().register_protocol_server(alternator_ctl).get();
 
             redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
                 redis_ctl.start_server().get();
             }
-            ss.local().register_protocol_server(redis_ctl);
+            ss.local().register_protocol_server(redis_ctl).get();
 
             supervisor::notify("serving");
 
