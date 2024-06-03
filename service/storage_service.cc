@@ -7204,5 +7204,9 @@ void storage_service::set_topology_change_kind(topology_change_kind kind) {
     _gossiper.set_topology_state_machine(kind == topology_change_kind::raft ? & _topology_state_machine : nullptr);
 }
 
+void storage_service::register_protocol_server(protocol_server& server) {
+    _protocol_servers.push_back(&server);
+}
+
 } // namespace service
 
