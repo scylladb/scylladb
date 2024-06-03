@@ -2030,4 +2030,11 @@ future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
     co_return ret;
 }
 
+future<> cql_server::update_connections_service_level_params() {
+    return for_each_gently([] (generic_server::connection& conn) -> future<> {
+        connection& cql_conn = dynamic_cast<connection&>(conn);
+        return cql_conn.get_client_state().maybe_update_per_service_level_params();
+    });
+}
+
 }
