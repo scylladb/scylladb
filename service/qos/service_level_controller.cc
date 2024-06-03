@@ -323,38 +323,38 @@ future<std::optional<service_level_options>> service_level_controller::find_effe
             ? std::optional<service_level_options>(_effective_service_levels_db.at(role_name)) 
             : std::nullopt;
     } else {
-    auto& role_manager = _auth_service.local().underlying_role_manager();
-    auto roles = co_await role_manager.query_granted(role_name, auth::recursive_role_query::yes);
+        auto& role_manager = _auth_service.local().underlying_role_manager();
+        auto roles = co_await role_manager.query_granted(role_name, auth::recursive_role_query::yes);
 
-    // converts a list of roles into the chosen service level.
-    co_return co_await ::map_reduce(roles.begin(), roles.end(), [&role_manager, this] (const sstring& role) {
-        return role_manager.get_attribute(role, "service_level").then_wrapped([this, role] (future<std::optional<sstring>> sl_name_fut) -> std::optional<service_level_options> {
-            try {
-                std::optional<sstring> sl_name = sl_name_fut.get();
-                if (!sl_name) {
+        // converts a list of roles into the chosen service level.
+        co_return co_await ::map_reduce(roles.begin(), roles.end(), [&role_manager, this] (const sstring& role) {
+            return role_manager.get_attribute(role, "service_level").then_wrapped([this, role] (future<std::optional<sstring>> sl_name_fut) -> std::optional<service_level_options> {
+                try {
+                    std::optional<sstring> sl_name = sl_name_fut.get();
+                    if (!sl_name) {
+                        return std::nullopt;
+                    }
+                    auto sl_it = _service_levels_db.find(*sl_name);
+                    if ( sl_it == _service_levels_db.end()) {
+                        return std::nullopt;
+                    }
+
+                    sl_it->second.slo.init_effective_names(*sl_name);
+                    return sl_it->second.slo;
+                } catch (...) { // when we fail, we act as if the attribute does not exist so the node
+                            // will not be brought down.
                     return std::nullopt;
                 }
-                auto sl_it = _service_levels_db.find(*sl_name);
-                if ( sl_it == _service_levels_db.end()) {
-                    return std::nullopt;
-                }
-
-                sl_it->second.slo.init_effective_names(*sl_name);
-                return sl_it->second.slo;
-            } catch (...) { // when we fail, we act as if the attribute does not exist so the node
-                           // will not be brought down.
-                return std::nullopt;
+            });
+        }, std::optional<service_level_options>{}, [] (std::optional<service_level_options> first, std::optional<service_level_options> second) -> std::optional<service_level_options> {
+            if (!second) {
+                return first;
+            } else if (!first) {
+                return second;
+            } else {
+                return first->merge_with(*second);
             }
         });
-    }, std::optional<service_level_options>{}, [] (std::optional<service_level_options> first, std::optional<service_level_options> second) -> std::optional<service_level_options> {
-        if (!second) {
-            return first;
-        } else if (!first) {
-            return second;
-        } else {
-            return first->merge_with(*second);
-        }
-    });
     }
 }
 
