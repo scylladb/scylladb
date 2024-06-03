@@ -10,10 +10,15 @@
 #include "cql3/query_processor.hh"
 #include "db/consistency_level_type.hh"
 #include <seastar/core/abort_source.hh>
+#include "seastar/util/variant_utils.hh"
+#include "service/raft/group0_state_machine.hh"
 #include "exceptions/exceptions.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "db/system_keyspace.hh"
 #include "types/types.hh"
+#include "mutation/canonical_mutation.hh"
+#include "gms/feature_service.hh"
+#include "service/storage_proxy.hh"
 
 namespace qos {
 
@@ -47,12 +52,23 @@ future<qos::service_levels_info> raft_service_level_distributed_data_accessor::g
     return qos::get_service_level(_qp, db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2, std::move(service_level_name), db::consistency_level::LOCAL_ONE);
 }
 
-future<> raft_service_level_distributed_data_accessor::do_raft_command(service::group0_guard guard, abort_source& as, std::vector<mutation> mutations, std::string_view description) const {    
-    service::write_mutations change {
-        .mutations{mutations.begin(), mutations.end()},
-    };
+static std::variant<service::write_mutations, service::service_levels_change> create_raft_change(const gms::feature_service& fs, std::vector<canonical_mutation> mutations) {
+    if (fs.raft_service_levels_change) {
+        return service::service_levels_change {
+            .mutations = std::move(mutations)
+        };
+    } else {
+        return service::write_mutations {
+            .mutations = std::move(mutations)
+        };
+    }
+}
 
-    auto group0_cmd = _group0_client.prepare_command(change, guard, description);
+future<> raft_service_level_distributed_data_accessor::do_raft_command(service::group0_guard guard, abort_source& as, std::vector<mutation> mutations, std::string_view description) const {    
+    auto change = create_raft_change(_qp.proxy().features(), std::vector<canonical_mutation>(mutations.begin(), mutations.end()));
+    auto group0_cmd = std::visit([&] (auto& chng) { 
+        return _group0_client.prepare_command(chng, guard, description);
+    }, change);
     co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &as);
 }
 
