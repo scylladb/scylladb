@@ -1338,19 +1338,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             messaging.invoke_on_all(&netw::messaging_service::start).get();
 
             supervisor::notify("starting gossiper");
+            auto cluster_name = cfg->cluster_name();
+            if (cluster_name.empty()) {
+                cluster_name = "Test Cluster";
+                startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
+            }
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
             gcfg.seeds = get_seeds_from_db_config(*cfg, broadcast_addr);
-            gcfg.cluster_name = cfg->cluster_name();
+            gcfg.cluster_name = cluster_name;
             gcfg.partitioner = cfg->partitioner();
             gcfg.ring_delay_ms = cfg->ring_delay_ms();
             gcfg.shadow_round_ms = cfg->shadow_round_ms();
             gcfg.shutdown_announce_ms = cfg->shutdown_announce_in_ms();
             gcfg.skip_wait_for_gossip_to_settle = cfg->skip_wait_for_gossip_to_settle();
-            if (gcfg.cluster_name.empty()) {
-                gcfg.cluster_name = "Test Cluster";
-                startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
-            }
             gcfg.group0_id = sys_ks.local().get_raft_group0_id().get();
 
             debug::the_gossiper = &gossiper;
