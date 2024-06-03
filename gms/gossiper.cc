@@ -90,7 +90,6 @@ gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, 
         : _abort_source(as)
         , _shared_token_metadata(stm)
         , _messaging(ms)
-        , _force_gossip_generation(cfg.force_gossip_generation)
         , _gcfg(std::move(gcfg)) {
     // Gossiper's stuff below runs only on CPU0
     if (this_shard_id() != 0) {
@@ -2038,8 +2037,8 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     });
 
     build_seeds_list();
-    if (_force_gossip_generation() > 0) {
-        generation_nbr = gms::generation_type(_force_gossip_generation());
+    if (_gcfg.force_gossip_generation() > 0) {
+        generation_nbr = gms::generation_type(_gcfg.force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
     endpoint_state local_state = my_endpoint_state();

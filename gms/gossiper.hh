@@ -76,6 +76,7 @@ struct gossip_config {
     uint32_t shutdown_announce_ms = 2 * 1000;
     uint32_t skip_wait_for_gossip_to_settle = -1;
     utils::updateable_value<uint32_t> failure_detector_timeout_ms;
+    utils::updateable_value<int32_t> force_gossip_generation;
 };
 
 struct loaded_endpoint_state {
@@ -691,7 +692,6 @@ private:
     abort_source& _abort_source;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
-    utils::updateable_value<int32_t> _force_gossip_generation;
     gossip_config _gcfg;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
