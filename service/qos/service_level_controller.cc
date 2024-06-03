@@ -317,12 +317,18 @@ void service_level_controller::stop_update_from_distributed_data() {
     _global_controller_db->dist_data_update_aborter.request_abort();
 }
 
-future<std::optional<service_level_options>> service_level_controller::find_effective_service_level(auth::role_set roles, include_effective_names include_names) {
+future<std::optional<service_level_options>> service_level_controller::find_effective_service_level(const sstring& role_name) {
+    if (true) { //TODO: fix it, properly determine if service level controller already switched to raft updates
+        co_return _effective_service_levels_db.contains(role_name) 
+            ? std::optional<service_level_options>(_effective_service_levels_db.at(role_name)) 
+            : std::nullopt;
+    } else {
     auto& role_manager = _auth_service.local().underlying_role_manager();
+    auto roles = co_await role_manager.query_granted(role_name, auth::recursive_role_query::yes);
 
     // converts a list of roles into the chosen service level.
-    return ::map_reduce(roles.begin(), roles.end(), [&role_manager, include_names, this] (const sstring& role) {
-        return role_manager.get_attribute(role, "service_level").then_wrapped([include_names, this, role] (future<std::optional<sstring>> sl_name_fut) -> std::optional<service_level_options> {
+    co_return co_await ::map_reduce(roles.begin(), roles.end(), [&role_manager, this] (const sstring& role) {
+        return role_manager.get_attribute(role, "service_level").then_wrapped([this, role] (future<std::optional<sstring>> sl_name_fut) -> std::optional<service_level_options> {
             try {
                 std::optional<sstring> sl_name = sl_name_fut.get();
                 if (!sl_name) {
@@ -333,9 +339,7 @@ future<std::optional<service_level_options>> service_level_controller::find_effe
                     return std::nullopt;
                 }
 
-                if (include_names == include_effective_names::yes) {
-                    sl_it->second.slo.init_effective_names(*sl_name);
-                }
+                sl_it->second.slo.init_effective_names(*sl_name);
                 return sl_it->second.slo;
             } catch (...) { // when we fail, we act as if the attribute does not exist so the node
                            // will not be brought down.
@@ -351,6 +355,7 @@ future<std::optional<service_level_options>> service_level_controller::find_effe
             return first->merge_with(*second);
         }
     });
+    }
 }
 
 future<>  service_level_controller::notify_service_level_added(sstring name, service_level sl_data) {
