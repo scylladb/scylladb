@@ -1959,6 +1959,26 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_view_builder(ctx).get();
             });
 
+            sharded<alternator::expiration_service> es;
+            std::any stop_expiration_service;
+
+            if (cfg->alternator_port() || cfg->alternator_https_port()) {
+                // Start the expiration service on all shards.
+                // Currently we only run it if Alternator is enabled, because
+                // only Alternator uses it for its TTL feature. But in the
+                // future if we add a CQL interface to it, we may want to
+                // start this outside the Alternator if().
+                supervisor::notify("starting the expiration service");
+                es.start(seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db)),
+                         std::ref(proxy), std::ref(gossiper)).get();
+                stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
+                    es.stop().get();
+                });
+                with_scheduling_group(maintenance_scheduling_group, [&es] {
+                    return es.invoke_on_all(&alternator::expiration_service::start);
+                }).get();
+            }
+
             db.invoke_on_all(&replica::database::revert_initial_system_read_concurrency_boost).get();
             notify_set.notify_all(configurable::system_state::started).get();
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
@@ -1989,26 +2009,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_rpc_controller = defer_verbose_shutdown("rpc controller API", [&ctx] {
                 api::unset_rpc_controller(ctx).get();
             });
-
-            sharded<alternator::expiration_service> es;
-            std::any stop_expiration_service;
-
-            if (cfg->alternator_port() || cfg->alternator_https_port()) {
-                // Start the expiration service on all shards.
-                // Currently we only run it if Alternator is enabled, because
-                // only Alternator uses it for its TTL feature. But in the
-                // future if we add a CQL interface to it, we may want to
-                // start this outside the Alternator if().
-                supervisor::notify("starting the expiration service");
-                es.start(seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db)),
-                         std::ref(proxy), std::ref(gossiper)).get();
-                stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
-                    es.stop().get();
-                });
-                with_scheduling_group(maintenance_scheduling_group, [&es] {
-                    return es.invoke_on_all(&alternator::expiration_service::start);
-                }).get();
-            }
 
             ss.local().register_protocol_server(alternator_ctl, cfg->alternator_port() || cfg->alternator_https_port()).get();
 
