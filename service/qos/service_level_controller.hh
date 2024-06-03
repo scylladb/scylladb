@@ -114,6 +114,7 @@ private:
     static constexpr shard_id global_controller = 0;
 
     std::map<sstring, service_level> _service_levels_db;
+    std::map<sstring, service_level_options> _effective_service_levels_db;
     service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
@@ -198,6 +199,14 @@ public:
      */
     future<> update_service_levels_cache();
 
+    /**
+     * Updates effective service levels cache.
+     * The method uses service levels cache (_service_levels_db)
+     * and data from auth tables.
+     * Must be executed on shard 0.
+     * @return a future that is resolved when the update is done
+     */
+    future<> update_effective_service_levels_cache();
 
     future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists, std::optional<service::group0_guard> guard);
     future<> alter_distributed_service_level(sstring name, service_level_options slo, std::optional<service::group0_guard> guard);

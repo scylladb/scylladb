@@ -220,6 +220,72 @@ future<> service_level_controller::update_service_levels_cache() {
     });
 }
 
+static std::unordered_set<sstring> get_all_roles(const std::unordered_multimap<sstring, sstring>& hierarchy, const sstring& base_role) {
+    std::unordered_set<sstring> roles;
+    std::queue<sstring> queue;
+    queue.push(base_role);
+
+    while (!queue.empty()) {
+        auto role = queue.front();
+        auto [it, it_end] = hierarchy.equal_range(role);
+
+        while (it != it_end) {
+            if (!roles.contains(it->second)) {
+                queue.push(it->second);
+            }
+            ++it;
+        }
+        roles.insert(role);
+        queue.pop();
+    }
+
+    return roles;
+}
+
+future<> service_level_controller::update_effective_service_levels_cache() {
+    assert(this_shard_id() == global_controller);
+
+    return with_semaphore(_global_controller_db->notifications_serializer, 1, [this] () {
+        return async([this] () {
+            auto& role_manager = _auth_service.local().underlying_role_manager();
+            const auto hierarchy = role_manager.query_all_directly_granted().get();
+            // includes only roles with attached service level
+            const auto attributes = role_manager.query_attribute_for_all("service_level").get();
+
+            std::map<sstring, service_level_options> effective_sl_map;
+            ::parallel_for_each(attributes.begin(), attributes.end(), [&hierarchy, &attributes, &effective_sl_map, this] (auto& attribute_entry) -> future<> {
+                auto& base_role = attribute_entry.first;
+
+                auto all_roles = get_all_roles(hierarchy, base_role);
+                auto effective_sl = co_await ::map_reduce(all_roles, [this, &attributes] (const sstring& role) -> future<std::optional<service_level_options>> {
+                    auto sl_name_it = attributes.find(role);
+
+                    if (sl_name_it == attributes.end()) {
+                        co_return std::nullopt;
+                    }
+
+                    auto sl = _service_levels_db.at(sl_name_it->second);
+                    sl.slo.init_effective_names(sl_name_it->second);
+                    
+                    co_return sl.slo;
+                }, std::optional<service_level_options>{}, [] (std::optional<service_level_options> first, std::optional<service_level_options> second) -> std::optional<service_level_options> {
+                    if (!second) {
+                        return first;
+                    } else if (!first) {
+                        return second;
+                    } else {
+                        return first->merge_with(*second);
+                    }
+                });
+
+                effective_sl_map.insert({base_role, std::move(*effective_sl)});
+            }).get();
+
+            _effective_service_levels_db = std::move(effective_sl_map);
+        });
+    });
+}
+
 void service_level_controller::maybe_start_legacy_update_loop(gms::feature_service& feature_service, lw_shared_ptr<db::config> cfg) {
     assert(this_shard_id() == global_controller);
 
