@@ -1969,6 +1969,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Register controllers after drain_on_shutdown() below, so that even on start
             // failure drain is called and stops controllers
             cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
+            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss, proxy, dbcfg.statement_scheduling_group);
 
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
@@ -1981,19 +1982,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_transport_controller(ctx).get();
             });
 
-            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss, proxy, dbcfg.statement_scheduling_group);
-
-            ss.local().register_protocol_server(thrift_ctl).get();
-
-            std::any stop_rpc;
-            if (cfg->start_rpc()) {
-                thrift_ctl.start_server().get();
-                // FIXME -- this should be done via client hooks instead
-                stop_rpc = defer_verbose_shutdown("rpc server", [&thrift_ctl] {
-                    thrift_ctl.stop_server().get();
-                });
-            }
-
+            ss.local().register_protocol_server(thrift_ctl, cfg->start_rpc()).get();
             api::set_rpc_controller(ctx, thrift_ctl).get();
             auto stop_rpc_controller = defer_verbose_shutdown("rpc controller API", [&ctx] {
                 api::unset_rpc_controller(ctx).get();
