@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/timer.hh>
+#include "seastar/util/bool_class.hh"
 #include "seastarx.hh"
 #include "auth/role_manager.hh"
 #include <seastar/core/sstring.hh>
@@ -40,6 +41,8 @@ struct service_level {
      bool marked_for_deletion;
      bool is_static;
 };
+
+using update_only_effective_cache = bool_class<class update_only_effective_cache_tag>;
 
 /**
  *  The service_level_controller class is an implementation of the service level
@@ -207,6 +210,8 @@ public:
      * @return a future that is resolved when the update is done
      */
     future<> update_effective_service_levels_cache();
+
+    future<> update_cache(update_only_effective_cache update_only_effective_cache = update_only_effective_cache::no);
 
     future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists, std::optional<service::group0_guard> guard);
     future<> alter_distributed_service_level(sstring name, service_level_options slo, std::optional<service::group0_guard> guard);

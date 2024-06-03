@@ -286,6 +286,14 @@ future<> service_level_controller::update_effective_service_levels_cache() {
     });
 }
 
+future<> service_level_controller::update_cache(update_only_effective_cache update_only_effective_cache) {
+    assert(this_shard_id() == global_controller);
+    if (!update_only_effective_cache) {
+        co_await update_service_levels_cache();
+    }
+    co_await update_effective_service_levels_cache();
+}
+
 void service_level_controller::maybe_start_legacy_update_loop(gms::feature_service& feature_service, lw_shared_ptr<db::config> cfg) {
     assert(this_shard_id() == global_controller);
 
