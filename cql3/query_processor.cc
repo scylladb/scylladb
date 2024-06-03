@@ -1032,8 +1032,6 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
             co_await stmt.grant_permissions_to_creator(client_state, mc);
         }
     }
-    // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
-    // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
     ::shared_ptr<messages::result_message> result;
     if (!ce) {
         result = ::make_shared<messages::result_message::void_message>();

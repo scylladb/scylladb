@@ -92,14 +92,12 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
     using namespace cql_transport;
     const auto& tm = *qp.proxy().get_token_metadata_ptr();
     const auto& feat = qp.proxy().features();
-    ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
     std::vector<sstring> warnings;
 
     try {
         auto ksm = _attrs->as_ks_metadata(_name, tm, feat);
         m = service::prepare_new_keyspace_announcement(qp.db().real_database(), ksm, ts);
-        ret = created_event();
         // If the new keyspace uses tablets, as long as there are features
         // which aren't supported by tablets we want to warn the user that
         // they will not be usable on the new keyspace - and suggest how a
@@ -124,7 +122,15 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
         }
     }
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
+    // If an IF NOT EXISTS clause was used and resource was already created
+    // we shouldn't emit created event. However it interacts badly with
+    // concurrent clients creating resources. The client seeing no create event
+    // assumes resource already previously existed and proceeds with its logic
+    // which may depend on that resource. But it may send requests to nodes which
+    // are not yet aware of new schema or client's metadata may be outdated.
+    // To force synchronization always emit the event (see
+    // github.com/scylladb/scylladb/issues/16909).
+    co_return std::make_tuple(created_event(), std::move(m), std::move(warnings));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
