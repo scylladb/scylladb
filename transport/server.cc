@@ -2022,9 +2022,10 @@ void cql_server::response::write(const cql3::prepared_metadata& m, uint8_t versi
 
 future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
     utils::chunked_vector<client_data> ret;
-    co_await for_each_gently([&ret] (const generic_server::connection& c) {
+    co_await for_each_gently([&ret] (const generic_server::connection& c) -> future<> {
         const connection& conn = dynamic_cast<const connection&>(c);
         ret.emplace_back(conn.make_client_data());
+        return make_ready_future<>();
     });
     co_return ret;
 }

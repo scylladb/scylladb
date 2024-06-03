@@ -119,7 +119,7 @@ protected:
 
     virtual future<> unadvertise_connection(shared_ptr<connection> conn);
 
-    future<> for_each_gently(noncopyable_function<void(connection&)>);
+    future<> for_each_gently(noncopyable_function<future<>(connection&)>);
 
     void maybe_stop();
 };
