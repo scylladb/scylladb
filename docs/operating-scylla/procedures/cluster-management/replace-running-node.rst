@@ -16,7 +16,7 @@ Add a new node to the cluster and then decommission the old node
 =================================================================
 
 Adding a new node and only then decommissioning the old node allows the cluster to keep the same level of data replication throughout the process, but at the cost of more data being transferred during the procedure.
-When adding a new node to a Scylla cluster, it will take up ownership of a subset of existing nodes their data.
+When adding a new node to a ScyllaDB cluster, it will take up ownership of a subset of existing nodes their data.
 The new node effectively takes its place on the token ring with its own number of tokens (Vnodes), and consequentially will be responsible for data which maps to its token ranges.
 Certain token ranges for which original nodes are responsible effectively become smaller in size.
 To ensure that data is once again equally distributed, these nodes will stream relevant data to the new node.
