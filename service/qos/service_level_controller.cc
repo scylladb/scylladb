@@ -282,6 +282,14 @@ future<> service_level_controller::update_effective_service_levels_cache() {
     });
 }
 
+future<> service_level_controller::update_cache(update_both_cache_levels update_both_cache_levels) {
+    SCYLLA_ASSERT(this_shard_id() == global_controller);
+    if (update_both_cache_levels) {
+        co_await update_service_levels_cache();
+    }
+    co_await update_effective_service_levels_cache();
+}
+
 void service_level_controller::stop_legacy_update_from_distributed_data() {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
 
