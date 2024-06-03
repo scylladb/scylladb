@@ -58,16 +58,21 @@ jobs:
              --target seastar_http_request_parser       \
              --target idl-sources                       \
              --target $swagger_targets
+      - run: |
+          echo "::add-matcher::.github/clang-include-cleaner.json"
       - name: clang-include-cleaner
         run: |
           for d in $CLEANER_DIRS; do
             find $d -name '*.cc' -o -name '*.hh'          \
               -exec echo {} \;                            \
               -exec clang-include-cleaner-$CLANG_VERSION  \
+                --ignore-headers=seastarx.hh              \
                 --print=changes                           \
                 -p $BUILD_DIR                             \
                 {} \; | tee --append $CLEANER_OUTPUT_PATH
           done
+      - run: |
+          echo "::remove-matcher owner=clang-include-cleaner::"
       - uses: actions/upload-artifact@v4
         with:
           name: Logs (clang-include-cleaner)
