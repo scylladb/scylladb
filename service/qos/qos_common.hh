@@ -68,7 +68,7 @@ struct service_level_options {
     };
     std::optional<slo_effective_names> effective_names = std::nullopt;
 
-    void init_effective_names(sstring& service_level_name);
+    void init_effective_names(const sstring& service_level_name);
 };
 
 std::ostream& operator<<(std::ostream& os, const service_level_options::workload_type&);

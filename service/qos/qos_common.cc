@@ -118,7 +118,7 @@ std::optional<service_level_options::workload_type> service_level_options::parse
     return std::nullopt;
 }
 
-void service_level_options::init_effective_names(sstring& service_level_name) {
+void service_level_options::init_effective_names(const sstring& service_level_name) {
     effective_names = service_level_options::slo_effective_names {
         .timeout = service_level_name,
         .workload = service_level_name
