@@ -38,10 +38,6 @@
 #include "locator/token_metadata.hh"
 #include "locator/types.hh"
 
-namespace db {
-class config;
-}
-
 namespace gms {
 
 class gossip_digest_syn;
@@ -293,7 +289,7 @@ private:
     // Must be called under lock_endpoint.
     future<> replicate(inet_address, endpoint_state, permit_id);
 public:
-    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg);
+    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg);
 
     /**
      * Register for interesting state changes.
