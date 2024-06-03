@@ -1964,21 +1964,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
 
+            // Create controllers before drain_on_shutdown() below, so that it destructs
+            // after drain stops them in stop_transport()
+            // Register controllers after drain_on_shutdown() below, so that even on start
+            // failure drain is called and stops controllers
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
+
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
                 ss.local().drain_on_shutdown().get();
             });
 
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
-
-            ss.local().register_protocol_server(cql_server_ctl).get();
-
-            std::any stop_cql;
-
-            if (cfg->start_native_transport()) {
-                start_cql(cql_server_ctl, stop_cql, "native transport");
-            }
-
+            ss.local().register_protocol_server(cql_server_ctl, cfg->start_native_transport()).get();
             api::set_transport_controller(ctx, cql_server_ctl).get();
             auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {
                 api::unset_transport_controller(ctx).get();
