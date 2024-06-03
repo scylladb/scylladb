@@ -20,7 +20,9 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/timer.hh>
 #include "seastar/core/future.hh"
+#include "seastar/core/semaphore.hh"
 #include "seastar/core/shard_id.hh"
+#include "seastar/coroutine/maybe_yield.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service_level_controller.hh"
@@ -28,6 +30,7 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_service.hh"
 #include "service/topology_state_machine.hh"
+#include "utils/sorting.hh"
 
 namespace qos {
 static logging::logger sl_logger("service_level_controller");
@@ -218,6 +221,64 @@ future<> service_level_controller::update_service_levels_cache() {
                 do_add_service_level(sl.first, sl.second).get();
             }
         });
+    });
+}
+
+future<> service_level_controller::update_effective_service_levels_cache() {
+    SCYLLA_ASSERT(this_shard_id() == global_controller);
+    
+    if (!_auth_service.local_is_initialized()) {
+        // Because cache update is triggered in `topology_state_load()`, auth service
+        // might be not initialized yet.
+        co_return;
+    }
+    auto units = co_await get_units(_global_controller_db->notifications_serializer, 1);
+
+    auto& role_manager = _auth_service.local().underlying_role_manager();
+    const auto all_roles = co_await role_manager.query_all();
+    const auto hierarchy = co_await role_manager.query_all_directly_granted();
+    // includes only roles with attached service level
+    const auto attributes = co_await role_manager.query_attribute_for_all("service_level");
+
+    std::map<sstring, service_level_options> effective_sl_map;
+
+    auto sorted = co_await utils::topological_sort(all_roles, hierarchy);
+    // Roles are sorted from the top of the hierarchy to the bottom. 
+    /// `GRANT role1 TO role2` means role2 is higher in the hierarchy than role1, so role2 will be before
+    // role1 in `sorted` vector.
+    // That's why if we iterate over the vector in reversed order, we will visit the roles from the bottom
+    // and we can use already calculated effective service levels for all of the subroles.
+    for (auto& role: sorted | boost::adaptors::reversed) {
+        std::optional<service_level_options> sl_options;
+
+        if (auto sl_name_it = attributes.find(role); sl_name_it != attributes.end()) {
+            auto sl = _service_levels_db.at(sl_name_it->second);
+            sl_options = sl.slo;
+            sl_options->init_effective_names(sl_name_it->second);
+        }
+
+        auto [it, it_end] = hierarchy.equal_range(role);
+        while (it != it_end) {
+            auto& subrole = it->second;
+            if (auto sub_sl_it = effective_sl_map.find(subrole); sub_sl_it != effective_sl_map.end()) {
+                if (sl_options) {
+                    sl_options = sl_options->merge_with(sub_sl_it->second);
+                } else {
+                    sl_options = sub_sl_it->second;
+                }
+            }
+
+            ++it;
+        }
+
+        if (sl_options) {
+            effective_sl_map.insert({role, *sl_options});
+        }
+        co_await coroutine::maybe_yield();
+    }
+
+    co_await container().invoke_on_all([effective_sl_map] (service_level_controller& sl_controller) {
+        sl_controller._effective_service_levels_db = std::move(effective_sl_map);
     });
 }
 
