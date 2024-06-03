@@ -274,9 +274,6 @@ partition_slice native_reverse_slice_to_legacy_reverse_slice(const schema& schem
 // Fully reverse slice (forward to native reverse or native reverse to forward).
 // Also toggles the reversed bit in `partition_slice::options`.
 partition_slice reverse_slice(const schema& schema, partition_slice slice);
-// Half reverse slice (forward to legacy reverse or legacy reverse to forward).
-// Also toggles the reversed bit in `partition_slice::options`.
-partition_slice half_reverse_slice(const schema&, partition_slice);
 
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
 constexpr auto max_tombstones = std::numeric_limits<uint64_t>::max();
