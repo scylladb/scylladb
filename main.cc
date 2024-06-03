@@ -1345,6 +1345,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             auto group0_id = sys_ks.local().get_raft_group0_id().get();
             auto gossiper_seeds = get_seeds_from_db_config(*cfg, broadcast_addr);
+
+          auto get_gossiper_cfg = sharded_parameter([&] {
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
             gcfg.seeds = gossiper_seeds;
@@ -1355,9 +1357,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             gcfg.shutdown_announce_ms = cfg->shutdown_announce_in_ms();
             gcfg.skip_wait_for_gossip_to_settle = cfg->skip_wait_for_gossip_to_settle();
             gcfg.group0_id = group0_id;
+            return gcfg;
+          });
 
             debug::the_gossiper = &gossiper;
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::move(get_gossiper_cfg)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
