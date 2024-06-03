@@ -141,13 +141,10 @@ void service_level_controller::abort_group0_operations() {
     }
 }
 
-future<> service_level_controller::update_service_levels_from_distributed_data() {
+future<> service_level_controller::update_service_levels_cache() {
+    assert(this_shard_id() == global_controller);
 
     if (!_sl_data_accessor) {
-        return make_ready_future();
-    }
-
-    if (this_shard_id() != global_controller) {
         return make_ready_future();
     }
 
@@ -245,7 +242,7 @@ void service_level_controller::stop_update_from_distributed_data() {
     _global_controller_db->dist_data_update_aborter.request_abort();
 }
 
-future<std::optional<service_level_options>> service_level_controller::find_service_level(auth::role_set roles, include_effective_names include_names) {
+future<std::optional<service_level_options>> service_level_controller::find_effective_service_level(auth::role_set roles, include_effective_names include_names) {
     auto& role_manager = _auth_service.local().underlying_role_manager();
 
     // converts a list of roles into the chosen service level.
@@ -343,7 +340,7 @@ void service_level_controller::update_from_distributed_data(std::function<steady
                     _global_controller_db->dist_data_update_aborter).then_wrapped([this] (future<>&& f) {
                 try {
                     f.get();
-                    return update_service_levels_from_distributed_data().then_wrapped([this] (future<>&& f){
+                    return update_service_levels_cache().then_wrapped([this] (future<>&& f){
                         try {
                             f.get();
                             _last_successful_config_update = seastar::lowres_clock::now();
