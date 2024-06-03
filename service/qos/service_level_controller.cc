@@ -300,40 +300,46 @@ void service_level_controller::stop_legacy_update_from_distributed_data() {
     _global_controller_db->dist_data_update_aborter.request_abort();
 }
 
-future<std::optional<service_level_options>> service_level_controller::find_effective_service_level(auth::role_set roles, include_effective_names include_names) {
-    auto& role_manager = _auth_service.local().underlying_role_manager();
+future<std::optional<service_level_options>> service_level_controller::find_effective_service_level(const sstring& role_name) {
+    if (_sl_data_accessor->is_v2()) {
+        auto effective_sl_it = _effective_service_levels_db.find(role_name);
+        co_return effective_sl_it != _effective_service_levels_db.end() 
+            ? std::optional<service_level_options>(effective_sl_it->second)
+            : std::nullopt;
+    } else {
+        auto& role_manager = _auth_service.local().underlying_role_manager();
+        auto roles = co_await role_manager.query_granted(role_name, auth::recursive_role_query::yes);
 
-    // converts a list of roles into the chosen service level.
-    return ::map_reduce(roles.begin(), roles.end(), [&role_manager, include_names, this] (const sstring& role) {
-        return role_manager.get_attribute(role, "service_level").then_wrapped([include_names, this, role] (future<std::optional<sstring>> sl_name_fut) -> std::optional<service_level_options> {
-            try {
-                std::optional<sstring> sl_name = sl_name_fut.get();
-                if (!sl_name) {
-                    return std::nullopt;
-                }
-                auto sl_it = _service_levels_db.find(*sl_name);
-                if ( sl_it == _service_levels_db.end()) {
-                    return std::nullopt;
-                }
+        // converts a list of roles into the chosen service level.
+        co_return co_await ::map_reduce(roles.begin(), roles.end(), [&role_manager, this] (const sstring& role) {
+            return role_manager.get_attribute(role, "service_level").then_wrapped([this, role] (future<std::optional<sstring>> sl_name_fut) -> std::optional<service_level_options> {
+                try {
+                    std::optional<sstring> sl_name = sl_name_fut.get();
+                    if (!sl_name) {
+                        return std::nullopt;
+                    }
+                    auto sl_it = _service_levels_db.find(*sl_name);
+                    if ( sl_it == _service_levels_db.end()) {
+                        return std::nullopt;
+                    }
 
-                if (include_names == include_effective_names::yes) {
                     sl_it->second.slo.init_effective_names(*sl_name);
+                    return sl_it->second.slo;
+                } catch (...) { // when we fail, we act as if the attribute does not exist so the node
+                            // will not be brought down.
+                    return std::nullopt;
                 }
-                return sl_it->second.slo;
-            } catch (...) { // when we fail, we act as if the attribute does not exist so the node
-                           // will not be brought down.
-                return std::nullopt;
+            });
+        }, std::optional<service_level_options>{}, [] (std::optional<service_level_options> first, std::optional<service_level_options> second) -> std::optional<service_level_options> {
+            if (!second) {
+                return first;
+            } else if (!first) {
+                return second;
+            } else {
+                return first->merge_with(*second);
             }
         });
-    }, std::optional<service_level_options>{}, [] (std::optional<service_level_options> first, std::optional<service_level_options> second) -> std::optional<service_level_options> {
-        if (!second) {
-            return first;
-        } else if (!first) {
-            return second;
-        } else {
-            return first->merge_with(*second);
-        }
-    });
+    }
 }
 
 future<>  service_level_controller::notify_service_level_added(sstring name, service_level sl_data) {

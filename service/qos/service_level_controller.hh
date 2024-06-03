@@ -237,7 +237,7 @@ public:
      * @return the effective service level options - they may in particular be a combination
      *         of options from multiple service levels
      */
-    future<std::optional<service_level_options>> find_effective_service_level(auth::role_set roles, include_effective_names include_names = include_effective_names::no);
+    future<std::optional<service_level_options>> find_effective_service_level(const sstring& role_name);
 
     /**
      * Gets the service level data by name.
