@@ -116,7 +116,7 @@ name                 kind       mandatory   default   description
                                                       details below).
 ``durable_writes``   *simple*   no          true      Whether to use the commit log for updates on this keyspace
                                                       (disable this option at your own risk!).
-``tablets``          *map*      no                    Experimental - enables tablets for this keyspace (see :ref:`tablets<tablets>`)
+``tablets``          *map*      no                    Enables or disables tablets for the keyspace (see :ref:`tablets<tablets>`)
 =================== ========== =========== ========= ===================================================================
 
 The ``replication`` property is mandatory and must at least contains the ``'class'`` sub-option, which defines the
@@ -217,39 +217,30 @@ An example that excludes a datacenter while using ``replication_factor``::
 
 .. _tablets:
 
-The ``tablets`` property :label-caution:`Experimental`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The ``tablets`` property
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The ``tablets`` property is used to make keyspace replication tablets-based.
-It is only valid when ``experimental_features: tablets`` is specified in ``scylla.yaml`` (which
-in turn requires ``consistent_cluster_management: true``); it must be a power of two.
+The ``tablets`` property enables or disables tablets-based distribution
+for a keyspace. 
 
 Options:
 
 ===================================== ====== =============================================
 sub-option                             type  description
 ===================================== ====== =============================================
-``'enabled'``                          bool  Whether or not to enable tablets for keyspace
+``'enabled'``                          bool  Whether or not to enable tablets for a keyspace
 ``'initial'``                          int   The number of tablets to start with
 ===================================== ====== =============================================
 
-By default if tablets cluster feature is enabled, any keyspace will be created with tablets
-enabled. The ``tablets`` option is used to opt-out a keyspace from tablets replication.
+By default, a keyspace is created with tablets enabled. The ``tablets`` option 
+is used to opt out a keyspace from tablets-based distribution; see :ref:`Enabling Tablets <tablets-enable-tablets>`
+for details.
 
 A good rule of thumb to calculate initial tablets is to divide the expected total storage used
 by tables in this keyspace by (``replication_factor`` * 5GB). For example, if you expect a 30TB
 table and have a replication factor of 3, divide 30TB by (3*5GB) for a result of 2000. Since the
 value must be a power of two, round up to 2048.
-
-.. note::
-   The calculation applies to every table in the keyspace independently; so it can only realistically be
-   used for a keyspace containing a single table. It is expected that per-table controls will be available
-   in the future.
-
-.. caution::
-   The ``initial`` option may change its definition or be completely removed as it is part
-   of an experimental feature.
-
+The calculation applies to every table in the keyspace.
 
 An example that creates a keyspace with 2048 tablets per table::
 
@@ -260,6 +251,9 @@ An example that creates a keyspace with 2048 tablets per table::
     } AND tablets = {
         'initial': 2048
     };
+
+
+See :doc:`Data Distribution with Tablets </architecture/tablets>` for more information about tablets.
 
 .. _use-statement:        
         
