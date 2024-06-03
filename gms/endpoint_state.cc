@@ -65,15 +65,12 @@ locator::host_id endpoint_state::get_host_id() const noexcept {
 }
 
 std::optional<locator::endpoint_dc_rack> endpoint_state::get_dc_rack() const {
-    if (auto app_state = get_application_state_ptr(application_state::DC)) {
-        std::optional<locator::endpoint_dc_rack> ret;
-        ret->dc = app_state->value();
-        if ((app_state = get_application_state_ptr(application_state::RACK))) {
-            ret->rack = app_state->value();
-            if (ret->dc.empty() || ret->rack.empty()) {
-                on_internal_error_noexcept(logger, format("Node {} has empty dc={} or rack={}", get_host_id(), ret->dc, ret->rack));
-            }
-            return ret;
+    if (const auto* dc_state = get_application_state_ptr(application_state::DC)) {
+        const auto* rack_state = get_application_state_ptr(application_state::RACK);
+        if (dc_state->value().empty() || !rack_state || rack_state->value().empty()) {
+            on_internal_error_noexcept(logger, format("Node {} has empty dc={} or rack={}", get_host_id(), dc_state->value(), rack_state ? rack_state->value() : "(null)"));
+        } else {
+            return std::make_optional<locator::endpoint_dc_rack>(dc_state->value(), rack_state->value());
         }
     }
     return std::nullopt;
