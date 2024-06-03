@@ -1971,6 +1971,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
             ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss, proxy, dbcfg.statement_scheduling_group);
             alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, *cfg, dbcfg.statement_scheduling_group);
+            redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
 
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
@@ -2011,11 +2012,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             ss.local().register_protocol_server(alternator_ctl, cfg->alternator_port() || cfg->alternator_https_port()).get();
 
-            redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
-            if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                redis_ctl.start_server().get();
-            }
-            ss.local().register_protocol_server(redis_ctl).get();
+            ss.local().register_protocol_server(redis_ctl, cfg->redis_port() || cfg->redis_ssl_port()).get();
 
             supervisor::notify("serving");
 
