@@ -69,16 +69,6 @@ using bytes_opt = std::optional<bytes>;
 template<typename ToType, typename FromType>
 static data_value castas_fctn_simple(data_value from) {
     auto val_from = value_cast<FromType>(from);
-    // Workaround for https://github.com/boostorg/multiprecision/issues/553 (the additional bug discovered post-closing)
-    if constexpr (std::is_floating_point_v<ToType> && std::is_same_v<FromType, utils::multiprecision_int>) {
-        static auto min = utils::multiprecision_int(std::numeric_limits<ToType>::lowest());
-        static auto max = utils::multiprecision_int(std::numeric_limits<ToType>::max());
-        if (val_from < min) {
-            return -std::numeric_limits<ToType>::infinity();
-        } else if (val_from > max) {
-            return std::numeric_limits<ToType>::infinity();
-        }
-    }
     return static_cast<ToType>(val_from);
 }
 
