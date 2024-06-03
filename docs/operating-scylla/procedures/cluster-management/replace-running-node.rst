@@ -20,7 +20,7 @@ When adding a new node to a ScyllaDB cluster, it will take up ownership of a sub
 The new node effectively takes its place on the token ring with its own number of tokens (vNodes), and consequentially will be responsible for data which maps to its token ranges.
 Certain token ranges for which original nodes are responsible effectively become smaller in size.
 To ensure that data is once again equally distributed, these nodes will stream relevant data to the new node.
-Vice versa, when decommissioning a node from a Scylla cluster it releases ownership of its token ranges.
+Vice versa, when decommissioning a node from a ScyllaDB cluster it releases ownership of its token ranges.
 Certain token ranges of other nodes will become larger as a consequence, and as an effect these nodes will take up responsibility for a subset of the decommissioned node's data.
 In the process, the decommissioned node will stream its data to these other nodes.
 Hence, the process of replacing a node by adding and decommissioning streams a node worth of data each time.
