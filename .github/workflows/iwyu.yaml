@@ -42,6 +42,22 @@ jobs:
             -G Ninja                                    \
             -B $BUILD_DIR                               \
             -S .
+      - name: Build headers
+        run: |
+          swagger_targets=''
+          for f in api/api-doc/*.json; do
+            if test "${f#*.}" = json; then
+              name=$(basename "$f" .json)
+              if test $name != swagger20_header; then
+                swagger_targets+=" scylla_swagger_gen_$name"
+              fi
+            fi
+          done
+          cmake                                         \
+            --build build                               \
+             --target seastar_http_request_parser       \
+             --target idl-sources                       \
+             --target $swagger_targets
       - name: clang-include-cleaner
         run: |
           for d in $CLEANER_DIRS; do
