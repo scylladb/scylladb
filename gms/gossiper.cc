@@ -90,7 +90,6 @@ gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, 
         : _abort_source(as)
         , _shared_token_metadata(stm)
         , _messaging(ms)
-        , _failure_detector_timeout_ms(cfg.failure_detector_timeout_in_ms)
         , _force_gossip_generation(cfg.force_gossip_generation)
         , _gcfg(std::move(gcfg)) {
     // Gossiper's stuff below runs only on CPU0
@@ -955,7 +954,7 @@ future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, genera
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::milliseconds(2000);
-    auto max_duration = echo_interval + std::chrono::milliseconds(_failure_detector_timeout_ms());
+    auto max_duration = echo_interval + std::chrono::milliseconds(_gcfg.failure_detector_timeout_ms());
     while (is_enabled()) {
         bool failed = false;
         try {
