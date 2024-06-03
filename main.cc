@@ -1964,6 +1964,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
 
+            // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
+            auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
+                ss.local().drain_on_shutdown().get();
+            });
+
             cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
 
             ss.local().register_protocol_server(cql_server_ctl);
@@ -2027,11 +2032,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             ss.local().register_protocol_server(redis_ctl);
 
             supervisor::notify("serving");
-            // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
-
-            auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
-                ss.local().drain_on_shutdown().get();
-            });
 
             startlog.info("Scylla version {} initialization completed.", scylla_version());
             if (after_init_func) {
