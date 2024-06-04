@@ -216,18 +216,26 @@ def test_streams_operations(test_table_s, dynamodbstreams, metrics):
 # Check that an operation sets the desired latency histograms to non-zero.
 # We don't know what this latency should be, but we can still check that
 # the desired latency metric gets updated.
+#
+# A latency histogram metric "scylla_alternator_op_latency" is actually three
+# separate metrics: scylla_alternator_op_latency_count, ..._sum and ..._bucket.
+# As discussed in issue #18847, we cannot assume that the _sum must increase
+# on every request (it is possible for it to stay unchanged if the request is
+# very short and to sum until now was high). But we can rely on the _count
+# to change when the latency is updated, so that's what we'll check here.
+# Remember that the goal of this test isn't to verify that the histogram
+# metrics code is correct, but to verify that Alternator didn't forget
+# to update latencies for one kind of operation (#17616, and compare #9406),
+# and to do that checking that ..._count increases for that op is enough.
 @contextmanager
 def check_sets_latency(metrics, operation_names):
     the_metrics = get_metrics(metrics)
     saved_latency_count = { x: get_metric(metrics, 'scylla_alternator_op_latency_count', {'op': x}, the_metrics) for x in operation_names }
-    saved_latency_sum = { x: get_metric(metrics, 'scylla_alternator_op_latency_sum', {'op': x}, the_metrics) for x in operation_names }
-    # TODO: Also look at the latency_bucket.
     yield
     the_metrics = get_metrics(metrics)
     for op in operation_names:
-        # The total "count" and "sum" on all shards should strictly increase
+        # The total "count" on all shards should strictly increase
         assert saved_latency_count[op] < get_metric(metrics, 'scylla_alternator_op_latency_count', {'op': op}, the_metrics)
-        assert saved_latency_sum[op] < get_metric(metrics, 'scylla_alternator_op_latency_sum', {'op': op}, the_metrics)
 
 # Test latency metrics for PutItem, GetItem, DeleteItem, UpdateItem.
 # We can't check what exactly the latency is - just that it gets updated.
