@@ -971,7 +971,7 @@ private:
                         config,
                         auth::authentication_options(),
                         mc).get();
-                std::move(mc).announce(group0_client, *as, ::service::raft_timeout{}).get();
+                std::move(mc).commit(group0_client, *as, ::service::raft_timeout{}).get();
             } catch (const auth::role_already_exists&) {
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
@@ -1040,7 +1040,7 @@ void do_with_mc(cql_test_env& env, std::function<void(service::mutations_collect
     auto guard = g0.start_operation(&as).get();
     auto mc = service::mutations_collector(std::move(guard));
     func(mc);
-    std::move(mc).announce(g0, as, std::nullopt).get();
+    std::move(mc).commit(g0, as, std::nullopt).get();
 }
 
 reader_permit make_reader_permit(cql_test_env& env) {

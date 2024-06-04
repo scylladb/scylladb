@@ -59,7 +59,7 @@ public:
         virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const = 0;
         virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, service::mutations_collector& mc) const = 0;
         virtual future<> drop_service_level(sstring service_level_name, service::mutations_collector& mc) const = 0;
-        virtual future<> announce_mutations(service::mutations_collector&& mc, abort_source& as) const = 0;
+        virtual future<> commit_mutations(service::mutations_collector&& mc, abort_source& as) const = 0;
 
         virtual bool is_v2() const = 0;
         // Returns v2(raft) data accessor. If data accessor is already a raft one, returns nullptr.
@@ -189,9 +189,9 @@ public:
         return sl_it->second;
     }
 
-    future<> announce_mutations(::service::mutations_collector&& mc) {
+    future<> commit_mutations(::service::mutations_collector&& mc) {
         if (_sl_data_accessor->is_v2()) {
-            return _sl_data_accessor->announce_mutations(std::move(mc), _global_controller_db->group0_aborter);
+            return _sl_data_accessor->commit_mutations(std::move(mc), _global_controller_db->group0_aborter);
         }
         return make_ready_future();
     }

@@ -46,7 +46,7 @@ detach_service_level_statement::execute(query_processor& qp,
     auto& sl = state.get_service_level_controller();
     service::mutations_collector mc{std::move(guard)};
     co_await auth::remove_attribute(as, _role_name, "service_level", mc);
-    co_await sl.announce_mutations(std::move(mc));
+    co_await sl.commit_mutations(std::move(mc));
 
     using void_result_msg = cql_transport::messages::result_message::void_message;
     using result_msg = cql_transport::messages::result_message;

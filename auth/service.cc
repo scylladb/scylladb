@@ -622,8 +622,8 @@ future<std::vector<permission_details>> list_filtered_permissions(
     });
 }
 
-future<> announce_mutations(service& ser, ::service::mutations_collector&& mc) {
-    return ser.announce_mutations(std::move(mc));
+future<> commit_mutations(service& ser, ::service::mutations_collector&& mc) {
+    return ser.commit_mutations(std::move(mc));
 }
 
 future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {

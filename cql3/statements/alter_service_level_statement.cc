@@ -42,7 +42,7 @@ alter_service_level_statement::execute(query_processor& qp,
     qos::service_level_options slo = _slo.replace_defaults(sl.slo);
     auto& slc = state.get_service_level_controller();
     co_await slc.alter_distributed_service_level(_service_level, slo, mc);
-    co_await slc.announce_mutations(std::move(mc));
+    co_await slc.commit_mutations(std::move(mc));
     co_return nullptr;
 }
 }

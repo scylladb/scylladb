@@ -48,7 +48,7 @@ public:
             });
         }
 
-        virtual future<> announce_mutations(service::mutations_collector&& mc, abort_source& as) const override { return make_ready_future(); }
+        virtual future<> commit_mutations(service::mutations_collector&& mc, abort_source& as) const override { return make_ready_future(); }
 
         virtual bool is_v2() const override {
             return false;

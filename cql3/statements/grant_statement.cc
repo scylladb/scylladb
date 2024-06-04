@@ -25,7 +25,7 @@ cql3::statements::grant_statement::execute(query_processor&, service::query_stat
     try {
         service::mutations_collector mc{std::move(guard)};
         co_await auth::grant_permissions(auth_service, _role_name, _permissions, _resource, mc);
-        co_await auth::announce_mutations(auth_service, std::move(mc));
+        co_await auth::commit_mutations(auth_service, std::move(mc));
     } catch (const auth::nonexistant_role& e) {
         throw exceptions::invalid_request_exception(e.what());
     } catch (const auth::unsupported_authorization_operation& e) {

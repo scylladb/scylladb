@@ -255,7 +255,7 @@ SEASTAR_TEST_CASE(test_mutations_collector) {
             auto guard = co_await rclient.start_operation(&as);
             service::mutations_collector mc(std::move(guard));
             co_await f(mc);
-            co_await std::move(mc).announce(rclient, as, ::service::raft_timeout{});
+            co_await std::move(mc).commit(rclient, as, ::service::raft_timeout{});
         };
 
         // test simple add_mutation
@@ -329,6 +329,6 @@ SEASTAR_TEST_CASE(test_mutations_collector) {
 
         // nop without mutations nor generator
         auto mc1 = service::mutations_collector::unused();
-        co_await std::move(mc1).announce(rclient, as, ::service::raft_timeout{});
+        co_await std::move(mc1).commit(rclient, as, ::service::raft_timeout{});
     });
 }

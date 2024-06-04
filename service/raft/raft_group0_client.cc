@@ -570,7 +570,7 @@ future<> mutations_collector::materialize_mutations() {
     }
 }
 
-future<> mutations_collector::announce(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
+future<> mutations_collector::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
     if (_muts.size() == 0 && _generators.size() == 0) {
         co_return;
     }

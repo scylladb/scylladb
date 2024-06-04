@@ -107,7 +107,7 @@ create_role_statement::execute(query_processor&,
         throw exceptions::invalid_request_exception(e.what());
     }
 
-    co_await auth::announce_mutations(as, std::move(mc));
+    co_await auth::commit_mutations(as, std::move(mc));
     co_return nullptr;
 }
 
@@ -182,7 +182,7 @@ alter_role_statement::execute(query_processor&, service::query_state& state, con
         throw exceptions::invalid_request_exception(e.what());
     }
 
-    co_await auth::announce_mutations(as, std::move(mc));
+    co_await auth::commit_mutations(as, std::move(mc));
     co_return nullptr;
 }
 
@@ -237,7 +237,7 @@ drop_role_statement::execute(query_processor&, service::query_state& state, cons
             throw exceptions::invalid_request_exception(e.what());
         }
     }
-    co_await auth::announce_mutations(as, std::move(mc));
+    co_await auth::commit_mutations(as, std::move(mc));
     co_return nullptr;
 }
 
@@ -402,7 +402,7 @@ grant_role_statement::execute(query_processor&, service::query_state& state, con
     } catch (const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
-    co_await auth::announce_mutations(as, std::move(mc));
+    co_await auth::commit_mutations(as, std::move(mc));
     co_return nullptr;
 }
 
@@ -435,7 +435,7 @@ future<result_message_ptr> revoke_role_statement::execute(
     } catch (const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
-    co_await auth::announce_mutations(as, std::move(mc));
+    co_await auth::commit_mutations(as, std::move(mc));
     co_return nullptr;
 }
 

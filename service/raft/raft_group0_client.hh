@@ -239,7 +239,7 @@ public:
     void add_generator(generator_func f, std::string_view description = "");
 
     // Commits the data, nop if there was no guard provided.
-    future<> announce(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) &&;
+    future<> commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) &&;
     // For rare cases where collector is used but announce logic is replaced with a custom one.
     future<std::pair<std::vector<mutation>, ::service::group0_guard>> extract() &&;
 };

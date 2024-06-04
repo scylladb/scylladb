@@ -77,8 +77,8 @@ future<> raft_service_level_distributed_data_accessor::drop_service_level(sstrin
     mc.add_mutations(std::move(muts), format("service levels internal statement: {}", delete_query));
 }
 
-future<> raft_service_level_distributed_data_accessor::announce_mutations(service::mutations_collector&& mc, abort_source& as) const {
-    return std::move(mc).announce(_group0_client, as, ::service::raft_timeout{});
+future<> raft_service_level_distributed_data_accessor::commit_mutations(service::mutations_collector&& mc, abort_source& as) const {
+    return std::move(mc).commit(_group0_client, as, ::service::raft_timeout{});
 }
 
 bool raft_service_level_distributed_data_accessor::is_v2() const {

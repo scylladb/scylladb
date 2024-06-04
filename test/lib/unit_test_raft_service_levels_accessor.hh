@@ -31,8 +31,8 @@ public:
         co_await _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
     }
 
-    virtual future<> announce_mutations(service::mutations_collector&& mc, abort_source& as) const override {
-        co_await raft_service_level_distributed_data_accessor::announce_mutations(std::move(mc), as);
+    virtual future<> commit_mutations(service::mutations_collector&& mc, abort_source& as) const override {
+        co_await raft_service_level_distributed_data_accessor::commit_mutations(std::move(mc), as);
         co_await _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
     }
 
