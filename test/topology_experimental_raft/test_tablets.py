@@ -440,7 +440,11 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
         for r in rows:
             assert r.c == r.pk
 
+<<<<<<< HEAD
     await manager.rolling_restart(servers, with_down=check_with_down)
+=======
+    cql = await safe_rolling_restart(manager, servers, with_down=check_with_down)
+>>>>>>> 76fc8c2fe6 (topology_experimental_raft/test_tablets: restore usage of check_with_down)
 
 
 @pytest.mark.repair
