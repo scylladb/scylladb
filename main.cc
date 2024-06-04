@@ -165,12 +165,29 @@ struct convert<::object_storage_endpoint_param> {
         ep.endpoint = node["name"].as<std::string>();
         ep.config.port = node["port"].as<unsigned>();
         ep.config.use_https = node["https"].as<bool>(false);
-        if (node["aws_region"]) {
+        if (node["aws_region"] || std::getenv("AWS_DEFAULT_REGION")) {
             ep.config.aws.emplace();
-            ep.config.aws->region = node["aws_region"].as<std::string>();
-            ep.config.aws->access_key_id = node["aws_access_key_id"].as<std::string>();
-            ep.config.aws->secret_access_key = node["aws_secret_access_key"].as<std::string>();
-            ep.config.aws->session_token = node["aws_session_token"].as<std::string>("");
+
+            // https://github.com/scylladb/scylla-pkg/issues/3845
+            // Allow picking up aws values via standard env vars as well.
+            // Value in config has prio, but fall back to env.
+            // This has the added benefit of potentially reducing the amount of
+            // sensitive data in config files (i.e. credentials)
+            auto get_node_value_or_env = [&](const char* key, const char* var) {
+                auto child = node[key];
+                if (child) {
+                    return child.as<std::string>();
+                }
+                auto val = std::getenv(var);
+                if (val) {
+                    return std::string(val);
+                }
+                return std::string{};
+            };
+            ep.config.aws->region = get_node_value_or_env("aws_region", "AWS_DEFAULT_REGION");
+            ep.config.aws->access_key_id = get_node_value_or_env("aws_access_key_id", "AWS_ACCESS_KEY_ID");
+            ep.config.aws->secret_access_key = get_node_value_or_env("aws_secret_access_key", "AWS_SECRET_ACCESS_KEY");
+            ep.config.aws->session_token = get_node_value_or_env("aws_session_token", "AWS_SESSION_TOKEN");
         }
         return true;
     }
