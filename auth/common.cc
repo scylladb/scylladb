@@ -212,7 +212,7 @@ future<> collect_mutations(
             internal_distributed_query_state(),
             collector.write_timestamp(),
             std::move(values));
-    collector.add_mutations(std::move(muts));
+    collector.add_mutations(std::move(muts), format("auth internal statement: {}", query_string));
 }
 
 }

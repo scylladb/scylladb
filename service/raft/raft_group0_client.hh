@@ -16,6 +16,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
+#include <string>
 
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "service/raft/raft_group_registry.hh"
@@ -209,6 +210,7 @@ public:
 private:
     std::vector<mutation> _muts;
     std::vector<generator_func> _generators;
+    std::vector<sstring> _descriptions;
     std::optional<::service::group0_guard> _guard;
 
     future<> materialize_mutations();
@@ -232,12 +234,12 @@ public:
     api::timestamp_type write_timestamp() const;
     utils::UUID new_group0_state_id() const;
 
-    void add_mutation(mutation m);
-    void add_mutations(std::vector<mutation> ms);
-    void add_generator(generator_func f);
+    void add_mutation(mutation m, std::string_view description = "");
+    void add_mutations(std::vector<mutation> ms, std::string_view description = "");
+    void add_generator(generator_func f, std::string_view description = "");
 
     // Commits the data, nop if there was no guard provided.
-    future<> announce(::service::raft_group0_client& group0_client, std::string_view description, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) &&;
+    future<> announce(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) &&;
     // For rare cases where collector is used but announce logic is replaced with a custom one.
     future<std::pair<std::vector<mutation>, ::service::group0_guard>> extract() &&;
 };

@@ -33,7 +33,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_w
             throw exceptions::invalid_request_exception(format("'{}' is not a user defined aggregate", func));
         }
         auto muts = co_await service::prepare_aggregate_drop_announcement(qp.proxy(), user_aggr, mc.write_timestamp());
-        mc.add_mutations(std::move(muts));
+        mc.add_mutations(std::move(muts), "CQL drop aggregate");
 
         const auto& as = *state.get_client_state().get_auth_service();
         co_await auth::revoke_all(as, auth::make_functions_resource(*user_aggr), mc);

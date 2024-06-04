@@ -11,6 +11,7 @@
 #include <optional>
 #include <seastar/core/coroutine.hh>
 #include "raft_group0_client.hh"
+#include <boost/algorithm/string/join.hpp>
 
 #include "frozen_schema.hh"
 #include "schema_mutations.hh"
@@ -517,18 +518,27 @@ utils::UUID mutations_collector::new_group0_state_id() const {
     return _guard->new_group0_state_id();
 }
 
-void mutations_collector::add_mutation(mutation m) {
+void mutations_collector::add_mutation(mutation m, std::string_view description) {
     _muts.push_back(std::move(m));
+    if (!description.empty()) {
+        _descriptions.emplace_back(description);
+    }
 }
 
-void mutations_collector::add_mutations(std::vector<mutation> ms) {
+void mutations_collector::add_mutations(std::vector<mutation> ms, std::string_view description) {
     _muts.insert(_muts.end(),
             std::make_move_iterator(ms.begin()),
             std::make_move_iterator(ms.end()));
+    if (!description.empty()) {
+        _descriptions.emplace_back(description);
+    }
 }
 
-void mutations_collector::add_generator(generator_func f) {
+void mutations_collector::add_generator(generator_func f, std::string_view description) {
     _generators.push_back(std::move(f));
+    if (!description.empty()) {
+        _descriptions.emplace_back(description);
+    }
 }
 
 static future<> add_write_mutations_entry(
@@ -560,13 +570,14 @@ future<> mutations_collector::materialize_mutations() {
     }
 }
 
-future<> mutations_collector::announce(::service::raft_group0_client& group0_client, std::string_view description, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
+future<> mutations_collector::announce(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
     if (_muts.size() == 0 && _generators.size() == 0) {
         co_return;
     }
     if (!_guard) {
         on_internal_error(logger, "mutations_collector: trying to announce without guard");
     }
+    auto description = boost::algorithm::join(_descriptions, "; ");
     // common case, don't bother with generators as we would have only 1-2 mutations,
     // when producer expects substantial number or size of mutations it should use generator
     if (_generators.size() == 0) {

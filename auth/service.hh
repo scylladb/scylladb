@@ -192,7 +192,7 @@ public:
     }
 
     future<> announce_mutations(::service::mutations_collector&& mc) {
-        return std::move(mc).announce(_group0_client, "auth", _as, ::service::raft_timeout{});
+        return std::move(mc).announce(_group0_client, _as, ::service::raft_timeout{});
     }
 
 private:

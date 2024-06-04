@@ -65,7 +65,7 @@ future<> raft_service_level_distributed_data_accessor::set_service_level(sstring
             : data_value(qos::service_level_options::to_string(slo.workload));
 
     auto muts = co_await _qp.get_mutations_internal(insert_query, qos_query_state(), mc.write_timestamp(), {service_level_name, timeout_to_data_value(slo.timeout), workload});
-    mc.add_mutations(std::move(muts));
+    mc.add_mutations(std::move(muts), format("service levels internal statement: {}", insert_query));
 }
 
 future<> raft_service_level_distributed_data_accessor::drop_service_level(sstring service_level_name, service::mutations_collector& mc) const {
@@ -74,11 +74,11 @@ future<> raft_service_level_distributed_data_accessor::drop_service_level(sstrin
     static sstring delete_query = format("DELETE FROM {}.{} WHERE service_level= ?;", db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2);
 
     auto muts = co_await _qp.get_mutations_internal(delete_query, qos_query_state(), mc.write_timestamp(), {service_level_name});
-    mc.add_mutations(std::move(muts));
+    mc.add_mutations(std::move(muts), format("service levels internal statement: {}", delete_query));
 }
 
 future<> raft_service_level_distributed_data_accessor::announce_mutations(service::mutations_collector&& mc, abort_source& as) const {
-    return std::move(mc).announce(_group0_client, "service levels", as, ::service::raft_timeout{});
+    return std::move(mc).announce(_group0_client, as, ::service::raft_timeout{});
 }
 
 bool raft_service_level_distributed_data_accessor::is_v2() const {

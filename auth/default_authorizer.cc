@@ -351,7 +351,7 @@ future<> default_authorizer::revoke_all(const resource& resource, ::service::mut
             co_yield std::move(muts[0]);
         }
     };
-    mc.add_generator(std::move(gen));
+    mc.add_generator(std::move(gen), "default_authorizer::revoke_all");
 }
 
 void default_authorizer::revoke_all_keyspace_resources(const resource& ks_resource, ::service::mutations_collector& mc) {
@@ -391,7 +391,7 @@ void default_authorizer::revoke_all_keyspace_resources(const resource& ks_resour
             co_yield std::move(muts[0]);
         }
     };
-    mc.add_generator(std::move(gen));
+    mc.add_generator(std::move(gen), "default_authorizer::revoke_all_keyspace_resources");
 }
 
 const resource_set& default_authorizer::protected_resources() const {

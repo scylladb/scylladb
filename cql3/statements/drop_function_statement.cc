@@ -37,7 +37,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_w
             throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", func, *aggregate));
         }
         auto muts = co_await service::prepare_function_drop_announcement(qp.proxy(), user_func, mc.write_timestamp());
-        mc.add_mutations(std::move(muts));
+        mc.add_mutations(std::move(muts), "CQL drop function");
 
         const auto& as = *state.get_client_state().get_auth_service();
         co_await auth::revoke_all(as, auth::make_functions_resource(*user_func), mc);
