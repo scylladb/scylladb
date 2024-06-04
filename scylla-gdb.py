@@ -3862,6 +3862,17 @@ class scylla_fiber(gdb.Command):
             self._maybe_log("\t\t\tSymbol name doesn't match whitelisted symbols\n", verbose)
             return
 
+        # The promise object starts on the third `uintptr_t` in the frame.
+        # The resume_fn pointer is the first `uintptr_t`.
+        # So if the task is a coroutine, we should be able to find the resume function via offsetting by -2.
+        # AFAIK both major compilers respect this convention.
+        if resolved_symbol.startswith('vtable for seastar::internal::coroutine_traits_base'):
+            coroutine_resume_fn = resolve((gdb.Value(ptr).cast(self._vptr_type) - 2).dereference())
+            if coroutine_resume_fn:
+                resolved_symbol += f" (.resume is {coroutine_resume_fn})"
+            else:
+                resolved_symbol += f" (.resume is unknown)"
+
         if using_seastar_allocator:
             if ptr_meta is None:
                 ptr_meta = scylla_ptr.analyze(ptr)
