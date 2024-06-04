@@ -282,6 +282,7 @@ future<> service_level_controller::update_effective_service_levels_cache() {
             }).get();
 
             _effective_service_levels_db = std::move(effective_sl_map);
+            notify_effective_service_levels_cache_reloaded().get();
         });
     });
 }
@@ -400,6 +401,14 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
         });
     }
     co_return;
+}
+
+future<> service_level_controller::notify_effective_service_levels_cache_reloaded() {
+    return seastar::async([this] {
+        _subscribers.thread_for_each([] (qos_configuration_change_subscriber* subscriber) {
+            subscriber->on_effective_service_levels_cache_reloaded().get();
+        });
+    });
 }
 
 void service_level_controller::update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f) {

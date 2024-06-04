@@ -25,6 +25,8 @@ namespace qos {
         /** This callback is going to be called just before the service level is changed **/
         virtual future<> on_before_service_level_change(service_level_options slo_before, service_level_options slo_after, service_level_info sl_info) = 0;
 
+        virtual future<> on_effective_service_levels_cache_reloaded() = 0;
+
         virtual ~qos_configuration_change_subscriber() {};
     };
 }

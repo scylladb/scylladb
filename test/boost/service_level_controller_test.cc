@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <fmt/std.h>
 
+#include "seastar/core/future.hh"
 #include "seastarx.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
@@ -62,6 +63,10 @@ struct qos_configuration_change_suscriber_simple : public qos_configuration_chan
 
     virtual future<> on_before_service_level_change(service_level_options slo_before, service_level_options slo_after, service_level_info sl_info) override {
         ops.push_back(change_op{sl_info.name, slo_before, slo_after});
+        return make_ready_future<>();
+    }
+
+    virtual future<> on_effective_service_levels_cache_reloaded() override {
         return make_ready_future<>();
     }
 };
