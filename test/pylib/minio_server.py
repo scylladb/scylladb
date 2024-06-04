@@ -52,9 +52,10 @@ class MinioServer:
         self.default_user = 'minioadmin'
         self.default_pass = 'minioadmin'
         self.bucket_name = 'testbucket'
-        self.access_key = ''.join(random.choice(string.hexdigits) for i in range(16))
-        self.secret_key = ''.join(random.choice(string.hexdigits) for i in range(32))
+        self.access_key = os.environ.get(self.ENV_ACCESS_KEY, ''.join(random.choice(string.hexdigits) for i in range(16)))
+        self.secret_key = os.environ.get(self.ENV_SECRET_KEY, ''.join(random.choice(string.hexdigits) for i in range(32)))
         self.log_filename = (self.tempdir / 'minio').with_suffix(".log")
+        self.old_env = dict()
 
     def check_server(self, port):
         s = socket.socket()
@@ -154,8 +155,11 @@ class MinioServer:
         with open(path, 'w', encoding='ascii') as config_file:
             endpoint = {'name': address,
                         'port': port,
-                        'aws_access_key_id': acc_key,
-                        'aws_secret_access_key': secret_key,
+                        # don't put credentials here. We're exporing env vars, which should
+                        # be picked up properly by scylla.
+                        # https://github.com/scylladb/scylla-pkg/issues/3845
+                        #'aws_access_key_id': acc_key,
+                        #'aws_secret_access_key': secret_key,
                         'aws_region': region,
                         }
             yaml.dump({'endpoints': [endpoint]}, config_file)
@@ -184,6 +188,37 @@ class MinioServer:
 
         return cmd
 
+    def _set_environ(self):
+        self.old_env = dict(os.environ)
+        os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
+        os.environ[self.ENV_ADDRESS] = f'{self.address}'
+        os.environ[self.ENV_PORT] = f'{self.port}'
+        os.environ[self.ENV_BUCKET] = f'{self.bucket_name}'
+        os.environ[self.ENV_ACCESS_KEY] = f'{self.access_key}'
+        os.environ[self.ENV_SECRET_KEY] = f'{self.secret_key}'
+
+    def _get_environs(self):
+        return [self.ENV_CONFFILE,
+                self.ENV_ADDRESS,
+                self.ENV_PORT,
+                self.ENV_BUCKET,
+                self.ENV_ACCESS_KEY,
+                self.ENV_SECRET_KEY]
+
+    def _unset_environ(self):
+        for env in self._get_environs():
+            if self.old_env[env] is not None:
+                os.environ[env] = self.old_env[env]
+            else:
+                del os.environ[env]
+
+    def print_environ(self):
+        msgs = []
+        for key in self._get_environs():
+            value = os.environ[key]
+            msgs.append(f'export {key}={value}')
+        print('\n'.join(msgs))
+
     async def start(self):
         if self.srv_exe is None:
             self.logger.info("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
@@ -206,13 +241,7 @@ class MinioServer:
             return
 
         self.create_conf_file(self.address, self.port, self.access_key, self.secret_key, self.DEFAULT_REGION, self.config_file)
-        os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
-        os.environ[self.ENV_ADDRESS] = f'{self.address}'
-        os.environ[self.ENV_PORT] = f'{self.port}'
-        os.environ[self.ENV_BUCKET] = f'{self.bucket_name}'
-        os.environ[self.ENV_ACCESS_KEY] = f'{self.access_key}'
-        os.environ[self.ENV_SECRET_KEY] = f'{self.secret_key}'
-
+        self._set_environ()
         try:
             alias = 'local'
             self.log_to_file(f'Configuring access to {self.address}:{self.port}')
@@ -238,6 +267,7 @@ class MinioServer:
         if not self.cmd:
             return
 
+        self._unset_environ()
         try:
             self.cmd.kill()
         except ProcessLookupError:

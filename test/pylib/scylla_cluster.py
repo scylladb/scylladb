@@ -395,7 +395,9 @@ class ScyllaServer:
         """Start an installed server. May be used for restarts."""
 
         env = os.environ.copy()
-        env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
+        # remove from env to make sure user's SCYLLA_HOME has no impact
+        env.pop('SCYLLA_HOME', None)
+
         self.cmd = await asyncio.create_subprocess_exec(
             self.exe,
             *self.cmdline_options,
