@@ -495,7 +495,8 @@ class ScyllaServer:
         """Start an installed server. May be used for restarts."""
 
         env = os.environ.copy()
-        env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
+        # remove from env to make sure user's SCYLLA_HOME has no impact
+        env.pop('SCYLLA_HOME', None)
         env.update(self.append_env)
         env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={os.getcwd()}/ubsan-suppressions.supp'
         env['ASAN_OPTIONS'] = f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'
