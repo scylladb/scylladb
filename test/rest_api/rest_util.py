@@ -52,13 +52,17 @@ def scylla_inject_error(rest_api, err, one_shot=False):
 
 @contextmanager
 def new_test_module(rest_api):
-    name = "test_module"
-    resp = rest_api.send("POST", f"task_manager_test/{name}")
+    resp = rest_api.send("POST", f"task_manager_test/test_module")
     resp.raise_for_status()
     try:
         yield
     finally:
-        resp = rest_api.send("DELETE", f"task_manager_test/{name}")
+        resp = rest_api.send("GET", f"task_manager/list_module_tasks/test", { "internal": "true" })
+        resp.raise_for_status()
+        for task in resp.json():
+            rest_api.send("DELETE", "task_manager_test/test_task", { "task_id": task["task_id"] })
+
+        resp = rest_api.send("DELETE", f"task_manager_test/test_module")
         resp.raise_for_status()
 
 @contextmanager

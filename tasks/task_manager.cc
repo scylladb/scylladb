@@ -17,6 +17,62 @@ namespace tasks {
 
 logging::logger tmlogger("task_manager");
 
+bool task_manager::task::children::all_finished() const noexcept {
+    return _children.empty();
+}
+
+size_t task_manager::task::children::size() const noexcept {
+    return _children.size() + _finished_children.size();
+}
+
+future<> task_manager::task::children::add_child(foreign_task_ptr task) {
+    rwlock::holder exclusive_holder = co_await _lock.hold_write_lock();
+
+    auto id = task->id();
+    auto inserted = _children.emplace(id, std::move(task)).second;
+    assert(inserted);
+}
+
+future<> task_manager::task::children::mark_as_finished(task_id id, task_essentials essentials) const {
+    rwlock::holder exclusive_holder = co_await _lock.hold_write_lock();
+
+    auto it = _children.find(id);
+    _finished_children.push_back(essentials);
+    [&] () noexcept {   // erase is expected to not throw
+        _children.erase(it);
+    }();
+}
+
+future<task_manager::task::progress> task_manager::task::children::get_progress(const std::string& progress_units) const {
+    rwlock::holder shared_holder = co_await _lock.hold_read_lock();
+
+    tasks::task_manager::task::progress progress{};
+    co_await coroutine::parallel_for_each(_children, [&] (const auto& child_entry) -> future<> {
+        const auto& child = child_entry.second;
+        auto local_progress = co_await smp::submit_to(child.get_owner_shard(), [&child, &progress_units] {
+            assert(child->get_status().progress_units == progress_units);
+            return child->get_progress();
+        });
+        progress += local_progress;
+    });
+    for (const auto& child: _finished_children) {
+        progress += child.task_progress;
+    }
+    co_return progress;
+}
+
+future<> task_manager::task::children::for_each_task(std::function<future<>(const foreign_task_ptr&)> f_children,
+        std::function<future<>(const task_essentials&)> f_finished_children) const {
+    rwlock::holder shared_holder = co_await _lock.hold_read_lock();
+
+    for (const auto& [_, child]: _children) {
+        co_await f_children(child);
+    }
+    for (const auto& child: _finished_children) {
+        co_await f_finished_children(child);
+    }
+}
+
 task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_number, std::string scope, std::string keyspace, std::string table, std::string entity, task_id parent_id) noexcept
     : _status({
         .id = id,
@@ -69,12 +125,7 @@ future<task_manager::task::progress> task_manager::task::impl::get_progress() co
         co_return get_binary_progress();
     }
 
-    tasks::task_manager::task::progress progress{};
-    for (auto& child: _children) {
-        progress += co_await smp::submit_to(child.get_owner_shard(), [&child] {
-            return child->get_progress();
-        });
-    }
+    auto progress = co_await _children.get_progress(_status.progress_units);
     progress.total = expected_workload.value_or(progress.total);
     co_return progress;
 }
@@ -91,9 +142,10 @@ future<> task_manager::task::impl::abort() noexcept {
     if (!_as.abort_requested()) {
         _as.request_abort();
 
-        std::vector<task_info> children_info{_children.size()};
-        boost::transform(_children, children_info.begin(), [] (const auto& child) {
+        std::vector<task_info> children_info = co_await _children.map_each_task<task_info>([] (const foreign_task_ptr& child) {
             return task_info{child->id(), child.get_owner_shard()};
+        }, [] (const task_essentials& child) {
+            return std::nullopt;
         });
 
         co_await coroutine::parallel_for_each(children_info, [this] (auto info) {
@@ -116,42 +168,77 @@ bool task_manager::task::impl::is_done() const noexcept {
     return _status.state == tasks::task_manager::task_state::done;
 }
 
-void task_manager::task::impl::run_to_completion() {
-    (void)run().then_wrapped([this] (auto f) {
-        if (f.failed()) {
-            finish_failed(f.get_exception());
-        } else {
-            try {
-                _as.check();
-                finish();
-            } catch (...) {
-                finish_failed(std::current_exception());
+future<std::vector<task_manager::task::task_essentials>> task_manager::task::impl::get_failed_children() const {
+    return _children.map_each_task<task_essentials>([] (const foreign_task_ptr&) { return std::nullopt; },
+        [] (const task_essentials& child) -> std::optional<task_essentials> {
+            if (child.task_status.state == task_state::failed || !child.failed_children.empty()) {
+                return child;
             }
+            return std::nullopt;
         }
+    );
+}
+
+void task_manager::task::impl::run_to_completion() {
+    (void)run().then([this] {
+        _as.check();
+        return finish();
+    }).handle_exception([this] (std::exception_ptr ex) {
+        return finish_failed(std::move(ex));
     });
 }
 
-void task_manager::task::impl::finish() noexcept {
+future<> task_manager::task::impl::maybe_fold_into_parent() const noexcept {
+    try {
+        if (is_internal() && _parent_id && _children.all_finished()) {
+            auto parent = co_await _module->get_task_manager().lookup_task_on_all_shards(_module->get_task_manager().container(), _parent_id);
+            task_essentials child{
+                .task_status = _status,
+                .task_progress = co_await get_progress(),
+                .parent_id = _parent_id,
+                .type = type(),
+                .abortable = is_abortable(),
+                .failed_children = co_await get_failed_children(),
+            };
+            co_await smp::submit_to(parent.get_owner_shard(), [&parent, id = _status.id, child = std::move(child)] () {
+                return parent->get_children().mark_as_finished(id, std::move(child));
+            });
+        }
+    } catch (...) {
+        // If folding fails, leave the subtree unfolded.
+        tasks::tmlogger.warn("Folding of task with id={} failed due to {}. Ignored", _status.id, std::current_exception());
+    }
+}
+
+future<> task_manager::task::impl::finish() noexcept {
     if (!_done.available()) {
         _status.end_time = db_clock::now();
         _status.state = task_manager::task_state::done;
+        co_await maybe_fold_into_parent();
         _done.set_value();
         release_resources();
     }
 }
 
-void task_manager::task::impl::finish_failed(std::exception_ptr ex, std::string error) noexcept {
+future<> task_manager::task::impl::finish_failed(std::exception_ptr ex, std::string error) noexcept {
     if (!_done.available()) {
         _status.end_time = db_clock::now();
         _status.state = task_manager::task_state::failed;
         _status.error = std::move(error);
+        co_await maybe_fold_into_parent();
         _done.set_exception(ex);
         release_resources();
     }
 }
 
-void task_manager::task::impl::finish_failed(std::exception_ptr ex) {
-    finish_failed(ex, fmt::format("{}", ex));
+future<> task_manager::task::impl::finish_failed(std::exception_ptr ex) noexcept {
+    std::string error;
+    try {
+        error = fmt::format("{}", ex);
+    } catch (...) {
+        error = "Failed to get error message";
+    }
+    return finish_failed(ex, std::move(error));
 }
 
 task_manager::task::task(task_impl_ptr&& impl, gate::holder gh) noexcept : _impl(std::move(impl)), _gate_holder(std::move(gh)) {
@@ -182,8 +269,8 @@ void task_manager::task::change_state(task_state state) noexcept {
     _impl->_status.state = state;
 }
 
-void task_manager::task::add_child(foreign_task_ptr&& child) {
-    _impl->_children.push_back(std::move(child));
+future<> task_manager::task::add_child(foreign_task_ptr&& child) {
+    return _impl->_children.add_child(std::move(child));
 }
 
 void task_manager::task::start() {
@@ -196,7 +283,7 @@ void task_manager::task::start() {
         // Background fiber does not capture task ptr, so the task can be unregistered and destroyed independently in the foreground.
         // After the ttl expires, the task id will be used to unregister the task if that didn't happen in any other way.
         auto module = _impl->_module;
-        bool drop_after_complete = is_internal() && !get_parent_id();
+        bool drop_after_complete = get_parent_id() || is_internal();
         (void)done().finally([module, drop_after_complete] {
             if (drop_after_complete) {
                 return make_ready_future<>();
@@ -210,7 +297,7 @@ void task_manager::task::start() {
         _impl->_status.state = task_manager::task_state::running;
         _impl->run_to_completion();
     } catch (...) {
-        _impl->finish_failed(std::current_exception());
+        (void)_impl->finish_failed(std::current_exception()).then([impl = _impl] {});
     }
 }
 
@@ -254,12 +341,16 @@ void task_manager::task::unregister_task() noexcept {
     _impl->_module->unregister_task(id());
 }
 
-const task_manager::foreign_task_list& task_manager::task::get_children() const noexcept {
+const task_manager::task::children& task_manager::task::get_children() const noexcept {
     return _impl->_children;
 }
 
 bool task_manager::task::is_complete() const noexcept {
     return _impl->is_complete();
+}
+
+future<std::vector<task_manager::task::task_essentials>> task_manager::task::get_failed_children() const {
+    return _impl->get_failed_children();
 }
 
 task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {
@@ -322,16 +413,16 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
     auto task = make_lw_shared<task_manager::task>(std::move(task_impl_ptr), async_gate().hold());
     bool abort = false;
     if (parent_d) {
-        task->get_status().sequence_number = co_await _tm.container().invoke_on(parent_d.shard, [id = parent_d.id, task = make_foreign(task), &abort] (task_manager& tm) mutable {
+        task->get_status().sequence_number = co_await _tm.container().invoke_on(parent_d.shard, coroutine::lambda([id = parent_d.id, task = make_foreign(task), &abort] (task_manager& tm) mutable -> future<uint64_t> {
             const auto& all_tasks = tm.get_all_tasks();
             if (auto it = all_tasks.find(id); it != all_tasks.end()) {
-                it->second->add_child(std::move(task));
+                co_await it->second->add_child(std::move(task));
                 abort = it->second->abort_requested();
-                return it->second->get_sequence_number();
+                co_return it->second->get_sequence_number();
             } else {
                 throw task_manager::task_not_found(id);
             }
-        });
+        }));
     }
     if (abort) {
         co_await task->abort();

@@ -1,3 +1,4 @@
+from enum import Enum
 import requests
 import time
 
@@ -169,3 +170,192 @@ def test_module_not_exists(rest_api):
     module_name = "module_that_does_not_exist"
     resp = rest_api.send("GET", f"task_manager/list_module_tasks/{module_name}", )
     assert resp.status_code == requests.codes.bad_request, f"Invalid response status code: {resp.status_code}"
+
+class State(Enum):
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    NONE = "none"
+
+# A class for testing task tree folding.
+#
+# The tasks are formed into a complete binary tree. The tree is kept in a list, such that i-th element
+# of the list corresponds to i-th element in BFS order from root. All methods which get list of values
+# for each tree node are expected to be in the same format.
+#
+# Example of indices for height = 4:
+#
+#                     0
+#             1               2
+#         3       4       5       6
+#        7 8     9 10   11 12   13 14
+#
+class TaskBinaryTree():
+    def __init__(self, rest_api, height: int):
+        self.rest_api = rest_api
+        self.tree = [self._new_task()]
+        for i in range(1, pow(2, height) - 1):
+            self.tree.append(self._new_task({ "parent_id": self.tree[(i - 1) // 2]}))
+
+    def _new_task(self, args={}):
+        resp = self.rest_api.send("POST", "task_manager_test/test_task", args)
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_nodes_number(self):
+        return len(self.tree)
+
+    def finish_all_tasks(self, failure_pattern: list[bool]):
+        assert len(self.tree) == len(failure_pattern), "Incorrect pattern"
+        for i in range(len(self.tree) - 1, -1, -1):
+            if failure_pattern[i]:
+                resp = self.rest_api.send("POST", f"task_manager_test/finish_test_task/{self.tree[i]}", { "error": "x" })
+                resp.raise_for_status()
+            else:
+                resp = self.rest_api.send("POST", f"task_manager_test/finish_test_task/{self.tree[i]}")
+                resp.raise_for_status()
+
+    def get_status_tree(self):
+        return get_task_status_recursively(self.rest_api, self.tree[0])
+
+    def check_status_tree(self, status_tree, expected_states: list[State]):
+        assert len(self.tree) == len(expected_states), "Incorrect tree size"
+        assert len(status_tree) == len([s for s in expected_states if s != State.NONE]), "Incorrect tree nodes number"
+        for i in range(len(self.tree)):
+            if expected_states[i] != State.NONE:
+                statuses = [s for s in status_tree if s["id"] == self.tree[i]]
+                assert len(statuses) == 1
+                status = statuses[0]
+                assert expected_states[i].value == status["state"]
+
+    def __del__(self):
+        for task_id in self.tree:
+            self.rest_api.send("DELETE", "task_manager_test/test_task", { "task_id": task_id })
+
+
+def make_expected_states(failures_indexes, successes_indexes, nodes_num):
+    expected_states = [State.NONE for _ in range(nodes_num)]
+    for i in failures_indexes:
+        assert i < nodes_num
+        expected_states[i] = State.FAILED
+    for i in successes_indexes:
+        assert i < nodes_num
+        assert expected_states[i] == State.NONE, "Index marked as both failed and succeed"
+        expected_states[i] = State.DONE
+    return expected_states
+
+# The actual tree and tree after folding. o means that a task finished successfully, x - that it failed.
+#
+#                     o                                       o
+#             o               o          ->           o               o
+#         o       o       o       o
+#        o o     o o     o o     o o
+#
+def task_folding1(rest_api):
+    tree_height = 4
+    task_tree = TaskBinaryTree(rest_api, tree_height)
+
+    status_tree_running = task_tree.get_status_tree()
+    task_tree.check_status_tree(status_tree_running, [State.RUNNING for _ in range(task_tree.get_nodes_number())])
+
+    success_pattern = [False for _ in range(task_tree.get_nodes_number())]
+    task_tree.finish_all_tasks(success_pattern)
+
+    status_tree_done = task_tree.get_status_tree()
+    task_tree.check_status_tree(status_tree_done, make_expected_states(failures_indexes=[], successes_indexes=[0, 1, 2], nodes_num=task_tree.get_nodes_number()))
+
+# The actual tree and tree after folding. o means that a task finished successfully, x - that it failed.
+#
+#                     o                                       o
+#             o               o          ->           o               o
+#         o       o       o       o               o
+#        x o     o o     o o     o o             x
+#
+def task_folding2(rest_api):
+    tree_height = 4
+    task_tree = TaskBinaryTree(rest_api, tree_height)
+
+    pattern = [i == 7 for i in range(task_tree.get_nodes_number())]
+    task_tree.finish_all_tasks(pattern)
+
+    status_tree_done = task_tree.get_status_tree()
+    task_tree.check_status_tree(status_tree_done, make_expected_states(failures_indexes=[7], successes_indexes=[0, 1, 2, 3], nodes_num=task_tree.get_nodes_number()))
+
+# The actual tree and tree after folding. o means that a task finished successfully, x - that it failed.
+#
+#                     o                                       o
+#             o               o          ->           o               o
+#         x       o       o       o               x
+#        o o     o o     o o     o o
+#
+def task_folding3(rest_api):
+    tree_height = 4
+    task_tree = TaskBinaryTree(rest_api, tree_height)
+
+    pattern = [i == 3 for i in range(task_tree.get_nodes_number())]
+    task_tree.finish_all_tasks(pattern)
+
+    status_tree_done = task_tree.get_status_tree()
+    task_tree.check_status_tree(status_tree_done, make_expected_states(failures_indexes=[3], successes_indexes=[0, 1, 2], nodes_num=task_tree.get_nodes_number()))
+
+# The actual tree and tree after folding. o means that a task finished successfully, x - that it failed.
+#
+#                     o                                       o
+#             o               o          ->           o               o
+#         x       o       o       o               x
+#        x o     o o     o o     o o             x
+#
+def task_folding4(rest_api):
+    tree_height = 4
+    task_tree = TaskBinaryTree(rest_api, tree_height)
+
+    pattern = [i == 3 or i == 7 for i in range(task_tree.get_nodes_number())]
+    task_tree.finish_all_tasks(pattern)
+
+    status_tree_done = task_tree.get_status_tree()
+    task_tree.check_status_tree(status_tree_done, make_expected_states(failures_indexes=[3, 7], successes_indexes=[0, 1, 2], nodes_num=task_tree.get_nodes_number()))
+
+# The actual tree and tree after folding. o means that a task finished successfully, x - that it failed.
+#
+#                     x                                       x
+#             x               o          ->           x               o
+#         x       o       o       o               x
+#        x o     o o     o o     o o             x
+#
+def task_folding5(rest_api):
+    tree_height = 4
+    task_tree = TaskBinaryTree(rest_api, tree_height)
+
+    pattern = [i in [0, 1, 3, 7] for i in range(task_tree.get_nodes_number())]
+    task_tree.finish_all_tasks(pattern)
+
+    status_tree_done = task_tree.get_status_tree()
+    task_tree.check_status_tree(status_tree_done, make_expected_states(failures_indexes=[0, 1, 3, 7], successes_indexes=[2], nodes_num=task_tree.get_nodes_number()))
+
+# The actual tree and tree after folding. o means that a task finished successfully, x - that it failed.
+#
+#                     o                                       o
+#             x               o          ->           x               o
+#         o       o       x       o                               x
+#        o o     o o     o x     o o                               x
+#
+def task_folding6(rest_api):
+    tree_height = 4
+    task_tree = TaskBinaryTree(rest_api, tree_height)
+
+    pattern = [i in [1, 5, 12] for i in range(task_tree.get_nodes_number())]
+    task_tree.finish_all_tasks(pattern)
+
+    status_tree_done = task_tree.get_status_tree()
+    task_tree.check_status_tree(status_tree_done, make_expected_states(failures_indexes=[1, 5, 12], successes_indexes=[0, 2], nodes_num=task_tree.get_nodes_number()))
+
+# Checks whether finished children fold into parents as expected.
+def test_task_folding(rest_api):
+    with new_test_module(rest_api):
+        with set_tmp_task_ttl(rest_api, long_time):
+            task_folding1(rest_api)
+            task_folding2(rest_api)
+            task_folding3(rest_api)
+            task_folding4(rest_api)
+            task_folding5(rest_api)
+            task_folding6(rest_api)

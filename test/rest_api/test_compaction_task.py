@@ -6,7 +6,7 @@ import threading
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 from util import new_test_table, new_test_keyspace
 from rest_util import set_tmp_task_ttl, scylla_inject_error
-from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks, abort_task, get_task_status
+from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks, abort_task, get_task_status, get_task_status_recursively, get_children
 
 module_name = "compaction"
 long_time = 1000000000
@@ -40,8 +40,9 @@ def check_compaction_task(cql, rest_api, keyspace, run_compaction, compaction_ty
             failed = [task["task_id"] for task in statuses if task["state"] != "done"]
             assert not failed, f"tasks with ids {failed} failed"
 
-            for top_level_task in statuses:
-                check_child_parent_relationship(rest_api, top_level_task, depth, allow_no_children)
+            for root_id in [s["id"] for s in statuses]:
+                status_tree = get_task_status_recursively(rest_api, root_id)
+                check_child_parent_relationship(rest_api, status_tree, status_tree[0], allow_no_children)
     drain_module_tasks(rest_api, module_name)
 
 def checkout_async_task(cql, rest_api, keyspace, run_compaction_async, compaction_type):
@@ -159,8 +160,9 @@ def test_compaction_task_abort(cql, this_dc, rest_api):
                     assert status["state"] == "failed", "Task finished successfully despite abort"
                     assert "abort" in status["error"], "Task wasn't aborted by user"
 
+                    status_tree = get_task_status_recursively(rest_api, status["id"])
                     if "children_ids" in status:
-                        children = [wait_for_task(rest_api, child_id) for child_id in status["children_ids"]]
+                        children = get_children(status_tree, status["id"])
                         assert all(child["state"] == "failed" for child in children), "Some child tasks finished successfully despite abort"
                         assert all("abort requested" in child["error"] for child in children), "Some child tasks weren't aborted by user"
                         assert all("children" not in child for child in children), "Some child tasks spawned new tasks even though they were aborted"
