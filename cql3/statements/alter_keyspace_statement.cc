@@ -112,6 +112,11 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 #endif
 }
 
+bool cql3::statements::alter_keyspace_statement::changes_tablets(query_processor& qp) const {
+    auto ks = qp.db().find_keyspace(_name);
+    return ks.get_replication_strategy().uses_tablets() && !_attrs->get_replication_options().empty();
+}
+
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     using namespace cql_transport;
@@ -127,7 +132,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         auto ks_options = _attrs->get_all_options_flattened(feat);
 
         // we only want to run the tablets path if there are actually any tablets changes, not only schema changes
-        if (ks.get_replication_strategy().uses_tablets() && !_attrs->get_replication_options().empty()) {
+        if (changes_tablets(qp)) {
             if (!qp.topology_global_queue_empty()) {
                 return make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
                         exceptions::invalid_request_exception("Another global topology request is ongoing, please retry."));
