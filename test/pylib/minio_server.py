@@ -50,9 +50,10 @@ class MinioServer:
         self.default_user = 'minioadmin'
         self.default_pass = 'minioadmin'
         self.bucket_name = 'testbucket'
-        self.access_key = ''.join(random.choice(string.hexdigits) for i in range(16))
-        self.secret_key = ''.join(random.choice(string.hexdigits) for i in range(32))
+        self.access_key = os.environ.get(self.ENV_ACCESS_KEY, ''.join(random.choice(string.hexdigits) for i in range(16)))
+        self.secret_key = os.environ.get(self.ENV_SECRET_KEY, ''.join(random.choice(string.hexdigits) for i in range(32)))
         self.log_filename = (self.tempdir / 'minio').with_suffix(".log")
+        self.old_env = dict()
 
     def __repr__(self):
         return f"[minio] {self.address}:{self.port}/{self.bucket_name}@{self.config_file}"
@@ -155,8 +156,11 @@ class MinioServer:
         with open(path, 'w', encoding='ascii') as config_file:
             endpoint = {'name': address,
                         'port': port,
-                        'aws_access_key_id': acc_key,
-                        'aws_secret_access_key': secret_key,
+                        # don't put credentials here. We're exporing env vars, which should
+                        # be picked up properly by scylla.
+                        # https://github.com/scylladb/scylla-pkg/issues/3845
+                        #'aws_access_key_id': acc_key,
+                        #'aws_secret_access_key': secret_key,
                         'aws_region': region,
                         }
             yaml.dump({'endpoints': [endpoint]}, config_file)
@@ -186,6 +190,7 @@ class MinioServer:
         return cmd
 
     def _set_environ(self):
+        self.old_env = dict(os.environ)
         os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
         os.environ[self.ENV_ADDRESS] = f'{self.address}'
         os.environ[self.ENV_PORT] = f'{self.port}'
@@ -203,7 +208,10 @@ class MinioServer:
 
     def _unset_environ(self):
         for env in self._get_environs():
-            del os.environ[env]
+            if self.old_env[env] is not None:
+                os.environ[env] = self.old_env[env]
+            else:
+                del os.environ[env]
 
     def print_environ(self):
         msgs = []
