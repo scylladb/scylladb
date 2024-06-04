@@ -1344,9 +1344,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
             }
             auto group0_id = sys_ks.local().get_raft_group0_id().get();
+            auto gossiper_seeds = get_seeds_from_db_config(*cfg, broadcast_addr);
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
-            gcfg.seeds = get_seeds_from_db_config(*cfg, broadcast_addr);
+            gcfg.seeds = gossiper_seeds;
             gcfg.cluster_name = cluster_name;
             gcfg.partitioner = cfg->partitioner();
             gcfg.ring_delay_ms = cfg->ring_delay_ms();
