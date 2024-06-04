@@ -7,8 +7,9 @@ from cassandra.protocol import ConfigurationException
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError
-from test.pylib.tablets import get_all_tablet_replicas
+from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import read_barrier
+from test.topology.conftest import skip_mode
 from test.topology.util import wait_for_cql_and_get_hosts
 import time
 import pytest
@@ -229,3 +230,75 @@ async def test_saved_readers_tablet_migration(manager: ManagerClient, mode):
 
     # The tablet move should have evicted the cached reader.
     assert all(map(lambda x: x == 0, [get_querier_cache_population(server) for server in servers]))
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/19052
+#   1) table A has N tablets and views
+#   2) migration starts for a tablet of A from node 1 to 2.
+#   3) migration is at write_both_read_old stage
+#   4) coordinator will push writes to both nodes
+#   5) A has view, so writes to it will also result in reads (table::push_view_replica_updates())
+#   6) tablet's update_effective_replication_map() is not refreshing tablet sstable set (for new tablet migrating in)
+#   7) so read on step 5 is not being able to find sstable set for tablet migrating in
+@pytest.mark.parametrize("with_cache", ['false', 'true'])
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_read_of_pending_replica_during_migration(manager: ManagerClient, with_cache):
+    logger.info("Bootstrapping cluster")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+        '--enable-cache', with_cache,
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await cql.run_async("CREATE MATERIALIZED VIEW test.mv1 AS \
+        SELECT * FROM test.test WHERE pk IS NOT NULL AND c IS NOT NULL \
+        PRIMARY KEY (c, pk);")
+
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+
+    key = 7 # Whatever
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({key}, 0)")
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 1
+
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+    dst_shard = 0
+
+    await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments", one_shot=True)
+    s1_log = await manager.server_open_log(servers[1].server_id)
+    s1_mark = await s1_log.mark()
+
+    # Drop cache to remove dummy entry indicating that underlying mutation source is empty
+    await manager.api.drop_sstable_caches(servers[1].ip_addr)
+
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token))
+
+    await s1_log.wait_for('stream_mutation_fragments: waiting', from_mark=s1_mark)
+    s1_mark = await s1_log.mark()
+
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({key}, 1)")
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 1
+
+    # Release abandoned streaming
+    await manager.api.message_injection(servers[1].ip_addr, "stream_mutation_fragments")
+    await s1_log.wait_for('stream_mutation_fragments: done', from_mark=s1_mark)
+
+    logger.info("Waiting for migration to finish")
+    await migration_task
+    logger.info("Migration done")
+
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 1
