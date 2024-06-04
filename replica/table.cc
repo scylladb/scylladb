@@ -598,7 +598,7 @@ public:
         _storage_groups = std::move(r);
     }
 
-    future<> update_effective_replication_map(const locator::effective_replication_map& erm) override { return make_ready_future(); }
+    future<> update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override { return make_ready_future(); }
 
     compaction_group& compaction_group_for_token(dht::token token) const noexcept override {
         return get_compaction_group();
@@ -698,7 +698,7 @@ public:
         _storage_groups = std::move(ret);
     }
 
-    future<> update_effective_replication_map(const locator::effective_replication_map& erm) override;
+    future<> update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override;
 
     compaction_group& compaction_group_for_token(dht::token token) const noexcept override;
     utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const override;
@@ -2145,7 +2145,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
     return stop_fut;
 }
 
-future<> tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm) {
+future<> tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) {
     auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
     auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
 
@@ -2166,6 +2166,7 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
     auto tablet_migrates_in = [this_replica] (locator::tablet_transition_info& transition_info) {
         return transition_info.stage == locator::tablet_transition_stage::allow_write_both_read_old && transition_info.pending_replica == this_replica;
     };
+    bool tablet_migrating_in = false;
     for (auto& transition : new_tablet_map->transitions()) {
         auto tid = transition.first;
         auto transition_info = transition.second;
@@ -2173,7 +2174,16 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
             auto range = new_tablet_map->get_token_range(tid);
             auto cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
             _storage_groups[tid.value()] = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
+            tablet_migrating_in = true;
         }
+    }
+    // TODO: possibly use row_cache::invalidate(external_updater) instead on all ranges of new replicas,
+    //  as underlying source will be refreshed and external_updater::execute can refresh the sstable set.
+    //  Also serves as a protection for clearing the cache on the new range, although it shouldn't be a
+    //  problem as fresh node won't have any data in new range and migration cleanup invalidates the
+    //  range being moved away.
+    if (tablet_migrating_in) {
+        refresh_mutation_source();
     }
     co_return;
 }
@@ -2185,8 +2195,13 @@ future<> table::update_effective_replication_map(locator::effective_replication_
 
     auto old_erm = std::exchange(_erm, std::move(erm));
 
+    auto refresh_mutation_source = [this] {
+        refresh_compound_sstable_set();
+        _cache.refresh_snapshot();
+    };
+
     if (uses_tablets()) {
-        co_await _sg_manager->update_effective_replication_map(*_erm);
+        co_await _sg_manager->update_effective_replication_map(*_erm, refresh_mutation_source);
     }
     if (old_erm) {
         old_erm->invalidate();
