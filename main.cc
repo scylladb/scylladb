@@ -1947,7 +1947,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (cfg->view_building()) {
                 supervisor::notify("Launching generate_mv_updates for non system tables");
-                view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
+                with_scheduling_group(maintenance_scheduling_group, [] {
+                    return view_update_generator.invoke_on_all(&db::view::view_update_generator::start);
+                }).get();
             }
 
             if (cfg->view_building()) {
