@@ -333,6 +333,9 @@ future<> controller::subscribe_server(sharded<cql_server>& server) {
     return server.invoke_on_all([this] (cql_server& server) -> future<> {
         _mnotifier.local().register_listener(server.get_migration_listener());
         _lifecycle_notifier.local().register_subscriber(server.get_lifecycle_listener());
+        if (!_used_by_maintenance_socket) {
+            _sl_controller.local().register_subscriber(server.get_qos_configuration_listener());
+        }
         co_return;
     });
 }
@@ -341,6 +344,9 @@ future<> controller::unsubscribe_server(sharded<cql_server>& server) {
     return server.invoke_on_all([this] (cql_server& server) -> future<> {
         co_await _mnotifier.local().unregister_listener(server.get_migration_listener());
         co_await _lifecycle_notifier.local().unregister_subscriber(server.get_lifecycle_listener());
+        if (!_used_by_maintenance_socket) {
+            co_await _sl_controller.local().unregister_subscriber(server.get_qos_configuration_listener());
+        }
     });
 }
 

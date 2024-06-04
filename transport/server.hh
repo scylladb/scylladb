@@ -14,6 +14,7 @@
 #include "service/migration_listener.hh"
 #include "auth/authenticator.hh"
 #include <seastar/core/distributed.hh>
+#include "service/qos/qos_configuration_change_subscriber.hh"
 #include "timeout_config.hh"
 #include <seastar/core/semaphore.hh>
 #include <memory>
@@ -179,6 +180,7 @@ public:
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
+    qos::qos_configuration_change_subscriber* get_qos_configuration_listener() const noexcept;
     cql_sg_stats::request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) {
         return scheduling_group_get_specific<cql_sg_stats>(_stats_key).get_cql_opcode_stats(op);
     }
@@ -292,9 +294,10 @@ private:
 };
 
 class cql_server::event_notifier : public service::migration_listener,
-                                   public service::endpoint_lifecycle_subscriber
+                                   public service::endpoint_lifecycle_subscriber,
+                                   public qos::qos_configuration_change_subscriber
 {
-    const cql_server& _server;
+    cql_server& _server;
     std::set<cql_server::connection*> _topology_change_listeners;
     std::set<cql_server::connection*> _status_change_listeners;
     std::set<cql_server::connection*> _schema_change_listeners;
@@ -306,7 +309,7 @@ class cql_server::event_notifier : public service::migration_listener,
 
     void send_join_cluster(const gms::inet_address& endpoint);
 public:
-    explicit event_notifier(const cql_server& s) noexcept : _server(s) {}
+    explicit event_notifier(cql_server& s) noexcept : _server(s) {}
     void register_event(cql_transport::event::event_type et, cql_server::connection* conn);
     void unregister_connection(cql_server::connection* conn);
 
@@ -332,6 +335,11 @@ public:
     virtual void on_drop_function(const sstring& ks_name, const sstring& function_name) override;
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override;
 
+    virtual future<> on_before_service_level_add(qos::service_level_options, qos::service_level_info sl_info) override;
+    virtual future<> on_after_service_level_remove(qos::service_level_info sl_info) override;
+    virtual future<> on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
+    virtual future<> on_effective_service_levels_cache_reloaded() override;
+
     virtual void on_join_cluster(const gms::inet_address& endpoint) override;
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) override;
     virtual void on_up(const gms::inet_address& endpoint) override;
@@ -340,4 +348,5 @@ public:
 
 inline service::endpoint_lifecycle_subscriber* cql_server::get_lifecycle_listener() const noexcept { return _notifier.get(); }
 inline service::migration_listener* cql_server::get_migration_listener() const noexcept { return _notifier.get(); }
+inline qos::qos_configuration_change_subscriber* cql_server::get_qos_configuration_listener() const noexcept { return _notifier.get(); }
 }

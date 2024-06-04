@@ -216,6 +216,22 @@ void cql_server::event_notifier::on_drop_aggregate(const sstring& ks_name, const
     elogger.warn("%s event ignored", __func__);
 }
 
+future<> cql_server::event_notifier::on_before_service_level_add(qos::service_level_options, qos::service_level_info sl_info) {
+    co_return;
+}
+
+future<> cql_server::event_notifier::on_after_service_level_remove(qos::service_level_info sl_info) {
+    co_return;
+}
+
+future<> cql_server::event_notifier::on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) {
+    co_return;
+}
+
+future<> cql_server::event_notifier::on_effective_service_levels_cache_reloaded() {
+    return _server.update_connections_service_level_params();
+}
+
 void cql_server::event_notifier::on_join_cluster(const gms::inet_address& endpoint)
 {
     if (!_server._gossiper.is_cql_ready(endpoint)) {
