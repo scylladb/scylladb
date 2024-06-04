@@ -277,8 +277,9 @@ future<> service_level_controller::update_effective_service_levels_cache() {
         co_await coroutine::maybe_yield();
     }
 
-    co_await container().invoke_on_all([effective_sl_map] (service_level_controller& sl_controller) {
+    co_await container().invoke_on_all([effective_sl_map] (service_level_controller& sl_controller) -> future<> {
         sl_controller._effective_service_levels_db = std::move(effective_sl_map);
+        co_await sl_controller.notify_effective_service_levels_cache_reloaded();
     });
 }
 
@@ -383,6 +384,12 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
         });
     }
     co_return;
+}
+
+future<> service_level_controller::notify_effective_service_levels_cache_reloaded() {
+    co_await _subscribers.for_each([] (qos_configuration_change_subscriber* subscriber) -> future<> {
+        return subscriber->on_effective_service_levels_cache_reloaded();
+    });
 }
 
 void service_level_controller::maybe_start_legacy_update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f, service::storage_service& storage_service, service::raft_group0_client& group0_client) {
