@@ -581,6 +581,8 @@ future<> manager::change_host_filter(host_filter filter) {
             });
 
             if (!maybe_host_id_and_ip) {
+                manager_logger.warn("Encountered a hint directory of invalid name while changing the host filter: {}. "
+                        "Hints stored in it won't be replayed.", de.name);
                 co_return;
             }
 
@@ -760,6 +762,8 @@ future<> manager::initialize_endpoint_managers() {
 
         // The directory is invalid, so there's nothing more to do.
         if (!maybe_host_id_or_ep) {
+            manager_logger.warn("Encountered a hint directory of invalid name while initializing endpoint managers: {}. "
+                    "Hints stored in it won't be replayed", de.name);
             co_return;
         }
 
