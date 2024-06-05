@@ -2396,8 +2396,13 @@ bool gossiper::is_alive(inet_address ep) const {
 }
 
 future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
+    return wait_alive([nodes = std::move(nodes)] { return nodes; }, timeout);
+}
+
+future<> gossiper::wait_alive(noncopyable_function<std::vector<gms::inet_address>()> get_nodes, std::chrono::milliseconds timeout) {
     auto start_time = std::chrono::steady_clock::now();
     for (;;) {
+        auto nodes = get_nodes();
         std::vector<gms::inet_address> live_nodes;
         for (const auto& node: nodes) {
             size_t nr_alive = co_await container().map_reduce0([node] (gossiper& g) -> size_t {
