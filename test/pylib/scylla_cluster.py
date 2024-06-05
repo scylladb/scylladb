@@ -8,6 +8,7 @@
 """
 from functools import wraps
 import asyncio
+import concurrent.futures
 from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
 from collections import ChainMap
@@ -28,6 +29,7 @@ from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
 from test.pylib.util import LogPrefixAdapter, read_last_line
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
+from functools import partial
 import aiohttp
 import aiohttp.web
 import yaml
@@ -44,6 +46,13 @@ from cassandra.cluster import ExecutionProfile  # pylint: disable=no-name-in-mod
 from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in-module
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 from cassandra.connection import UnixSocketEndPoint
+
+
+io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+
+async def async_rmtree(directory, *args, **kwargs):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(io_executor, partial(shutil.rmtree, directory, *args, **kwargs))
 
 
 class ReplaceConfig(NamedTuple):
@@ -353,7 +362,7 @@ class ScyllaServer:
         self.logger.info("installing Scylla server in %s...", self.workdir)
 
         # Cleanup any remains of the previously running server in this path
-        shutil.rmtree(self.workdir, ignore_errors=True)
+        await async_rmtree(self.workdir, ignore_errors=True)
 
         try:
             self.workdir.mkdir(parents=True, exist_ok=True)
@@ -363,7 +372,7 @@ class ScyllaServer:
             self.log_file = self.log_filename.open("wb")
         except:
             try:
-                shutil.rmtree(self.workdir)
+                await async_rmtree(self.workdir)
             except FileNotFoundError:
                 pass
             self.log_filename.unlink(missing_ok=True)
@@ -663,7 +672,7 @@ class ScyllaServer:
         self.logger.info("Uninstalling server at %s", self.workdir)
 
         try:
-            shutil.rmtree(self.workdir)
+            await async_rmtree(self.workdir)
         except FileNotFoundError:
             pass
         self.log_filename.unlink(missing_ok=True)
@@ -1201,7 +1210,7 @@ class ScyllaClusterManager:
             await self.clusters.put(self.cluster, is_dirty=True)
         del self.cluster
         if os.path.exists(self.manager_dir):
-            shutil.rmtree(self.manager_dir)
+            await async_rmtree(self.manager_dir)
         self.is_running = False
 
     def _setup_routes(self, app: aiohttp.web.Application) -> None:
