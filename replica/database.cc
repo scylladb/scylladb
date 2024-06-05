@@ -1219,10 +1219,10 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     column_family::config cfg;
     const db::config& db_config = db.get_config();
 
-    for (auto& extra : _config.all_datadirs) {
+    for (auto& extra : db_config.data_file_directories()) {
         auto uuid_sstring = s.id().to_sstring();
         boost::erase_all(uuid_sstring, "-");
-        cfg.all_datadirs.push_back(format("{}/{}-{}", extra, s.cf_name(), uuid_sstring));
+        cfg.all_datadirs.push_back(format("{}/{}/{}-{}", extra, s.ks_name(), s.cf_name(), uuid_sstring));
     }
     cfg.datadir = cfg.all_datadirs[0];
     cfg.enable_disk_reads = _config.enable_disk_reads;
@@ -2116,9 +2116,6 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     keyspace::config cfg;
     if (_cfg.data_file_directories().size() > 0) {
         cfg.datadir = format("{}/{}", _cfg.data_file_directories()[0], ksm.name());
-        for (auto& extra : _cfg.data_file_directories()) {
-            cfg.all_datadirs.push_back(format("{}/{}", extra, ksm.name()));
-        }
         cfg.enable_disk_writes = !_cfg.enable_in_memory_data_store();
         cfg.enable_disk_reads = true; // we always read from disk
         cfg.enable_commitlog = _cfg.enable_commitlog() && !_cfg.enable_in_memory_data_store();

@@ -1254,7 +1254,6 @@ using keyspace_metadata = data_dictionary::keyspace_metadata;
 class keyspace {
 public:
     struct config {
-        std::vector<sstring> all_datadirs;
         sstring datadir;
         bool enable_commitlog = true;
         bool enable_disk_reads = true;
