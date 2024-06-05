@@ -30,8 +30,8 @@ struct noop_converter {
     template<typename F, typename... Args>
     static
     wrapped_type<std::invoke_result_t<F, Args...>>
-    invoke(F&& f, Args&&... args) {
-        return std::invoke(std::forward<F>(f), std::forward<Args>(args)...);
+    invoke(const F& f, Args&&... args) {
+        return std::invoke(f, std::forward<Args>(args)...);
     }
 };
 
@@ -53,8 +53,8 @@ struct futurizing_converter {
     template<typename F, typename... Args>
     static
     wrapped_type<std::invoke_result_t<F, Args...>>
-    invoke(F&& f, Args&&... args) {
-        return seastar::futurize_invoke(std::forward<F>(f), std::forward<Args>(args)...);
+    invoke(const F& f, Args&&... args) {
+        return seastar::futurize_invoke(f, std::forward<Args>(args)...);
     }
 };
 
