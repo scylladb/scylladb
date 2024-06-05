@@ -422,7 +422,9 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     // We use unique_ptr because client_state cannot be moved or copied
     executor::client_state client_state = username.empty()
         ? service::client_state{service::client_state::internal_tag()}
-        : service::client_state{service::client_state::internal_tag(), _auth_service, _sl_controller, username};
+        : (_service_level
+            ? service::client_state{service::client_state::internal_tag(), _auth_service, _sl_controller, username}
+            : service::client_state{service::client_state::internal_tag(), _auth_service, username});
     co_await client_state.maybe_update_per_service_level_params();
 
     tracing::trace_state_ptr trace_state = maybe_trace_query(client_state, username, op, content);
@@ -546,9 +548,10 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
-        bool enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+        bool enforce_authorization, bool service_level, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
     _enforce_authorization = enforce_authorization;
+    _service_level = service_level;
     _max_concurrent_requests = std::move(max_concurrent_requests);
     if (!port && !https_port) {
         return make_exception_future<>(std::runtime_error("Either regular port or TLS port"
