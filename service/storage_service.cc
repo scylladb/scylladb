@@ -6039,34 +6039,36 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
         });
     }
 
-    using table_erms_t = std::unordered_map<table_id, const locator::effective_replication_map_ptr>;
-    // Creates a snapshot of transitions, so different shards will find their tablet replicas in the
-    // same migration stage. Important for intra-node migration.
-    const auto erms = co_await std::invoke([this] () -> future<table_erms_t> {
-        table_erms_t erms;
+    using table_ids_t = std::unordered_set<table_id>;
+    const auto table_ids = co_await std::invoke([this] () -> future<table_ids_t> {
+        table_ids_t ids;
         co_await _db.local().get_tables_metadata().for_each_table_gently([&] (table_id id, lw_shared_ptr<replica::table> table) mutable {
             if (table->uses_tablets()) {
-                erms.emplace(id, table->get_effective_replication_map());
+                ids.insert(id);
             }
             return make_ready_future<>();
         });
-        co_return std::move(erms);
+        co_return std::move(ids);
     });
+
+    // Helps with intra-node migration by serializing with changes to token metadata, so shards
+    // participating in the migration will see migration in same stage, therefore preventing
+    // double accounting (anomaly) in the reported size.
+    auto tmlock = co_await get_token_metadata_lock();
 
     // Each node combines a per-table load map from all of its shards and returns it to the coordinator.
     // So if there are 1k nodes, there will be 1k RPCs in total.
-    auto load_stats = co_await _db.map_reduce0([&erms] (replica::database& db) -> future<locator::load_stats> {
+    auto load_stats = co_await _db.map_reduce0([&table_ids] (replica::database& db) -> future<locator::load_stats> {
         locator::load_stats load_stats{};
         auto& tables_metadata = db.get_tables_metadata();
 
-        for (const auto& [id, erm] : erms) {
+        for (const auto& id : table_ids) {
             auto table = tables_metadata.get_table_if_exists(id);
             if (!table) {
                 continue;
             }
-
+            auto erm = table->get_effective_replication_map();
             auto& token_metadata = erm->get_token_metadata();
-            auto& tmap = token_metadata.tablets().get_tablet_map(id);
             auto me = locator::tablet_replica { token_metadata.get_my_id(), this_shard_id() };
 
             // It's important to tackle the anomaly in reported size, since both leaving and
@@ -6074,7 +6076,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
             // If transition hasn't reached cleanup stage, then leaving replicas are accounted.
             // If transition is past cleanup stage, then pending replicas are accounted.
             // This helps to reduce the discrepancy window.
-            auto tablet_filter = [&tmap, &me] (locator::global_tablet_id id) {
+            auto tablet_filter = [&me] (const locator::tablet_map& tmap, locator::global_tablet_id id) {
                 auto transition = tmap.get_tablet_transition_info(id.tablet);
                 auto& info = tmap.get_tablet_info(id.tablet);
 
@@ -6085,11 +6087,11 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
 
                 bool is_pending = transition->pending_replica == me;
                 bool is_leaving = locator::get_leaving_replica(info, *transition) == me;
-                auto s = transition->stage;
+                auto s = transition->reads; // read selector
 
                 return (!is_pending && !is_leaving)
-                       || (is_leaving && s < locator::tablet_transition_stage::cleanup)
-                       || (is_pending && s >= locator::tablet_transition_stage::cleanup);
+                       || (is_leaving && s == locator::read_replica_set_selector::previous)
+                       || (is_pending && s == locator::read_replica_set_selector::next);
             };
 
             load_stats.tables.emplace(id, table->table_load_stats(tablet_filter));

@@ -57,6 +57,22 @@ async def load_repair_history(cql, hosts):
         logging.info(f"Got repair_history_entry={row}")
     return all_rows
 
+async def safe_server_stop_gracefully(manager, server_id, timeout: float = 60, reconnect: bool = False):
+    # Explicitly close the driver to avoid reconnections if scylla fails to update gossiper state on shutdown.
+    # It's a problem until https://github.com/scylladb/scylladb/issues/15356 is fixed.
+    manager.driver_close()
+    await manager.server_stop_gracefully(server_id, timeout)
+    cql = None
+    if reconnect:
+        cql = await reconnect_driver(manager)
+    return cql
+
+async def safe_rolling_restart(manager, servers, with_down):
+    # https://github.com/scylladb/python-driver/issues/230 is not fixed yet, so for sake of CI stability,
+    # driver must be reconnected after rolling restart of servers.
+    await manager.rolling_restart(servers, with_down)
+    cql = await reconnect_driver(manager)
+    return cql
 
 @pytest.mark.asyncio
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ManagerClient):
@@ -79,9 +95,8 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     not_s0 = servers[1:]
 
     # s0 should miss schema and tablet changes
-    await manager.server_stop_gracefully(s0)
+    cql = await safe_server_stop_gracefully(manager, s0, reconnect=True)
 
-    cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 100};")
 
     # force s0 to catch up later from the snapshot and not the raft log
@@ -428,7 +443,7 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
         await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});")
                                for k in keys_for_server[down_server.server_id]])
 
-    await manager.rolling_restart(servers, with_down=insert_with_down)
+    cql = await safe_rolling_restart(manager, servers, with_down=insert_with_down)
 
     await repair_on_node(manager, servers[0], servers)
 
@@ -440,7 +455,7 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
         for r in rows:
             assert r.c == r.pk
 
-    await manager.rolling_restart(servers, with_down=check_with_down)
+    cql = await safe_rolling_restart(manager, servers, with_down=check_with_down)
 
 
 @pytest.mark.repair
@@ -677,7 +692,9 @@ async def test_tablet_split(manager: ManagerClient):
         '--logger-log-level', 'table=debug',
         '--target-tablet-size-in-bytes', '1024',
     ]
-    servers = [await manager.server_add(cmdline=cmdline)]
+    servers = [await manager.server_add(config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    }, cmdline=cmdline)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
@@ -894,11 +911,7 @@ async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_on
 
     await create_table("test2", 16)
 
-    # Explicitly close the driver to avoid reconnections if scylla fails to update gossiper state on shutdown.
-    # It's a problem until https://github.com/scylladb/scylladb/issues/15356 is fixed.
-    manager.driver_close()
-    cql = None
-    await manager.server_stop_gracefully(servers[0].server_id)
+    cql = await safe_server_stop_gracefully(manager, servers[0].server_id)
 
     table_dir = glob.glob(os.path.join(node_workdir, "data", "test", "test-*"))[0]
     logger.info(f"Table dir: {table_dir}")
