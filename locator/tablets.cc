@@ -245,9 +245,17 @@ dht::token_range tablet_map::get_token_range(tablet_id id) const {
     }
 }
 
-host_id tablet_map::get_primary_replica(tablet_id id) const {
-    const auto info = get_tablet_info(id);
-    return info.replicas.at(size_t(id) % info.replicas.size()).host;
+tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
+    const auto& replicas = get_tablet_info(id).replicas;
+    return replicas.at(size_t(id) % replicas.size());
+}
+
+tablet_replica tablet_map::get_primary_replica_within_dc(tablet_id id, const topology& topo, sstring dc) const {
+    const auto replicas = boost::copy_range<tablet_replica_set>(get_tablet_info(id).replicas | boost::adaptors::filtered([&] (const auto& tr) {
+        const auto& node = topo.get_node(tr.host);
+        return node.dc_rack().dc == dc;
+    }));
+    return replicas.at(size_t(id) % replicas.size());
 }
 
 future<std::vector<token>> tablet_map::get_sorted_tokens() const {
