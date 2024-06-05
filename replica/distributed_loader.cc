@@ -272,20 +272,17 @@ class table_populator {
     sstring _ks;
     sstring _cf;
     global_table_ptr& _global_table;
-    std::filesystem::path _base_path;
     std::unordered_map<sstables::sstable_state, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
     sstables::generation_type _highest_generation;
 
 public:
-    table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf, sstring datadir)
+    table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf)
         : _db(db)
         , _ks(std::move(ks))
         , _cf(std::move(cf))
         , _global_table(ptr)
-        , _base_path(std::move(datadir))
     {
-        dblog.debug("table_populator: {}", _base_path);
     }
 
     ~table_populator() {
@@ -360,7 +357,7 @@ sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_s
 }
 
 future<> table_populator::populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction do_allow_offstrategy_compaction) {
-    dblog.debug("Populating {}/{}/{} state={} allow_offstrategy_compaction={}", _ks, _cf, _base_path, state, do_allow_offstrategy_compaction);
+    dblog.debug("Populating {}/{}/{} state={} allow_offstrategy_compaction={}", _ks, _cf, _global_table->dir(), state, do_allow_offstrategy_compaction);
 
     if (!_sstable_directories.contains(state)) {
         co_return;
@@ -421,7 +418,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
 
             dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={} datadir={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options().type_string(), datadir);
 
-            auto metadata = table_populator(gtable, db, ks_name, cfname, datadir);
+            auto metadata = table_populator(gtable, db, ks_name, cfname);
             std::exception_ptr ex;
 
             try {
