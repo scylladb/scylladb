@@ -237,6 +237,7 @@ protected:
     // The list entries are unlinked automatically when the storage group, they belong to, is removed.
     compaction_group_list _compaction_groups;
     storage_group_map _storage_groups;
+    storage_group_map _storage_groups_pending_deletion;
     // Prevents _storage_groups from having its elements inserted or deleted while other layer iterates
     // over them (or over _compaction_groups).
     seastar::rwlock _lock;

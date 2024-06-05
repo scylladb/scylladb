@@ -565,7 +565,8 @@ void storage_group_manager::for_each_storage_group(std::function<void(size_t, st
 
 void storage_group_manager::remove_storage_group(size_t id) {
     if (auto it = _storage_groups.find(id); it != _storage_groups.end()) {
-        _storage_groups.erase(it);
+        auto nh = _storage_groups.extract(it);
+        _storage_groups_pending_deletion.emplace(nh.key(), std::move(nh.mapped()));
     } else {
         throw std::out_of_range(format("remove_storage_group: storage group with id={} not found", id));
     }
@@ -2148,6 +2149,11 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
 future<> tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm) {
     auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
     auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
+
+    while (!_storage_groups_pending_deletion.empty()) {
+        auto it = _storage_groups_pending_deletion.begin();
+        _storage_groups_pending_deletion.erase(it);
+    }
 
     size_t old_tablet_count = old_tablet_map->tablet_count();
     size_t new_tablet_count = new_tablet_map->tablet_count();
