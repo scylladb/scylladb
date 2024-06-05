@@ -7,7 +7,7 @@
  */
 
 #include "db/view/view_update_backlog.hh"
-#include "exceptions/exceptions.hh"
+#include <seastar/core/timed_out_error.hh>
 #include "gms/inet_address.hh"
 #include <seastar/util/defer.hh>
 #include <boost/range/adaptor/map.hpp>
@@ -368,6 +368,17 @@ future<> view_update_generator::populate_views(const replica::table& table,
     }
 }
 
+
+// Generating view updates for a single client request can take a long time and might not finish before the timeout is
+// reached. In such case this exception is thrown.
+// "Generating a view update" means creating a view update and scheduling it to be sent later.
+// This exception isn't thrown if the sending timeouts, it's only concrened with generating.
+struct view_update_generation_timeout_exception : public seastar::timed_out_error {
+    const char* what() const noexcept override {
+        return "Request timed out - couldn't prepare materialized view updates in time";
+    }
+};
+
 /**
  * Given some updates on the base table and the existing values for the rows affected by that update, generates the
  * mutations to be applied to the base table's views, and sends them to the paired view replicas.
@@ -444,7 +455,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
             }
 
             if (db::timeout_clock::now() > timeout) {
-                err = std::make_exception_ptr(exceptions::view_update_generation_timeout_exception());
+                err = std::make_exception_ptr(view_update_generation_timeout_exception());
                 break;
             }
         }
