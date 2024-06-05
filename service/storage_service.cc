@@ -2964,17 +2964,17 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // the joining node would wait for it to be UP, and wait_alive would time out. Recalculation fixes
         // this problem. Ref: #17526
         auto get_sync_nodes = [&] {
-        auto ignore_nodes = ri
-                ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), get_token_metadata())
-                // TODO: specify ignore_nodes for bootstrap
-                : std::unordered_set<gms::inet_address>{};
-        std::vector<gms::inet_address> sync_nodes;
-        get_token_metadata().get_topology().for_each_node([&] (const locator::node* np) {
-            auto ep = np->endpoint();
-            if (!ignore_nodes.contains(ep) && (!ri || ep != ri->address)) {
-                sync_nodes.push_back(ep);
-            }
-        });
+            auto ignore_nodes = ri
+                    ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), get_token_metadata())
+                    // TODO: specify ignore_nodes for bootstrap
+                    : std::unordered_set<gms::inet_address>{};
+            std::vector<gms::inet_address> sync_nodes;
+            get_token_metadata().get_topology().for_each_node([&] (const locator::node* np) {
+                auto ep = np->endpoint();
+                if (!ignore_nodes.contains(ep) && (!ri || ep != ri->address)) {
+                    sync_nodes.push_back(ep);
+                }
+            });
             return sync_nodes;
         };
 
