@@ -173,6 +173,8 @@ void space_watchdog::on_timer() {
                 // Case 3: The directory isn't managed by an endpoint manager, and it represents neither an IP address,
                 //         nor a host ID.
                 else {
+                    // We use trace here to prevent flooding logs with unnecessary information.
+                    resource_manager_logger.trace("Encountered a hint directory of invalid name while scanning: {}", de.name);
                     return scan_one_ep_dir(dir / de.name, shard_manager, {});
                 }
             }).get();
