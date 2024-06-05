@@ -2958,23 +2958,29 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // but here they may still be present if we're performing topology changes in quick succession.
         // `token_metadata` has all host ID / token collisions resolved so in particular it doesn't contain
         // these obsolete IPs. Refs: #14487, #14468
-        auto& tm = get_token_metadata();
+        //
+        // We recalculate nodes in every step of the loop in wait_alive. For example, if we booted a new node
+        // just after removing a different node, other nodes could still see the removed node as NORMAL. Then,
+        // the joining node would wait for it to be UP, and wait_alive would time out. Recalculation fixes
+        // this problem. Ref: #17526
+        auto get_sync_nodes = [&] {
         auto ignore_nodes = ri
-                ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), tm)
+                ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), get_token_metadata())
                 // TODO: specify ignore_nodes for bootstrap
                 : std::unordered_set<gms::inet_address>{};
-
         std::vector<gms::inet_address> sync_nodes;
-        tm.get_topology().for_each_node([&] (const locator::node* np) {
+        get_token_metadata().get_topology().for_each_node([&] (const locator::node* np) {
             auto ep = np->endpoint();
             if (!ignore_nodes.contains(ep) && (!ri || ep != ri->address)) {
                 sync_nodes.push_back(ep);
             }
         });
+            return sync_nodes;
+        };
 
-        slogger.info("Waiting for nodes {} to be alive", sync_nodes);
-        co_await _gossiper.wait_alive(sync_nodes, wait_for_live_nodes_timeout);
-        slogger.info("Nodes {} are alive", sync_nodes);
+        slogger.info("Waiting for other nodes to be alive. Current nodes: {}", get_sync_nodes());
+        co_await _gossiper.wait_alive(get_sync_nodes, wait_for_live_nodes_timeout);
+        slogger.info("Nodes {} are alive", get_sync_nodes());
     }
 
     assert(_group0);
