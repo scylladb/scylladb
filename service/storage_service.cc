@@ -1693,14 +1693,14 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // the joining node would wait for it to be UP, and wait_alive would time out. Recalculation fixes
         // this problem. Ref: #17526
         auto get_sync_nodes = [&] {
-        std::vector<gms::inet_address> sync_nodes;
-        get_token_metadata().get_topology().for_each_node([&] (const locator::node* np) {
-            auto ep = np->endpoint();
-            const auto& host_id = np->host_id();
-            if (!ri || (host_id != ri->host_id && !ri->ignore_nodes.contains(host_id))) {
-                sync_nodes.push_back(ep);
-            }
-        });
+            std::vector<gms::inet_address> sync_nodes;
+            get_token_metadata().get_topology().for_each_node([&] (const locator::node* np) {
+                auto ep = np->endpoint();
+                const auto& host_id = np->host_id();
+                if (!ri || (host_id != ri->host_id && !ri->ignore_nodes.contains(host_id))) {
+                    sync_nodes.push_back(ep);
+                }
+            });
             return sync_nodes;
         };
 
