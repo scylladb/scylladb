@@ -376,14 +376,7 @@ hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id, const
     }
 
     try {
-        const auto hint_directory = std::invoke([&] () -> std::filesystem::path {
-            if (_uses_host_id) {
-                return hints_dir() / host_id.to_sstring();
-            } else {
-                return hints_dir() / fmt::to_string(ip);
-            }
-        });
-
+        std::filesystem::path hint_directory = hints_dir() / (_uses_host_id ? fmt::to_string(host_id) : fmt::to_string(ip));
         auto [it, _] = _ep_managers.emplace(host_id, hint_endpoint_manager{host_id, std::move(hint_directory), *this});
         hint_endpoint_manager& ep_man = it->second;
 
