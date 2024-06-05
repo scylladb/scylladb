@@ -1676,10 +1676,8 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // NORMAL doesn't necessarily mean UP (#14042). Wait for these nodes to be UP as well
         // to reduce flakiness (we need them to be UP to perform CDC generation write and for repair/streaming).
         //
-        // This could be done in Raft topology mode as well, but the calculation of nodes to sync with
-        // has to be done based on topology state machine instead of gossiper as it is here;
-        // furthermore, the place in the code where we do this has to be different (it has to be coordinated
-        // by the topology coordinator after it joins the node to the cluster).
+        // We do it in Raft topology mode as well in join_node_response_handler. The calculation of nodes to
+        // sync with is done based on topology state machine instead of gossiper as it is here.
         //
         // We calculate nodes to wait for based on token_metadata. Previously we would use gossiper
         // directly for this, but gossiper may still contain obsolete entries from 1. replaced nodes
