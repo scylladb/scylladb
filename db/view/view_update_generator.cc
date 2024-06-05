@@ -354,6 +354,11 @@ future<> view_update_generator::populate_views(const replica::table& table,
             size_t units_to_wait_for = std::min(table.get_config().view_update_concurrency_semaphore_limit, update_size);
             auto units = co_await seastar::get_units(_db.view_update_sem(), units_to_wait_for);
             units.adopt(seastar::consume_units(_db.view_update_sem(), update_size - units_to_wait_for));
+            if (utils::get_local_injector().enter("view_building_failure")) {
+                co_await seastar::sleep(std::chrono::seconds(1));
+                err = std::make_exception_ptr(std::runtime_error("Timeout a view building update"));
+                continue;
+            }
             co_await mutate_MV(schema, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(),
                     tracing::trace_state_ptr(), std::move(units), service::allow_hints::no, wait_for_all_updates::yes);
         } catch (...) {
