@@ -10,7 +10,7 @@ env:
   BUILD_TYPE: RelWithDebInfo
   BUILD_DIR: build
   CLEANER_OUTPUT_PATH: build/clang-include-cleaner.log
-  CLEANER_DIRS: test/unit
+  CLEANER_DIRS: test/unit exceptions
 
 permissions: {}
 
@@ -42,16 +42,37 @@ jobs:
             -G Ninja                                    \
             -B $BUILD_DIR                               \
             -S .
+      - name: Build headers
+        run: |
+          swagger_targets=''
+          for f in api/api-doc/*.json; do
+            if test "${f#*.}" = json; then
+              name=$(basename "$f" .json)
+              if test $name != swagger20_header; then
+                swagger_targets+=" scylla_swagger_gen_$name"
+              fi
+            fi
+          done
+          cmake                                         \
+            --build build                               \
+             --target seastar_http_request_parser       \
+             --target idl-sources                       \
+             --target $swagger_targets
+      - run: |
+          echo "::add-matcher::.github/clang-include-cleaner.json"
       - name: clang-include-cleaner
         run: |
           for d in $CLEANER_DIRS; do
             find $d -name '*.cc' -o -name '*.hh'          \
               -exec echo {} \;                            \
               -exec clang-include-cleaner-$CLANG_VERSION  \
+                --ignore-headers=seastarx.hh              \
                 --print=changes                           \
                 -p $BUILD_DIR                             \
                 {} \; | tee --append $CLEANER_OUTPUT_PATH
           done
+      - run: |
+          echo "::remove-matcher owner=clang-include-cleaner::"
       - uses: actions/upload-artifact@v4
         with:
           name: Logs (clang-include-cleaner)
