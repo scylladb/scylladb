@@ -14,7 +14,7 @@ from re import fullmatch
 import pytest
 from botocore.exceptions import ClientError
 
-from test.alternator.util import list_tables, unique_table_name, create_test_table, random_string, new_test_table, is_aws
+from test.alternator.util import list_tables, multiset, unique_table_name, create_test_table, random_string, new_test_table, is_aws, scylla_config_read
 
 
 # Utility function for create a table with a given name and some valid
@@ -461,15 +461,9 @@ def check_pre_consistent_cluster_management(dynamodb):
     # If not running on Scylla, return false.
     if is_aws(dynamodb):
         return False
-    # In Scylla, we check Raft mode by inspecting the configuration via a
-    # system table (which is also visible in Alternator)
-    config_table = dynamodb.Table('.scylla.alternator.system.config')
-    consistent = config_table.query(
-            KeyConditionExpression='#key=:val',
-            ExpressionAttributeNames={'#key': 'name'},
-            ExpressionAttributeValues={':val': 'consistent_cluster_management'}
-        )['Items']
-    return len(consistent) == 0 or consistent[0]['value'] == 'false'
+    consistent = scylla_config_read(dynamodb, 'consistent_cluster_management')
+    return consistent is None or consistent == 'false'
+
 @pytest.fixture(scope="function")
 def fails_without_consistent_cluster_management(request, check_pre_consistent_cluster_management):
     if check_pre_consistent_cluster_management:
