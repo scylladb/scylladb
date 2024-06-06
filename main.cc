@@ -1071,6 +1071,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             langman.start(std::ref(wasm_ctx)).get();
             // don't stop for real until query_processor stops
             auto stop_lang_man = defer_verbose_shutdown("lang manager", [] { langman.invoke_on_all(&lang::manager::stop).get(); });
+            langman.invoke_on_all(&lang::manager::start).get();
 
             supervisor::notify("starting database");
             debug::the_database = &db;

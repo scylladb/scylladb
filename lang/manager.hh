@@ -27,6 +27,7 @@ class manager {
 public:
     manager(const std::optional<wasm::startup_context>&);
     friend wasm::context;
+    future<> start();
     future<> stop();
     seastar::future<> precompile(wasm::context& ctx, const std::vector<sstring>& arg_names, std::string script);
     void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) noexcept {

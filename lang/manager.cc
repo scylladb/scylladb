@@ -17,6 +17,10 @@ manager::manager(const std::optional<wasm::startup_context>& ctx)
         , _alien_runner(ctx ? ctx->alien_runner : nullptr)
 {}
 
+future<> manager::start() {
+    co_return;
+}
+
 future<> manager::stop() {
     if (_instance_cache) {
         co_await _instance_cache->stop();
