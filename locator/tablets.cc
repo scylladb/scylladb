@@ -559,7 +559,7 @@ private:
         auto& topo = _tmptr->get_topology();
         for (auto&& replica : replicas) {
             auto* node = topo.find_node(replica.host);
-            if (node) {
+            if (node && !node->left()) {
                 result.emplace_back(node->endpoint());
             }
         }

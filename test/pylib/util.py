@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+import threading
 import time
 import asyncio
 import logging
@@ -15,9 +16,13 @@ from typing import Callable, Awaitable, Optional, TypeVar, Any
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
-from cassandra import DriverException # type: ignore # pylint: disable=no-name-in-module
+from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import ServerInfo
+
+
+logger = logging.getLogger(__name__)
+
 
 class LogPrefixAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
@@ -158,3 +163,80 @@ async def get_enabled_features(cql: Session, host: Host) -> set[str]:
     """Returns a set of cluster features that a node considers to be enabled."""
     rs = await cql.run_async(f"SELECT value FROM system.scylla_local WHERE key = 'enabled_features'", host=host)
     return set(rs[0].value.split(","))
+
+
+class KeyGenerator:
+    def __init__(self):
+        self.pk = None
+        self.pk_lock = threading.Lock()
+
+    def next_pk(self):
+        with self.pk_lock:
+            if self.pk is not None:
+                self.pk += 1
+            else:
+                self.pk = 0
+            return self.pk
+
+    def last_pk(self):
+        with self.pk_lock:
+            return self.pk
+
+
+async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int = 3, ignore_errors=False):
+    logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")
+
+    stop_event = asyncio.Event()
+
+    warmup_writes = 128 // concurrency
+    warmup_event = asyncio.Event()
+
+    stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (pk, c) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.QUORUM
+    rd_stmt = cql.prepare(f"SELECT * FROM {keyspace}.{table} WHERE pk = ?")
+    rd_stmt.consistency_level = ConsistencyLevel.QUORUM
+
+    key_gen = KeyGenerator()
+
+    async def do_writes(worker_id: int):
+        write_count = 0
+        while not stop_event.is_set():
+            pk = key_gen.next_pk()
+
+            # Once next_pk() is produced, key_gen.last_key() is assumed to be in the database
+            # hence we can't give up on it.
+            while True:
+                try:
+                    await cql.run_async(stmt, [pk, pk])
+                    # Check read-your-writes
+                    rows = await cql.run_async(rd_stmt, [pk])
+                    assert(len(rows) == 1)
+                    assert(rows[0].c == pk)
+                    write_count += 1
+                    break
+                except Exception as e:
+                    if ignore_errors:
+                        pass # Expected when node is brought down temporarily
+                    else:
+                        raise e
+
+            if pk == warmup_writes:
+                warmup_event.set()
+
+        logger.info(f"Worker #{worker_id} did {write_count} successful writes")
+
+    tasks = [asyncio.create_task(do_writes(worker_id)) for worker_id in range(concurrency)]
+
+    await asyncio.wait_for(warmup_event.wait(), timeout=60)
+
+    async def finish():
+        logger.info("Stopping workers")
+        stop_event.set()
+        await asyncio.gather(*tasks)
+
+        last = key_gen.last_pk()
+        if last is not None:
+            return last + 1
+        return 0
+
+    return finish
