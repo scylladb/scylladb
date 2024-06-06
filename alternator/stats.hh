@@ -11,7 +11,6 @@
 #include <cstdint>
 
 #include <seastar/core/metrics_registration.hh>
-#include "utils/estimated_histogram.hh"
 #include "utils/histogram.hh"
 #include "cql3/stats.hh"
 
