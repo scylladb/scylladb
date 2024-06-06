@@ -1407,7 +1407,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             service::raft_group0 group0_service{
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
-                    gossiper.local(), feature_service.local(), sys_ks.local(), group0_client};
+                    gossiper.local(), feature_service.local(), sys_ks.local(), group0_client, dbcfg.gossip_scheduling_group};
 
             service::tablet_allocator::config tacfg;
             tacfg.initial_tablets_scale = cfg->tablets_initial_scale_factor();

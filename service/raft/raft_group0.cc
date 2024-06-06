@@ -138,8 +138,9 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         gms::gossiper& gs,
         gms::feature_service& feat,
         db::system_keyspace& sys_ks,
-        raft_group0_client& client)
-    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs),  _feat(feat), _sys_ks(sys_ks), _client(client)
+        raft_group0_client& client,
+        seastar::scheduling_group sg)
+    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs),  _feat(feat), _sys_ks(sys_ks), _client(client), _sg(sg)
     , _status_for_monitoring(status_for_monitoring::normal)
 {
     register_metrics();
@@ -396,7 +397,10 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
     auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm, topology_change_enabled);
     auto& persistence = srv_for_group0.persistence;
     auto& server = *srv_for_group0.server;
-    co_await _raft_gr.start_server_for_group(std::move(srv_for_group0));
+    co_await with_scheduling_group(_sg, [this, srv_for_group0 = std::move(srv_for_group0)] () mutable {
+        return _raft_gr.start_server_for_group(std::move(srv_for_group0));
+    });
+
     _group0.emplace<raft::group_id>(group0_id);
 
     // Fix for scylladb/scylladb#16683:
