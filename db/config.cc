@@ -1391,6 +1391,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     // alternator_max_items_in_batch_write matches DynamoDB behaviour of size limit, but with different value - for DynamoDB it's 25
     // (see DynamoDB's documentation for BatchWriteItem command)
     , alternator_max_items_in_batch_write(this, "alternator_max_items_in_batch_write", value_status::Used, 100, "Maximum amount of items in single BatchItemWrite call.")
+    , alternator_allow_system_table_write(this, "alternator_allow_system_table_write", liveness::LiveUpdate, value_status::Used,
+        false,
+        "Allow writing to system tables using the .scylla.alternator.system prefix")
     , vector_store_uri(this, "vector_store_uri", value_status::Used, "", "The URI of the vector store to use for vector search. If not set, vector search is disabled.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , redis_port(this, "redis_port", value_status::Used, 0, "Port on which the REDIS transport listens for clients.")
