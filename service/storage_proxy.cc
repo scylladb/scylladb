@@ -740,6 +740,9 @@ private:
             slogger.info("storage_proxy::handle_read injection done");
         });
 
+        // Pin the current ERM version, for the duration of the read.
+        const auto erm = s->table().get_effective_replication_map();
+
         auto pr2 = ::compat::unwrap(std::move(pr), *s);
         auto do_query = [&]() {
             if constexpr (verb == read_verb::read_data) {
@@ -747,7 +750,6 @@ private:
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DATA called with wrapping range");
                 }
-                auto erm = s->table().get_effective_replication_map();
                 p->get_stats().replica_data_reads++;
                 if (!oda) {
                     throw std::runtime_error("READ_DATA called without digest algorithm");
@@ -765,7 +767,6 @@ private:
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DIGEST called with wrapping range");
                 }
-                auto erm = s->table().get_effective_replication_map();
                 p->get_stats().replica_digest_reads++;
                 if (!oda) {
                     throw std::runtime_error("READ_DIGEST called without digest algorithm");
