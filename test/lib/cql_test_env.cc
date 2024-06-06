@@ -753,7 +753,7 @@ private:
 
             service::raft_group0 group0_service{
                     abort_sources.local(), _group0_registry.local(), _ms,
-                    _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client};
+                    _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
 
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
