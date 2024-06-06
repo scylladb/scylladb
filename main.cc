@@ -1338,23 +1338,32 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             messaging.invoke_on_all(&netw::messaging_service::start).get();
 
             supervisor::notify("starting gossiper");
-            gms::gossip_config gcfg;
-            gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
-            gcfg.seeds = get_seeds_from_db_config(*cfg, broadcast_addr);
-            gcfg.cluster_name = cfg->cluster_name();
-            gcfg.partitioner = cfg->partitioner();
-            gcfg.ring_delay_ms = cfg->ring_delay_ms();
-            gcfg.shadow_round_ms = cfg->shadow_round_ms();
-            gcfg.shutdown_announce_ms = cfg->shutdown_announce_in_ms();
-            gcfg.skip_wait_for_gossip_to_settle = cfg->skip_wait_for_gossip_to_settle();
-            if (gcfg.cluster_name.empty()) {
-                gcfg.cluster_name = "Test Cluster";
+            auto cluster_name = cfg->cluster_name();
+            if (cluster_name.empty()) {
+                cluster_name = "Test Cluster";
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
             }
-            gcfg.group0_id = sys_ks.local().get_raft_group0_id().get();
+            auto group0_id = sys_ks.local().get_raft_group0_id().get();
+            auto gossiper_seeds = get_seeds_from_db_config(*cfg, broadcast_addr);
+
+            auto get_gossiper_cfg = sharded_parameter([&] {
+                gms::gossip_config gcfg;
+                gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
+                gcfg.seeds = gossiper_seeds;
+                gcfg.cluster_name = cluster_name;
+                gcfg.partitioner = cfg->partitioner();
+                gcfg.ring_delay_ms = cfg->ring_delay_ms();
+                gcfg.shadow_round_ms = cfg->shadow_round_ms();
+                gcfg.shutdown_announce_ms = cfg->shutdown_announce_in_ms();
+                gcfg.skip_wait_for_gossip_to_settle = cfg->skip_wait_for_gossip_to_settle();
+                gcfg.group0_id = group0_id;
+                gcfg.failure_detector_timeout_ms = cfg->failure_detector_timeout_in_ms;
+                gcfg.force_gossip_generation = cfg->force_gossip_generation;
+                return gcfg;
+            });
 
             debug::the_gossiper = &gossiper;
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::move(get_gossiper_cfg)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();

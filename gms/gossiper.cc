@@ -32,7 +32,6 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/exception.hh>
 #include <chrono>
-#include "db/config.hh"
 #include "locator/host_id.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/adaptors.hpp>
@@ -86,12 +85,10 @@ std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
     return ring_delay * 2;
 }
 
-gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg)
+gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg)
         : _abort_source(as)
         , _shared_token_metadata(stm)
         , _messaging(ms)
-        , _failure_detector_timeout_ms(cfg.failure_detector_timeout_in_ms)
-        , _force_gossip_generation(cfg.force_gossip_generation)
         , _gcfg(std::move(gcfg)) {
     // Gossiper's stuff below runs only on CPU0
     if (this_shard_id() != 0) {
@@ -955,7 +952,7 @@ future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, genera
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::milliseconds(2000);
-    auto max_duration = echo_interval + std::chrono::milliseconds(_failure_detector_timeout_ms());
+    auto max_duration = echo_interval + std::chrono::milliseconds(_gcfg.failure_detector_timeout_ms());
     while (is_enabled()) {
         bool failed = false;
         try {
@@ -2039,8 +2036,8 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     });
 
     build_seeds_list();
-    if (_force_gossip_generation() > 0) {
-        generation_nbr = gms::generation_type(_force_gossip_generation());
+    if (_gcfg.force_gossip_generation() > 0) {
+        generation_nbr = gms::generation_type(_gcfg.force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
     endpoint_state local_state = my_endpoint_state();

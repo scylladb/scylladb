@@ -19,7 +19,6 @@
 #include "log.hh"
 #include <seastar/core/thread.hh>
 #include <chrono>
-#include "db/config.hh"
 #include "db/schema_tables.hh"
 
 namespace bpo = boost::program_options;
@@ -54,7 +53,6 @@ int main(int ac, char ** av) {
             auto config = app.configuration();
             logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
             const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
-            auto cfg = std::make_unique<db::config>();
 
             sharded<abort_source> abort_sources;
             sharded<locator::shared_token_metadata> token_metadata;
@@ -79,7 +77,7 @@ int main(int ac, char ** av) {
                 gcfg.seeds.emplace(std::move(s));
             }
             sharded<gms::gossiper> gossiper;
-            gossiper.start(std::ref(abort_sources), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::move(gcfg)).get();
+            gossiper.start(std::ref(abort_sources), std::ref(token_metadata), std::ref(messaging), std::move(gcfg)).get();
 
             auto& server = messaging.local();
             auto port = server.port();
