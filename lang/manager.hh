@@ -31,6 +31,10 @@ public:
     const uint64_t wasm_yield_fuel;
     const uint64_t wasm_total_fuel;
 
+    const unsigned lua_max_bytes;
+    const unsigned lua_max_contiguous;
+    const std::chrono::milliseconds lua_timeout;
+
 public:
     struct wasm_config {
         size_t udf_memory_limit;
@@ -40,8 +44,14 @@ public:
         uint64_t yield_fuel;
         uint64_t total_fuel;
     };
+    struct lua_config {
+        unsigned max_bytes;
+        unsigned max_contiguous;
+        std::chrono::milliseconds timeout;
+    };
     struct config {
         std::optional<wasm_config> wasm;
+        lua_config lua;
     };
     manager(config);
     friend wasm::context;

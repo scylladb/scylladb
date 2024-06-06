@@ -1063,6 +1063,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             lang::manager::config lang_config;
+            lang_config.lua.max_bytes = cfg->user_defined_function_allocation_limit_bytes();
+            lang_config.lua.max_contiguous = cfg->user_defined_function_contiguous_allocation_limit_bytes();
+            lang_config.lua.timeout = std::chrono::milliseconds(cfg->user_defined_function_time_limit_ms());
             if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
                 lang_config.wasm = lang::manager::wasm_config {
                     .udf_memory_limit = cfg->wasm_udf_memory_limit(),
