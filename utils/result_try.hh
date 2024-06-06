@@ -30,8 +30,8 @@ struct noop_converter {
     template<typename F, typename... Args>
     static
     wrapped_type<std::invoke_result_t<F, Args...>>
-    invoke(F&& f, Args&&... args) {
-        return std::invoke(std::forward<F>(f), std::forward<Args>(args)...);
+    invoke(const F& f, Args&&... args) {
+        return std::invoke(f, std::forward<Args>(args)...);
     }
 };
 
@@ -53,8 +53,8 @@ struct futurizing_converter {
     template<typename F, typename... Args>
     static
     wrapped_type<std::invoke_result_t<F, Args...>>
-    invoke(F&& f, Args&&... args) {
-        return seastar::futurize_invoke(std::forward<F>(f), std::forward<Args>(args)...);
+    invoke(const F& f, Args&&... args) {
+        return seastar::futurize_invoke(f, std::forward<Args>(args)...);
     }
 };
 
@@ -176,12 +176,12 @@ public:
         if constexpr (std::is_base_of_v<Ex, std::remove_cvref_t<decltype(ex)>>) {
             if constexpr (std::is_invocable_v<Cb, const Ex&, failed_result_handle<R>>) {
                 // Invoke with exception reference and handle
-                return Converter::template invoke(_cb, ex, failed_result_handle<R>(std::move(original_result)));
+                return Converter::template invoke<Cb, const Ex&, failed_result_handle<R>>(_cb, ex, failed_result_handle<R>(std::move(original_result)));
             } else {
                 // Simplified interface - invoke with reference to exception only
                 static_assert(std::is_invocable_v<Cb, const Ex&>,
                         "The handler function does not have a suitable call operator");
-                return Converter::template invoke(_cb, ex);
+                return Converter::template invoke<Cb, const Ex&>(_cb, ex);
             }
         } else {
             // Let another handler try it
@@ -202,12 +202,12 @@ public:
 
                 if constexpr (std::is_invocable_v<Cb, const Ex&, exception_ptr_handle<R>>) {
                     // Invoke with exception reference and handle
-                    return Converter::template invoke(_cb, ex, exception_ptr_handle<R>(std::current_exception()));
+                    return Converter::template invoke<const Cb, const Ex&, exception_ptr_handle<R>>(_cb, ex, exception_ptr_handle<R>(std::current_exception()));
                 } else {
                     // Simplified interface - invoke with reference to exception only
                     static_assert(std::is_invocable_v<Cb, const Ex&>,
                             "The handler function does not have a suitable call operator");
-                    return Converter::template invoke(_cb, ex);
+                    return Converter::template invoke<const Cb, const Ex&>(_cb, ex);
                 }
             }
         };
@@ -252,12 +252,12 @@ public:
     handle_exception_from_result(const auto& ex, R& original_result, Continuation&& cont) {
         if constexpr (std::is_invocable_v<Cb, failed_result_handle<R>>) {
             // Invoke with handle
-            return Converter::template invoke(_cb, failed_result_handle<R>(std::move(original_result)));
+            return Converter::template invoke<Cb, failed_result_handle<R>>(_cb, failed_result_handle<R>(std::move(original_result)));
         } else {
             // Simplified interface - invoke without arguments
             static_assert(std::is_invocable_v<Cb>,
                     "The handler function does not have a suitable call operator");
-            return Converter::template invoke(_cb);
+            return Converter::template invoke<Cb>(_cb);
         }
         // Don't propagate to the next handler. The catch (...) is supposed
         // to match on all errors.
@@ -276,12 +276,12 @@ public:
 
                 if constexpr (std::is_invocable_v<Cb, exception_ptr_handle<R>>) {
                     // Invoke with handle
-                    return Converter::template invoke(_cb, exception_ptr_handle<R>(std::current_exception()));
+                    return Converter::template invoke<Cb, exception_ptr_handle<R>>(_cb, exception_ptr_handle<R>(std::current_exception()));
                 } else {
                     // Simplified interface - invoke without arguments
                     static_assert(std::is_invocable_v<Cb>,
                             "The handler function does not have a suitable call operator");
-                    return Converter::template invoke(_cb);
+                    return Converter::template invoke<Cb>(_cb);
                 }
             }
         };
@@ -384,7 +384,7 @@ public:
     typename Converter::template wrapped_type<R>
     handle(const auto& ex, R& original_result) {
         // No more handlers to try out, just return
-        return Converter::template wrap(std::move(original_result));
+        return Converter::template wrap<R>(std::move(original_result));
     }
 
     auto with_original_result(R& res) {
