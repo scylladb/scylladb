@@ -53,12 +53,3 @@ inline bool operator>(const proposal& lhs, const proposal& rhs) {
 template <> struct fmt::formatter<service::paxos::proposal> : fmt::formatter<string_view> {
     auto format(const service::paxos::proposal&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
-
-namespace service::paxos {
-
-static inline std::ostream& operator<<(std::ostream& os, const proposal& proposal) {
-    fmt::print(os, "{}", proposal);
-    return os;
-}
-
-}
