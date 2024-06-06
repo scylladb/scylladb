@@ -10,6 +10,8 @@ import requests
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 
+from .util import scylla_config_read, scylla_config_write, scylla_config_temporary
+
 internal_prefix = '.scylla.alternator.'
 
 # Test that fetching key columns from system tables works
@@ -106,3 +108,14 @@ def test_write_to_config(scylla_only, dynamodb):
             ExpressionAttributeNames={'#val': 'value'},
             ExpressionAttributeValues={':val': old_val}
         )
+
+# Same test as above, just using the scylla_config_temporary() utility
+# function (also validating its correctness)
+def test_scylla_config_temporary(scylla_only, dynamodb):
+    tbl = '.scylla.alternator.system.config'
+    parameter = 'query_tombstone_page_limit'
+    old_val = scylla_config_read(dynamodb, parameter)
+    new_val = old_val + "1"
+    with scylla_config_temporary(dynamodb, parameter, new_val):
+        assert scylla_config_read(dynamodb, parameter) == new_val
+    assert scylla_config_read(dynamodb, parameter) == old_val
