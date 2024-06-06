@@ -1192,14 +1192,11 @@ public:
     future<migration_plan> make_plan(dc_name dc) {
         migration_plan plan;
 
-        _stats.for_dc(dc).calls++;
-        lblogger.info("Examining DC {}", dc);
-
         // Causes load balancer to move some tablet even though load is balanced.
         auto shuffle = in_shuffle_mode();
-        if (shuffle) {
-            lblogger.warn("Running without convergence checks");
-        }
+
+        _stats.for_dc(dc).calls++;
+        lblogger.info("Examining DC {} (shuffle={}, balancing={})", dc, shuffle, _tm->tablets().balancing_enabled());
 
         const locator::topology& topo = _tm->get_topology();
 
@@ -1376,7 +1373,7 @@ public:
             });
         }
 
-        if (!nodes_to_drain.empty() || shuffle || (max_load != min_load && _tm->tablets().balancing_enabled())) {
+        if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || max_load != min_load))) {
             host_id target = *min_load_node;
             lblogger.info("target node: {}, avg_load: {}, max: {}", target, min_load, max_load);
             plan.merge(co_await make_internode_plan(dc, nodes, nodes_to_drain, target));

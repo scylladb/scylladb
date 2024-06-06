@@ -2106,8 +2106,21 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
             continue;
         }
-        // FIXME: we need to wait for current tablet movement and disable future tablet movement
-        auto erm = t->get_effective_replication_map();
+        locator::effective_replication_map_ptr erm;
+        while (true) {
+            _repair_module->check_in_shutdown();
+            erm = t->get_effective_replication_map();
+            const locator::tablet_map& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
+            if (!tmap.has_transitions()) {
+                break;
+            }
+            rlogger.info("repair[{}] Table {}.{} has tablet transitions, waiting for topology to quiesce", rid.uuid(), keyspace_name, table_name);
+            erm = nullptr;
+            co_await container().invoke_on(0, [] (repair_service& rs) {
+                return rs._tsm.local().await_not_busy();
+            });
+            rlogger.info("repair[{}] Topology quiesced", rid.uuid());
+        }
         auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
         struct repair_tablet_meta {
             locator::tablet_id id;
@@ -2237,7 +2250,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             for (auto& r : intersection_ranges) {
                 rlogger.debug("repair[{}] Repair tablet task table={}.{} master_shard_id={} range={} neighbors={} replicas={}",
                         rid.uuid(), keyspace_name, table_name, master_shard_id, r, repair_neighbors(nodes, shards).shard_map, m.replicas);
-                task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, master_shard_id, r, repair_neighbors(nodes, shards), m.replicas});
+                task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, master_shard_id, r, repair_neighbors(nodes, shards), m.replicas, erm});
                 co_await coroutine::maybe_yield();
             }
         }

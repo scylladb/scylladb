@@ -235,6 +235,12 @@ topology::upgrade_state_type upgrade_state_from_string(const sstring& s) {
     on_internal_error(tsmlogger, format("cannot map name {} to upgrade_state", s));
 }
 
+future<> topology_state_machine::await_not_busy() {
+    while (_topology.is_busy()) {
+        co_await event.wait();
+    }
+}
+
 }
 
 auto fmt::formatter<service::cleanup_status>::format(service::cleanup_status status,
