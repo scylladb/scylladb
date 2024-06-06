@@ -7,6 +7,8 @@
  */
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
+#include "mutation/canonical_mutation.hh"
+#include "service/raft/group0_state_machine.hh"
 #include "service/raft/group0_state_machine_merger.hh"
 
 namespace service {
@@ -76,6 +78,9 @@ std::vector<canonical_mutation>& group0_state_machine_merger::get_command_mutati
             on_internal_error(slogger, "trying to merge broadcast table command");
         },
         [] (topology_change& chng) -> std::vector<canonical_mutation>& {
+            return chng.mutations;
+        },
+        [] (service_levels_change& chng) -> std::vector<canonical_mutation>& {
             return chng.mutations;
         },
         [] (mixed_change& chng) -> std::vector<canonical_mutation>& {

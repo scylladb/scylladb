@@ -168,13 +168,25 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
         co_await _ss.topology_transition();
     },
+    [&] (service_levels_change& chng) -> future<> {
+        co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
+        co_await _ss.update_service_levels_configuration();
+    },
     [&] (mixed_change& chng) -> future<> {
         co_await _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
         co_await _ss.topology_transition();
         co_return;
     },
     [&] (write_mutations& muts) -> future<> {
-        return write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
+        bool update_service_levels = std::any_of(muts.mutations.begin(), muts.mutations.end(), [] (auto& mut) {
+            return mut.column_family_id() == db::system_keyspace::role_attributes()->id() || mut.column_family_id() == db::system_keyspace::role_members()->id();
+        });
+
+        co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
+        
+        if (update_service_levels) {
+            co_await _ss.update_service_levels_configuration(qos::update_only_effective_cache::yes);
+        }
     }
     ), cmd.change);
 

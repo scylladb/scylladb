@@ -27,6 +27,10 @@ struct topology_change {
     std::vector<canonical_mutation> mutations;
 };
 
+struct service_levels_change {
+    std::vector<canonical_mutation> mutations;
+};
+
 struct mixed_change {
     std::vector<canonical_mutation> mutations;
 };
@@ -36,7 +40,7 @@ struct write_mutations {
 };
 
 struct group0_command {
-    std::variant<service::schema_change, service::broadcast_table_query, service::topology_change, service::write_mutations, service::mixed_change> change;
+    std::variant<service::schema_change, service::broadcast_table_query, service::topology_change, service::service_levels_change, service::write_mutations, service::mixed_change> change;
     canonical_mutation history_append;
 
     std::optional<utils::UUID> prev_state_id;

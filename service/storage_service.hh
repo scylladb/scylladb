@@ -864,6 +864,10 @@ public:
     // Public for `reload_raft_topology_state` REST API.
     future<> topology_transition();
 
+    // Reload service levels in-memory configuration once.
+    // Must be called on shard 0.
+    future<> update_service_levels_configuration(qos::update_only_effective_cache update_only_effective_cache = qos::update_only_effective_cache::no);
+
     future<> do_cluster_cleanup();
 
     // Starts the upgrade procedure to topology on raft.

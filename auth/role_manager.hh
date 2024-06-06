@@ -75,6 +75,7 @@ public:
 };
 
 using role_set = std::unordered_set<sstring>;
+using direct_roles_map = std::unordered_multimap<sstring, sstring>;
 
 enum class recursive_role_query { yes, no };
 
@@ -142,6 +143,8 @@ public:
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
     virtual future<role_set> query_granted(std::string_view grantee, recursive_role_query) = 0;
+
+    virtual future<direct_roles_map> query_all_directly_granted() = 0;
 
     virtual future<role_set> query_all() = 0;
 

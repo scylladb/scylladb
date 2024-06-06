@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/timer.hh>
+#include "seastar/util/bool_class.hh"
 #include "seastarx.hh"
 #include "auth/role_manager.hh"
 #include <seastar/core/sstring.hh>
@@ -41,6 +42,8 @@ struct service_level {
      bool is_static;
 };
 
+using update_only_effective_cache = bool_class<class update_only_effective_cache_tag>;
+
 /**
  *  The service_level_controller class is an implementation of the service level
  *  controller design.
@@ -49,6 +52,33 @@ struct service_level {
  *      manipulation.
  *      2. Local controllers that act upon the data and facilitates execution in
  *      the service level context
+ *
+ *  Definitions:
+ *  service level - User creates service level with some parameters (timeout/workload type).
+ *                  Then it can be attached to some role, but it's not guaranteed the role
+ *                  will effectively get exactly the same parameter values 
+ *                  as its assigned service level.
+ *
+ *  effective service level - Represents exact values of role's parameters. It's created by
+ *                            merging all service levels attached to all roles which are
+ *                            granted to the user.
+ *
+ *  Example:
+ *      Roles: user_role, r1, r2
+ *          GRANT ROLE r1 TO user_role
+ *          GRANT ROLE r2 TO r1
+ *      Service levels:
+ *          - sl1 (timeout: 1h, workload type: batch)
+ *          - sl2 (timeout: 30 min)
+ *          - ATTACH SERVICE LEVEL sl1 TO user_role
+ *          - ATTACH SERVICE LEVEL sl2 TO r2
+ *
+ *      Effective service level of user_role is (timeout: 30 min, workload_type: batch).
+ *      It gets created by merging all service levels (sl1, sl2) which are attached to
+ *      all roles granted to the user (user_role, r1, r2).
+ *
+ *  For more detail check qos_common.hh (service_level_options::merge_with()) and
+ *  docs/dev/service_levels.md
  */
 class service_level_controller : public peering_sharded_service<service_level_controller>, public service::endpoint_lifecycle_subscriber {
 public:
@@ -79,6 +109,7 @@ private:
         future<> distributed_data_update = make_ready_future();
         abort_source dist_data_update_aborter;
         abort_source group0_aborter;
+        gms::feature::listener_registration switch_to_raft_sl_change_listener;
     };
 
     std::unique_ptr<global_controller_data> _global_controller_db;
@@ -86,7 +117,7 @@ private:
     static constexpr shard_id global_controller = 0;
 
     std::map<sstring, service_level> _service_levels_db;
-    std::unordered_map<sstring, sstring> _role_to_service_level;
+    std::map<sstring, service_level_options> _effective_service_levels_db;
     service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
@@ -142,6 +173,13 @@ public:
     void abort_group0_operations();
 
     /**
+     * Start legacy update loop only when RAFT_SERVICE_LEVELS_CHANGE feature is not enable yet and setup
+     * a callback which will stop the loop after the feature gets enabled.
+     * Must be called on shard 0.
+     */
+    void maybe_start_legacy_update_loop(gms::feature_service& feature_service, lw_shared_ptr<db::config> cfg);
+
+    /**
      * Check the distributed data for changes in a constant interval and updates
      * the service_levels configuration in accordance (adds, removes, or updates
      * service levels as necessary).
@@ -152,11 +190,28 @@ public:
     void update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f);
 
     /**
-     * Updates the service level data from the distributed data store.
+     * Request abort of update loop.
+     * Must be called on shard 0.
+     */
+    void stop_update_from_distributed_data();
+
+    /**
+     * Updates the service level cache from the distributed data store.
+     * Must be executed on shard 0.
      * @return a future that is resolved when the update is done
      */
-    future<> update_service_levels_from_distributed_data();
+    future<> update_service_levels_cache();
 
+    /**
+     * Updates effective service levels cache.
+     * The method uses service levels cache (_service_levels_db)
+     * and data from auth tables.
+     * Must be executed on shard 0.
+     * @return a future that is resolved when the update is done
+     */
+    future<> update_effective_service_levels_cache();
+
+    future<> update_cache(update_only_effective_cache update_only_effective_cache = update_only_effective_cache::no);
 
     future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists, std::optional<service::group0_guard> guard);
     future<> alter_distributed_service_level(sstring name, service_level_options slo, std::optional<service::group0_guard> guard);
@@ -171,7 +226,7 @@ public:
      * @return the effective service level options - they may in particular be a combination
      *         of options from multiple service levels
      */
-    future<std::optional<service_level_options>> find_service_level(auth::role_set roles, include_effective_names include_names = include_effective_names::no);
+    future<std::optional<service_level_options>> find_effective_service_level(const sstring& role_name);
 
     /**
      * Gets the service level data by name.
@@ -230,6 +285,7 @@ private:
     future<> notify_service_level_added(sstring name, service_level sl_data);
     future<> notify_service_level_updated(sstring name, service_level_options slo);
     future<> notify_service_level_removed(sstring name);
+    future<> notify_effective_service_levels_cache_reloaded();
 
     enum class  set_service_level_op_type {
         add_if_not_exists,
