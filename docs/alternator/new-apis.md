@@ -77,6 +77,11 @@ isolation policy for a specific table can be overridden by tagging the table
    in an error.
    Example: in order to query the contents of Scylla's system.large_rows,
    pass TableName='.scylla.alternator.system.large_rows' to a Query/Scan request.
+ * If the `alternator_allow_system_table_write` configuration option is set to
+   true (by default, it is false), system tables can also be written to. This
+   can be useful for, for example, modifying configuration options. Even when
+   writing system tables is enabled, the role sending the command must be a
+   superuser or the write will be denied.
 
 ## Service discovery
 As explained in [Scylla Alternator for DynamoDB users](compatibility.md),
