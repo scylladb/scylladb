@@ -284,7 +284,7 @@ static bool valid_table_name_chars(std::string_view name) {
 // can contain only the following characters: a-z, A-Z, 0-9, _ (underscore),
 // - (dash), . (dot)". However, Alternator only allows max_table_name_length
 // characters (see above) - not 255.
-static void validate_table_name(const std::string& name) {
+static void validate_table_name(std::string_view name) {
     if (name.length() < 3 || name.length() > max_table_name_length) {
         throw api_error::validation(
                 format("TableName must be at least 3 characters long and at most {} characters long", max_table_name_length));
@@ -383,15 +383,19 @@ schema_ptr executor::find_table(service::storage_proxy& proxy, const rjson::valu
     if (!table_name) {
         return nullptr;
     }
+    return find_table(proxy, *table_name);
+}
+
+schema_ptr executor::find_table(service::storage_proxy& proxy, std::string_view table_name) {
     try {
-        return proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(*table_name), *table_name);
+        return proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(table_name), table_name);
     } catch(data_dictionary::no_such_column_family&) {
         // DynamoDB returns validation error even when table does not exist
         // and the table name is invalid.
-        validate_table_name(table_name.value());
+        validate_table_name(table_name);
 
         throw api_error::resource_not_found(
-                fmt::format("Requested resource not found: Table: {} not found", *table_name));
+                fmt::format("Requested resource not found: Table: {} not found", table_name));
     }
 }
 
@@ -405,24 +409,39 @@ schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request)
     return schema;
 }
 
-static std::tuple<bool, std::string_view, std::string_view> try_get_internal_table(data_dictionary::database db, std::string_view table_name) {
+// try_get_internal_table() handles the special case that the given table_name
+// begins with INTERNAL_TABLE_PREFIX (".scylla.alternator."). In that case,
+// this function assumes that the rest of the name refers to an internal
+// Scylla table (e.g., system table) and returns the schema of that table -
+// or an exception if it doesn't exist. Otherwise, if table_name does not
+// start with INTERNAL_TABLE_PREFIX, this function returns an empty schema_ptr
+// and the caller should look for a normal Alternator table with that name.
+static schema_ptr try_get_internal_table(data_dictionary::database db, std::string_view table_name) {
     size_t it = table_name.find(executor::INTERNAL_TABLE_PREFIX);
     if (it != 0) {
-        return {false, "", ""};
+        return schema_ptr{};
     }
     table_name.remove_prefix(executor::INTERNAL_TABLE_PREFIX.size());
     size_t delim = table_name.find_first_of('.');
     if (delim == std::string_view::npos) {
-        return {false, "", ""};
+        return schema_ptr{};
     }
     std::string_view ks_name = table_name.substr(0, delim);
     table_name.remove_prefix(ks_name.size() + 1);
     // Only internal keyspaces can be accessed to avoid leakage
     auto ks = db.try_find_keyspace(ks_name);
     if (!ks || !ks->is_internal()) {
-        return {false, "", ""};
+        return schema_ptr{};
     }
-    return {true, ks_name, table_name};
+    try {
+        return db.find_schema(ks_name, table_name);
+    } catch (data_dictionary::no_such_column_family&) {
+        // DynamoDB returns validation error even when table does not exist
+        // and the table name is invalid.
+        validate_table_name(table_name);
+        throw api_error::resource_not_found(
+            fmt::format("Requested resource not found: Internal table: {}.{} not found", ks_name, table_name));
+        }
 }
 
 // get_table_or_view() is similar to to get_table(), except it returns either
@@ -435,18 +454,8 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     table_or_view_type type = table_or_view_type::base;
     std::string table_name = get_table_name(request);
 
-    auto [is_internal_table, internal_ks_name, internal_table_name] = try_get_internal_table(proxy.data_dictionary(), table_name);
-    if (is_internal_table) {
-        try {
-            return { proxy.data_dictionary().find_schema(sstring(internal_ks_name), sstring(internal_table_name)), type };
-        } catch (data_dictionary::no_such_column_family&) {
-            // DynamoDB returns validation error even when table does not exist
-            // and the table name is invalid.
-            validate_table_name(table_name);
-
-            throw api_error::resource_not_found(
-                fmt::format("Requested resource not found: Internal table: {}.{} not found", internal_ks_name, internal_table_name));
-        }
+    if (schema_ptr s = try_get_internal_table(proxy.data_dictionary(), table_name)) {
+        return {s, type};
     }
 
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
@@ -487,6 +496,24 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
                 fmt::format("Requested resource not found: Table: {} not found", table_name));
         }
     }
+}
+
+// get_table_for_write() is similar to get_table(), but additionally, if the
+// configuration allows this, may also allow writing to system table with
+// prefix INTERNAL_TABLE_PREFIX. This is analogous to the function
+// get_table_or_view() above which allows *reading* internal tables.
+static schema_ptr get_table_for_write(service::storage_proxy& proxy, const rjson::value& request) {
+    std::string table_name = get_table_name(request);
+    if (schema_ptr s = try_get_internal_table(proxy.data_dictionary(), table_name)) {
+        if (!proxy.data_dictionary().get_config().alternator_allow_system_table_write()) {
+            throw api_error::resource_not_found(fmt::format(
+                "Table {} is an internal table, and writing to it is forbidden"
+                " by the alternator_allow_system_table_write configuration",
+                table_name));
+        }
+        return s;
+    }
+    return executor::find_table(proxy, table_name);
 }
 
 // Convenience function for getting the value of a string attribute, or a
@@ -817,6 +844,23 @@ future<> verify_permission(
     auth::permission permission_to_check) {
     if (!enforce_authorization) {
         co_return;
+    }
+    // Unfortunately, the fix for issue #23218 did not modify the function
+    // that we use here - check_has_permissions(). So if we want to allow
+    // writes to internal tables (from try_get_internal_table()) only to a
+    // superuser, we need to explicitly check it here.
+    if (permission_to_check == auth::permission::MODIFY && is_internal_keyspace(schema->ks_name())) {
+        if (!client_state.user() ||
+            !client_state.user()->name ||
+            !co_await client_state.get_auth_service()->underlying_role_manager().is_superuser(*client_state.user()->name)) {
+                sstring username = "<anonymous>";
+                if (client_state.user() && client_state.user()->name) {
+                    username = client_state.user()->name.value();
+                }
+                throw api_error::access_denied(fmt::format(
+                    "Write access denied on internal table {}.{} to role {} because it is not a superuser",
+                    schema->ks_name(), schema->cf_name(), username));
+        }
     }
     auto resource = auth::make_data_resource(schema->ks_name(), schema->cf_name());
     if (!co_await client_state.check_has_permission(auth::command_desc(permission_to_check, resource))) {
@@ -2385,7 +2429,7 @@ rmw_operation::parse_returnvalues_on_condition_check_failure(const rjson::value&
 
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
     : _request(std::move(request))
-    , _schema(get_table(proxy, _request))
+    , _schema(get_table_for_write(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _consumed_capacity(_request)
     , _returnvalues(parse_returnvalues(_request))
@@ -2412,9 +2456,21 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
 }
 
 rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(schema_ptr schema) {
-    const auto& tags = get_tags_of_table_or_throw(schema);
-    auto it = tags.find(WRITE_ISOLATION_TAG_KEY);
-    if (it == tags.end() || it->second.empty()) {
+    const auto tags_ptr = db::get_tags_of_table(schema);
+    if (!tags_ptr) {
+        // Tags missing entirely from this table. This can't happen for a
+        // normal Alternator table, but can happen if get_table_for_write()
+        // allowed writing to a non-Alternator table (e.g., an internal table).
+        // If it is a system table, LWT will not work (and is also pointless
+        // for non-distributed tables), so use UNSAFE_RMW.
+        if(is_internal_keyspace(schema->ks_name())) {
+            return write_isolation::UNSAFE_RMW;
+        } else {
+            return default_write_isolation;
+        }
+    }
+    auto it = tags_ptr->find(WRITE_ISOLATION_TAG_KEY);
+    if (it == tags_ptr->end() || it->second.empty()) {
         return default_write_isolation;
     }
     return parse_write_isolation(it->second);
