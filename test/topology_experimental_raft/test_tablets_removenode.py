@@ -208,6 +208,8 @@ async def test_removenode_with_ignored_node(manager: ManagerClient):
     await manager.server_stop(servers[0].server_id) # removed
     await manager.server_stop(servers[1].server_id) # ignored
     await manager.remove_node(servers[2].server_id, servers[0].server_id, [servers[1].ip_addr])
+
+    await manager.others_not_see_server(servers[1].ip_addr)
     servers = servers[1:]
 
     await check()
