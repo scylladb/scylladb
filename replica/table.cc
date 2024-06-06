@@ -563,11 +563,12 @@ void storage_group_manager::for_each_storage_group(std::function<void(size_t, st
     }
 }
 
-void storage_group_manager::remove_storage_group(size_t id) {
+void storage_group_manager::mark_storage_group_for_remove(size_t id) {
     if (auto it = _storage_groups.find(id); it != _storage_groups.end()) {
+        _storage_groups_marked_for_remove.push_front(std::move(it->second));
         _storage_groups.erase(it);
     } else {
-        throw std::out_of_range(format("remove_storage_group: storage group with id={} not found", id));
+        throw std::out_of_range(format("mark_storage_group_for_remove: storage group with id={} not found", id));
     }
 }
 
@@ -2149,6 +2150,8 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
     auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
     auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
 
+    _storage_groups_marked_for_remove.clear();
+
     size_t old_tablet_count = old_tablet_map->tablet_count();
     size_t new_tablet_count = new_tablet_map->tablet_count();
     if (new_tablet_count > old_tablet_count) {
@@ -3543,7 +3546,7 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     // compaction_group::stop takes care of flushing.
     co_await stop_compaction_groups(sg);
     co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
-    _sg_manager->remove_storage_group(tid.value());
+    _sg_manager->mark_storage_group_for_remove(tid.value());
 }
 
 future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
