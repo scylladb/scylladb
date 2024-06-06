@@ -101,6 +101,7 @@ class raft_group0 {
     gms::feature_service& _feat;
     db::system_keyspace& _sys_ks;
     raft_group0_client& _client;
+    seastar::scheduling_group _sg;
 
     // Status of leader discovery. Initially there is no group 0,
     // and the variant contains no state. During initial cluster
@@ -140,7 +141,8 @@ public:
         gms::gossiper& gs,
         gms::feature_service& feat,
         db::system_keyspace& sys_ks,
-        raft_group0_client& client);
+        raft_group0_client& client,
+        seastar::scheduling_group sg);
 
     // Initialises RPC verbs on all shards.
     // Call after construction but before using the object.
@@ -294,6 +296,11 @@ public:
 
     const raft_address_map& address_map() const;
     raft_address_map& modifiable_address_map();
+
+    // Returns scheduling group group0 is configured to run with
+    seastar::scheduling_group get_scheduling_group() {
+        return _sg;
+    }
 private:
     static void init_rpc_verbs(raft_group0& shard0_this);
     static future<> uninit_rpc_verbs(netw::messaging_service& ms);

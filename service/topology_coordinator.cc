@@ -2934,7 +2934,9 @@ future<> run_topology_coordinator(
         rtlogger.info("start topology coordinator fiber");
         const bool upgrade_done = co_await coordinator.maybe_run_upgrade();
         if (upgrade_done) {
-            co_await coordinator.run();
+            co_await with_scheduling_group(group0.get_scheduling_group(), [&] {
+                return coordinator.run();
+            });
         }
     } catch (...) {
         ex = std::current_exception();
