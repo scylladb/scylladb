@@ -18,8 +18,6 @@ namespace wasm {
 struct context;
 }
 
-namespace db { class config; }
-
 namespace lang {
 
 class manager : public seastar::peering_sharded_service<manager> {
@@ -62,7 +60,7 @@ public:
     }
 
     using context = std::optional<cql3::functions::user_function::context>;
-    future<> create(sstring language, context& ctx, const db::config& cfg, sstring name, const std::vector<sstring>& arg_names, std::string script);
+    future<> create(sstring language, context& ctx, sstring name, const std::vector<sstring>& arg_names, std::string script);
 };
 
 } // lang namespace

@@ -1954,7 +1954,7 @@ static seastar::future<shared_ptr<cql3::functions::user_function>> create_func(r
     auto body = row.get_nonnull<sstring>("body");
     auto language = row.get_nonnull<sstring>("language");
     lang::manager::context ctx;
-    co_await db.lang().create(language, ctx, db.get_config(), name.name, arg_names, body);
+    co_await db.lang().create(language, ctx, name.name, arg_names, body);
     if (!ctx) {
         throw std::runtime_error(format("Unsupported language for UDF: {}", language));
     }

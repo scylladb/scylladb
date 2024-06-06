@@ -18,7 +18,6 @@
 #include "replica/database.hh" // for wasm
 #include "lang/manager.hh"
 #include "cql3/query_processor.hh"
-#include "db/config.hh"
 
 namespace cql3 {
 
@@ -38,9 +37,8 @@ seastar::future<shared_ptr<functions::function>> create_function_statement::crea
         arg_names.push_back(arg_name->to_string());
     }
 
-    auto&& db = qp.db();
     lang::manager::context ctx;
-    co_await qp.lang().create(_language, ctx, db.get_config(), _name.name, arg_names, _body);
+    co_await qp.lang().create(_language, ctx, _name.name, arg_names, _body);
     if (!ctx) {
         co_return nullptr;
     }

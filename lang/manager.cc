@@ -44,7 +44,7 @@ future<> manager::stop() {
     }
 }
 
-future<> manager::create(sstring language, context& ctx, const db::config& cfg, sstring name, const std::vector<sstring>& arg_names, std::string script) {
+future<> manager::create(sstring language, context& ctx, sstring name, const std::vector<sstring>& arg_names, std::string script) {
     if (language == "lua") {
         utils::updateable_value<unsigned> max_bytes(lua_max_bytes);
         utils::updateable_value<unsigned> max_contiguous(lua_max_contiguous);
