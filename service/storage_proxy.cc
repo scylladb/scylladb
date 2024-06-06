@@ -2223,6 +2223,21 @@ bool storage_proxy::need_throttle_writes() const {
 }
 
 void storage_proxy::unthrottle() {
+   // Here, we garbage-collect (from _throttled_writes) the response IDs which are no longer
+   // relevant, because their handlers are gone.
+   //
+   // need_throttle_writes() may remain true for an indefinite amount of time, so without this piece of code,
+   // _throttled_writes might also grow without any limit. We saw this happen in a throughput test once.
+   //
+   // Note that we only remove the irrelevant entries which are in front of the list.
+   // We don't touch the middle of the list, so an irrelevant ID will still remain in the list if there is some
+   // earlier ID which is still relevant. But since writes should have some reasonable finite timeout,
+   // we assume that it's not a problem.
+   //
+   while (!_throttled_writes.empty() && !_response_handlers.contains(_throttled_writes.front())) {
+       _throttled_writes.pop_front();
+   }
+
    while(!need_throttle_writes() && !_throttled_writes.empty()) {
        auto id = _throttled_writes.front();
        _throttled_writes.pop_front();
