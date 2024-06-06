@@ -9,7 +9,7 @@
 #include "lang/wasm.hh"
 #include "lang/manager.hh"
 
-namespace wasm {
+namespace lang {
 
 manager::manager(const std::optional<wasm::startup_context>& ctx)
         : _engine(ctx ? ctx->engine : nullptr)
@@ -23,4 +23,4 @@ future<> manager::stop() {
     }
 }
 
-}
+} // lang namespace

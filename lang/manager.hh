@@ -13,8 +13,11 @@
 #include "lang/wasm_alien_thread_runner.hh"
 
 namespace wasm {
-
 struct startup_context;
+struct context;
+}
+
+namespace lang {
 
 class manager {
     std::shared_ptr<rust::Box<wasmtime::Engine>> _engine;
@@ -23,12 +26,12 @@ class manager {
 
 public:
     manager(const std::optional<wasm::startup_context>&);
-    friend context;
+    friend wasm::context;
     future<> stop();
-    seastar::future<> precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script);
+    seastar::future<> precompile(wasm::context& ctx, const std::vector<sstring>& arg_names, std::string script);
     void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) noexcept {
         _instance_cache->remove(name, arg_types);
     }
 };
 
-}
+} // lang namespace

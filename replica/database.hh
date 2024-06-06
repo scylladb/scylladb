@@ -78,7 +78,7 @@ class reconcilable_result;
 namespace tracing { class trace_state_ptr; }
 namespace s3 { struct endpoint_config; }
 
-namespace wasm { class manager; }
+namespace lang { class manager; }
 
 namespace service {
 class storage_proxy;
@@ -1515,7 +1515,7 @@ private:
     gms::feature_service& _feat;
     std::vector<std::any> _listeners;
     const locator::shared_token_metadata& _shared_token_metadata;
-    wasm::manager& _wasm;
+    lang::manager& _lang_manager;
 
     utils::cross_shard_barrier _stop_barrier;
 
@@ -1591,7 +1591,7 @@ public:
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-            compaction_manager& cm, sstables::storage_manager& sstm, wasm::manager& wasm, sstables::directory_semaphore& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
+            compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
 
@@ -1625,8 +1625,8 @@ public:
     const locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
     const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
 
-    wasm::manager& wasm() noexcept { return _wasm; }
-    const wasm::manager& wasm() const noexcept { return _wasm; }
+    lang::manager& wasm() noexcept { return _lang_manager; }
+    const lang::manager& wasm() const noexcept { return _lang_manager; }
 
     service::migration_notifier& get_notifier() { return _mnotifier; }
     const service::migration_notifier& get_notifier() const { return _mnotifier; }

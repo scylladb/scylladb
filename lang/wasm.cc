@@ -41,7 +41,7 @@ context::context(wasmtime::Engine& engine_ptr, std::string name, instance_cache&
     , total_fuel(total_fuel) {
 }
 
-context::context(manager& manager, std::string name, uint64_t yield_fuel, uint64_t total_fuel)
+context::context(lang::manager& manager, std::string name, uint64_t yield_fuel, uint64_t total_fuel)
     : context(**manager._engine, std::move(name), *manager._instance_cache, yield_fuel, total_fuel)
 { }
 
@@ -229,9 +229,17 @@ struct from_val_visitor {
     }
 };
 
-seastar::future<> manager::precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script) {
+}
+
+namespace lang {
+
+seastar::future<> manager::precompile(wasm::context& ctx, const std::vector<sstring>& arg_names, std::string script) {
     return ::wasm::precompile(*_alien_runner, ctx, arg_names, std::move(script));
 }
+
+}
+
+namespace wasm {
 
 seastar::future<> precompile(alien_thread_runner& alien_runner, context& ctx, const std::vector<sstring>& arg_names, std::string script) {
     seastar::promise<rust::Box<wasmtime::Module>> done;
