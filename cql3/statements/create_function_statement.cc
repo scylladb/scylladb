@@ -16,6 +16,7 @@
 #include "lang/lua.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "replica/database.hh" // for wasm
+#include "lang/manager.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 

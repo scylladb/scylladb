@@ -67,6 +67,7 @@
 #include "service/raft/raft_group0.hh"
 #include "sstables/sstables_manager.hh"
 #include "init.hh"
+#include "lang/manager.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>

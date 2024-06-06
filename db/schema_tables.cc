@@ -69,6 +69,7 @@
 
 #include "index/target_parser.hh"
 #include "lang/lua.hh"
+#include "lang/manager.hh"
 
 #include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"

@@ -45,21 +45,6 @@ struct startup_context {
     startup_context(db::config& cfg, replica::database_config& dbcfg);
 };
 
-class manager {
-    std::shared_ptr<rust::Box<wasmtime::Engine>> _engine;
-    std::optional<wasm::instance_cache> _instance_cache;
-    std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
-
-public:
-    manager(const std::optional<wasm::startup_context>&);
-    friend context;
-    future<> stop();
-    seastar::future<> precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script);
-    void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) noexcept {
-        _instance_cache->remove(name, arg_types);
-    }
-};
-
 struct context {
     wasmtime::Engine& engine_ptr;
     std::optional<rust::Box<wasmtime::Module>> module;

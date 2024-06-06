@@ -19,6 +19,7 @@
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "lang/wasm_alien_thread_runner.hh"
+#include "lang/manager.hh"
 
 logging::logger wasm_logger("wasm");
 
@@ -30,18 +31,6 @@ startup_context::startup_context(db::config& cfg, replica::database_config& dbcf
     , cache_size(dbcfg.available_memory * cfg.wasm_cache_memory_fraction())
     , instance_size(cfg.wasm_cache_instance_size_limit())
     , timer_period(std::chrono::milliseconds(cfg.wasm_cache_timeout_in_ms())) {
-}
-
-manager::manager(const std::optional<wasm::startup_context>& ctx)
-        : _engine(ctx ? ctx->engine : nullptr)
-        , _instance_cache(ctx ? std::make_optional<wasm::instance_cache>(ctx->cache_size, ctx->instance_size, ctx->timer_period) : std::nullopt)
-        , _alien_runner(ctx ? ctx->alien_runner : nullptr)
-{}
-
-future<> manager::stop() {
-    if (_instance_cache) {
-        co_await _instance_cache->stop();
-    }
 }
 
 context::context(wasmtime::Engine& engine_ptr, std::string name, instance_cache& cache, uint64_t yield_fuel, uint64_t total_fuel)
