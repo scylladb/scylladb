@@ -1953,25 +1953,14 @@ static seastar::future<shared_ptr<cql3::functions::user_function>> create_func(r
     auto arg_names = get_list<sstring>(row, "argument_names");
     auto body = row.get_nonnull<sstring>("body");
     auto language = row.get_nonnull<sstring>("language");
-    if (language == "lua") {
-        lua::runtime_config cfg = lua::make_runtime_config(db.get_config());
-        cql3::functions::user_function::context ctx = cql3::functions::user_function::lua_context {
-            .bitcode = lua::compile(cfg, arg_names, body),
-            .cfg = cfg,
-        };
-
-        co_return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
-                std::move(body), language, std::move(return_type),
-                row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
-    } else if (language == "wasm") {
-        wasm::context ctx(db.wasm(), name.name, db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel());
-        co_await db.wasm().precompile(ctx, arg_names, body);
-        co_return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
-                std::move(body), language, std::move(return_type),
-                row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
-    } else {
+    lang::manager::context ctx;
+    co_await db.lang().create(language, ctx, db.get_config(), name.name, arg_names, body);
+    if (!ctx) {
         throw std::runtime_error(format("Unsupported language for UDF: {}", language));
     }
+    co_return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
+            std::move(body), language, std::move(return_type),
+            row.get_nonnull<bool>("called_on_null_input"), std::move(*ctx));
 }
 
 static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row) {
@@ -2033,7 +2022,7 @@ static void drop_cached_func(replica::database& db, const query::result_set_row&
         cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
         auto arg_types = read_arg_types(db, row, name.keyspace);
-        db.wasm().remove(name, arg_types);
+        db.lang().remove(name, arg_types);
     }
 }
 

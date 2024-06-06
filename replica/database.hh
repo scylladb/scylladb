@@ -1625,8 +1625,8 @@ public:
     const locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
     const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
 
-    lang::manager& wasm() noexcept { return _lang_manager; }
-    const lang::manager& wasm() const noexcept { return _lang_manager; }
+    lang::manager& lang() noexcept { return _lang_manager; }
+    const lang::manager& lang() const noexcept { return _lang_manager; }
 
     service::migration_notifier& get_notifier() { return _mnotifier; }
     const service::migration_notifier& get_notifier() const { return _mnotifier; }

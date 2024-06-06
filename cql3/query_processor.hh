@@ -174,7 +174,7 @@ public:
         return _cql_stats;
     }
 
-    lang::manager& wasm() { return _lang_manager; }
+    lang::manager& lang() { return _lang_manager; }
 
     db::system_keyspace::auth_version_t auth_version;
 

@@ -12,10 +12,13 @@
 #include "rust/wasmtime_bindings.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "lang/wasm_alien_thread_runner.hh"
+#include "cql3/functions/user_function.hh"
 
 namespace wasm {
 struct context;
 }
+
+namespace db { class config; }
 
 namespace lang {
 
@@ -42,6 +45,9 @@ public:
     void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) noexcept {
         _instance_cache->remove(name, arg_types);
     }
+
+    using context = std::optional<cql3::functions::user_function::context>;
+    future<> create(sstring language, context& ctx, const db::config& cfg, sstring name, const std::vector<sstring>& arg_names, std::string script);
 };
 
 } // lang namespace

@@ -39,27 +39,13 @@ seastar::future<shared_ptr<functions::function>> create_function_statement::crea
     }
 
     auto&& db = qp.db();
-    if (_language == "lua") {
-        auto cfg = lua::make_runtime_config(db.get_config());
-        functions::user_function::context ctx = functions::user_function::lua_context {
-            .bitcode = lua::compile(cfg, arg_names, _body),
-            .cfg = cfg,
-        };
-
-        co_return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
-            std::move(return_type), _called_on_null_input, std::move(ctx));
-    } else if (_language == "wasm") {
-       // FIXME: need better way to test wasm compilation without real_database()
-       wasm::context ctx(qp.wasm(), _name.name, db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel());
-       try {
-            co_await qp.wasm().precompile(ctx, arg_names, _body);
-            co_return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
-                std::move(return_type), _called_on_null_input, std::move(ctx));
-       } catch (const wasm::exception& we) {
-           throw exceptions::invalid_request_exception(we.what());
-       }
+    lang::manager::context ctx;
+    co_await qp.lang().create(_language, ctx, db.get_config(), _name.name, arg_names, _body);
+    if (!ctx) {
+        co_return nullptr;
     }
-    co_return nullptr;
+    co_return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
+        std::move(return_type), _called_on_null_input, std::move(*ctx));
 }
 
 std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dictionary::database db, cql_stats& stats) {
