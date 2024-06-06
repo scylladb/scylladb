@@ -56,7 +56,7 @@ std::unique_ptr<prepared_statement> create_role_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<create_role_statement>(*this));
 }
 
-future<> create_role_statement::grant_permissions_to_creator(const service::client_state& cs, ::service::mutations_collector& mc) const {
+future<> create_role_statement::grant_permissions_to_creator(const service::client_state& cs, ::service::group0_batch& mc) const {
     auto resource = auth::make_role_resource(_role);
     try {
         co_await auth::grant_applicable_permissions(
@@ -95,7 +95,7 @@ create_role_statement::execute(query_processor&,
     const auto& cs = state.get_client_state();
     auto& as = *cs.get_auth_service();
 
-    service::mutations_collector mc{std::move(guard)};
+    service::group0_batch mc{std::move(guard)};
     try {
         co_await auth::create_role(as, _role, config, extract_authentication_options(_options), mc);
         co_await grant_permissions_to_creator(cs, mc);
@@ -173,7 +173,7 @@ alter_role_statement::execute(query_processor&, service::query_state& state, con
     update.can_login = _options.can_login;
 
     auto& as = *state.get_client_state().get_auth_service();
-    service::mutations_collector mc{std::move(guard)};
+    service::group0_batch mc{std::move(guard)};
     try {
         co_await auth::alter_role(as, _role, update, extract_authentication_options(_options), mc);
     } catch (const auth::nonexistant_role& e) {
@@ -228,7 +228,7 @@ future<> drop_role_statement::check_access(query_processor& qp, const service::c
 
 future<result_message_ptr>
 drop_role_statement::execute(query_processor&, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
-    service::mutations_collector mc{std::move(guard)};
+    service::group0_batch mc{std::move(guard)};
     auto& as = *state.get_client_state().get_auth_service();
     try {
         co_await auth::drop_role(as, _role, mc);
@@ -395,7 +395,7 @@ future<> grant_role_statement::check_access(query_processor& qp, const service::
 
 future<result_message_ptr>
 grant_role_statement::execute(query_processor&, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
-    service::mutations_collector mc{std::move(guard)};
+    service::group0_batch mc{std::move(guard)};
     auto& as = *state.get_client_state().get_auth_service();
     try {
         co_await auth::grant_role(as, _grantee, _role, mc);
@@ -428,7 +428,7 @@ future<result_message_ptr> revoke_role_statement::execute(
         service::query_state& state,
         const query_options&,
         std::optional<service::group0_guard> guard) const {
-    service::mutations_collector mc{std::move(guard)};
+    service::group0_batch mc{std::move(guard)};
     auto& as = *state.get_client_state().get_auth_service();
     try {
         co_await auth::revoke_role(as, _revokee, _role, mc);

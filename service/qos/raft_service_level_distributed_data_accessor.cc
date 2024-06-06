@@ -56,7 +56,7 @@ static void validate_state(const service::raft_group0_client& group0_client) {
     }
 }
 
-future<> raft_service_level_distributed_data_accessor::set_service_level(sstring service_level_name, qos::service_level_options slo, service::mutations_collector& mc) const {
+future<> raft_service_level_distributed_data_accessor::set_service_level(sstring service_level_name, qos::service_level_options slo, service::group0_batch& mc) const {
     validate_state(_group0_client);
     
     static sstring insert_query = format("INSERT INTO {}.{} (service_level, timeout, workload_type) VALUES (?, ?, ?);", db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2);
@@ -68,7 +68,7 @@ future<> raft_service_level_distributed_data_accessor::set_service_level(sstring
     mc.add_mutations(std::move(muts), format("service levels internal statement: {}", insert_query));
 }
 
-future<> raft_service_level_distributed_data_accessor::drop_service_level(sstring service_level_name, service::mutations_collector& mc) const {
+future<> raft_service_level_distributed_data_accessor::drop_service_level(sstring service_level_name, service::group0_batch& mc) const {
     validate_state(_group0_client);
 
     static sstring delete_query = format("DELETE FROM {}.{} WHERE service_level= ?;", db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2);
@@ -77,7 +77,7 @@ future<> raft_service_level_distributed_data_accessor::drop_service_level(sstrin
     mc.add_mutations(std::move(muts), format("service levels internal statement: {}", delete_query));
 }
 
-future<> raft_service_level_distributed_data_accessor::commit_mutations(service::mutations_collector&& mc, abort_source& as) const {
+future<> raft_service_level_distributed_data_accessor::commit_mutations(service::group0_batch&& mc, abort_source& as) const {
     return std::move(mc).commit(_group0_client, as, ::service::raft_timeout{});
 }
 

@@ -239,32 +239,32 @@ SEASTAR_TEST_CASE(test_concurrent_group0_modifications) {
     });
 }
 
-SEASTAR_TEST_CASE(test_mutations_collector) {
+SEASTAR_TEST_CASE(test_group0_batch) {
     return do_with_cql_env([] (cql_test_env& e) -> future<> {
         auto& rclient = e.get_raft_group0_client();
         abort_source as;
 
-        co_await e.execute_cql("CREATE TABLE test_mutations_collector (key int, part int, PRIMARY KEY (key, part))");
+        co_await e.execute_cql("CREATE TABLE test_group0_batch (key int, part int, PRIMARY KEY (key, part))");
 
         auto insert_mut = [&] (int key, int part) -> future<mutation> {
-            auto muts = co_await e.get_modification_mutations(format("INSERT INTO test_mutations_collector (key, part) VALUES ({}, {})", key, part));
+            auto muts = co_await e.get_modification_mutations(format("INSERT INTO test_group0_batch (key, part) VALUES ({}, {})", key, part));
             co_return muts[0];
         };
 
-        auto do_transaction = [&] (std::function<future<>(service::mutations_collector&)> f) -> future<> {
+        auto do_transaction = [&] (std::function<future<>(service::group0_batch&)> f) -> future<> {
             auto guard = co_await rclient.start_operation(&as);
-            service::mutations_collector mc(std::move(guard));
+            service::group0_batch mc(std::move(guard));
             co_await f(mc);
             co_await std::move(mc).commit(rclient, as, ::service::raft_timeout{});
         };
 
         // test simple add_mutation
-        co_await do_transaction([&] (service::mutations_collector& mc) -> future<> {
+        co_await do_transaction([&] (service::group0_batch& mc) -> future<> {
             mc.add_mutation(co_await insert_mut(1, 1));
             mc.add_mutation(co_await insert_mut(2, 1));
         });
         BOOST_TEST_PASSPOINT();
-        assert_that(co_await e.execute_cql("SELECT * FROM test_mutations_collector WHERE part = 1 ALLOW FILTERING"))
+        assert_that(co_await e.execute_cql("SELECT * FROM test_group0_batch WHERE part = 1 ALLOW FILTERING"))
             .is_rows()
             .with_size(2)
             .with_rows_ignore_order({
@@ -274,7 +274,7 @@ SEASTAR_TEST_CASE(test_mutations_collector) {
         // test extract
         {
             auto guard = co_await rclient.start_operation(&as);
-            service::mutations_collector mc(std::move(guard));
+            service::group0_batch mc(std::move(guard));
             mc.add_mutation(co_await insert_mut(1, 2));
             mc.add_generator([&] (api::timestamp_type t) -> ::service::mutations_generator {
                 co_yield co_await insert_mut(2, 2);
@@ -285,10 +285,10 @@ SEASTAR_TEST_CASE(test_mutations_collector) {
             BOOST_REQUIRE(v.second); // we got the guard too
         }
         BOOST_TEST_PASSPOINT();
-        assert_that(co_await e.execute_cql("SELECT * FROM test_mutations_collector WHERE part = 2 ALLOW FILTERING")).is_rows().is_empty();
+        assert_that(co_await e.execute_cql("SELECT * FROM test_group0_batch WHERE part = 2 ALLOW FILTERING")).is_rows().is_empty();
 
         // test all add methods combined
-        co_await do_transaction([&] (service::mutations_collector& mc) -> future<> {
+        co_await do_transaction([&] (service::group0_batch& mc) -> future<> {
             mc.add_mutations({
                 co_await insert_mut(1, 3),
                 co_await insert_mut(2, 3)
@@ -301,7 +301,7 @@ SEASTAR_TEST_CASE(test_mutations_collector) {
             });
         });
         BOOST_TEST_PASSPOINT();
-        assert_that(co_await e.execute_cql("SELECT * FROM test_mutations_collector WHERE part = 3 ALLOW FILTERING"))
+        assert_that(co_await e.execute_cql("SELECT * FROM test_group0_batch WHERE part = 3 ALLOW FILTERING"))
             .is_rows()
             .with_size(6)
             .with_rows_ignore_order({
@@ -313,14 +313,14 @@ SEASTAR_TEST_CASE(test_mutations_collector) {
                 {int32_type->decompose(6), int32_type->decompose(3)}});
 
         // test generator only
-        co_await do_transaction([&] (service::mutations_collector& mc) -> future<> {
+        co_await do_transaction([&] (service::group0_batch& mc) -> future<> {
             mc.add_generator([&] (api::timestamp_type t) -> ::service::mutations_generator {
                 co_yield co_await insert_mut(1, 4);
             });
             co_return;
         });
         BOOST_TEST_PASSPOINT();
-        assert_that(co_await e.execute_cql("SELECT * FROM test_mutations_collector WHERE part = 4 ALLOW FILTERING"))
+        assert_that(co_await e.execute_cql("SELECT * FROM test_group0_batch WHERE part = 4 ALLOW FILTERING"))
             .is_rows()
             .with_size(1)
             .with_rows_ignore_order({
@@ -328,7 +328,7 @@ SEASTAR_TEST_CASE(test_mutations_collector) {
 
 
         // nop without mutations nor generator
-        auto mc1 = service::mutations_collector::unused();
+        auto mc1 = service::group0_batch::unused();
         co_await std::move(mc1).commit(rclient, as, ::service::raft_timeout{});
     });
 }

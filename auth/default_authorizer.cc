@@ -90,7 +90,7 @@ future<> default_authorizer::migrate_legacy_metadata() {
             return do_with(
                     row.get_as<sstring>("username"),
                     parse_resource(row.get_as<sstring>(RESOURCE_NAME)),
-                    ::service::mutations_collector::unused(),
+                    ::service::group0_batch::unused(),
                     [this, &row](const auto& username, const auto& r, auto& mc) {
                 const permission_set perms = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
                 return grant(username, perms, r, mc);
@@ -187,7 +187,7 @@ default_authorizer::modify(
         permission_set set,
         const resource& resource,
         std::string_view op,
-        ::service::mutations_collector& mc) {
+        ::service::group0_batch& mc) {
     const sstring query = format("UPDATE {}.{} SET {} = {} {} ? WHERE {} = ? AND {} = ?",
             get_auth_ks_name(_qp),
             PERMISSIONS_CF,
@@ -209,11 +209,11 @@ default_authorizer::modify(
 }
 
 
-future<> default_authorizer::grant(std::string_view role_name, permission_set set, const resource& resource, ::service::mutations_collector& mc) {
+future<> default_authorizer::grant(std::string_view role_name, permission_set set, const resource& resource, ::service::group0_batch& mc) {
     return modify(role_name, std::move(set), resource, "+", mc);
 }
 
-future<> default_authorizer::revoke(std::string_view role_name, permission_set set, const resource& resource, ::service::mutations_collector& mc) {
+future<> default_authorizer::revoke(std::string_view role_name, permission_set set, const resource& resource, ::service::group0_batch& mc) {
     return modify(role_name, std::move(set), resource, "-", mc);
 }
 
@@ -244,7 +244,7 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
     co_return all_details;
 }
 
-future<> default_authorizer::revoke_all(std::string_view role_name, ::service::mutations_collector& mc) {
+future<> default_authorizer::revoke_all(std::string_view role_name, ::service::group0_batch& mc) {
     try {
         const sstring query = format("DELETE FROM {}.{} WHERE {} = ?",
                 get_auth_ks_name(_qp),
@@ -310,7 +310,7 @@ future<> default_authorizer::revoke_all_legacy(const resource& resource) {
     });
 }
 
-future<> default_authorizer::revoke_all(const resource& resource, ::service::mutations_collector& mc) {
+future<> default_authorizer::revoke_all(const resource& resource, ::service::group0_batch& mc) {
     if (legacy_mode(_qp)) {
         co_return co_await revoke_all_legacy(resource);
     }
@@ -354,7 +354,7 @@ future<> default_authorizer::revoke_all(const resource& resource, ::service::mut
     mc.add_generator(std::move(gen), "default_authorizer::revoke_all");
 }
 
-void default_authorizer::revoke_all_keyspace_resources(const resource& ks_resource, ::service::mutations_collector& mc) {
+void default_authorizer::revoke_all_keyspace_resources(const resource& ks_resource, ::service::group0_batch& mc) {
     auto ks_name = ks_resource.name();
     auto gen = [this, ks_name] (api::timestamp_type t) -> ::service::mutations_generator {
         const sstring query = format("SELECT {}, {} FROM {}.{}",

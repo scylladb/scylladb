@@ -48,7 +48,7 @@ const sstring& drop_keyspace_statement::keyspace() const
     return _keyspace;
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_keyspace_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::mutations_collector& mc) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_keyspace_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
 
     try {

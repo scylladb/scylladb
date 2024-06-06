@@ -36,19 +36,19 @@ public:
         virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const override {
             return _sys_dist_ks.local().get_service_level(service_level_name);
         }
-        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, service::mutations_collector&) const override {
+        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, service::group0_batch&) const override {
             return _sys_dist_ks.local().set_service_level(service_level_name, slo).then([this] () {
                 return _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
             });
 
         }
-        virtual future<> drop_service_level(sstring service_level_name, service::mutations_collector&) const override {
+        virtual future<> drop_service_level(sstring service_level_name, service::group0_batch&) const override {
             return _sys_dist_ks.local().drop_service_level(service_level_name).then([this] () {
                 return _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
             });
         }
 
-        virtual future<> commit_mutations(service::mutations_collector&& mc, abort_source& as) const override { return make_ready_future(); }
+        virtual future<> commit_mutations(service::group0_batch&& mc, abort_source& as) const override { return make_ready_future(); }
 
         virtual bool is_v2() const override {
             return false;

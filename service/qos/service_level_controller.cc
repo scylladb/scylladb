@@ -354,16 +354,16 @@ void service_level_controller::update_from_distributed_data(std::function<steady
     }
 }
 
-future<> service_level_controller::add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exists, service::mutations_collector& mc) {
+future<> service_level_controller::add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exists, service::group0_batch& mc) {
     set_service_level_op_type add_type = if_not_exists ? set_service_level_op_type::add_if_not_exists : set_service_level_op_type::add;
     return set_distributed_service_level(name, slo, add_type, mc);
 }
 
-future<> service_level_controller::alter_distributed_service_level(sstring name, service_level_options slo, service::mutations_collector& mc) {
+future<> service_level_controller::alter_distributed_service_level(sstring name, service_level_options slo, service::group0_batch& mc) {
     return set_distributed_service_level(name, slo, set_service_level_op_type::alter, mc);
 }
 
-future<> service_level_controller::drop_distributed_service_level(sstring name, bool if_exists, service::mutations_collector& mc) {
+future<> service_level_controller::drop_distributed_service_level(sstring name, bool if_exists, service::group0_batch& mc) {
     auto sl_info = co_await _sl_data_accessor->get_service_levels();
     auto it = sl_info.find(name);
     if (it == sl_info.end()) {
@@ -398,7 +398,7 @@ future<service_levels_info> service_level_controller::get_distributed_service_le
     return _sl_data_accessor ? _sl_data_accessor->get_service_level(service_level_name) : make_ready_future<service_levels_info>();
 }
 
-future<> service_level_controller::set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, service::mutations_collector& mc) {
+future<> service_level_controller::set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, service::group0_batch& mc) {
     auto sl_info = co_await _sl_data_accessor->get_service_levels();
     auto it = sl_info.find(name);
     // test for illegal requests or requests that should terminate without any action

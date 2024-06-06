@@ -24,7 +24,7 @@ std::unique_ptr<prepared_statement> drop_function_statement::prepare(data_dictio
     return std::make_unique<prepared_statement>(make_shared<drop_function_statement>(*this));
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_function_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::mutations_collector& mc) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_function_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
 
     auto func = co_await validate_while_executing(qp);

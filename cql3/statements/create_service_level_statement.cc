@@ -38,7 +38,7 @@ create_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &,
         std::optional<service::group0_guard> guard) const {
-    service::mutations_collector mc{std::move(guard)};
+    service::group0_batch mc{std::move(guard)};
     qos::service_level_options slo = _slo.replace_defaults(qos::service_level_options{});
     auto& sl = state.get_service_level_controller();
     co_await sl.add_distributed_service_level(_service_level, slo, _if_not_exists, mc);

@@ -87,15 +87,15 @@ public:
         });
     }
 
-    virtual future<> create(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) override {
+    virtual future<> create(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) override {
         return _authenticator->create(role_name, options, mc);
     }
 
-    virtual future<> alter(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) override {
+    virtual future<> alter(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) override {
         return _authenticator->alter(role_name, options, mc);
     }
 
-    virtual future<> drop(std::string_view role_name, ::service::mutations_collector& mc) override {
+    virtual future<> drop(std::string_view role_name, ::service::group0_batch& mc) override {
         return _authenticator->drop(role_name, mc);
     }
 
@@ -187,11 +187,11 @@ public:
         return make_ready_future<permission_set>(transitional_permissions);
     }
 
-    virtual future<> grant(std::string_view s, permission_set ps, const resource& r, ::service::mutations_collector& mc)  override {
+    virtual future<> grant(std::string_view s, permission_set ps, const resource& r, ::service::group0_batch& mc)  override {
         return _authorizer->grant(s, std::move(ps), r, mc);
     }
 
-    virtual future<> revoke(std::string_view s, permission_set ps, const resource& r, ::service::mutations_collector& mc) override {
+    virtual future<> revoke(std::string_view s, permission_set ps, const resource& r, ::service::group0_batch& mc) override {
         return _authorizer->revoke(s, std::move(ps), r, mc);
     }
 
@@ -199,11 +199,11 @@ public:
         return _authorizer->list_all();
     }
 
-    virtual future<> revoke_all(std::string_view s, ::service::mutations_collector& mc) override {
+    virtual future<> revoke_all(std::string_view s, ::service::group0_batch& mc) override {
         return _authorizer->revoke_all(s, mc);
     }
 
-    virtual future<> revoke_all(const resource& r, ::service::mutations_collector& mc) override {
+    virtual future<> revoke_all(const resource& r, ::service::group0_batch& mc) override {
         return _authorizer->revoke_all(r, mc);
     }
 

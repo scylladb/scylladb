@@ -257,7 +257,7 @@ future<authenticated_user> password_authenticator::authenticate(
     }
 }
 
-future<> password_authenticator::create(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) {
+future<> password_authenticator::create(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) {
     if (!options.password) {
         co_return;
     }
@@ -275,7 +275,7 @@ future<> password_authenticator::create(std::string_view role_name, const authen
     }
 }
 
-future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) {
+future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) {
     if (!options.password) {
         co_return;
     }
@@ -298,7 +298,7 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
     }
 }
 
-future<> password_authenticator::drop(std::string_view name, ::service::mutations_collector& mc) {
+future<> password_authenticator::drop(std::string_view name, ::service::group0_batch& mc) {
     const sstring query = format("DELETE {} FROM {}.{} WHERE {} = ?",
             SALTED_HASH,
             get_auth_ks_name(_qp),

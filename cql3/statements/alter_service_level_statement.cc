@@ -37,7 +37,7 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 alter_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &, std::optional<service::group0_guard> guard) const {
-    service::mutations_collector mc{std::move(guard)};
+    service::group0_batch mc{std::move(guard)};
     qos::service_level& sl = state.get_service_level_controller().get_service_level(_service_level);
     qos::service_level_options slo = _slo.replace_defaults(sl.slo);
     auto& slc = state.get_service_level_controller();

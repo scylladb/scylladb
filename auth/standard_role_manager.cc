@@ -224,7 +224,7 @@ future<> standard_role_manager::migrate_legacy_metadata() {
             return do_with(
                     row.get_as<sstring>("name"),
                     std::move(config),
-                    ::service::mutations_collector::unused(),
+                    ::service::group0_batch::unused(),
                     [this](const auto& name, const auto& config, auto& mc) {
                 return create_or_replace(name, config, mc);
             });
@@ -275,7 +275,7 @@ future<> standard_role_manager::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});;
 }
 
-future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::mutations_collector& mc) {
+future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
     const sstring query = format("INSERT INTO {}.{} ({}, is_superuser, can_login) VALUES (?, ?, ?)",
             get_auth_ks_name(_qp),
             meta::roles_table::name,
@@ -293,7 +293,7 @@ future<> standard_role_manager::create_or_replace(std::string_view role_name, co
 }
 
 future<>
-standard_role_manager::create(std::string_view role_name, const role_config& c, ::service::mutations_collector& mc) {
+standard_role_manager::create(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
     return exists(role_name).then([this, role_name, &c, &mc](bool role_exists) {
         if (role_exists) {
             throw role_already_exists(role_name);
@@ -304,7 +304,7 @@ standard_role_manager::create(std::string_view role_name, const role_config& c, 
 }
 
 future<>
-standard_role_manager::alter(std::string_view role_name, const role_config_update& u, ::service::mutations_collector& mc) {
+standard_role_manager::alter(std::string_view role_name, const role_config_update& u, ::service::group0_batch& mc) {
     static const auto build_column_assignments = [](const role_config_update& u) -> sstring {
         std::vector<sstring> assignments;
 
@@ -341,7 +341,7 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
     });
 }
 
-future<> standard_role_manager::drop(std::string_view role_name, ::service::mutations_collector& mc) {
+future<> standard_role_manager::drop(std::string_view role_name, ::service::group0_batch& mc) {
     if (!co_await exists(role_name)) {
         throw nonexistant_role(role_name);
     }
@@ -468,7 +468,7 @@ standard_role_manager::modify_membership(
         std::string_view grantee_name,
         std::string_view role_name,
         membership_change ch,
-        ::service::mutations_collector& mc) {
+        ::service::group0_batch& mc) {
     if (legacy_mode(_qp)) {
         co_return co_await legacy_modify_membership(grantee_name, role_name, ch);
     }
@@ -502,7 +502,7 @@ standard_role_manager::modify_membership(
 }
 
 future<>
-standard_role_manager::grant(std::string_view grantee_name, std::string_view role_name, ::service::mutations_collector& mc) {
+standard_role_manager::grant(std::string_view grantee_name, std::string_view role_name, ::service::group0_batch& mc) {
     const auto check_redundant = [this, role_name, grantee_name] {
         return query_granted(
                 grantee_name,
@@ -533,7 +533,7 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
 }
 
 future<>
-standard_role_manager::revoke(std::string_view revokee_name, std::string_view role_name, ::service::mutations_collector& mc) {
+standard_role_manager::revoke(std::string_view revokee_name, std::string_view role_name, ::service::group0_batch& mc) {
     return exists(role_name).then([role_name](bool role_exists) {
         if (!role_exists) {
             throw nonexistant_role(sstring(role_name));
@@ -655,7 +655,7 @@ future<role_manager::attribute_vals> standard_role_manager::query_attribute_for_
     });
 }
 
-future<> standard_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::mutations_collector& mc) {
+future<> standard_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::group0_batch& mc) {
     if (!co_await exists(role_name)) {
         throw auth::nonexistant_role(role_name);
     }
@@ -670,7 +670,7 @@ future<> standard_role_manager::set_attribute(std::string_view role_name, std::s
     }
 }
 
-future<> standard_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::mutations_collector& mc) {
+future<> standard_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::group0_batch& mc) {
     if (!co_await exists(role_name)) {
         throw auth::nonexistant_role(role_name);
     }

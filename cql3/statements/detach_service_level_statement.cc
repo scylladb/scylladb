@@ -44,7 +44,7 @@ detach_service_level_statement::execute(query_processor& qp,
 
     auto& as = *state.get_client_state().get_auth_service();
     auto& sl = state.get_service_level_controller();
-    service::mutations_collector mc{std::move(guard)};
+    service::group0_batch mc{std::move(guard)};
     co_await auth::remove_attribute(as, _role_name, "service_level", mc);
     co_await sl.commit_mutations(std::move(mc));
 

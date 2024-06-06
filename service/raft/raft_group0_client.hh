@@ -194,17 +194,17 @@ public:
 
 using mutations_generator = coroutine::experimental::generator<mutation>;
 
-// mutations_collector is used to gather mutations which are side effects
+// group0_batch is used to gather mutations which are side effects
 // of functions execution. They need to be announced under single guard
 // for atomicity. As functions which produce mutations may embed each other
 // we need to decouple announcing step to a common external place here.
 // It also supports generator callbacks to avoid holding too many mutations
 // in memory.
 //
-// Single mutations_collector object represents a single transaction.
+// Single group0_batch object represents a single transaction.
 // If size or number of mutations is too big for raft too handle it will be
 // rejected.
-class mutations_collector {
+class group0_batch {
 public:
     using generator_func = std::function<mutations_generator(api::timestamp_type t)>;
 private:
@@ -215,20 +215,20 @@ private:
 
     future<> materialize_mutations();
 public:
-    explicit mutations_collector(::service::group0_guard&& g) : _guard(std::move(g)) {}
+    explicit group0_batch(::service::group0_guard&& g) : _guard(std::move(g)) {}
     // Constructor with optional guard used to handle both legacy and current code.
     // There is no guard for legacy code but the whole class may be passed
     // through to simplify the flow.
-    explicit mutations_collector(std::optional<::service::group0_guard> g) : _guard(std::move(g)) {}
+    explicit group0_batch(std::optional<::service::group0_guard> g) : _guard(std::move(g)) {}
 
     // Annotation helper for cases where we need collector (e.g. some interface)
     // but the code is fully legacy and the collector won't be used.
-    static mutations_collector unused() {
-        return mutations_collector(std::nullopt);
+    static group0_batch unused() {
+        return group0_batch(std::nullopt);
     }
 
-    mutations_collector(const mutations_collector&) = delete;
-    mutations_collector(mutations_collector&&) = default;
+    group0_batch(const group0_batch&) = delete;
+    group0_batch(group0_batch&&) = default;
 
     // Gets timestamp which should be used when building mutations.
     api::timestamp_type write_timestamp() const;

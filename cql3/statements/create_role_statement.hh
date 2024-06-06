@@ -45,7 +45,7 @@ public:
     execute(query_processor&, service::query_state&, const query_options&, std::optional<service::group0_guard> guard) const override;
 
 private:
-    future<> grant_permissions_to_creator(const service::client_state&, ::service::mutations_collector&) const;
+    future<> grant_permissions_to_creator(const service::client_state&, ::service::group0_batch&) const;
 };
 
 }

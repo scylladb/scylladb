@@ -964,7 +964,7 @@ private:
 
                 auto as = &abort_sources.local();
                 auto guard = group0_client.start_operation(as).get();
-                service::mutations_collector mc{std::move(guard)};
+                service::group0_batch mc{std::move(guard)};
                 auth::create_role(
                         _auth_service.local(),
                         testing_superuser,
@@ -1034,11 +1034,11 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
 }
 
 // this function should be called in seastar thread
-void do_with_mc(cql_test_env& env, std::function<void(service::mutations_collector&)> func) {
+void do_with_mc(cql_test_env& env, std::function<void(service::group0_batch&)> func) {
     seastar::abort_source as;
     auto& g0 = env.get_raft_group0_client();
     auto guard = g0.start_operation(&as).get();
-    auto mc = service::mutations_collector(std::move(guard));
+    auto mc = service::group0_batch(std::move(guard));
     func(mc);
     std::move(mc).commit(g0, as, std::nullopt).get();
 }

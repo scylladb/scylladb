@@ -47,9 +47,9 @@ public:
     future<authenticated_user> authenticate(const credentials_map& credentials) const override;
     future<std::optional<authenticated_user>> authenticate(session_dn_func) const override;
 
-    future<> create(std::string_view role_name, const authentication_options& options, ::service::mutations_collector& mc) override;
-    future<> alter(std::string_view role_name, const authentication_options& options, ::service::mutations_collector&) override;
-    future<> drop(std::string_view role_name, ::service::mutations_collector&) override;
+    future<> create(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) override;
+    future<> alter(std::string_view role_name, const authentication_options& options, ::service::group0_batch&) override;
+    future<> drop(std::string_view role_name, ::service::group0_batch&) override;
 
     future<custom_options> query_custom_options(std::string_view role_name) const override;
 

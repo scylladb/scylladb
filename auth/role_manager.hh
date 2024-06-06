@@ -109,17 +109,17 @@ public:
     ///
     /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.
     ///
-    virtual future<> create(std::string_view role_name, const role_config&, ::service::mutations_collector&) = 0;
+    virtual future<> create(std::string_view role_name, const role_config&, ::service::group0_batch&) = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<> drop(std::string_view role_name, ::service::mutations_collector&) = 0;
+    virtual future<> drop(std::string_view role_name, ::service::group0_batch&) = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<> alter(std::string_view role_name, const role_config_update&, ::service::mutations_collector&) = 0;
+    virtual future<> alter(std::string_view role_name, const role_config_update&, ::service::group0_batch&) = 0;
 
     ///
     /// Grant `role_name` to `grantee_name`.
@@ -129,7 +129,7 @@ public:
     /// \returns an exceptional future with \ref role_already_included if granting the role would be redundant, or
     /// create a cycle.
     ///
-    virtual future<> grant(std::string_view grantee_name, std::string_view role_name, ::service::mutations_collector& mc) = 0;
+    virtual future<> grant(std::string_view grantee_name, std::string_view role_name, ::service::group0_batch& mc) = 0;
 
     ///
     /// Revoke `role_name` from `revokee_name`.
@@ -138,7 +138,7 @@ public:
     ///
     /// \returns an exceptional future with \ref revoke_ungranted_role if the role was not granted.
     ///
-    virtual future<> revoke(std::string_view revokee_name, std::string_view role_name, ::service::mutations_collector& mc) = 0;
+    virtual future<> revoke(std::string_view revokee_name, std::string_view role_name, ::service::group0_batch& mc) = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
@@ -172,12 +172,12 @@ public:
     /// Sets `attribute_name` with `attribute_value` for `role_name`.
     /// \returns an exceptional future with nonexistant_role if the role does not exist.
     ///
-    virtual future<> set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::mutations_collector& mc) = 0;
+    virtual future<> set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::group0_batch& mc) = 0;
 
     /// Removes `attribute_name` for `role_name`.
     /// \returns an exceptional future with nonexistant_role if the role does not exist.
     /// \note: This is a no-op if the role does not have the named attribute set.
     ///
-    virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::mutations_collector& mc) = 0;
+    virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::group0_batch& mc) = 0;
 };
 }

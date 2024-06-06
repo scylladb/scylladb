@@ -204,7 +204,7 @@ future<> announce_mutations(
 
 future<> collect_mutations(
         cql3::query_processor& qp,
-        ::service::mutations_collector& collector,
+        ::service::group0_batch& collector,
         const sstring query_string,
         std::vector<data_value_or_unset> values) {
     auto muts = co_await qp.get_mutations_internal(

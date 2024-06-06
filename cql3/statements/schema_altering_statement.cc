@@ -38,7 +38,7 @@ bool schema_altering_statement::needs_guard(query_processor&, service::query_sta
     return true;
 }
 
-future<> schema_altering_statement::grant_permissions_to_creator(const service::client_state&, service::mutations_collector&) const {
+future<> schema_altering_statement::grant_permissions_to_creator(const service::client_state&, service::group0_batch&) const {
     return make_ready_future<>();
 }
 
@@ -74,7 +74,7 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
             throw std::logic_error(format("Attempted to modify {} via internal query: such schema changes are not propagated and thus illegal", info));
         }
     }
-    service::mutations_collector mc{std::move(guard)};
+    service::group0_batch mc{std::move(guard)};
     auto result = co_await qp.execute_schema_statement(*this, state, options, mc);
     // We don't want to grant the permissions to the supposed creator even if the statement succeeded if it's an internal query
     // or if the query did not actually create the item, i.e. the query is bounced to another shard or it's a IF NOT EXISTS
@@ -92,7 +92,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
     co_return std::make_tuple(::shared_ptr<cql_transport::event::schema_change>(nullptr), std::vector<mutation>{}, cql3::cql_warnings_vec{});
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> schema_altering_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::mutations_collector& mc) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> schema_altering_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const {
     auto [ret, muts, cql_warnings] = co_await prepare_schema_mutations(qp, options, mc.write_timestamp());
     mc.add_mutations(std::move(muts));
     co_return std::make_tuple(ret, cql_warnings);

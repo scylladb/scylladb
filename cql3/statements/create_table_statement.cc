@@ -143,7 +143,7 @@ create_table_statement::prepare(data_dictionary::database db, cql_stats& stats) 
     abort();
 }
 
-future<> create_table_statement::grant_permissions_to_creator(const service::client_state& cs, service::mutations_collector& mc) const {
+future<> create_table_statement::grant_permissions_to_creator(const service::client_state& cs, service::group0_batch& mc) const {
     auto resource = auth::make_data_resource(keyspace(), column_family());
     try {
         co_await auth::grant_applicable_permissions(

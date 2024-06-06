@@ -32,7 +32,7 @@ future<> drop_table_statement::check_access(query_processor& qp, const service::
     return state.has_column_family_access(keyspace(), column_family(), auth::permission::DROP);
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_table_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::mutations_collector& mc) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_table_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
 
     if (cdc::is_log_for_some_table(qp.db().real_database(), keyspace(), column_family())) {

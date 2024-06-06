@@ -1012,7 +1012,7 @@ query_processor::forward(query::forward_request req, tracing::trace_state_ptr tr
 }
 
 future<::shared_ptr<messages::result_message>>
-query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options, service::mutations_collector& mc) {
+query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options, service::group0_batch& mc) {
     if (this_shard_id() != 0) {
         on_internal_error(log, "DDL must be executed on shard 0");
     }
@@ -1038,7 +1038,7 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
     co_return result;
 }
 
-future<> query_processor::announce_schema_statement(const statements::schema_altering_statement& stmt, service::mutations_collector& mc) {
+future<> query_processor::announce_schema_statement(const statements::schema_altering_statement& stmt, service::group0_batch& mc) {
     auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
     auto [remote_, holder] = remote();
     auto [m, guard] = co_await std::move(mc).extract();

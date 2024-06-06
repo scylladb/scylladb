@@ -504,28 +504,28 @@ template group0_command raft_group0_client::prepare_command(broadcast_table_quer
 template group0_command raft_group0_client::prepare_command(write_mutations change, std::string_view description);
 template group0_command raft_group0_client::prepare_command(mixed_change change, group0_guard& guard, std::string_view description);
 
-api::timestamp_type mutations_collector::write_timestamp() const {
+api::timestamp_type group0_batch::write_timestamp() const {
     if (!_guard) {
-        on_internal_error(logger, "mutations_collector: write_timestamp without guard taken");
+        on_internal_error(logger, "group0_batch: write_timestamp without guard taken");
     }
     return _guard->write_timestamp();
 }
 
-utils::UUID mutations_collector::new_group0_state_id() const {
+utils::UUID group0_batch::new_group0_state_id() const {
     if (!_guard) {
-        on_internal_error(logger, "mutations_collector: new_group0_state_id without guard taken");
+        on_internal_error(logger, "group0_batch: new_group0_state_id without guard taken");
     }
     return _guard->new_group0_state_id();
 }
 
-void mutations_collector::add_mutation(mutation m, std::string_view description) {
+void group0_batch::add_mutation(mutation m, std::string_view description) {
     _muts.push_back(std::move(m));
     if (!description.empty()) {
         _descriptions.emplace_back(description);
     }
 }
 
-void mutations_collector::add_mutations(std::vector<mutation> ms, std::string_view description) {
+void group0_batch::add_mutations(std::vector<mutation> ms, std::string_view description) {
     _muts.insert(_muts.end(),
             std::make_move_iterator(ms.begin()),
             std::make_move_iterator(ms.end()));
@@ -534,7 +534,7 @@ void mutations_collector::add_mutations(std::vector<mutation> ms, std::string_vi
     }
 }
 
-void mutations_collector::add_generator(generator_func f, std::string_view description) {
+void group0_batch::add_generator(generator_func f, std::string_view description) {
     _generators.push_back(std::move(f));
     if (!description.empty()) {
         _descriptions.emplace_back(description);
@@ -560,7 +560,7 @@ static future<> add_write_mutations_entry(
     return group0_client.add_entry(std::move(group0_cmd), std::move(group0_guard), as, timeout);
 }
 
-future<> mutations_collector::materialize_mutations() {
+future<> group0_batch::materialize_mutations() {
     auto t = _guard->write_timestamp();
     for (auto& generator : _generators) {
         auto g = generator(t);
@@ -570,12 +570,12 @@ future<> mutations_collector::materialize_mutations() {
     }
 }
 
-future<> mutations_collector::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
+future<> group0_batch::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
     if (_muts.size() == 0 && _generators.size() == 0) {
         co_return;
     }
     if (!_guard) {
-        on_internal_error(logger, "mutations_collector: trying to announce without guard");
+        on_internal_error(logger, "group0_batch: trying to announce without guard");
     }
     auto description = boost::algorithm::join(_descriptions, "; ");
     // common case, don't bother with generators as we would have only 1-2 mutations,
@@ -594,7 +594,7 @@ future<> mutations_collector::commit(::service::raft_group0_client& group0_clien
     co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), &as, timeout);
 }
 
-future<std::pair<std::vector<mutation>, ::service::group0_guard>> mutations_collector::extract() && {
+future<std::pair<std::vector<mutation>, ::service::group0_guard>> group0_batch::extract() && {
     co_await materialize_mutations();
     co_return std::make_pair(std::move(_muts), std::move(*_guard));
 }
