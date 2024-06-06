@@ -2937,13 +2937,12 @@ table::query(schema_ptr s,
         co_return make_lw_shared<query::result>();
     }
 
-    _async_gate.enter();
+    const auto table_async_gate_holder = _async_gate.hold();
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
 
     auto finally = defer([&] () noexcept {
         _stats.reads.mark(lc);
-        _async_gate.leave();
     });
 
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
@@ -3010,6 +3009,8 @@ table::mutation_query(schema_ptr s,
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return reconcilable_result();
     }
+
+    const auto table_async_gate_holder = _async_gate.hold();
 
     std::optional<query::querier> querier_opt;
     if (saved_querier) {
