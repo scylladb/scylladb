@@ -464,14 +464,10 @@ def alternator_ttl_period_in_seconds(dynamodb, request):
         pytest.skip('Scylla-only test skipped')
     # In Scylla, we can inspect the configuration via a system table
     # (which is also visible in Alternator)
-    config_table = dynamodb.Table('.scylla.alternator.system.config')
-    resp = config_table.query(
-            KeyConditionExpression='#key=:val',
-            ExpressionAttributeNames={'#key': 'name'},
-            ExpressionAttributeValues={':val': 'alternator_ttl_period_in_seconds'})
-    if not 'Items' in resp:
+    period = scylla_config_read(dynamodb, 'alternator_ttl_period_in_seconds')
+    if period is None:
         pytest.skip('missing TTL feature, skipping test')
-    period = float(resp['Items'][0]['value'])
+    period = float(period)
     if period > 1 and not request.config.getoption('runveryslow'):
         pytest.skip('need --runveryslow option to run')
     return period
