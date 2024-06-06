@@ -45,20 +45,24 @@ private:
 public:
     test_task(task_manager::task_ptr task) noexcept : _task(task) {}
 
-    void finish() noexcept {
+    future<> finish() noexcept {
         auto& task_impl = dynamic_cast<test_task_impl&>(*_task->_impl);
         if (!task_impl._finished) {
             task_impl._finish_run.set_value();
             task_impl._finished = true;
         }
+        return _task->done();
     }
 
-    void finish_failed(std::exception_ptr ex) {
+    future<> finish_failed(std::exception_ptr ex) {
         auto& task_impl = dynamic_cast<test_task_impl&>(*_task->_impl);
         if (!task_impl._finished) {
             task_impl._finish_run.set_exception(ex);
             task_impl._finished = true;
         }
+        return _task->done().then_wrapped([] (auto&& f) {
+            f.ignore_ready_future();
+        });
     }
 
     void register_task() {
@@ -67,7 +71,7 @@ public:
 
     future<> unregister_task() noexcept {
         auto& task_impl = dynamic_cast<test_task_impl&>(*_task->_impl);
-        finish();
+        co_await finish();
         co_await task_impl._done.get_shared_future();
         _task->unregister_task();
     }

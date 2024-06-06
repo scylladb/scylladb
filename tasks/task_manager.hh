@@ -9,7 +9,9 @@
 #pragma once
 
 #include <list>
+#include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/transform.hpp>
+#include <boost/range/join.hpp>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
@@ -17,6 +19,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db_clock.hh"
 #include "log.hh"
+#include "seastar/core/rwlock.hh"
 #include "tasks/types.hh"
 #include "utils/serialized_action.hh"
 #include "utils/updateable_value.hh"
@@ -42,7 +45,7 @@ public:
     using task_ptr = lw_shared_ptr<task_manager::task>;
     using task_map = std::unordered_map<task_id, task_ptr>;
     using foreign_task_ptr = foreign_ptr<task_ptr>;
-    using foreign_task_list = std::list<foreign_task_ptr>;
+    using foreign_task_map = std::unordered_map<task_id, foreign_task_ptr>;
     using module_ptr = shared_ptr<module>;
     using modules = std::unordered_map<std::string, module_ptr>;
 private:
@@ -105,11 +108,50 @@ public:
             std::string progress_units;     // A description of the units progress.
         };
 
+        struct task_essentials {
+            status task_status;
+            progress task_progress;
+            task_id parent_id;
+            std::string type;
+            is_abortable abortable;
+            std::vector<task_essentials> failed_children;
+        };
+
+        class children {
+            mutable foreign_task_map _children;
+            mutable std::vector<task_essentials> _finished_children;
+            mutable rwlock _lock;
+        public:
+            bool all_finished() const noexcept;
+            size_t size() const noexcept;
+            future<> add_child(foreign_task_ptr task);
+            future<> mark_as_finished(task_id id, task_essentials essentials) const;
+            future<progress> get_progress(const std::string& progress_units) const;
+            future<> for_each_task(std::function<future<>(const foreign_task_ptr&)> f_children,
+                    std::function<future<>(const task_essentials&)> f_finished_children) const;
+
+            template<typename Res>
+            future<std::vector<Res>> map_each_task(std::function<std::optional<Res>(const foreign_task_ptr&)> map_children,
+                    std::function<std::optional<Res>(const task_essentials&)> map_finished_children) const {
+                auto shared_holder = co_await _lock.hold_read_lock();
+
+                co_return boost::copy_range<std::vector<Res>>(
+                    boost::adaptors::filter(
+                        boost::join(
+                            _children | boost::adaptors::map_values | boost::adaptors::transformed(map_children),
+                            _finished_children | boost::adaptors::transformed(map_finished_children)
+                        ),
+                        [] (const auto& task) { return bool(task); }
+                    ) | boost::adaptors::transformed([] (const auto& res) { return res.value(); })
+                );
+            }
+        };
+
         class impl {
         protected:
             status _status;
             task_id _parent_id;
-            foreign_task_list _children;
+            children _children;
             shared_promise<> _done;
             module_ptr _module;
             seastar::abort_source _as;
@@ -129,12 +171,14 @@ public:
             bool is_complete() const noexcept;
             bool is_done() const noexcept;
             virtual void release_resources() noexcept {}
+            future<std::vector<task_essentials>> get_failed_children() const;
         protected:
             virtual future<> run() = 0;
             void run_to_completion();
-            void finish() noexcept;
-            void finish_failed(std::exception_ptr ex, std::string error) noexcept;
-            void finish_failed(std::exception_ptr ex);
+            future<> maybe_fold_into_parent() const noexcept;
+            future<> finish() noexcept;
+            future<> finish_failed(std::exception_ptr ex, std::string error) noexcept;
+            future<> finish_failed(std::exception_ptr ex) noexcept;
             virtual future<std::optional<double>> expected_total_workload() const;
             virtual std::optional<double> expected_children_number() const;
             task_manager::task::progress get_binary_progress() const;
@@ -155,7 +199,7 @@ public:
         uint64_t get_sequence_number() const noexcept;
         task_id get_parent_id() const noexcept;
         void change_state(task_state state) noexcept;
-        void add_child(foreign_task_ptr&& child);
+        future<> add_child(foreign_task_ptr&& child);
         void start();
         std::string get_module_name() const noexcept;
         module_ptr get_module() const noexcept;
@@ -167,8 +211,9 @@ public:
         future<> done() const noexcept;
         void register_task();
         void unregister_task() noexcept;
-        const foreign_task_list& get_children() const noexcept;
+        const children& get_children() const noexcept;
         bool is_complete() const noexcept;
+        future<std::vector<task_essentials>> get_failed_children() const;
 
         friend class test_task;
         friend class ::repair::task_manager_module;
