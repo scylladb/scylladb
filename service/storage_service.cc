@@ -502,20 +502,29 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         switch (rs.state) {
         case node_state::bootstrapping:
             if (rs.ring.has_value()) {
-                if (ip && !is_me(*ip)) {
-                    // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
-                    sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, host_id, {}));
-                }
-                update_topology(host_id, ip, rs);
-                if (_topology_state_machine._topology.normal_nodes.empty()) {
-                    // This is the first node in the cluster. Insert the tokens as normal to the token ring early
-                    // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
-                    // (such as the CDC generation write).
-                    // It doesn't break anything to set the tokens to normal early in this single-node case.
-                    co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
-                } else {
-                    tmptr->add_bootstrap_tokens(rs.ring.value().tokens, host_id);
-                    co_await update_topology_change_info(tmptr, ::format("bootstrapping node {}/{}", id, ip));
+                if (ip) {
+                    if (!is_me(*ip)) {
+                        utils::get_local_injector().inject("crash-before-bootstrapping-node-added", [] {
+                            rtlogger.error("crash-before-bootstrapping-node-added hit, killing the node");
+                            _exit(1);
+                        });
+
+                        // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
+                        sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, host_id, {}));
+                    }
+                    update_topology(host_id, ip, rs);
+                    if (_topology_state_machine._topology.normal_nodes.empty()) {
+                        // This is the first node in the cluster. Insert the tokens as normal to the token ring early
+                        // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
+                        // (such as the CDC generation write).
+                        // It doesn't break anything to set the tokens to normal early in this single-node case.
+                        co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
+                    } else {
+                        tmptr->add_bootstrap_tokens(rs.ring.value().tokens, host_id);
+                        co_await update_topology_change_info(tmptr, ::format("bootstrapping node {}/{}", id, ip));
+                    }
+                } else if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_new) {
+                    on_internal_error(rtlogger, format("Bootstrapping node {} does not have IP mapping but the topology is in the write_both_read_new state", id));
                 }
             }
             break;
@@ -5346,6 +5355,14 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             }
             break;
             case raft_topology_cmd::command::barrier_and_drain: {
+                if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
+                    for (auto& n : _topology_state_machine._topology.transition_nodes) {
+                        if (!_group0->address_map().find(n.first)) {
+                            rtlogger.error("The topology transition is in a double write state but the IP of the node in transition is not known");
+                            break;
+                        }
+                    }
+                }
                 co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
                     const auto current_version = ss._shared_token_metadata.get()->get_version();
                     rtlogger.debug("Got raft_topology_cmd::barrier_and_drain, version {}, current version {}",
