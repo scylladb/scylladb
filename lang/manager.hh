@@ -28,11 +28,17 @@ class manager : public seastar::peering_sharded_service<manager> {
     std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
 
 public:
+    const uint64_t wasm_yield_fuel;
+    const uint64_t wasm_total_fuel;
+
+public:
     struct wasm_config {
         size_t udf_memory_limit;
         size_t cache_size;
         size_t cache_instance_size;
         std::chrono::milliseconds cache_timer_period;
+        uint64_t yield_fuel;
+        uint64_t total_fuel;
     };
     struct config {
         std::optional<wasm_config> wasm;

@@ -46,7 +46,7 @@ struct context {
     uint64_t total_fuel;
 
     context(wasmtime::Engine& engine_ptr, std::string name, instance_cache& cache, uint64_t yield_fuel, uint64_t total_fuel);
-    context(lang::manager&, std::string name, uint64_t yield_fuel, uint64_t total_fuel);
+    context(lang::manager&, std::string name);
 };
 
 seastar::future<> precompile(alien_thread_runner& alien_runner, context& ctx, const std::vector<sstring>& arg_names, std::string script);

@@ -13,6 +13,8 @@
 namespace lang {
 
 manager::manager(config cfg)
+        : wasm_yield_fuel(cfg.wasm ? cfg.wasm->yield_fuel : 0)
+        , wasm_total_fuel(cfg.wasm ? cfg.wasm->total_fuel : 0)
 {
     if (cfg.wasm) {
         if (this_shard_id() == 0) {
@@ -50,7 +52,7 @@ future<> manager::create(sstring language, context& ctx, const db::config& cfg, 
         ctx = std::move(lua_ctx);
     } else if (language == "wasm") {
        // FIXME: need better way to test wasm compilation without real_database()
-       auto wasm_ctx = wasm::context(*this, name, cfg.wasm_udf_yield_fuel(), cfg.wasm_udf_total_fuel());
+       auto wasm_ctx = wasm::context(*this, name);
        try {
             co_await ::wasm::precompile(*_alien_runner, wasm_ctx, arg_names, std::move(script));
        } catch (const wasm::exception& we) {

@@ -1069,6 +1069,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .cache_size = dbcfg.available_memory * cfg->wasm_cache_memory_fraction(),
                     .cache_instance_size = cfg->wasm_cache_instance_size_limit(),
                     .cache_timer_period = std::chrono::milliseconds(cfg->wasm_cache_timeout_in_ms()),
+                    .yield_fuel = cfg->wasm_udf_yield_fuel(),
+                    .total_fuel = cfg->wasm_udf_total_fuel(),
                 };
             }
 
