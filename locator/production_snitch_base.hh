@@ -45,7 +45,7 @@ public:
 private:
     virtual void set_my_dc_and_rack(const sstring& new_dc, const sstring& new_rack) override;
     virtual void set_prefer_local(bool prefer_local) override;
-    void parse_property_file();
+    void parse_property_file(std::string contents);
 
     virtual bool prefer_local() const noexcept override {
         return _prefer_local;
@@ -69,7 +69,6 @@ protected:
     void throw_incomplete_file() const;
 
 protected:
-    std::string _prop_file_contents;
     sstring _prop_file_name;
     std::unordered_map<sstring, sstring> _prop_values;
 
@@ -89,7 +88,6 @@ protected:
     }
 
 private:
-    size_t _prop_file_size;
     snitch_ptr* _backreference = nullptr;
 protected:
     /*

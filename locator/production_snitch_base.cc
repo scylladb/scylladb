@@ -66,28 +66,17 @@ void production_snitch_base::set_prefer_local(bool prefer_local) {
 }
 
 future<> production_snitch_base::load_property_file() {
-    return open_file_dma(_prop_file_name, open_flags::ro)
-    .then([this] (file f) {
-        return do_with(std::move(f), [this] (file& f) {
-            return f.size().then([this, &f] (size_t s) {
-                _prop_file_size = s;
-
-                return f.dma_read_exactly<char>(0, s);
-            });
-        }).then([this] (temporary_buffer<char> tb) {
-            _prop_file_contents = std::string(tb.get(), _prop_file_size);
-            parse_property_file();
-
-            return make_ready_future<>();
-        });
-    });
+    auto f = co_await open_file_dma(_prop_file_name, open_flags::ro);
+    auto s = co_await f.size();
+    auto tb = co_await f.dma_read_exactly<char>(0, s);
+    parse_property_file(std::string(tb.get(), s));
 }
 
-void production_snitch_base::parse_property_file() {
+void production_snitch_base::parse_property_file(std::string contents) {
     using namespace boost::algorithm;
 
     std::string line;
-    std::istringstream istrm(_prop_file_contents);
+    std::istringstream istrm(contents);
     std::vector<std::string> split_line;
     _prop_values.clear();
 
