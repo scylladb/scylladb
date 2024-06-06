@@ -1376,6 +1376,13 @@ future<> sstable::drop_caches() {
     co_await _index_cache->evict_gently();
 }
 
+// Return the filter format for the given sstable version
+static inline utils::filter_format get_filter_format(sstable_version_types version) {
+    return (version >= sstable_version_types::mc)
+               ? utils::filter_format::m_format
+               : utils::filter_format::k_l_format;
+}
+
 future<> sstable::read_filter(sstable_open_config cfg) {
     if (!cfg.load_bloom_filter || !has_component(component_type::Filter)) {
         _components->filter = std::make_unique<utils::filter::always_present_filter>();
@@ -1387,10 +1394,7 @@ future<> sstable::read_filter(sstable_open_config cfg) {
         read_simple<component_type::Filter>(filter).get();
         auto nr_bits = filter.buckets.elements.size() * std::numeric_limits<typename decltype(filter.buckets.elements)::value_type>::digits;
         large_bitset bs(nr_bits, std::move(filter.buckets.elements));
-        utils::filter_format format = (_version >= sstable_version_types::mc)
-                                      ? utils::filter_format::m_format
-                                      : utils::filter_format::k_l_format;
-        _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs), format);
+        _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs), get_filter_format(_version));
     });
 }
 
