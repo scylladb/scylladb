@@ -52,7 +52,7 @@ future<> manager::create(sstring language, context& ctx, const db::config& cfg, 
        // FIXME: need better way to test wasm compilation without real_database()
        auto wasm_ctx = wasm::context(*this, name, cfg.wasm_udf_yield_fuel(), cfg.wasm_udf_total_fuel());
        try {
-            co_await precompile(wasm_ctx, arg_names, script);
+            co_await ::wasm::precompile(*_alien_runner, wasm_ctx, arg_names, std::move(script));
        } catch (const wasm::exception& we) {
            throw exceptions::invalid_request_exception(we.what());
        }
