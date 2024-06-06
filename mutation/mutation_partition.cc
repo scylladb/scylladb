@@ -34,106 +34,6 @@
 
 logging::logger mplog("mutation_partition");
 
-template<bool reversed>
-struct reversal_traits;
-
-template<>
-struct reversal_traits<false> {
-    template <typename Container>
-    static auto begin(Container& c) {
-        return c.begin();
-    }
-
-    template <typename Container>
-    static auto end(Container& c) {
-        return c.end();
-    }
-
-    template <typename Container, typename Disposer>
-    static typename Container::iterator erase_and_dispose(Container& c,
-        typename Container::iterator begin,
-        typename Container::iterator end,
-        Disposer disposer)
-    {
-        return c.erase_and_dispose(begin, end, std::move(disposer));
-    }
-
-    template<typename Container, typename Disposer>
-    static typename Container::iterator erase_dispose_and_update_end(Container& c,
-         typename Container::iterator it, Disposer&& disposer,
-         typename Container::iterator&)
-    {
-        return c.erase_and_dispose(it, std::forward<Disposer>(disposer));
-    }
-
-    template <typename Container>
-    static boost::iterator_range<typename Container::iterator> maybe_reverse(
-        Container& c, boost::iterator_range<typename Container::iterator> r)
-    {
-        return r;
-    }
-
-    template <typename Container>
-    static typename Container::iterator maybe_reverse(Container&, typename Container::iterator r) {
-        return r;
-    }
-};
-
-template<>
-struct reversal_traits<true> {
-    template <typename Container>
-    static auto begin(Container& c) {
-        return c.rbegin();
-    }
-
-    template <typename Container>
-    static auto end(Container& c) {
-        return c.rend();
-    }
-
-    template <typename Container, typename Disposer>
-    static typename Container::reverse_iterator erase_and_dispose(Container& c,
-        typename Container::reverse_iterator begin,
-        typename Container::reverse_iterator end,
-        Disposer disposer)
-    {
-        return typename Container::reverse_iterator(
-            c.erase_and_dispose(end.base(), begin.base(), disposer)
-        );
-    }
-
-    // Erases element pointed to by it and makes sure than iterator end is not
-    // invalidated.
-    template<typename Container, typename Disposer>
-    static typename Container::reverse_iterator erase_dispose_and_update_end(Container& c,
-        typename Container::reverse_iterator it, Disposer&& disposer,
-        typename Container::reverse_iterator& end)
-    {
-        auto to_erase = std::next(it).base();
-        bool update_end = end.base() == to_erase;
-        auto ret = typename Container::reverse_iterator(
-            c.erase_and_dispose(to_erase, std::forward<Disposer>(disposer))
-        );
-        if (update_end) {
-            end = ret;
-        }
-        return ret;
-    }
-
-    template <typename Container>
-    static boost::iterator_range<typename Container::reverse_iterator> maybe_reverse(
-        Container& c, boost::iterator_range<typename Container::iterator> r)
-    {
-        using reverse_iterator = typename Container::reverse_iterator;
-        return boost::make_iterator_range(reverse_iterator(r.end()), reverse_iterator(r.begin()));
-    }
-
-    template <typename Container>
-    static typename Container::reverse_iterator maybe_reverse(Container&, typename Container::iterator r) {
-        return typename Container::reverse_iterator(r);
-    }
-};
-
 mutation_partition::mutation_partition(const schema& s, const mutation_partition& x)
         : _tombstone(x._tombstone)
         , _static_row(s, column_kind::static_column, x._static_row)
@@ -1321,7 +1221,7 @@ size_t mutation_partition::external_memory_usage(const schema& s) const {
     return sum;
 }
 
-template<bool reversed, typename Func>
+template<typename Func>
 requires std::is_invocable_r_v<stop_iteration, Func, rows_entry&>
 void mutation_partition::trim_rows(const schema& s,
     const std::vector<query::clustering_range>& row_ranges,
@@ -1330,15 +1230,15 @@ void mutation_partition::trim_rows(const schema& s,
     check_schema(s);
 
     stop_iteration stop = stop_iteration::no;
-    auto last = reversal_traits<reversed>::begin(_rows);
+    auto last = _rows.begin();
     auto deleter = current_deleter<rows_entry>();
 
     auto range_begin = [this, &s] (const query::clustering_range& range) {
-        return reversed ? upper_bound(s, range) : lower_bound(s, range);
+        return lower_bound(s, range);
     };
 
     auto range_end = [this, &s] (const query::clustering_range& range) {
-        return reversed ? lower_bound(s, range) : upper_bound(s, range);
+        return upper_bound(s, range);
     };
 
     for (auto&& row_range : row_ranges) {
@@ -1346,22 +1246,20 @@ void mutation_partition::trim_rows(const schema& s,
             break;
         }
 
-        last = reversal_traits<reversed>::erase_and_dispose(_rows, last,
-            reversal_traits<reversed>::maybe_reverse(_rows, range_begin(row_range)), deleter);
-
-        auto end = reversal_traits<reversed>::maybe_reverse(_rows, range_end(row_range));
+        last = _rows.erase_and_dispose(last, range_begin(row_range), deleter);
+        auto end = range_end(row_range);
         while (last != end && !stop) {
             rows_entry& e = *last;
             stop = func(e);
             if (e.empty()) {
-                last = reversal_traits<reversed>::erase_dispose_and_update_end(_rows, last, deleter, end);
+                last = _rows.erase_and_dispose(last, deleter);
             } else {
                 ++last;
             }
         }
     }
 
-    reversal_traits<reversed>::erase_and_dispose(_rows, last, reversal_traits<reversed>::end(_rows), deleter);
+    last = _rows.erase_and_dispose(last, _rows.end(), deleter);
 }
 
 uint32_t mutation_partition::do_compact(const schema& s,
@@ -1369,7 +1267,6 @@ uint32_t mutation_partition::do_compact(const schema& s,
     gc_clock::time_point query_time,
     const std::vector<query::clustering_range>& row_ranges,
     bool always_return_static_content,
-    bool reverse,
     uint64_t row_limit,
     can_gc_fn& can_gc,
     bool drop_tombstones_unconditionally,
@@ -1400,11 +1297,7 @@ uint32_t mutation_partition::do_compact(const schema& s,
         return stop_iteration(is_live && ++row_count == row_limit);
     };
 
-    if (reverse) {
-        trim_rows<true>(s, row_ranges, row_callback);
-    } else {
-        trim_rows<false>(s, row_ranges, row_callback);
-    }
+    trim_rows(s, row_ranges, row_callback);
 
     // #589 - Do not add extra row for static content unless we did a CK range-less query.
     // See comment in query
@@ -1432,14 +1325,13 @@ mutation_partition::compact_for_query(
     gc_clock::time_point query_time,
     const std::vector<query::clustering_range>& row_ranges,
     bool always_return_static_content,
-    bool reverse,
     uint64_t row_limit)
 {
     check_schema(s);
     bool drop_tombstones_unconditionally = false;
     // Replicas should only send non-purgeable tombstones already,
     // so we can expect to not have to actually purge any tombstones here.
-    return do_compact(s, dk, query_time, row_ranges, always_return_static_content, reverse, row_limit, always_gc, drop_tombstones_unconditionally, tombstone_gc_state(nullptr));
+    return do_compact(s, dk, query_time, row_ranges, always_return_static_content, row_limit, always_gc, drop_tombstones_unconditionally, tombstone_gc_state(nullptr));
 }
 
 void mutation_partition::compact_for_compaction(const schema& s,
@@ -1452,7 +1344,7 @@ void mutation_partition::compact_for_compaction(const schema& s,
     };
 
     bool drop_tombstones_unconditionally = false;
-    do_compact(s, dk, compaction_time, all_rows, true, false, query::partition_max_rows, can_gc, drop_tombstones_unconditionally, gc_state);
+    do_compact(s, dk, compaction_time, all_rows, true, query::partition_max_rows, can_gc, drop_tombstones_unconditionally, gc_state);
 }
 
 void mutation_partition::compact_for_compaction_drop_tombstones_unconditionally(const schema& s, const dht::decorated_key& dk)
@@ -1463,7 +1355,7 @@ void mutation_partition::compact_for_compaction_drop_tombstones_unconditionally(
     };
     bool drop_tombstones_unconditionally = true;
     auto compaction_time = gc_clock::time_point::max();
-    do_compact(s, dk, compaction_time, all_rows, true, false, query::partition_max_rows, always_gc, drop_tombstones_unconditionally, tombstone_gc_state(nullptr));
+    do_compact(s, dk, compaction_time, all_rows, true, query::partition_max_rows, always_gc, drop_tombstones_unconditionally, tombstone_gc_state(nullptr));
 }
 
 // Returns true if the mutation_partition represents no writes.
