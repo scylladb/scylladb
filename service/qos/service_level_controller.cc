@@ -354,16 +354,16 @@ void service_level_controller::update_from_distributed_data(std::function<steady
     }
 }
 
-future<> service_level_controller::add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exists, std::optional<service::group0_guard> guard) {
+future<> service_level_controller::add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exists, service::group0_batch& mc) {
     set_service_level_op_type add_type = if_not_exists ? set_service_level_op_type::add_if_not_exists : set_service_level_op_type::add;
-    return set_distributed_service_level(name, slo, add_type, std::move(guard));
+    return set_distributed_service_level(name, slo, add_type, mc);
 }
 
-future<> service_level_controller::alter_distributed_service_level(sstring name, service_level_options slo, std::optional<service::group0_guard> guard) {
-    return set_distributed_service_level(name, slo, set_service_level_op_type::alter, std::move(guard));
+future<> service_level_controller::alter_distributed_service_level(sstring name, service_level_options slo, service::group0_batch& mc) {
+    return set_distributed_service_level(name, slo, set_service_level_op_type::alter, mc);
 }
 
-future<> service_level_controller::drop_distributed_service_level(sstring name, bool if_exists, std::optional<service::group0_guard> guard) {
+future<> service_level_controller::drop_distributed_service_level(sstring name, bool if_exists, service::group0_batch& mc) {
     auto sl_info = co_await _sl_data_accessor->get_service_levels();
     auto it = sl_info.find(name);
     if (it == sl_info.end()) {
@@ -376,23 +376,18 @@ future<> service_level_controller::drop_distributed_service_level(sstring name, 
     
     auto& role_manager = _auth_service.local().underlying_role_manager();
     auto attributes = co_await role_manager.query_attribute_for_all("service_level");
-    //FIXME: use the same group0 operation to remove attribute
-    if (guard) {
-        service::release_guard(std::move(*guard));
-        guard = std::nullopt;
-    }
-        
-    co_await coroutine::parallel_for_each(attributes.begin(), attributes.end(), [&role_manager, name] (auto&& attr) {
+
+    co_await coroutine::parallel_for_each(attributes.begin(), attributes.end(), [&role_manager, name, &mc] (auto&& attr) {
         if (attr.second == name) {
-            return do_with(attr.first, [&role_manager] (const sstring& role_name) {
-                return role_manager.remove_attribute(role_name, "service_level");
+            return do_with(attr.first, [&role_manager, &mc] (const sstring& role_name) {
+                return role_manager.remove_attribute(role_name, "service_level", mc);
             });
         } else {
             return make_ready_future();
         }
     });
 
-    co_return co_await _sl_data_accessor->drop_service_level(name, std::move(guard), _global_controller_db->group0_aborter);
+    co_return co_await _sl_data_accessor->drop_service_level(name, mc);
 }
 
 future<service_levels_info> service_level_controller::get_distributed_service_levels() {
@@ -403,7 +398,7 @@ future<service_levels_info> service_level_controller::get_distributed_service_le
     return _sl_data_accessor ? _sl_data_accessor->get_service_level(service_level_name) : make_ready_future<service_levels_info>();
 }
 
-future<> service_level_controller::set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, std::optional<service::group0_guard> guard) {
+future<> service_level_controller::set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, service::group0_batch& mc) {
     auto sl_info = co_await _sl_data_accessor->get_service_levels();
     auto it = sl_info.find(name);
     // test for illegal requests or requests that should terminate without any action
@@ -418,7 +413,7 @@ future<> service_level_controller::set_distributed_service_level(sstring name, s
             co_return;
         }
     }
-    co_return co_await _sl_data_accessor->set_service_level(name, slo, std::move(guard), _global_controller_db->group0_aborter);
+    co_return co_await _sl_data_accessor->set_service_level(name, slo, mc);
 }
 
 future<> service_level_controller::do_add_service_level(sstring name, service_level_options slo, bool is_static) {

@@ -257,7 +257,7 @@ future<authenticated_user> password_authenticator::authenticate(
     }
 }
 
-future<> password_authenticator::create(std::string_view role_name, const authentication_options& options) {
+future<> password_authenticator::create(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) {
     if (!options.password) {
         co_return;
     }
@@ -270,12 +270,12 @@ future<> password_authenticator::create(std::string_view role_name, const authen
                 {passwords::hash(*options.password, rng_for_salt), sstring(role_name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query,
-                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc, query,
+                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)});
     }
 }
 
-future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options) {
+future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) {
     if (!options.password) {
         co_return;
     }
@@ -293,12 +293,12 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
                 {passwords::hash(*options.password, rng_for_salt), sstring(role_name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query,
-            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc, query,
+                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)});
     }
 }
 
-future<> password_authenticator::drop(std::string_view name) {
+future<> password_authenticator::drop(std::string_view name, ::service::group0_batch& mc) {
     const sstring query = format("DELETE {} FROM {}.{} WHERE {} = ?",
             SALTED_HASH,
             get_auth_ks_name(_qp),
@@ -311,7 +311,7 @@ future<> password_authenticator::drop(std::string_view name) {
                 {sstring(name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query, {sstring(name)}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc, query, {sstring(name)});
     }
 }
 
@@ -329,7 +329,7 @@ const resource_set& password_authenticator::protected_resources() const {
         credentials_map credentials{};
         credentials[USERNAME_KEY] = sstring(username);
         credentials[PASSWORD_KEY] = sstring(password);
-        return this->authenticate(credentials);
+        return authenticate(credentials);
     });
 }
 

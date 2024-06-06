@@ -18,6 +18,8 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
 
+#include "seastar/core/future.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
@@ -100,17 +102,14 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
 
         // check non-existing user
         return require_throws<exceptions::authentication_exception>(
-                authenticate(env, username, password)).then([&env] {
-            return do_with(auth::role_config{}, auth::authentication_options{}, [&env](auto& config, auto& options) {
-                config.can_login = true;
-                options.password = password;
-
-                return auth::create_role(env.local_auth_service(), username, config, options).then([&env] {
-                    return authenticate(env, username, password).then([](auth::authenticated_user user) {
-                        BOOST_REQUIRE(!auth::is_anonymous(user));
-                        BOOST_REQUIRE_EQUAL(*user.name, username);
-                    });
-                });
+            authenticate(env, username, password)).then([&env] {
+            return seastar::async([&env] () {
+                cquery_nofail(env, format("CREATE ROLE {} WITH PASSWORD = '{}' AND LOGIN = true", username, password));
+            }).then([&env] () {
+                return authenticate(env, username, password);
+            }).then([] (auth::authenticated_user user) {
+                BOOST_REQUIRE(!auth::is_anonymous(user));
+                BOOST_REQUIRE_EQUAL(*user.name, username);
             });
         }).then([&env] {
             return require_throws<exceptions::authentication_exception>(authenticate(env, username, "hejkotte"));
@@ -125,8 +124,17 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
                     [&env](auto& config_update, const auto& options) {
                 config_update.can_login = false;
 
-                return auth::alter_role(env.local_auth_service(), username, config_update, options).then([&env] {
-                    return require_throws<exceptions::authentication_exception>(authenticate(env, username, password));
+                return seastar::async([&env] {
+                    do_with_mc(env, [&env] (auto& mc) {
+                        auth::authentication_options opts;
+                        auth::role_config_update conf;
+                        conf.can_login = false;
+                        auth::alter_role(env.local_auth_service(), username, conf, opts, mc).get();
+                    });
+                    // has to be in a separate transaction to observe results of alter role
+                    do_with_mc(env, [&env] (auto& mc) {
+                        require_throws<exceptions::authentication_exception>(authenticate(env, username, password)).get();
+                    });
                 });
             });
         }).then([&env] {
@@ -152,8 +160,11 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             });
         }).then([&env] {
             // check deleted user
-            return auth::drop_role(env.local_auth_service(), username).then([&env] {
-                return require_throws<exceptions::authentication_exception>(authenticate(env, username, password));
+            return seastar::async([&env] {
+                do_with_mc(env, [&env] (auto& mc) {
+                    auth::drop_role(env.local_auth_service(), username, mc).get();
+                    require_throws<exceptions::authentication_exception>(authenticate(env, username, password)).get();
+                });
             });
         });
     }, auth_on(false));
@@ -196,16 +207,10 @@ SEASTAR_TEST_CASE(role_permissions_table_is_protected) {
 
 SEASTAR_TEST_CASE(test_alter_with_timeouts) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        auth::role_config config {
-            .can_login = true,
-        };
-        auth::authentication_options opts {
-            .password = "pass"
-        };
-        auth::create_role(e.local_auth_service(), "user1", config, opts).get();
-        auth::create_role(e.local_auth_service(), "user2", config, opts).get();
-        auth::create_role(e.local_auth_service(), "user3", config, opts).get();
-        auth::create_role(e.local_auth_service(), "user4", config, opts).get();
+        cquery_nofail(e, "CREATE ROLE user1 WITH PASSWORD = 'pass' AND LOGIN = true");
+        cquery_nofail(e, "CREATE ROLE user2 WITH PASSWORD = 'pass' AND LOGIN = true");
+        cquery_nofail(e, "CREATE ROLE user3 WITH PASSWORD = 'pass' AND LOGIN = true");
+        cquery_nofail(e, "CREATE ROLE user4 WITH PASSWORD = 'pass' AND LOGIN = true");
         authenticate(e, "user1", "pass").get();
 
         cquery_nofail(e, "CREATE SERVICE LEVEL sl WITH timeout = 5ms");
@@ -296,16 +301,10 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
 
 SEASTAR_TEST_CASE(test_alter_with_workload_type) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        auth::role_config config {
-            .can_login = true,
-        };
-        auth::authentication_options opts {
-            .password = "pass"
-        };
-        auth::create_role(e.local_auth_service(), "user1", config, opts).get();
-        auth::create_role(e.local_auth_service(), "user2", config, opts).get();
-        auth::create_role(e.local_auth_service(), "user3", config, opts).get();
-        auth::create_role(e.local_auth_service(), "user4", config, opts).get();
+        cquery_nofail(e, "CREATE ROLE user1 WITH PASSWORD = 'pass' AND LOGIN = true");
+        cquery_nofail(e, "CREATE ROLE user2 WITH PASSWORD = 'pass' AND LOGIN = true");
+        cquery_nofail(e, "CREATE ROLE user3 WITH PASSWORD = 'pass' AND LOGIN = true");
+        cquery_nofail(e, "CREATE ROLE user4 WITH PASSWORD = 'pass' AND LOGIN = true");
         authenticate(e, "user1", "pass").get();
 
         cquery_nofail(e, "CREATE SERVICE LEVEL sl");

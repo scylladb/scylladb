@@ -11,10 +11,12 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
+#include <string>
 
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "service/raft/raft_group_registry.hh"
@@ -188,6 +190,58 @@ public:
 
     query_result_guard create_result_guard(utils::UUID query_id);
     void set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr);
+};
+
+using mutations_generator = coroutine::experimental::generator<mutation>;
+
+// group0_batch is used to gather mutations which are side effects
+// of functions execution. They need to be announced under single guard
+// for atomicity. As functions which produce mutations may embed each other
+// we need to decouple announcing step to a common external place here.
+// It also supports generator callbacks to avoid holding too many mutations
+// in memory.
+//
+// Single group0_batch object represents a single transaction.
+// If size or number of mutations is too big for raft too handle it will be
+// rejected.
+class group0_batch {
+public:
+    using generator_func = std::function<mutations_generator(api::timestamp_type t)>;
+private:
+    std::vector<mutation> _muts;
+    std::vector<generator_func> _generators;
+    std::vector<sstring> _descriptions;
+    std::optional<::service::group0_guard> _guard;
+
+    future<> materialize_mutations();
+public:
+    explicit group0_batch(::service::group0_guard&& g) : _guard(std::move(g)) {}
+    // Constructor with optional guard used to handle both legacy and current code.
+    // There is no guard for legacy code but the whole class may be passed
+    // through to simplify the flow.
+    explicit group0_batch(std::optional<::service::group0_guard> g) : _guard(std::move(g)) {}
+
+    // Annotation helper for cases where we need collector (e.g. some interface)
+    // but the code is fully legacy and the collector won't be used.
+    static group0_batch unused() {
+        return group0_batch(std::nullopt);
+    }
+
+    group0_batch(const group0_batch&) = delete;
+    group0_batch(group0_batch&&) = default;
+
+    // Gets timestamp which should be used when building mutations.
+    api::timestamp_type write_timestamp() const;
+    utils::UUID new_group0_state_id() const;
+
+    void add_mutation(mutation m, std::string_view description = "");
+    void add_mutations(std::vector<mutation> ms, std::string_view description = "");
+    void add_generator(generator_func f, std::string_view description = "");
+
+    // Commits the data, nop if there was no guard provided.
+    future<> commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) &&;
+    // For rare cases where collector is used but announce logic is replaced with a custom one.
+    future<std::pair<std::vector<mutation>, ::service::group0_guard>> extract() &&;
 };
 
 }

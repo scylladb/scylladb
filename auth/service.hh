@@ -79,6 +79,8 @@ class service final : public seastar::peering_sharded_service<service> {
 
     cql3::query_processor& _qp;
 
+    ::service::raft_group0_client& _group0_client;
+
     ::service::migration_notifier& _mnotifier;
 
     authorizer::ptr_type _authorizer;
@@ -99,10 +101,13 @@ class service final : public seastar::peering_sharded_service<service> {
 
     maintenance_socket_enabled _used_by_maintenance_socket;
 
+    abort_source _as;
+
 public:
     service(
             utils::loading_cache_config,
             cql3::query_processor&,
+            ::service::raft_group0_client&,
             ::service::migration_notifier&,
             std::unique_ptr<authorizer>,
             std::unique_ptr<authenticator>,
@@ -151,6 +156,18 @@ public:
     future<bool> has_superuser(std::string_view role_name) const;
 
     ///
+    /// Create a role with optional authentication information.
+    ///
+    /// \returns an exceptional future with \ref role_already_exists if the user or role exists.
+    ///
+    /// \returns an exceptional future with \ref unsupported_authentication_option if an unsupported option is included.
+    ///
+    future<> create_role(std::string_view name,
+            const role_config& config,
+            const authentication_options& options,
+            ::service::group0_batch& mc) const;
+
+    ///
     /// Return the set of all roles granted to the given role, including itself and roles granted through other roles.
     ///
     /// \returns an exceptional future with \ref nonexistent_role if the role does not exist.
@@ -174,6 +191,10 @@ public:
         return _qp;
     }
 
+    future<> commit_mutations(::service::group0_batch&& mc) {
+        return std::move(mc).commit(_group0_client, _as, ::service::raft_timeout{});
+    }
+
 private:
     future<> create_legacy_keyspace_if_missing(::service::migration_manager& mm) const;
 };
@@ -183,14 +204,6 @@ future<bool> has_superuser(const service&, const authenticated_user&);
 future<role_set> get_roles(const service&, const authenticated_user&);
 
 future<permission_set> get_permissions(const service&, const authenticated_user&, const resource&);
-
-///
-/// Access-control is "enforcing" when either the authenticator or the authorizer are not their "allow-all" variants.
-///
-/// Put differently, when access control is not enforcing, all operations on resources will be allowed and users do not
-/// need to authenticate themselves.
-///
-bool is_enforcing(const service&);
 
 /// A description of a CQL command from which auth::service can tell whether or not this command could endanger
 /// internal data on which auth::service depends.
@@ -219,7 +232,8 @@ future<> create_role(
         const service&,
         std::string_view name,
         const role_config&,
-        const authentication_options&);
+        const authentication_options&,
+        ::service::group0_batch&);
 
 ///
 /// Alter an existing role and its authentication information.
@@ -232,14 +246,34 @@ future<> alter_role(
         const service&,
         std::string_view name,
         const role_config_update&,
-        const authentication_options&);
+        const authentication_options&,
+        ::service::group0_batch& mc);
 
 ///
 /// Drop a role from the system, including all permissions and authentication information.
 ///
 /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
 ///
-future<> drop_role(const service&, std::string_view name);
+future<> drop_role(const service&, std::string_view name, ::service::group0_batch& mc);
+
+///
+/// Grant `role_name` to `grantee_name`.
+///
+/// \returns an exceptional future with \ref nonexistant_role if either the role or the grantee do not exist.
+///
+/// \returns an exceptional future with \ref role_already_included if granting the role would be redundant, or
+/// create a cycle.
+///
+future<> grant_role(const service&, std::string_view grantee_name, std::string_view role_name, ::service::group0_batch& mc);
+
+///
+/// Revoke `role_name` from `revokee_name`.
+///
+/// \returns an exceptional future with \ref nonexistant_role if either the role or the revokee do not exist.
+///
+/// \returns an exceptional future with \ref revoke_ungranted_role if the role was not granted.
+///
+future<> revoke_role(const service&, std::string_view revokee_name, std::string_view role_name, ::service::group0_batch& mc);
 
 ///
 /// Check if `grantee` has been granted the named role.
@@ -254,6 +288,18 @@ future<bool> has_role(const service&, std::string_view grantee, std::string_view
 ///
 future<bool> has_role(const service&, const authenticated_user&, std::string_view name);
 
+
+/// Sets `attribute_name` with `attribute_value` for `role_name`.
+/// \returns an exceptional future with nonexistant_role if the role does not exist.
+///
+future<> set_attribute(const service&, std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::group0_batch& mc);
+
+/// Removes `attribute_name` for `role_name`.
+/// \returns an exceptional future with nonexistant_role if the role does not exist.
+/// \note: This is a no-op if the role does not have the named attribute set.
+///
+future<> remove_attribute(const service&, std::string_view role_name, std::string_view attribute_name, ::service::group0_batch& mc);
+
 ///
 /// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
 ///
@@ -264,7 +310,8 @@ future<> grant_permissions(
         const service&,
         std::string_view role_name,
         permission_set,
-        const resource&);
+        const resource&,
+        ::service::group0_batch&);
 
 ///
 /// Like \ref grant_permissions, but grants all applicable permissions on the resource.
@@ -274,8 +321,8 @@ future<> grant_permissions(
 /// \returns an exceptional future with \ref unsupported_authorization_operation if granting permissions is not
 /// supported.
 ///
-future<> grant_applicable_permissions(const service&, std::string_view role_name, const resource&);
-future<> grant_applicable_permissions(const service&, const authenticated_user&, const resource&);
+future<> grant_applicable_permissions(const service&, std::string_view role_name, const resource&, ::service::group0_batch&);
+future<> grant_applicable_permissions(const service&, const authenticated_user&, const resource&, ::service::group0_batch&);
 
 ///
 /// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
@@ -287,7 +334,15 @@ future<> revoke_permissions(
         const service&,
         std::string_view role_name,
         permission_set,
-        const resource&);
+        const resource&,
+        ::service::group0_batch&);
+
+///
+/// Revoke all permissions granted to any role for a particular resource.
+///
+/// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
+///
+future<> revoke_all(const service&, const resource&, ::service::group0_batch&);
 
 using recursive_permissions = bool_class<struct recursive_permissions_tag>;
 
@@ -312,6 +367,10 @@ future<std::vector<permission_details>> list_filtered_permissions(
         permission_set,
         std::optional<std::string_view> role_name,
         const std::optional<std::pair<resource, recursive_permissions>>& resource_filter);
+
+
+// Finalizes write operations performed in auth by committing mutations via raft group0.
+future<> commit_mutations(service& ser, ::service::group0_batch&& mc);
 
 // Migrates data from old keyspace to new one which supports linearizable writes via raft.
 future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as);

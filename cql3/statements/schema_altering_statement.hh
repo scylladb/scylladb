@@ -50,7 +50,7 @@ protected:
      *
      * By default, this function does nothing.
      */
-    virtual future<> grant_permissions_to_creator(const service::client_state&) const;
+    virtual future<> grant_permissions_to_creator(const service::client_state&, service::group0_batch&) const;
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
@@ -62,7 +62,10 @@ protected:
     execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
 public:
-    virtual future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const = 0;
+    virtual future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const;
+
+    virtual future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const;
+
     mutable utils::UUID global_req_id;
 };
 

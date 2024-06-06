@@ -33,6 +33,7 @@
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
 #include "service/migration_manager.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "timestamp.hh"
 #include "utils/class_registrator.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -55,9 +56,10 @@ static logging::logger log("auth_service");
 
 class auth_migration_listener final : public ::service::migration_listener {
     authorizer& _authorizer;
+    cql3::query_processor& _qp;
 
 public:
-    explicit auth_migration_listener(authorizer& a) : _authorizer(a) {
+    explicit auth_migration_listener(authorizer& a, cql3::query_processor& qp) : _authorizer(a),  _qp(qp) {
     }
 
 private:
@@ -77,27 +79,33 @@ private:
     void on_update_tablet_metadata() override {}
 
     void on_drop_keyspace(const sstring& ks_name) override {
+        if (!legacy_mode(_qp)) {
+            // in non legacy path revoke is part of schema change statement execution
+            return;
+        }
         // Do it in the background.
-        (void)_authorizer.revoke_all(
-                auth::make_data_resource(ks_name)).handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
+        (void)do_with(::service::group0_batch::unused(), [this, &ks_name] (auto& mc) mutable {
+            return _authorizer.revoke_all(auth::make_data_resource(ks_name), mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped keyspace: {}", e);
         });
-        (void)_authorizer.revoke_all(
-            auth::make_functions_resource(ks_name)).handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
+
+        (void)do_with(::service::group0_batch::unused(), [this, &ks_name] (auto& mc) mutable {
+            return _authorizer.revoke_all(auth::make_functions_resource(ks_name), mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on functions in dropped keyspace: {}", e);
         });
     }
 
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
+        if (!legacy_mode(_qp)) {
+            // in non legacy path revoke is part of schema change statement execution
+            return;
+        }
         // Do it in the background.
-        (void)_authorizer.revoke_all(
-                auth::make_data_resource(
-                        ks_name, cf_name)).handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
+        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &cf_name] (auto& mc) mutable {
+            return _authorizer.revoke_all(
+                    auth::make_data_resource(ks_name, cf_name), mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped table: {}", e);
         });
@@ -105,17 +113,26 @@ private:
 
     void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
     void on_drop_function(const sstring& ks_name, const sstring& function_name) override {
-        (void)_authorizer.revoke_all(
-            auth::make_functions_resource(ks_name, function_name)).handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
+        if (!legacy_mode(_qp)) {
+            // in non legacy path revoke is part of schema change statement execution
+            return;
+        }
+        // Do it in the background.
+        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &function_name] (auto& mc) mutable {
+            return _authorizer.revoke_all(
+                    auth::make_functions_resource(ks_name, function_name), mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped function: {}", e);
         });
     }
     void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {
-        (void)_authorizer.revoke_all(
-            auth::make_functions_resource(ks_name, aggregate_name)).handle_exception_type([](const unsupported_authorization_operation&) {
-            // Nothing.
+        if (!legacy_mode(_qp)) {
+            // in non legacy path revoke is part of schema change statement execution
+            return;
+        }
+        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &aggregate_name] (auto& mc) mutable {
+            return _authorizer.revoke_all(
+                    auth::make_functions_resource(ks_name, aggregate_name), mc);
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped aggregate: {}", e);
         });
@@ -134,6 +151,7 @@ static future<> validate_role_exists(const service& ser, std::string_view role_n
 service::service(
         utils::loading_cache_config c,
         cql3::query_processor& qp,
+        ::service::raft_group0_client& g0,
         ::service::migration_notifier& mn,
         std::unique_ptr<authorizer> z,
         std::unique_ptr<authenticator> a,
@@ -142,11 +160,12 @@ service::service(
             : _loading_cache_config(std::move(c))
             , _permissions_cache(nullptr)
             , _qp(qp)
+            , _group0_client(g0)
             , _mnotifier(mn)
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
-            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer))
+            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer, qp))
             , _permissions_cache_cfg_cb([this] (uint32_t) { (void) _permissions_cache_config_action.trigger_later(); })
             , _permissions_cache_config_action([this] { update_cache_config(); return make_ready_future<>(); })
             , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
@@ -165,6 +184,7 @@ service::service(
             : service(
                       std::move(c),
                       qp,
+                      g0,
                       mn,
                       create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
                       create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm),
@@ -222,6 +242,7 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
 }
 
 future<> service::stop() {
+    _as.request_abort();
     // Only one of the shards has the listener registered, but let's try to
     // unregister on each one just to make sure.
     return _mnotifier.unregister_listener(_migration_listener.get()).then([this] {
@@ -290,7 +311,7 @@ future<permission_set> service::get_permissions(const role_or_anonymous& maybe_r
 }
 
 future<bool> service::has_superuser(std::string_view role_name) const {
-    return this->get_roles(std::move(role_name)).then([this](role_set roles) {
+    return get_roles(std::move(role_name)).then([this](role_set roles) {
         return do_with(std::move(roles), [this](const role_set& roles) {
             return do_with(false, roles.begin(), [this, &roles](bool& any_super, auto& iter) {
                 return do_until(
@@ -305,6 +326,50 @@ future<bool> service::has_superuser(std::string_view role_name) const {
             });
         });
     });
+}
+
+static void validate_authentication_options_are_supported(
+        const authentication_options& options,
+        const authentication_option_set& supported) {
+    const auto check = [&supported](authentication_option k) {
+        if (!supported.contains(k)) {
+            throw unsupported_authentication_option(k);
+        }
+    };
+
+    if (options.password) {
+        check(authentication_option::password);
+    }
+
+    if (options.options) {
+        check(authentication_option::options);
+    }
+}
+
+future<> service::create_role(std::string_view name,
+        const role_config& config,
+        const authentication_options& options,
+        ::service::group0_batch& mc) const {
+    co_await underlying_role_manager().create(name, config, mc);
+    if (!auth::any_authentication_options(options)) {
+        co_return;
+    }
+    std::exception_ptr ep;
+    try {
+        validate_authentication_options_are_supported(options,
+                underlying_authenticator().supported_options());
+        co_await underlying_authenticator().create(name, options, mc);
+    } catch (...) {
+        ep = std::current_exception();
+    }
+    if (ep) {
+        // Rollback only in legacy mode as normally mutations won't be
+        // applied in case exception is raised
+        if (legacy_mode(_qp)) {
+            co_await underlying_role_manager().drop(name, mc);
+        }
+        std::rethrow_exception(std::move(ep));
+    }
 }
 
 future<role_set> service::get_roles(std::string_view role_name) const {
@@ -395,15 +460,6 @@ future<permission_set> get_permissions(const service& ser, const authenticated_u
     });
 }
 
-bool is_enforcing(const service& ser)  {
-    const bool enforcing_authorizer = ser.underlying_authorizer().qualified_java_name() != allow_all_authorizer_name;
-
-    const bool enforcing_authenticator = ser.underlying_authenticator().qualified_java_name()
-            != allow_all_authenticator_name;
-
-    return enforcing_authorizer || enforcing_authenticator;
-}
-
 bool is_protected(const service& ser, command_desc cmd) noexcept {
     if (cmd.type_ == command_desc::type::ALTER_WITH_OPTS) {
         return false; // Table attributes are OK to modify; see #7057.
@@ -413,74 +469,45 @@ bool is_protected(const service& ser, command_desc cmd) noexcept {
             || ser.underlying_authorizer().protected_resources().contains(cmd.resource);
 }
 
-static void validate_authentication_options_are_supported(
-        const authentication_options& options,
-        const authentication_option_set& supported) {
-    const auto check = [&supported](authentication_option k) {
-        if (!supported.contains(k)) {
-            throw unsupported_authentication_option(k);
-        }
-    };
-
-    if (options.password) {
-        check(authentication_option::password);
-    }
-
-    if (options.options) {
-        check(authentication_option::options);
-    }
-}
-
-
 future<> create_role(
         const service& ser,
         std::string_view name,
         const role_config& config,
-        const authentication_options& options) {
-    co_await ser.underlying_role_manager().create(name, config);
-    if (!auth::any_authentication_options(options)) {
-        co_return;
-    }
-    std::exception_ptr ep;
-    try {
-        validate_authentication_options_are_supported(options,
-                ser.underlying_authenticator().supported_options());
-        co_await ser.underlying_authenticator().create(name, options);
-    } catch (...) {
-        ep = std::current_exception();
-    }
-    if (ep) {
-        // Roll-back.
-        co_await ser.underlying_role_manager().drop(name);
-        std::rethrow_exception(std::move(ep));
-    }
+        const authentication_options& options,
+        ::service::group0_batch& mc) {
+    return ser.create_role(name, config, options, mc);
 }
 
 future<> alter_role(
         const service& ser,
         std::string_view name,
         const role_config_update& config_update,
-        const authentication_options& options) {
-    co_await ser.underlying_role_manager().alter(name, config_update);
+        const authentication_options& options,
+        ::service::group0_batch& mc) {
+    co_await ser.underlying_role_manager().alter(name, config_update, mc);
     if (!any_authentication_options(options)) {
         co_return;
     }
     validate_authentication_options_are_supported(options,
             ser.underlying_authenticator().supported_options());
-    co_await ser.underlying_authenticator().alter(name, options);
+    co_await ser.underlying_authenticator().alter(name, options, mc);
 }
 
-future<> drop_role(const service& ser, std::string_view name) {
+future<> drop_role(const service& ser, std::string_view name, ::service::group0_batch& mc) {
     auto& a = ser.underlying_authorizer();
     auto r = make_role_resource(name);
-    try {
-        co_await a.revoke_all(name);
-        co_await a.revoke_all(r);
-    } catch (const unsupported_authorization_operation&) {
-        // Nothing.
-    }
-    co_await ser.underlying_authenticator().drop(name);
-    co_await ser.underlying_role_manager().drop(name);
+    co_await a.revoke_all(name, mc);
+    co_await a.revoke_all(r, mc);
+    co_await ser.underlying_authenticator().drop(name, mc);
+    co_await ser.underlying_role_manager().drop(name, mc);
+}
+
+future<> grant_role(const service& ser, std::string_view grantee_name, std::string_view role_name, ::service::group0_batch& mc) {
+    return ser.underlying_role_manager().grant(grantee_name, role_name, mc);
+}
+
+future<> revoke_role(const service& ser, std::string_view revokee_name, std::string_view role_name, ::service::group0_batch& mc) {
+    return ser.underlying_role_manager().revoke(revokee_name, role_name, mc);
 }
 
 future<bool> has_role(const service& ser, std::string_view grantee, std::string_view name) {
@@ -498,33 +525,47 @@ future<bool> has_role(const service& ser, const authenticated_user& u, std::stri
     return has_role(ser, *u.name, name);
 }
 
+future<> set_attribute(const service& ser, std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::group0_batch& mc) {
+    return ser.underlying_role_manager().set_attribute(role_name, attribute_name, attribute_value, mc);
+}
+
+future<> remove_attribute(const service& ser, std::string_view role_name, std::string_view attribute_name, ::service::group0_batch& mc) {
+    return ser.underlying_role_manager().remove_attribute(role_name, attribute_name, mc);
+}
+
 future<> grant_permissions(
         const service& ser,
         std::string_view role_name,
         permission_set perms,
-        const resource& r) {
+        const resource& r,
+        ::service::group0_batch& mc) {
     co_await validate_role_exists(ser, role_name);
-    co_await ser.underlying_authorizer().grant(role_name, perms, r);
+    co_await ser.underlying_authorizer().grant(role_name, perms, r, mc);
 }
 
-future<> grant_applicable_permissions(const service& ser, std::string_view role_name, const resource& r) {
-    return grant_permissions(ser, role_name, r.applicable_permissions(), r);
+future<> grant_applicable_permissions(const service& ser, std::string_view role_name, const resource& r, ::service::group0_batch& mc) {
+    return grant_permissions(ser, role_name, r.applicable_permissions(), r, mc);
 }
-future<> grant_applicable_permissions(const service& ser, const authenticated_user& u, const resource& r) {
+
+future<> grant_applicable_permissions(const service& ser, const authenticated_user& u, const resource& r, ::service::group0_batch& mc) {
     if (is_anonymous(u)) {
         return make_ready_future<>();
     }
-
-    return grant_applicable_permissions(ser, *u.name, r);
+    return grant_applicable_permissions(ser, *u.name, r, mc);
 }
 
 future<> revoke_permissions(
         const service& ser,
         std::string_view role_name,
         permission_set perms,
-        const resource& r) {
+        const resource& r,
+        ::service::group0_batch& mc) {
     co_await validate_role_exists(ser, role_name);
-    co_await ser.underlying_authorizer().revoke(role_name, perms, r);
+    co_await ser.underlying_authorizer().revoke(role_name, perms, r, mc);
+}
+
+future<> revoke_all(const service& ser, const resource& r, ::service::group0_batch& mc) {
+    return ser.underlying_authorizer().revoke_all(r, mc);
 }
 
 future<std::vector<permission_details>> list_filtered_permissions(
@@ -581,10 +622,14 @@ future<std::vector<permission_details>> list_filtered_permissions(
     });
 }
 
+future<> commit_mutations(service& ser, ::service::group0_batch&& mc) {
+    return ser.commit_mutations(std::move(mc));
+}
+
 future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {
     // FIXME: if this function fails it may leave partial data in the new tables
     // that should be cleared
-    auto gen = [&sys_ks] (api::timestamp_type& ts) -> mutations_generator {
+    auto gen = [&sys_ks] (api::timestamp_type ts) -> ::service::mutations_generator {
         auto& qp = sys_ks.query_processor();
         for (const auto& cf_name : std::vector<sstring>{
                 "roles", "role_members", "role_attributes", "role_permissions"}) {

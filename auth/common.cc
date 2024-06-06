@@ -137,7 +137,7 @@ static future<> announce_mutations_with_guard(
 future<> announce_mutations_with_batching(
         ::service::raft_group0_client& group0_client,
         start_operation_func_t start_operation_func,
-        std::function<mutations_generator(api::timestamp_type& t)> gen,
+        std::function<::service::mutations_generator(api::timestamp_type t)> gen,
         seastar::abort_source* as,
         std::optional<::service::raft_timeout> timeout) {
     // account for command's overhead, it's better to use smaller threshold than constantly bounce off the limit
@@ -200,6 +200,19 @@ future<> announce_mutations(
             std::move(values));
     std::vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
     co_await announce_mutations_with_guard(group0_client, std::move(cmuts), std::move(group0_guard), as, timeout);
+}
+
+future<> collect_mutations(
+        cql3::query_processor& qp,
+        ::service::group0_batch& collector,
+        const sstring query_string,
+        std::vector<data_value_or_unset> values) {
+    auto muts = co_await qp.get_mutations_internal(
+            query_string,
+            internal_distributed_query_state(),
+            collector.write_timestamp(),
+            std::move(values));
+    collector.add_mutations(std::move(muts), format("auth internal statement: {}", query_string));
 }
 
 }

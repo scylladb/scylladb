@@ -442,7 +442,8 @@ public:
     struct retry_statement_execution_error : public std::exception {};
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_schema_statement(const statements::schema_altering_statement&, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard);
+    execute_schema_statement(const statements::schema_altering_statement&, service::query_state& state, const query_options& options, service::group0_batch& mc);
+    future<> announce_schema_statement(const statements::schema_altering_statement&, service::group0_batch& mc);
 
     future<std::string>
     execute_thrift_schema_command(

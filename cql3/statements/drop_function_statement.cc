@@ -10,6 +10,7 @@
 #include "cql3/statements/drop_function_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
+#include "cql3/statements/function_statement.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "cql3/query_processor.hh"
@@ -23,13 +24,10 @@ std::unique_ptr<prepared_statement> drop_function_statement::prepare(data_dictio
     return std::make_unique<prepared_statement>(make_shared<drop_function_statement>(*this));
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-drop_function_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_function_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
-    std::vector<mutation> m;
 
     auto func = co_await validate_while_executing(qp);
-
     if (func) {
         auto user_func = dynamic_pointer_cast<functions::user_function>(func);
         if (!user_func) {
@@ -38,11 +36,16 @@ drop_function_statement::prepare_schema_mutations(query_processor& qp, const que
         if (auto aggregate = functions::functions::used_by_user_aggregate(user_func)) {
             throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", func, *aggregate));
         }
-        m = co_await service::prepare_function_drop_announcement(qp.proxy(), user_func, ts);
+        auto muts = co_await service::prepare_function_drop_announcement(qp.proxy(), user_func, mc.write_timestamp());
+        mc.add_mutations(std::move(muts), "CQL drop function");
+
+        const auto& as = *state.get_client_state().get_auth_service();
+        co_await auth::revoke_all(as, auth::make_functions_resource(*user_func), mc);
+
         ret = create_schema_change(*func, false);
     }
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(std::move(ret), std::vector<sstring>());
 }
 
 drop_function_statement::drop_function_statement(functions::function_name name,

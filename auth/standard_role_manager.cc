@@ -26,6 +26,8 @@
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
+#include "seastar/core/on_internal_error.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "utils/class_registrator.hh"
 #include "service/migration_manager.hh"
 #include "password_authenticator.hh"
@@ -222,8 +224,9 @@ future<> standard_role_manager::migrate_legacy_metadata() {
             return do_with(
                     row.get_as<sstring>("name"),
                     std::move(config),
-                    [this](const auto& name, const auto& config) {
-                return this->create_or_replace(name, config);
+                    ::service::group0_batch::unused(),
+                    [this](const auto& name, const auto& config, auto& mc) {
+                return create_or_replace(name, config, mc);
             });
         }).finally([results] {});
     }).then([] {
@@ -238,7 +241,7 @@ future<> standard_role_manager::start() {
     return once_among_shards([this] {
         return futurize_invoke([this] () {
             if (legacy_mode(_qp)) {
-                return this->create_legacy_metadata_tables_if_missing();
+                return create_legacy_metadata_tables_if_missing();
             }
             return make_ready_future<>();
         }).then([this] {
@@ -248,15 +251,15 @@ future<> standard_role_manager::start() {
                         _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
                         if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get()) {
-                            if (this->legacy_metadata_exists()) {
+                            if (legacy_metadata_exists()) {
                                 log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                             }
 
                             return;
                         }
 
-                        if (this->legacy_metadata_exists()) {
-                            this->migrate_legacy_metadata().get();
+                        if (legacy_metadata_exists()) {
+                            migrate_legacy_metadata().get();
                             return;
                         }
                     }
@@ -272,7 +275,7 @@ future<> standard_role_manager::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});;
 }
 
-future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c) {
+future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
     const sstring query = format("INSERT INTO {}.{} ({}, is_superuser, can_login) VALUES (?, ?, ?)",
             get_auth_ks_name(_qp),
             meta::roles_table::name,
@@ -285,23 +288,23 @@ future<> standard_role_manager::create_or_replace(std::string_view role_name, co
                 {sstring(role_name), c.is_superuser, c.can_login},
                 cql3::query_processor::cache_internal::yes).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name), c.is_superuser, c.can_login}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc,  query, {sstring(role_name), c.is_superuser, c.can_login});
     }
 }
 
 future<>
-standard_role_manager::create(std::string_view role_name, const role_config& c) {
-    return this->exists(role_name).then([this, role_name, &c](bool role_exists) {
+standard_role_manager::create(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
+    return exists(role_name).then([this, role_name, &c, &mc](bool role_exists) {
         if (role_exists) {
             throw role_already_exists(role_name);
         }
 
-        return this->create_or_replace(role_name, c);
+        return create_or_replace(role_name, c, mc);
     });
 }
 
 future<>
-standard_role_manager::alter(std::string_view role_name, const role_config_update& u) {
+standard_role_manager::alter(std::string_view role_name, const role_config_update& u, ::service::group0_batch& mc) {
     static const auto build_column_assignments = [](const role_config_update& u) -> sstring {
         std::vector<sstring> assignments;
 
@@ -316,7 +319,7 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
         return boost::algorithm::join(assignments, ", ");
     };
 
-    return require_record(_qp, role_name).then([this, role_name, &u](record) {
+    return require_record(_qp, role_name).then([this, role_name, &u, &mc](record) {
         if (!u.is_superuser && !u.can_login) {
             return make_ready_future<>();
         }
@@ -333,17 +336,17 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
                     {sstring(role_name)},
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
-            return announce_mutations(_qp, _group0_client, std::move(query), {sstring(role_name)}, &_as, ::service::raft_timeout{});
+            return collect_mutations(_qp, mc, std::move(query), {sstring(role_name)});
         }
     });
 }
 
-future<> standard_role_manager::drop(std::string_view role_name) {
-    if (!co_await this->exists(role_name)) {
+future<> standard_role_manager::drop(std::string_view role_name, ::service::group0_batch& mc) {
+    if (!co_await exists(role_name)) {
         throw nonexistant_role(role_name);
     }
     // First, revoke this role from all roles that are members of it.
-    const auto revoke_from_members = [this, role_name] () -> future<> {
+    const auto revoke_from_members = [this, role_name, &mc] () -> future<> {
         const sstring query = format("SELECT member FROM {}.{} WHERE role = ?",
                 get_auth_ks_name(_qp),
                 meta::role_members_table::name);
@@ -356,26 +359,26 @@ future<> standard_role_manager::drop(std::string_view role_name) {
         co_await parallel_for_each(
                 members->begin(),
                 members->end(),
-                [this, role_name] (const cql3::untyped_result_set_row& member_row) -> future<> {
+                [this, role_name, &mc] (const cql3::untyped_result_set_row& member_row) -> future<> {
                     const sstring member = member_row.template get_as<sstring>("member");
-                    co_await this->modify_membership(member, role_name, membership_change::remove);
+                    co_await modify_membership(member, role_name, membership_change::remove, mc);
                 }
         );
     };
     // In parallel, revoke all roles that this role is members of.
-    const auto revoke_members_of = [this, grantee = role_name] () -> future<> {
-        const role_set granted_roles = co_await this->query_granted(
+    const auto revoke_members_of = [this, grantee = role_name, &mc] () -> future<> {
+        const role_set granted_roles = co_await query_granted(
                 grantee,
                 recursive_role_query::no);
         co_await parallel_for_each(
                 granted_roles.begin(),
                 granted_roles.end(),
-                [this, grantee](const sstring& role_name) {
-            return this->modify_membership(grantee, role_name, membership_change::remove);
+                [this, grantee, &mc](const sstring& role_name) {
+            return modify_membership(grantee, role_name, membership_change::remove, mc);
         });
     };
     // Delete all attributes for that role
-    const auto remove_attributes_of = [this, role_name] () -> future<> {
+    const auto remove_attributes_of = [this, role_name, &mc] () -> future<> {
         const sstring query = format("DELETE FROM {}.{} WHERE role = ?",
                 get_auth_ks_name(_qp),
                 meta::role_attributes_table::name);
@@ -383,11 +386,11 @@ future<> standard_role_manager::drop(std::string_view role_name) {
             co_await _qp.execute_internal(query, {sstring(role_name)},
                 cql3::query_processor::cache_internal::yes).discard_result();
         } else {
-            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as, ::service::raft_timeout{});
+            co_await collect_mutations(_qp, mc, query, {sstring(role_name)});
         }
     };
     // Finally, delete the role itself.
-    const auto delete_role = [this, role_name] () -> future<> {
+    const auto delete_role = [this, role_name, &mc] () -> future<> {
         const sstring query = format("DELETE FROM {}.{} WHERE {} = ?",
                 get_auth_ks_name(_qp),
                 meta::roles_table::name,
@@ -401,7 +404,7 @@ future<> standard_role_manager::drop(std::string_view role_name) {
                     {sstring(role_name)},
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
-            co_await announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as, ::service::raft_timeout{});
+            co_await collect_mutations(_qp, mc, query, {sstring(role_name)});
         }
     };
 
@@ -410,14 +413,10 @@ future<> standard_role_manager::drop(std::string_view role_name) {
 }
 
 future<>
-standard_role_manager::modify_membership(
+standard_role_manager::legacy_modify_membership(
         std::string_view grantee_name,
         std::string_view role_name,
         membership_change ch) {
-    // FIXME: in auth-v2 mode callers of this function should use a single guard
-    // to achieve consistent data across read and write, but the structure of calls
-    // is too complex to make such a refactor a quick fix.
-
     const auto modify_roles = [this, role_name, grantee_name, ch] () -> future<> {
         const auto query = format(
                 "UPDATE {}.{} SET member_of = member_of {} ? WHERE {} = ?",
@@ -425,17 +424,12 @@ standard_role_manager::modify_membership(
                 meta::roles_table::name,
                 (ch == membership_change::add ? '+' : '-'),
                 meta::roles_table::role_col_name);
-        if (legacy_mode(_qp)) {
-            co_await _qp.execute_internal(
-                    query,
-                    consistency_for_role(grantee_name),
-                    internal_distributed_query_state(),
-                    {role_set{sstring(role_name)}, sstring(grantee_name)},
-                    cql3::query_processor::cache_internal::no).discard_result();
-        } else {
-            co_await announce_mutations(_qp, _group0_client, std::move(query),
-                    {role_set{sstring(role_name)}, sstring(grantee_name)}, &_as, ::service::raft_timeout{});
-        }
+        co_await _qp.execute_internal(
+                query,
+                consistency_for_role(grantee_name),
+                internal_distributed_query_state(),
+                {role_set{sstring(role_name)}, sstring(grantee_name)},
+                cql3::query_processor::cache_internal::no).discard_result();
     };
 
     const auto modify_role_members = [this, role_name, grantee_name, ch] () -> future<> {
@@ -444,34 +438,24 @@ standard_role_manager::modify_membership(
                 const sstring insert_query = format("INSERT INTO {}.{} (role, member) VALUES (?, ?)",
                         get_auth_ks_name(_qp),
                         meta::role_members_table::name);
-                if (legacy_mode(_qp)) {
-                    co_return co_await _qp.execute_internal(
-                            insert_query,
-                            consistency_for_role(role_name),
-                            internal_distributed_query_state(),
-                            {sstring(role_name), sstring(grantee_name)},
-                            cql3::query_processor::cache_internal::no).discard_result();
-                } else {
-                    co_return co_await announce_mutations(_qp, _group0_client, insert_query,
-                            {sstring(role_name), sstring(grantee_name)}, &_as, ::service::raft_timeout{});
-                }
+                co_return co_await _qp.execute_internal(
+                        insert_query,
+                        consistency_for_role(role_name),
+                        internal_distributed_query_state(),
+                        {sstring(role_name), sstring(grantee_name)},
+                        cql3::query_processor::cache_internal::no).discard_result();
             }
 
             case membership_change::remove: {
                 const sstring delete_query = format("DELETE FROM {}.{} WHERE role = ? AND member = ?",
                         get_auth_ks_name(_qp),
                         meta::role_members_table::name);
-                if (legacy_mode(_qp)) {
-                    co_return co_await _qp.execute_internal(
-                            delete_query,
-                            consistency_for_role(role_name),
-                            internal_distributed_query_state(),
-                            {sstring(role_name), sstring(grantee_name)},
-                            cql3::query_processor::cache_internal::no).discard_result();
-                } else {
-                    co_return co_await announce_mutations(_qp, _group0_client, delete_query,
-                            {sstring(role_name), sstring(grantee_name)}, &_as, ::service::raft_timeout{});
-                }
+                co_return co_await _qp.execute_internal(
+                        delete_query,
+                        consistency_for_role(role_name),
+                        internal_distributed_query_state(),
+                        {sstring(role_name), sstring(grantee_name)},
+                        cql3::query_processor::cache_internal::no).discard_result();
             }
         }
     };
@@ -480,9 +464,47 @@ standard_role_manager::modify_membership(
 }
 
 future<>
-standard_role_manager::grant(std::string_view grantee_name, std::string_view role_name) {
+standard_role_manager::modify_membership(
+        std::string_view grantee_name,
+        std::string_view role_name,
+        membership_change ch,
+        ::service::group0_batch& mc) {
+    if (legacy_mode(_qp)) {
+        co_return co_await legacy_modify_membership(grantee_name, role_name, ch);
+    }
+
+    const auto modify_roles = format(
+            "UPDATE {}.{} SET member_of = member_of {} ? WHERE {} = ?",
+            get_auth_ks_name(_qp),
+            meta::roles_table::name,
+            (ch == membership_change::add ? '+' : '-'),
+            meta::roles_table::role_col_name);
+    co_await collect_mutations(_qp, mc, modify_roles,
+            {role_set{sstring(role_name)}, sstring(grantee_name)});
+
+    sstring modify_role_members;
+    switch (ch) {
+    case membership_change::add:
+        modify_role_members = format("INSERT INTO {}.{} (role, member) VALUES (?, ?)",
+                get_auth_ks_name(_qp),
+                meta::role_members_table::name);
+        break;
+    case membership_change::remove:
+        modify_role_members = format("DELETE FROM {}.{} WHERE role = ? AND member = ?",
+                get_auth_ks_name(_qp),
+                meta::role_members_table::name);
+        break;
+    default:
+        on_internal_error(log, format("unknown membership_change value: {}", int(ch)));
+    }
+    co_await collect_mutations(_qp, mc, modify_role_members,
+            {sstring(role_name), sstring(grantee_name)});
+}
+
+future<>
+standard_role_manager::grant(std::string_view grantee_name, std::string_view role_name, ::service::group0_batch& mc) {
     const auto check_redundant = [this, role_name, grantee_name] {
-        return this->query_granted(
+        return query_granted(
                 grantee_name,
                 recursive_role_query::yes).then([role_name, grantee_name](role_set roles) {
             if (roles.contains(sstring(role_name))) {
@@ -494,7 +516,7 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
     };
 
     const auto check_cycle = [this, role_name, grantee_name] {
-        return this->query_granted(
+        return query_granted(
                 role_name,
                 recursive_role_query::yes).then([role_name, grantee_name](role_set roles) {
             if (roles.contains(sstring(grantee_name))) {
@@ -505,19 +527,19 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
         });
     };
 
-   return when_all_succeed(check_redundant(), check_cycle()).then_unpack([this, role_name, grantee_name] {
-       return this->modify_membership(grantee_name, role_name, membership_change::add);
-   });
+    return when_all_succeed(check_redundant(), check_cycle()).then_unpack([this, role_name, grantee_name, &mc] {
+        return modify_membership(grantee_name, role_name, membership_change::add, mc);
+    });
 }
 
 future<>
-standard_role_manager::revoke(std::string_view revokee_name, std::string_view role_name) {
-    return this->exists(role_name).then([role_name](bool role_exists) {
+standard_role_manager::revoke(std::string_view revokee_name, std::string_view role_name, ::service::group0_batch& mc) {
+    return exists(role_name).then([role_name](bool role_exists) {
         if (!role_exists) {
             throw nonexistant_role(sstring(role_name));
         }
-    }).then([this, revokee_name, role_name] {
-        return this->query_granted(
+    }).then([this, revokee_name, role_name, &mc] {
+        return query_granted(
                 revokee_name,
                 recursive_role_query::no).then([revokee_name, role_name](role_set roles) {
             if (!roles.contains(sstring(role_name))) {
@@ -525,8 +547,8 @@ standard_role_manager::revoke(std::string_view revokee_name, std::string_view ro
             }
 
             return make_ready_future<>();
-        }).then([this, revokee_name, role_name] {
-            return this->modify_membership(revokee_name, role_name, membership_change::remove);
+        }).then([this, revokee_name, role_name, &mc] {
+            return modify_membership(revokee_name, role_name, membership_change::remove, mc);
         });
     });
 }
@@ -633,7 +655,7 @@ future<role_manager::attribute_vals> standard_role_manager::query_attribute_for_
     });
 }
 
-future<> standard_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) {
+future<> standard_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::group0_batch& mc) {
     if (!co_await exists(role_name)) {
         throw auth::nonexistant_role(role_name);
     }
@@ -643,12 +665,12 @@ future<> standard_role_manager::set_attribute(std::string_view role_name, std::s
     if (legacy_mode(_qp)) {
         co_await _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name), sstring(attribute_value)}, cql3::query_processor::cache_internal::yes).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query,
-                {sstring(role_name), sstring(attribute_name), sstring(attribute_value)}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc, query,
+                {sstring(role_name), sstring(attribute_name), sstring(attribute_value)});
     }
 }
 
-future<> standard_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name) {
+future<> standard_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::group0_batch& mc) {
     if (!co_await exists(role_name)) {
         throw auth::nonexistant_role(role_name);
     }
@@ -658,8 +680,8 @@ future<> standard_role_manager::remove_attribute(std::string_view role_name, std
     if (legacy_mode(_qp)) {
         co_await _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name)}, cql3::query_processor::cache_internal::yes).discard_result();
     } else {
-        co_await announce_mutations(_qp, _group0_client, query,
-                {sstring(role_name), sstring(attribute_name)}, &_as, ::service::raft_timeout{});
+        co_await collect_mutations(_qp, mc, query,
+                {sstring(role_name), sstring(attribute_name)});
     }
 }
 }

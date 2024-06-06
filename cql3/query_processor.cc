@@ -13,6 +13,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
+#include "seastar/core/shared_ptr.hh"
 #include "service/storage_proxy.hh"
 #include "service/topology_mutation.hh"
 #include "service/migration_manager.hh"
@@ -1011,43 +1012,15 @@ query_processor::forward(query::forward_request req, tracing::trace_state_ptr tr
 }
 
 future<::shared_ptr<messages::result_message>>
-query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) {
-    ::shared_ptr<cql_transport::event::schema_change> ce;
-
+query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options, service::group0_batch& mc) {
     if (this_shard_id() != 0) {
         on_internal_error(log, "DDL must be executed on shard 0");
     }
 
-    if (!guard) {
-        on_internal_error(log, "Guard must be present when executing DDL");
-    }
+    // TODO: remove this field, it should be injected directly as prepare_schema_mutations argument
+    stmt.global_req_id = mc.new_group0_state_id();
 
-    auto [remote_, holder] = remote();
-
-    cql3::cql_warnings_vec warnings;
-
-    auto request_id = guard->new_group0_state_id();
-    stmt.global_req_id = request_id;
-
-    auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, options, guard->write_timestamp());
-    warnings = std::move(cql_warnings);
-
-    ce = std::move(ret);
-    if (!m.empty()) {
-        auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
-        if (ce && ce->target == cql_transport::event::schema_change::target_type::TABLET_KEYSPACE) {
-            co_await remote_.get().mm.announce<service::topology_change>(std::move(m), std::move(*guard), description);
-            // TODO: eliminate timeout from alter ks statement on the cqlsh/driver side
-            auto error = co_await remote_.get().ss.wait_for_topology_request_completion(request_id);
-            co_await remote_.get().ss.wait_for_topology_not_busy();
-            if (!error.empty()) {
-                log.error("CQL statement \"{}\" with topology request_id \"{}\" failed with error: \"{}\"", stmt.raw_cql_statement, request_id, error);
-                throw exceptions::request_execution_exception(exceptions::exception_code::INVALID, error);
-            }
-        } else {
-            co_await remote_.get().mm.announce<service::schema_change>(std::move(m), std::move(*guard), description);
-        }
-    }
+    auto [ce, warnings] = co_await stmt.prepare_schema_mutations(*this, state, options, mc);
 
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
@@ -1063,6 +1036,29 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
     }
 
     co_return result;
+}
+
+future<> query_processor::announce_schema_statement(const statements::schema_altering_statement& stmt, service::group0_batch& mc) {
+    auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
+    auto [remote_, holder] = remote();
+    auto [m, guard] = co_await std::move(mc).extract();
+    if (m.empty()) {
+        co_return;
+    }
+    auto alter_ks_stmt_ptr = dynamic_cast<const statements::alter_keyspace_statement*>(&stmt);
+    if (alter_ks_stmt_ptr && alter_ks_stmt_ptr->changes_tablets(*this)) {
+        auto request_id = guard.new_group0_state_id();
+        co_await remote_.get().mm.announce<service::topology_change>(std::move(m), std::move(guard), description);
+        // TODO: eliminate timeout from alter ks statement on the cqlsh/driver side
+        auto error = co_await remote_.get().ss.wait_for_topology_request_completion(request_id);
+        co_await remote_.get().ss.wait_for_topology_not_busy();
+        if (!error.empty()) {
+            log.error("CQL statement \"{}\" with topology request_id \"{}\" failed with error: \"{}\"", stmt.raw_cql_statement, request_id, error);
+            throw exceptions::request_execution_exception(exceptions::exception_code::INVALID, error);
+        }
+        co_return;
+    }
+    co_await remote_.get().mm.announce(std::move(m), std::move(guard), description);
 }
 
 future<std::string>

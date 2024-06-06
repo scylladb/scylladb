@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/timer.hh>
+#include "seastar/core/future.hh"
 #include "seastarx.hh"
 #include "auth/role_manager.hh"
 #include <seastar/core/sstring.hh>
@@ -56,8 +57,9 @@ public:
     public:
         virtual future<qos::service_levels_info> get_service_levels() const = 0;
         virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const = 0;
-        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const = 0;
-        virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard, abort_source& as) const = 0;
+        virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, service::group0_batch& mc) const = 0;
+        virtual future<> drop_service_level(sstring service_level_name, service::group0_batch& mc) const = 0;
+        virtual future<> commit_mutations(service::group0_batch&& mc, abort_source& as) const = 0;
 
         virtual bool is_v2() const = 0;
         // Returns v2(raft) data accessor. If data accessor is already a raft one, returns nullptr.
@@ -158,9 +160,9 @@ public:
     future<> update_service_levels_from_distributed_data();
 
 
-    future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists, std::optional<service::group0_guard> guard);
-    future<> alter_distributed_service_level(sstring name, service_level_options slo, std::optional<service::group0_guard> guard);
-    future<> drop_distributed_service_level(sstring name, bool if_exists, std::optional<service::group0_guard> guard);
+    future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists, service::group0_batch& mc);
+    future<> alter_distributed_service_level(sstring name, service_level_options slo, service::group0_batch& mc);
+    future<> drop_distributed_service_level(sstring name, bool if_exists, service::group0_batch& mc);
     future<service_levels_info> get_distributed_service_levels();
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
 
@@ -187,7 +189,12 @@ public:
         return sl_it->second;
     }
 
-public:
+    future<> commit_mutations(::service::group0_batch&& mc) {
+        if (_sl_data_accessor->is_v2()) {
+            return _sl_data_accessor->commit_mutations(std::move(mc), _global_controller_db->group0_aborter);
+        }
+        return make_ready_future();
+    }
 
     /**
      * Returns true if service levels module is running under raft
@@ -237,7 +244,7 @@ private:
         alter
     };
 
-    future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, std::optional<service::group0_guard> guard);
+    future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, service::group0_batch& mc);
 public:
 
     /**

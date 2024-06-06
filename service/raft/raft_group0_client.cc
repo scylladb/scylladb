@@ -11,6 +11,7 @@
 #include <optional>
 #include <seastar/core/coroutine.hh>
 #include "raft_group0_client.hh"
+#include <boost/algorithm/string/join.hpp>
 
 #include "frozen_schema.hh"
 #include "schema_mutations.hh"
@@ -503,4 +504,98 @@ template group0_command raft_group0_client::prepare_command(broadcast_table_quer
 template group0_command raft_group0_client::prepare_command(write_mutations change, std::string_view description);
 template group0_command raft_group0_client::prepare_command(mixed_change change, group0_guard& guard, std::string_view description);
 
+api::timestamp_type group0_batch::write_timestamp() const {
+    if (!_guard) {
+        on_internal_error(logger, "group0_batch: write_timestamp without guard taken");
+    }
+    return _guard->write_timestamp();
+}
+
+utils::UUID group0_batch::new_group0_state_id() const {
+    if (!_guard) {
+        on_internal_error(logger, "group0_batch: new_group0_state_id without guard taken");
+    }
+    return _guard->new_group0_state_id();
+}
+
+void group0_batch::add_mutation(mutation m, std::string_view description) {
+    _muts.push_back(std::move(m));
+    if (!description.empty()) {
+        _descriptions.emplace_back(description);
+    }
+}
+
+void group0_batch::add_mutations(std::vector<mutation> ms, std::string_view description) {
+    _muts.insert(_muts.end(),
+            std::make_move_iterator(ms.begin()),
+            std::make_move_iterator(ms.end()));
+    if (!description.empty()) {
+        _descriptions.emplace_back(description);
+    }
+}
+
+void group0_batch::add_generator(generator_func f, std::string_view description) {
+    _generators.push_back(std::move(f));
+    if (!description.empty()) {
+        _descriptions.emplace_back(description);
+    }
+}
+
+static future<> add_write_mutations_entry(
+        ::service::raft_group0_client& group0_client,
+        std::string_view description,
+        std::vector<canonical_mutation> muts,
+        ::service::group0_guard group0_guard,
+        seastar::abort_source* as,
+        std::optional<::service::raft_timeout> timeout) {
+    logger.trace("add_write_mutations_entry: {} mutations with description {}",
+            muts.size(), description);
+    auto group0_cmd = group0_client.prepare_command(
+        ::service::write_mutations{
+            .mutations{std::move(muts)},
+        },
+        group0_guard,
+        description
+    );
+    return group0_client.add_entry(std::move(group0_cmd), std::move(group0_guard), as, timeout);
+}
+
+future<> group0_batch::materialize_mutations() {
+    auto t = _guard->write_timestamp();
+    for (auto& generator : _generators) {
+        auto g = generator(t);
+        while (auto mut = co_await g()) {
+            _muts.push_back(std::move(*mut));
+        }
+    }
+}
+
+future<> group0_batch::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
+    if (_muts.size() == 0 && _generators.size() == 0) {
+        co_return;
+    }
+    if (!_guard) {
+        on_internal_error(logger, "group0_batch: trying to announce without guard");
+    }
+    auto description = boost::algorithm::join(_descriptions, "; ");
+    // common case, don't bother with generators as we would have only 1-2 mutations,
+    // when producer expects substantial number or size of mutations it should use generator
+    if (_generators.size() == 0) {
+        std::vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
+        co_return co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), &as, timeout);
+    }
+    // raft doesn't support streaming so we need to materialize all mutations in memory
+    co_await materialize_mutations();
+    if (_muts.empty()) {
+        co_return;
+    }
+    std::vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
+    _muts.clear();
+    co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), &as, timeout);
+}
+
+future<std::pair<std::vector<mutation>, ::service::group0_guard>> group0_batch::extract() && {
+    co_await materialize_mutations();
+    co_return std::make_pair(std::move(_muts), std::move(*_guard));
+}
 }

@@ -49,23 +49,23 @@ future<T> operation_not_supported_exception(std::string_view operation) {
         std::runtime_error(format("role manager: {} operation not supported through maintenance socket", operation)));
 }
 
-future<> maintenance_socket_role_manager::create(std::string_view role_name, const role_config&) {
+future<> maintenance_socket_role_manager::create(std::string_view role_name, const role_config&, ::service::group0_batch&) {
     return operation_not_supported_exception("CREATE");
 }
 
-future<> maintenance_socket_role_manager::drop(std::string_view role_name) {
+future<> maintenance_socket_role_manager::drop(std::string_view role_name, ::service::group0_batch& mc) {
     return operation_not_supported_exception("DROP");
 }
 
-future<> maintenance_socket_role_manager::alter(std::string_view role_name, const role_config_update&) {
+future<> maintenance_socket_role_manager::alter(std::string_view role_name, const role_config_update&, ::service::group0_batch&) {
     return operation_not_supported_exception("ALTER");
 }
 
-future<> maintenance_socket_role_manager::grant(std::string_view grantee_name, std::string_view role_name) {
+future<> maintenance_socket_role_manager::grant(std::string_view grantee_name, std::string_view role_name, ::service::group0_batch& mc) {
     return operation_not_supported_exception("GRANT");
 }
 
-future<> maintenance_socket_role_manager::revoke(std::string_view revokee_name, std::string_view role_name) {
+future<> maintenance_socket_role_manager::revoke(std::string_view revokee_name, std::string_view role_name, ::service::group0_batch& mc) {
     return operation_not_supported_exception("REVOKE");
 }
 
@@ -97,11 +97,11 @@ future<role_manager::attribute_vals> maintenance_socket_role_manager::query_attr
     return operation_not_supported_exception<role_manager::attribute_vals>("QUERY ATTRIBUTE");
 }
 
-future<> maintenance_socket_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) {
+future<> maintenance_socket_role_manager::set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value, ::service::group0_batch& mc) {
     return operation_not_supported_exception("SET ATTRIBUTE");
 }
 
-future<> maintenance_socket_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name) {
+future<> maintenance_socket_role_manager::remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::group0_batch& mc) {
     return operation_not_supported_exception("REMOVE ATTRIBUTE");
 }
 

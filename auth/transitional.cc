@@ -87,16 +87,16 @@ public:
         });
     }
 
-    virtual future<> create(std::string_view role_name, const authentication_options& options) override {
-        return _authenticator->create(role_name, options);
+    virtual future<> create(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) override {
+        return _authenticator->create(role_name, options, mc);
     }
 
-    virtual future<> alter(std::string_view role_name, const authentication_options& options) override {
-        return _authenticator->alter(role_name, options);
+    virtual future<> alter(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) override {
+        return _authenticator->alter(role_name, options, mc);
     }
 
-    virtual future<> drop(std::string_view role_name) override {
-        return _authenticator->drop(role_name);
+    virtual future<> drop(std::string_view role_name, ::service::group0_batch& mc) override {
+        return _authenticator->drop(role_name, mc);
     }
 
     virtual future<custom_options> query_custom_options(std::string_view role_name) const override {
@@ -187,24 +187,24 @@ public:
         return make_ready_future<permission_set>(transitional_permissions);
     }
 
-    virtual future<> grant(std::string_view s, permission_set ps, const resource& r)  override {
-        return _authorizer->grant(s, std::move(ps), r);
+    virtual future<> grant(std::string_view s, permission_set ps, const resource& r, ::service::group0_batch& mc)  override {
+        return _authorizer->grant(s, std::move(ps), r, mc);
     }
 
-    virtual future<> revoke(std::string_view s, permission_set ps, const resource& r) override {
-        return _authorizer->revoke(s, std::move(ps), r);
+    virtual future<> revoke(std::string_view s, permission_set ps, const resource& r, ::service::group0_batch& mc) override {
+        return _authorizer->revoke(s, std::move(ps), r, mc);
     }
 
     virtual future<std::vector<permission_details>> list_all() const override {
         return _authorizer->list_all();
     }
 
-    virtual future<> revoke_all(std::string_view s) override {
-        return _authorizer->revoke_all(s);
+    virtual future<> revoke_all(std::string_view s, ::service::group0_batch& mc) override {
+        return _authorizer->revoke_all(s, mc);
     }
 
-    virtual future<> revoke_all(const resource& r) override {
-        return _authorizer->revoke_all(r);
+    virtual future<> revoke_all(const resource& r, ::service::group0_batch& mc) override {
+        return _authorizer->revoke_all(r, mc);
     }
 
     virtual const resource_set& protected_resources() const override {

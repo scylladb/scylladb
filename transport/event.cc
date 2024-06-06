@@ -57,7 +57,6 @@ event::schema_change::schema_change(change_type change, target_type target, sstr
 {
     switch (target) {
     case event::schema_change::target_type::KEYSPACE:
-    case event::schema_change::target_type::TABLET_KEYSPACE:
         assert(this->arguments.empty());
         break;
     case event::schema_change::target_type::TYPE:

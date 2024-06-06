@@ -21,13 +21,18 @@ public:
             : raft_service_level_distributed_data_accessor(qp, group0_client)
             , _sl_controller(sl_controller) {}
     
-    virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, std::optional<service::group0_guard> guard, abort_source& as) const override {
-        co_await raft_service_level_distributed_data_accessor::set_service_level(std::move(service_level_name), std::move(slo), std::move(guard), as);
+    virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, service::group0_batch& mc) const override {
+        co_await raft_service_level_distributed_data_accessor::set_service_level(std::move(service_level_name), std::move(slo), mc);
         co_await _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
     }
 
-    virtual future<> drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard, abort_source& as) const override {
-        co_await raft_service_level_distributed_data_accessor::drop_service_level(std::move(service_level_name), std::move(guard), as);
+    virtual future<> drop_service_level(sstring service_level_name, service::group0_batch& mc) const override {
+        co_await raft_service_level_distributed_data_accessor::drop_service_level(std::move(service_level_name), mc);
+        co_await _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
+    }
+
+    virtual future<> commit_mutations(service::group0_batch&& mc, abort_source& as) const override {
+        co_await raft_service_level_distributed_data_accessor::commit_mutations(std::move(mc), as);
         co_await _sl_controller.invoke_on_all(&service_level_controller::update_service_levels_from_distributed_data);
     }
 

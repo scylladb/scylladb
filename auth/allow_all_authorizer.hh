@@ -9,6 +9,7 @@
 #pragma once
 
 #include "auth/authorizer.hh"
+#include "seastar/core/future.hh"
 
 namespace cql3 {
 class query_processor;
@@ -44,12 +45,12 @@ public:
         return make_ready_future<permission_set>(permissions::ALL);
     }
 
-    virtual future<> grant(std::string_view, permission_set, const resource&) override {
+    virtual future<> grant(std::string_view, permission_set, const resource&, ::service::group0_batch&) override {
         return make_exception_future<>(
                 unsupported_authorization_operation("GRANT operation is not supported by AllowAllAuthorizer"));
     }
 
-    virtual future<> revoke(std::string_view, permission_set, const resource&) override {
+    virtual future<> revoke(std::string_view, permission_set, const resource&, ::service::group0_batch&) override {
         return make_exception_future<>(
                 unsupported_authorization_operation("REVOKE operation is not supported by AllowAllAuthorizer"));
     }
@@ -60,14 +61,12 @@ public:
                         "LIST PERMISSIONS operation is not supported by AllowAllAuthorizer"));
     }
 
-    virtual future<> revoke_all(std::string_view) override {
-        return make_exception_future(
-                unsupported_authorization_operation("REVOKE operation is not supported by AllowAllAuthorizer"));
+    virtual future<> revoke_all(std::string_view, ::service::group0_batch&) override {
+        return make_ready_future();
     }
 
-    virtual future<> revoke_all(const resource&) override {
-        return make_exception_future(
-                unsupported_authorization_operation("REVOKE operation is not supported by AllowAllAuthorizer"));
+    virtual future<> revoke_all(const resource&, ::service::group0_batch&) override {
+        return make_ready_future();
     }
 
     virtual const resource_set& protected_resources() const override {

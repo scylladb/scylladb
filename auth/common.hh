@@ -18,7 +18,6 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/smp.hh>
 
-#include "schema/schema_registry.hh"
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
 
@@ -85,14 +84,13 @@ future<> create_legacy_metadata_table_if_missing(
 // Use this function when need to perform read before write on a single guard or if
 // you have more than one mutation and potentially exceed single command size limit.
 using start_operation_func_t = std::function<future<::service::group0_guard>(abort_source*)>;
-using mutations_generator = coroutine::experimental::generator<mutation>;
 future<> announce_mutations_with_batching(
         ::service::raft_group0_client& group0_client,
         // since we can operate also in topology coordinator context where we need stronger
         // guarantees than start_operation from group0_client gives we allow to inject custom
         // function here
         start_operation_func_t start_operation_func,
-        std::function<mutations_generator(api::timestamp_type& t)> gen,
+        std::function<::service::mutations_generator(api::timestamp_type t)> gen,
         seastar::abort_source* as,
         std::optional<::service::raft_timeout> timeout);
 
@@ -105,4 +103,10 @@ future<> announce_mutations(
         seastar::abort_source* as,
         std::optional<::service::raft_timeout> timeout);
 
+// Appends mutations to a collector, they will be applied later on all nodes via group0 mechanism.
+future<> collect_mutations(
+        cql3::query_processor& qp,
+        ::service::group0_batch& collector,
+        const sstring query_string,
+        std::vector<data_value_or_unset> values);
 }

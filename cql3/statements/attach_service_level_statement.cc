@@ -7,6 +7,7 @@
  */
 
 #include "seastarx.hh"
+#include "auth/service.hh"
 #include "cql3/statements/attach_service_level_statement.hh"
 #include "service/qos/service_level_controller.hh"
 #include "exceptions/exceptions.hh"
@@ -14,7 +15,6 @@
 #include "service/client_state.hh"
 #include "service/query_state.hh"
 #include "cql3/query_processor.hh"
-#include "auth/common.hh"
 
 namespace cql3 {
 
@@ -43,16 +43,16 @@ attach_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &,
         std::optional<service::group0_guard> guard) const {
-    if (guard) {
-        release_guard(std::move(*guard));
-    }
     auto sli = co_await state.get_service_level_controller().get_distributed_service_level(_service_level);
     if (sli.empty()) {
         throw qos::nonexistant_service_level_exception(_service_level);
     }
 
-    co_await state.get_client_state().get_auth_service()->underlying_role_manager().
-            set_attribute(_role_name, "service_level", _service_level);
+    auto& as = *state.get_client_state().get_auth_service();
+    auto& sl = state.get_service_level_controller();
+    service::group0_batch mc{std::move(guard)};
+    co_await auth::set_attribute(as, _role_name, "service_level", _service_level, mc);
+    co_await sl.commit_mutations(std::move(mc));
 
     using void_result_msg = cql_transport::messages::result_message::void_message;
     using result_msg = cql_transport::messages::result_message;

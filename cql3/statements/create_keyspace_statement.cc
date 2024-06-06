@@ -137,13 +137,14 @@ cql3::statements::create_keyspace_statement::prepare(data_dictionary::database d
     return std::make_unique<prepared_statement>(make_shared<create_keyspace_statement>(*this));
 }
 
-future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(const service::client_state& cs) const {
+future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(const service::client_state& cs, service::group0_batch& mc) const {
     auto resource = auth::make_data_resource(keyspace());
     try {
         co_await auth::grant_applicable_permissions(
                 *cs.get_auth_service(),
                 *cs.user(),
-                resource);
+                resource,
+                mc);
     } catch (const auth::unsupported_authorization_operation&) {
         // Nothing.
     }

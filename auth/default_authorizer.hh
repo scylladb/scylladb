@@ -47,15 +47,15 @@ public:
 
     virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override;
 
-    virtual future<> grant(std::string_view, permission_set, const resource&) override;
+    virtual future<> grant(std::string_view, permission_set, const resource&, ::service::group0_batch&) override;
 
-    virtual future<> revoke( std::string_view, permission_set, const resource&) override;
+    virtual future<> revoke( std::string_view, permission_set, const resource&, ::service::group0_batch&) override;
 
     virtual future<std::vector<permission_details>> list_all() const override;
 
-    virtual future<> revoke_all(std::string_view) override;
+    virtual future<> revoke_all(std::string_view, ::service::group0_batch&) override;
 
-    virtual future<> revoke_all(const resource&) override;
+    virtual future<> revoke_all(const resource&, ::service::group0_batch&) override;
 
     virtual const resource_set& protected_resources() const override;
 
@@ -70,7 +70,9 @@ private:
 
     future<> migrate_legacy_metadata();
 
-    future<> modify(std::string_view, permission_set, const resource&, std::string_view);
+    future<> modify(std::string_view, permission_set, const resource&, std::string_view, ::service::group0_batch&);
+
+    void revoke_all_keyspace_resources(const resource& ks_resource, ::service::group0_batch& mc);
 };
 
 } /* namespace auth */
