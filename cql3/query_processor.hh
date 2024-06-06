@@ -28,11 +28,11 @@
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "utils/observable.hh"
-#include "lang/wasm.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
 
 
+namespace lang { class manager; }
 namespace service {
 class migration_manager;
 class query_state;

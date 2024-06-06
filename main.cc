@@ -102,8 +102,6 @@
 #include "tools/entry_point.hh"
 #include "test/perf/entry_point.hh"
 #include "db/per_partition_rate_limit_extension.hh"
-#include "lang/wasm_instance_cache.hh"
-#include "lang/wasm_alien_thread_runner.hh"
 #include "lang/manager.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/virtual_tables.hh"

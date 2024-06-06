@@ -16,7 +16,6 @@
 #include "lang/wasm_instance_cache.hh"
 #include "lang/wasm_alien_thread_runner.hh"
 #include "db/config.hh"
-#include "replica/database.hh"
 
 namespace wasm {
 
