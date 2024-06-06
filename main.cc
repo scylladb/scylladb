@@ -1961,49 +1961,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_view_builder(ctx).get();
             });
 
-            db.invoke_on_all(&replica::database::revert_initial_system_read_concurrency_boost).get();
-
-            notify_set.notify_all(configurable::system_state::started).get();
-
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
-
-            ss.local().register_protocol_server(cql_server_ctl);
-
-            std::any stop_cql;
-
-            if (cfg->start_native_transport()) {
-                start_cql(cql_server_ctl, stop_cql, "native transport");
-            }
-
-            api::set_transport_controller(ctx, cql_server_ctl).get();
-            auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {
-                api::unset_transport_controller(ctx).get();
-            });
-
-            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss, proxy, dbcfg.statement_scheduling_group);
-
-            ss.local().register_protocol_server(thrift_ctl);
-
-            std::any stop_rpc;
-            if (cfg->start_rpc()) {
-                thrift_ctl.start_server().get();
-                // FIXME -- this should be done via client hooks instead
-                stop_rpc = defer_verbose_shutdown("rpc server", [&thrift_ctl] {
-                    thrift_ctl.stop_server().get();
-                });
-            }
-
-            api::set_rpc_controller(ctx, thrift_ctl).get();
-            auto stop_rpc_controller = defer_verbose_shutdown("rpc controller API", [&ctx] {
-                api::unset_rpc_controller(ctx).get();
-            });
-
-            alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, *cfg, dbcfg.statement_scheduling_group);
             sharded<alternator::expiration_service> es;
             std::any stop_expiration_service;
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
-                alternator_ctl.start_server().get();
                 // Start the expiration service on all shards.
                 // Currently we only run it if Alternator is enabled, because
                 // only Alternator uses it for its TTL feature. But in the
@@ -2019,22 +1980,43 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     return es.invoke_on_all(&alternator::expiration_service::start);
                 }).get();
             }
-            ss.local().register_protocol_server(alternator_ctl);
 
-            redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
-            if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                redis_ctl.start_server().get();
-            }
-            ss.local().register_protocol_server(redis_ctl);
-
+            db.invoke_on_all(&replica::database::revert_initial_system_read_concurrency_boost).get();
+            notify_set.notify_all(configurable::system_state::started).get();
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
-            supervisor::notify("serving");
-            // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
 
+            // Create controllers before drain_on_shutdown() below, so that it destructs
+            // after drain stops them in stop_transport()
+            // Register controllers after drain_on_shutdown() below, so that even on start
+            // failure drain is called and stops controllers
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
+            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss, proxy, dbcfg.statement_scheduling_group);
+            alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, *cfg, dbcfg.statement_scheduling_group);
+            redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
+
+            // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
                 ss.local().drain_on_shutdown().get();
             });
+
+            ss.local().register_protocol_server(cql_server_ctl, cfg->start_native_transport()).get();
+            api::set_transport_controller(ctx, cql_server_ctl).get();
+            auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {
+                api::unset_transport_controller(ctx).get();
+            });
+
+            ss.local().register_protocol_server(thrift_ctl, cfg->start_rpc()).get();
+            api::set_rpc_controller(ctx, thrift_ctl).get();
+            auto stop_rpc_controller = defer_verbose_shutdown("rpc controller API", [&ctx] {
+                api::unset_rpc_controller(ctx).get();
+            });
+
+            ss.local().register_protocol_server(alternator_ctl, cfg->alternator_port() || cfg->alternator_https_port()).get();
+
+            ss.local().register_protocol_server(redis_ctl, cfg->redis_port() || cfg->redis_ssl_port()).get();
+
+            supervisor::notify("serving");
 
             startlog.info("Scylla version {} initialization completed.", scylla_version());
             if (after_init_func) {
