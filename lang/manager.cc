@@ -11,14 +11,25 @@
 
 namespace lang {
 
-manager::manager(const std::optional<wasm::startup_context>& ctx)
-        : _engine(ctx ? ctx->engine : nullptr)
-        , _instance_cache(ctx ? std::make_optional<wasm::instance_cache>(ctx->cache_size, ctx->instance_size, ctx->timer_period) : std::nullopt)
-        , _alien_runner(ctx ? ctx->alien_runner : nullptr)
-{}
+manager::manager(config cfg)
+{
+    if (cfg.wasm) {
+        if (this_shard_id() == 0) {
+            // Other shards will get this pointer in .start()
+            _engine = std::make_shared<rust::Box<wasmtime::Engine>>(wasmtime::create_engine(cfg.wasm->udf_memory_limit));
+            _alien_runner = std::make_shared<wasm::alien_thread_runner>();
+        }
+        _instance_cache.emplace(cfg.wasm->cache_size, cfg.wasm->cache_instance_size, cfg.wasm->cache_timer_period);
+    }
+}
 
 future<> manager::start() {
-    co_return;
+    if (this_shard_id() == 0) {
+        co_await container().invoke_on_others([this] (auto& m) {
+            m._engine = this->_engine;
+            m._alien_runner = this->_alien_runner;
+        });
+    }
 }
 
 future<> manager::stop() {

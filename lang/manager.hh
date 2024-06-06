@@ -8,24 +8,33 @@
 
 #pragma once
 
+#include <seastar/core/sharded.hh>
 #include "rust/wasmtime_bindings.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "lang/wasm_alien_thread_runner.hh"
 
 namespace wasm {
-struct startup_context;
 struct context;
 }
 
 namespace lang {
 
-class manager {
+class manager : public seastar::peering_sharded_service<manager> {
     std::shared_ptr<rust::Box<wasmtime::Engine>> _engine;
     std::optional<wasm::instance_cache> _instance_cache;
     std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
 
 public:
-    manager(const std::optional<wasm::startup_context>&);
+    struct wasm_config {
+        size_t udf_memory_limit;
+        size_t cache_size;
+        size_t cache_instance_size;
+        std::chrono::milliseconds cache_timer_period;
+    };
+    struct config {
+        std::optional<wasm_config> wasm;
+    };
+    manager(config);
     friend wasm::context;
     future<> start();
     future<> stop();

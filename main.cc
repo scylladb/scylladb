@@ -1062,13 +1062,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sstm.stop().get();
             });
 
-            std::optional<wasm::startup_context> wasm_ctx;
+            lang::manager::config lang_config;
             if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
-                wasm_ctx.emplace(*cfg, dbcfg);
+                lang_config.wasm = lang::manager::wasm_config {
+                    .udf_memory_limit = cfg->wasm_udf_memory_limit(),
+                    .cache_size = dbcfg.available_memory * cfg->wasm_cache_memory_fraction(),
+                    .cache_instance_size = cfg->wasm_cache_instance_size_limit(),
+                    .cache_timer_period = std::chrono::milliseconds(cfg->wasm_cache_timeout_in_ms()),
+                };
             }
 
             static sharded<lang::manager> langman;
-            langman.start(std::ref(wasm_ctx)).get();
+            langman.start(lang_config).get();
             // don't stop for real until query_processor stops
             auto stop_lang_man = defer_verbose_shutdown("lang manager", [] { langman.invoke_on_all(&lang::manager::stop).get(); });
             langman.invoke_on_all(&lang::manager::start).get();

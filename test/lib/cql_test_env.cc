@@ -569,12 +569,17 @@ private:
             _sstm.start(std::ref(*cfg), sstables::storage_manager::config{}).get();
             auto stop_sstm = deferred_stop(_sstm);
 
-            std::optional<wasm::startup_context> wasm_ctx;
+            lang::manager::config lang_config;
             if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
-                wasm_ctx.emplace(*cfg, dbcfg);
+                lang_config.wasm = lang::manager::wasm_config {
+                    .udf_memory_limit = cfg->wasm_udf_memory_limit(),
+                    .cache_size = dbcfg.available_memory * cfg->wasm_cache_memory_fraction(),
+                    .cache_instance_size = cfg->wasm_cache_instance_size_limit(),
+                    .cache_timer_period = std::chrono::milliseconds(cfg->wasm_cache_timeout_in_ms()),
+                };
             }
 
-            _lang_manager.start(std::ref(wasm_ctx)).get();
+            _lang_manager.start(lang_config).get();
             auto stop_lang_manager = defer([this] { _lang_manager.stop().get(); });
             _lang_manager.invoke_on_all(&lang::manager::start).get();
 
