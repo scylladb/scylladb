@@ -2,7 +2,7 @@
     "problemMatcher": [
         {
             "owner": "clang-include-cleaner",
-            "severity": "warning",
+            "severity": "error",
             "pattern": [
                 {
                     "regexp": "^([^\\-\\+].*)$",
