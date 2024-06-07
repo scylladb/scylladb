@@ -2646,6 +2646,10 @@ update_backlog node_update_backlog::fetch() {
         _max.store(new_max, std::memory_order_relaxed);
         return new_max;
     }
+    // If we perform a shard-aware write, we can read the backlog of the current shard,
+    // which was just updated.
+    // We still need to compare it to the max, aggregated from all shards, which might
+    // still be higher despite being most likely slightly outdated.
     return std::max(fetch_shard(this_shard_id()), _max.load(std::memory_order_relaxed));
 }
 

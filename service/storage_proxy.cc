@@ -542,7 +542,6 @@ private:
                         //
                         // Usually we will return immediately, since this work only involves appending data to the connection
                         // send buffer.
-                        p->update_view_update_backlog();
                         auto f = co_await coroutine::as_future(send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
                                 shard, response_id, p->get_view_update_backlog()));
                         f.ignore_ready_future();
@@ -581,7 +580,6 @@ private:
         }
         // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
         if (errors.count) {
-            p->update_view_update_backlog();
             auto f = co_await coroutine::as_future(send_mutation_failed(
                     netw::messaging_service::msg_addr{reply_to, shard},
                     trace_state_ptr,
@@ -4108,7 +4106,6 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
                 .then([response_id, this, my_address, h = std::move(handler_ptr), p = shared_from_this()] {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
-            update_view_update_backlog();
             got_response(response_id, my_address, get_view_update_backlog());
         });
     };
