@@ -93,7 +93,7 @@ disabled with the ``tablets = {'enabled': false}`` option:
     CREATE KEYSPACE my_keyspace
     WITH replication = {
         'class': 'NetworkTopologyStrategy',
-        'replication_factor': 3,
+        'replication_factor': 3
     } AND tablets = {
         'enabled': false
     };
