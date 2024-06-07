@@ -2779,7 +2779,6 @@ SEASTAR_TEST_CASE(sstable_reader_with_timeout) {
 
 SEASTAR_TEST_CASE(test_validate_checksums) {
     return test_env::do_with_async([&] (test_env& env) {
-        tests::reader_concurrency_semaphore_wrapper semaphore;
         auto random_spec = tests::make_random_schema_specification(
                 get_name(),
                 std::uniform_int_distribution<size_t>(1, 4),
@@ -2868,7 +2867,6 @@ SEASTAR_TEST_CASE(partial_sstable_deletion_test) {
 
 SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
     return test_env::do_with_async([&] (test_env& env) {
-        tests::reader_concurrency_semaphore_wrapper semaphore;
         auto random_spec = tests::make_random_schema_specification(
                 get_name(),
                 std::uniform_int_distribution<size_t>(1, 4),
