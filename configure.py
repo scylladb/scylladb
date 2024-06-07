@@ -1754,9 +1754,9 @@ def configure_seastar(build_dir, mode, mode_config):
 
 def configure_abseil(build_dir, mode, mode_config):
     abseil_cflags = mode_config['lib_cflags']
-    if '-DSANITIZE' in mode_config['cxxflags']:
+    cxx_flags = mode_config['cxxflags']
+    if '-DSANITIZE' in cxx_flags:
         abseil_cflags += ' -fsanitize=address -fsanitize=undefined -fno-sanitize=vptr'
-    abseil_cflags = abseil_cflags.strip()
 
     # We want to "undo" coverage for abseil if we have it enabled, as we are not
     # interested in the coverage of the abseil library. these flags were previously
@@ -1764,13 +1764,15 @@ def configure_abseil(build_dir, mode, mode_config):
     if args.coverage:
         for flag in COVERAGE_INST_FLAGS:
             abseil_cflags = abseil_cflags.replace(f' {flag}', '')
+
+    cxx_flags += ' ' + abseil_cflags.strip()
     cmake_mode = mode_config['cmake_build_type']
     abseil_cmake_args = [
         '-DCMAKE_BUILD_TYPE={}'.format(cmake_mode),
         '-DCMAKE_INSTALL_PREFIX={}'.format(build_dir + '/inst'), # just to avoid a warning from absl
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
-        '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), abseil_cflags),
+        '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), cxx_flags),
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
         '-DCMAKE_CXX_STANDARD=20',
         '-DABSL_PROPAGATE_CXX_STD=ON',
