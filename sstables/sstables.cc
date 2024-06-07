@@ -1452,9 +1452,7 @@ future<> sstable::reload_reclaimed_components() {
     sstlog.info("Reloaded bloom filter of {}", get_filename());
 }
 
-// This interface is only used during tests, snapshot loading and early initialization.
-// No need to set tunable priorities for it.
-future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noexcept {
+future<> sstable::load_metadata(sstable_open_config cfg, bool validate) noexcept {
     co_await read_toc();
     // read scylla-meta after toc. Might need it to parse
     // rest (hint extensions)
@@ -1466,9 +1464,17 @@ future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noe
             [&] { return read_compression(); },
             [&] { return read_filter(cfg); },
             [&] { return read_summary(); });
-    validate_min_max_metadata();
-    validate_max_local_deletion_time();
-    validate_partitioner();
+    if (validate) {
+        validate_min_max_metadata();
+        validate_max_local_deletion_time();
+        validate_partitioner();
+    }
+}
+
+// This interface is only used during tests, snapshot loading and early initialization.
+// No need to set tunable priorities for it.
+future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noexcept {
+    co_await load_metadata(cfg, true);
     if (_shards.empty()) {
         set_first_and_last_keys();
         _shards = compute_shards_for_this_sstable(sharder);
