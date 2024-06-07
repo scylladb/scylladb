@@ -1460,6 +1460,7 @@ void writer::consume_end_of_stream() {
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
     close_data_writer();
     _sst.write_summary();
+    _sst.maybe_rebuild_filter_from_index(_num_partitions_consumed);
     _sst.write_filter();
     _sst.write_statistics();
     _sst.write_compression();
