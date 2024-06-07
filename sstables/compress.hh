@@ -56,8 +56,6 @@ using compressor_ptr = shared_ptr<compressor>;
 
 namespace sstables {
 
-struct compression;
-
 struct compression {
     // To reduce the memory footpring of compression-info, n offsets are grouped
     // together into segments, where each segment stores a base absolute offset
