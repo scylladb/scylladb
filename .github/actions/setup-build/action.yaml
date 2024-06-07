@@ -51,13 +51,13 @@ runs:
       run: |
         sudo apt-get install -y clang-tidy-$CLANG_VERSION
 
-    - name: Install GCC-12
+    - name: Install GCC-13
       # ubuntu:jammy comes with GCC-11. and libstdc++-11 fails to compile
       # scylla which defines value type of std::unordered_map in .cc
       shell: bash
       run: |
-        sudo add-apt-repository -y ppa:ubuntu-toolchain-r/ppa
-        sudo apt-get install -y libstdc++-12-dev
+        sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+        sudo apt-get install -y libstdc++-13-dev
 
     - name: Install more build dependencies
       shell: bash
