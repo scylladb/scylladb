@@ -19,7 +19,6 @@
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "lang/wasm_alien_thread_runner.hh"
-#include "lang/manager.hh"
 
 logging::logger wasm_logger("wasm");
 
@@ -32,10 +31,6 @@ context::context(wasmtime::Engine& engine_ptr, std::string name, instance_cache&
     , yield_fuel(yield_fuel)
     , total_fuel(total_fuel) {
 }
-
-context::context(lang::manager& manager, std::string name)
-    : context(**manager._engine, std::move(name), *manager._instance_cache, manager.wasm_yield_fuel, manager.wasm_total_fuel)
-{ }
 
 static constexpr size_t WASM_PAGE_SIZE = 64 * 1024;
 

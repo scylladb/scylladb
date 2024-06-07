@@ -52,7 +52,6 @@ public:
         lua_config lua;
     };
     manager(config);
-    friend wasm::context;
     future<> start();
     future<> stop();
     void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) noexcept {

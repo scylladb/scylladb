@@ -58,7 +58,7 @@ future<> manager::create(sstring language, context& ctx, sstring name, const std
         ctx = std::move(lua_ctx);
     } else if (language == "wasm") {
        // FIXME: need better way to test wasm compilation without real_database()
-       auto wasm_ctx = wasm::context(*this, name);
+       auto wasm_ctx = wasm::context(**_engine, std::move(name), *_instance_cache, wasm_yield_fuel, wasm_total_fuel);
        try {
             co_await ::wasm::precompile(*_alien_runner, wasm_ctx, arg_names, std::move(script));
        } catch (const wasm::exception& we) {
