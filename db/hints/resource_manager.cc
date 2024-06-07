@@ -148,10 +148,16 @@ void space_watchdog::on_timer() {
                 auto maybe_variant = std::invoke([&] () -> std::optional<std::variant<locator::host_id, gms::inet_address>> {
                     try {
                         const auto hid_or_ep = locator::host_id_or_endpoint{de.name};
-                        if (hid_or_ep.has_host_id()) {
+
+                        // If hinted handoff is host-ID-based, hint directories representing IP addresses must've
+                        // been created by mistake and they're invalid. The same for pre-host-ID hinted handoff
+                        // -- hint directories representing host IDs are NOT valid.
+                        if (hid_or_ep.has_host_id() && shard_manager.uses_host_id()) {
                             return std::variant<locator::host_id, gms::inet_address>(hid_or_ep.id());
-                        } else {
+                        } else if (hid_or_ep.has_endpoint() && !shard_manager.uses_host_id()) {
                             return std::variant<locator::host_id, gms::inet_address>(hid_or_ep.endpoint());
+                        } else {
+                            return std::nullopt;
                         }
                     } catch (...) {
                         return std::nullopt;

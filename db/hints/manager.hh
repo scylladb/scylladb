@@ -323,6 +323,10 @@ public:
 
     void update_backlog(size_t backlog, size_t max_backlog);
 
+    bool uses_host_id() const noexcept {
+        return _uses_host_id;
+    }
+
 private:
     bool stopping() const noexcept {
         return _state.contains(state::stopping);
