@@ -553,10 +553,16 @@ future<> manager::change_host_filter(host_filter filter) {
             const auto maybe_host_id_and_ip = std::invoke([&] () -> std::optional<pair_type> {
                 try {
                     locator::host_id_or_endpoint hid_or_ep{de.name};
-                    if (hid_or_ep.has_host_id()) {
+
+                    // If hinted handoff is host-ID-based, hint directories representing IP addresses must've
+                    // been created by mistake and they're invalid. The same for pre-host-ID hinted handoff
+                    // -- hint directories representing host IDs are NOT valid.
+                    if (hid_or_ep.has_host_id() && _uses_host_id) {
                         return std::make_optional(pair_type{hid_or_ep.id(), hid_or_ep.resolve_endpoint(*tmptr)});
-                    } else {
+                    } else if (hid_or_ep.has_endpoint() && !_uses_host_id) {
                         return std::make_optional(pair_type{hid_or_ep.resolve_id(*tmptr), hid_or_ep.endpoint()});
+                    } else {
+                        return std::nullopt;
                     }
                 } catch (...) {
                     return std::nullopt;
@@ -716,8 +722,6 @@ future<> manager::with_file_update_mutex_for(const std::variant<locator::host_id
     return _ep_managers.at(host_id).with_file_update_mutex(std::move(func));
 }
 
-// The function assumes that if `_uses_host_id == true`, then there are no directories that represent IP addresses,
-// i.e. every directory is either valid and represents a host ID, or is invalid (so it should be ignored anyway).
 future<> manager::initialize_endpoint_managers() {
     auto maybe_create_ep_mgr = [this] (const locator::host_id& host_id, const gms::inet_address& ip) -> future<> {
         if (!check_dc_for(host_id)) {
@@ -749,12 +753,23 @@ future<> manager::initialize_endpoint_managers() {
         }
 
         if (_uses_host_id) {
+            // If hinted handoff is host-ID-based but the directory doesn't represent a host ID,
+            // it's invalid. Ignore it.
+            if (!maybe_host_id_or_ep->has_host_id()) {
+                co_return;
+            }
+
             // If hinted handoff is host-ID-based, `get_ep_manager` will NOT use the passed IP address,
             // so we simply pass the default value there.
             co_return co_await maybe_create_ep_mgr(maybe_host_id_or_ep->id(), gms::inet_address{});
         }
 
         // If we have got to this line, hinted handoff is still IP-based and we need to map the IP.
+        if (!maybe_host_id_or_ep->has_endpoint()) {
+            // If the directory name doesn't represent an IP, it's invalid. We ignore it.
+            co_return;
+        }
+
         const auto maybe_host_id = std::invoke([&] () -> std::optional<locator::host_id> {
             try {
                 return maybe_host_id_or_ep->resolve_id(*tmptr);
