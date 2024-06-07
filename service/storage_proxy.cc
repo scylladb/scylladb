@@ -542,6 +542,7 @@ private:
                         //
                         // Usually we will return immediately, since this work only involves appending data to the connection
                         // send buffer.
+                        p->update_view_update_backlog();
                         auto f = co_await coroutine::as_future(send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
                                 shard, response_id, p->get_view_update_backlog()));
                         f.ignore_ready_future();
@@ -580,6 +581,7 @@ private:
         }
         // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
         if (errors.count) {
+            p->update_view_update_backlog();
             auto f = co_await coroutine::as_future(send_mutation_failed(
                     netw::messaging_service::msg_addr{reply_to, shard},
                     trace_state_ptr,
@@ -2433,8 +2435,19 @@ void storage_proxy::maybe_update_view_backlog_of(gms::inet_address replica, std:
     }
 }
 
-db::view::update_backlog storage_proxy::get_view_update_backlog() const {
-    return _max_view_update_backlog.add_fetch(this_shard_id(), get_db().local().get_view_update_backlog());
+void storage_proxy::update_view_update_backlog() {
+    _max_view_update_backlog.add(get_db().local().get_view_update_backlog());
+}
+
+db::view::update_backlog storage_proxy::get_view_update_backlog() {
+    return _max_view_update_backlog.fetch();
+}
+
+future<std::optional<db::view::update_backlog>> storage_proxy::get_view_update_backlog_if_changed() {
+    if (this_shard_id() != 0) {
+        on_internal_error(slogger, format("getting view update backlog for gossip on a non-gossip shard {}", this_shard_id()));
+    }
+    return _max_view_update_backlog.fetch_if_changed();
 }
 
 db::view::update_backlog storage_proxy::get_backlog_of(gms::inet_address ep) const {
@@ -4081,6 +4094,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
                 .then([response_id, this, my_address, h = std::move(handler_ptr), p = shared_from_this()] {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
+            update_view_update_backlog();
             got_response(response_id, my_address, get_view_update_backlog());
         });
     };

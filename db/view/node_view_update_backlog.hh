@@ -11,7 +11,9 @@
 #include "db/view/view_update_backlog.hh"
 
 #include <seastar/core/cacheline.hh>
+#include <seastar/core/future.hh>
 #include <seastar/core/lowres_clock.hh>
+#include <seastar/util/bool_class.hh>
 
 #include <atomic>
 #include <chrono>
@@ -25,9 +27,11 @@ namespace db::view {
  */
 class node_update_backlog {
     using clock = seastar::lowres_clock;
+    using need_publishing = seastar::bool_class<class need_publishing_tag>;
     struct per_shard_backlog {
         // Multiply by 2 to defeat the prefetcher
         alignas(seastar::cache_line_size * 2) std::atomic<update_backlog> backlog = update_backlog::no_backlog();
+        need_publishing need_publishing = need_publishing::no;
 
         update_backlog load() const {
             return backlog.load(std::memory_order_relaxed);
@@ -46,7 +50,10 @@ public:
             , _max(update_backlog::no_backlog()) {
     }
 
-    update_backlog add_fetch(unsigned shard, update_backlog backlog);
+    update_backlog fetch();
+    void add(update_backlog backlog);
+    update_backlog fetch_shard(unsigned shard);
+    seastar::future<std::optional<update_backlog>> fetch_if_changed();
 
     // Exposed for testing only.
     update_backlog load() const {
