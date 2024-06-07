@@ -3050,6 +3050,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
                     schema_with_source->source,
                     schema_with_source->path ? format(" ({})", schema_with_source->path->native()) : "",
                     schema_with_source->obtained_from);
+            sst_log.trace("Loaded schema: {}", schema);
         } else {
             return 1;
         }
