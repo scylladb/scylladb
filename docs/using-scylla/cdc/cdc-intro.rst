@@ -85,7 +85,7 @@ The following libraries are available:
 More information
 ----------------
 
-`Scylla University: Change Data Capture (CDC) lesson <https://university.scylladb.com/courses/scylla-operations/lessons/change-data-capture-cdc/>`_ -  Learn how to use CDC. Some of the topics covered are:
+`Scylla University: Change Data Capture (CDC) lesson <https://university.scylladb.com/courses/data-modeling/lessons/change-data-capture-cdc/>`_ -  Learn how to use CDC. Some of the topics covered are:
 
 * An overview of Change Data Capture,  what exactly is it, what are some common use cases, what does it do, and an overview of how it works
 * How can that data be consumed? Different options for consuming the data changes including normal CQL, a layered approach, and integrators
