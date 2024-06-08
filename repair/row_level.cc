@@ -3177,7 +3177,8 @@ public:
     }
 };
 
-repair_service::repair_service(distributed<gms::gossiper>& gossiper,
+repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
+        distributed<gms::gossiper>& gossiper,
         netw::messaging_service& ms,
         sharded<replica::database>& db,
         sharded<service::storage_proxy>& sp,
@@ -3189,7 +3190,8 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
         tasks::task_manager& tm,
         service::migration_manager& mm,
         size_t max_repair_memory)
-    : _gossiper(gossiper)
+    : _tsm(tsm)
+    , _gossiper(gossiper)
     , _messaging(ms)
     , _db(db)
     , _sp(sp)

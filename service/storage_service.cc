@@ -142,7 +142,8 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<cdc::generation_service>& cdc_gens,
     sharded<db::view::view_builder>& view_builder,
     cql3::query_processor& qp,
-    sharded<qos::service_level_controller>& sl_controller)
+    sharded<qos::service_level_controller>& sl_controller,
+    topology_state_machine& topology_state_machine)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -170,6 +171,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _tablet_allocator(tablet_allocator)
         , _cdc_gens(cdc_gens)
         , _view_builder(view_builder)
+        , _topology_state_machine(topology_state_machine)
 {
     register_metrics();
 
@@ -6183,13 +6185,6 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     while (true) {
         group0_guard guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
 
-        while (_topology_state_machine._topology.is_busy()) {
-            rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
-            release_guard(std::move(guard));
-            co_await _topology_state_machine.event.wait();
-            guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-        }
-
         std::vector<canonical_mutation> updates;
         updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
             .set_tablet_balancing_enabled(enabled)
@@ -6206,6 +6201,11 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
             rtlogger.debug("set_tablet_balancing_enabled(): concurrent modification");
         }
     }
+
+    while (_topology_state_machine._topology.is_busy()) {
+        rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
+        co_await _topology_state_machine.event.wait();
+    }
 }
 
 future<> storage_service::await_topology_quiesced() {
@@ -6219,14 +6219,8 @@ future<> storage_service::await_topology_quiesced() {
         co_return;
     }
 
-    group0_guard guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-
-    while (_topology_state_machine._topology.is_busy()) {
-        rtlogger.debug("await_topology_quiesced(): topology is busy");
-        release_guard(std::move(guard));
-        co_await _topology_state_machine.event.wait();
-        guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
-    }
+    co_await _group0->group0_server().read_barrier(&_group0_as);
+    co_await _topology_state_machine.await_not_busy();
 }
 
 future<join_node_request_result> storage_service::join_node_request_handler(join_node_request_params params) {

@@ -136,6 +136,7 @@ private:
     sharded<db::view::view_update_generator> _view_update_generator;
     sharded<service::migration_notifier> _mnotifier;
     sharded<qos::service_level_controller> _sl_controller;
+    sharded<service::topology_state_machine> _topology_state_machine;
     sharded<service::migration_manager> _mm;
     sharded<db::batchlog_manager> _batchlog_manager;
     sharded<gms::gossiper> _gossiper;
@@ -751,6 +752,11 @@ private:
                 _tablet_allocator.stop().get();
             });
 
+            _topology_state_machine.start().get();
+            auto stop_topology_state_machine = defer([this] {
+                _topology_state_machine.stop().get();
+            });
+
             service::raft_group0 group0_service{
                     abort_sources.local(), _group0_registry.local(), _ms,
                     _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client};
@@ -770,7 +776,8 @@ private:
                 std::ref(_cdc_generation_service),
                 std::ref(_view_builder),
                 std::ref(_qp),
-                std::ref(_sl_controller)).get();
+                std::ref(_sl_controller),
+                std::ref(_topology_state_machine)).get();
             auto stop_storage_service = defer([this] { _ss.stop().get(); });
 
             _mnotifier.local().register_listener(&_ss.local());
