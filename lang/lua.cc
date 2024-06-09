@@ -794,7 +794,7 @@ struct from_lua_visitor {
         if (error_pos) {
             throw exceptions::invalid_request_exception(format("value is not valid utf8, invalid character at byte offset {}", *error_pos));
         }
-        return std::move(s);
+        return s;
     }
 
     data_value operator()(const ascii_type_impl& t) {
