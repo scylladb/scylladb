@@ -148,7 +148,7 @@ struct compression {
         class const_iterator {
         public:
             using iterator_category = std::random_access_iterator_tag;
-            using value_type = const uint64_t;
+            using value_type = uint64_t;
             using difference_type = std::ptrdiff_t;
             using pointer = const uint64_t*;
             using reference = const uint64_t&;
