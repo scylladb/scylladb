@@ -15,11 +15,6 @@
 #include "compaction_descriptor.hh"
 #include "tombstone_gc.hh"
 
-namespace compaction {
-class table_state;
-class strategy_control;
-}
-
 namespace sstables {
 
 class sstable_set_impl;

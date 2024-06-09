@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <seastar/core/condition-variable.hh>
+
 #include "schema_fwd.hh"
 #include "compaction_descriptor.hh"
 
@@ -45,6 +47,7 @@ public:
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept = 0;
     virtual compaction_backlog_tracker& get_backlog_tracker() = 0;
+    virtual seastar::condition_variable& get_staging_done_condition() noexcept = 0;
 };
 
 }

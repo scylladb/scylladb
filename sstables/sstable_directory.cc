@@ -226,7 +226,8 @@ sstable_directory::process_sstable_dir(process_flags flags) {
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await parallel_for_each_restricted(state.descriptors, [this, flags, &state] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
+    auto descriptors = std::move(state.descriptors);
+    co_await parallel_for_each_restricted(descriptors, [this, flags, &state] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
         auto& desc = std::get<1>(t);
         state.generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
@@ -272,7 +273,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 
 future<>
 sstable_directory::load_foreign_sstables(sstable_info_vector info_vec) {
-    return parallel_for_each_restricted(info_vec, [this] (sstables::foreign_sstable_open_info& info) {
+    co_await parallel_for_each_restricted(info_vec, [this] (sstables::foreign_sstable_open_info& info) {
         auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
         return sst->load(std::move(info)).then([sst, this] {
             _unshared_local_sstables.push_back(sst);
@@ -404,7 +405,8 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::tab
 
 future<>
 sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& cm, replica::table& table,
-                           unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator)
+                           unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator,
+                           compaction::owned_ranges_ptr owned_ranges_ptr)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -418,7 +420,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
     auto sstables_per_job = shared_info.size() / num_jobs;
 
     using reshard_buckets = std::vector<std::vector<sstables::shared_sstable>>;
-    return do_with(reshard_buckets(1), [this, &cm, &table, sstables_per_job, num_jobs, creator = std::move(creator), shared_info = std::move(shared_info)] (reshard_buckets& buckets) mutable {
+    return do_with(reshard_buckets(1), [this, &cm, &table, sstables_per_job, num_jobs, creator = std::move(creator), shared_info = std::move(shared_info), owned_ranges_ptr = std::move(owned_ranges_ptr)] (reshard_buckets& buckets) mutable {
         return parallel_for_each(shared_info, [this, sstables_per_job, num_jobs, &buckets] (sstables::foreign_sstable_open_info& info) {
             auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
             return sst->load(std::move(info)).then([this, &buckets, sstables_per_job, num_jobs, sst = std::move(sst)] () mutable {
@@ -428,15 +430,16 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
                 }
                 buckets.back().push_back(std::move(sst));
             });
-        }).then([this, &cm, &table, &buckets, creator = std::move(creator)] () mutable {
+        }).then([this, &cm, &table, &buckets, creator = std::move(creator), owned_ranges_ptr = std::move(owned_ranges_ptr)] () mutable {
             // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
             // parallel_for_each so the statistics about pending jobs are updated to reflect all
             // jobs. But only one will run in parallel at a time
-            return parallel_for_each(buckets, [this, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
-                return cm.run_custom_job(table.as_table_state(), compaction_type::Reshard, "Reshard compaction", [this, &cm, &table, creator, &sstlist] (sstables::compaction_data& info) {
+            return parallel_for_each(buckets, [this, &cm, &table, creator = std::move(creator), owned_ranges_ptr = std::move(owned_ranges_ptr)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
+                return cm.run_custom_job(table.as_table_state(), compaction_type::Reshard, "Reshard compaction", [this, &cm, &table, creator, &sstlist, owned_ranges_ptr] (sstables::compaction_data& info) {
                     sstables::compaction_descriptor desc(sstlist, _io_priority);
                     desc.options = sstables::compaction_type_options::make_reshard();
                     desc.creator = std::move(creator);
+                    desc.owned_ranges = owned_ranges_ptr;
 
                     return sstables::compact_sstables(std::move(desc), info, table.as_table_state()).then([this, &sstlist] (sstables::compaction_result result) {
                         // input sstables are moved, to guarantee their resources are released once we're done
@@ -451,18 +454,29 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
 
 future<>
 sstable_directory::do_for_each_sstable(std::function<future<>(sstables::shared_sstable)> func) {
-    return parallel_for_each_restricted(_unshared_local_sstables, std::move(func));
+    auto sstables = std::move(_unshared_local_sstables);
+    co_await parallel_for_each_restricted(sstables, std::move(func));
+}
+
+future<>
+sstable_directory::filter_sstables(std::function<future<bool>(sstables::shared_sstable)> func) {
+    std::vector<sstables::shared_sstable> filtered;
+    co_await parallel_for_each_restricted(_unshared_local_sstables, [func = std::move(func), &filtered] (sstables::shared_sstable sst) -> future<> {
+        auto keep = co_await func(sst);
+        if (keep) {
+            filtered.emplace_back(sst);
+        }
+    });
+    _unshared_local_sstables = std::move(filtered);
 }
 
 template <typename Container, typename Func>
+requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
 future<>
-sstable_directory::parallel_for_each_restricted(Container&& C, Func&& func) {
-    return do_with(std::move(C), std::move(func), [this] (Container& c, Func& func) mutable {
-      return max_concurrent_for_each(c, _manager.dir_semaphore()._concurrency, [this, &func] (auto& el) mutable {
-        return with_semaphore(_manager.dir_semaphore()._sem, 1, [this, &func,  el = std::move(el)] () mutable {
-            return func(el);
-        });
-      });
+sstable_directory::parallel_for_each_restricted(Container& c, Func func) {
+    co_await max_concurrent_for_each(c, _manager.dir_semaphore()._concurrency, [&] (auto& el) -> future<>{
+        auto units = co_await get_units(_manager.dir_semaphore()._sem, 1);
+        co_await func(el);
     });
 }
 

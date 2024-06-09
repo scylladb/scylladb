@@ -3094,6 +3094,8 @@ future<> sstable::filesystem_storage::wipe(const sstable& sst) noexcept {
 
 future<>
 sstable::unlink() noexcept {
+    _on_delete(*this);
+
     auto remove_fut = _storage.wipe(*this);
 
     try {
@@ -3426,6 +3428,12 @@ future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir) {
         // sstable files and directories
         co_await remove_dir(table_dir, true);
     }
+}
+
+std::string to_string(const shared_sstable& sst, bool include_origin) {
+    return include_origin ?
+        fmt::format("{}:level={:d}:origin={}", sst->get_filename(), sst->get_sstable_level(), sst->get_origin()) :
+        fmt::format("{}:level={:d}", sst->get_filename(), sst->get_sstable_level());
 }
 
 } // namespace sstables

@@ -22,6 +22,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
 #include "log.hh"
+#include "sstables/shared_sstable.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/updateable_value.hh"
 #include "utils/serialized_action.hh"
@@ -33,6 +34,7 @@
 #include "compaction_weight_registration.hh"
 #include "compaction_backlog_manager.hh"
 #include "compaction/compaction_descriptor.hh"
+#include "compaction_state.hh"
 #include "strategy_control.hh"
 #include "backlog_controller.hh"
 #include "seastarx.hh"
@@ -70,31 +72,6 @@ public:
         size_t available_memory = 0;
         utils::updateable_value<float> static_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
-    };
-private:
-    struct compaction_state {
-        // Used both by compaction tasks that refer to the compaction_state
-        // and by any function running under run_with_compaction_disabled().
-        seastar::gate gate;
-
-        // Prevents table from running major and minor compaction at the same time.
-        rwlock lock;
-
-        // Raised by any function running under run_with_compaction_disabled();
-        long compaction_disabled_counter = 0;
-
-        // Signaled whenever a compaction task completes.
-        condition_variable compaction_done;
-
-        compaction_backlog_tracker backlog_tracker;
-
-        explicit compaction_state(table_state& t);
-        compaction_state(compaction_state&&) = delete;
-        ~compaction_state();
-
-        bool compaction_disabled() const noexcept {
-            return compaction_disabled_counter > 0;
-        }
     };
 
 public:
@@ -342,7 +319,11 @@ private:
     void deregister_weight(int weight);
 
     // Get candidates for compaction strategy, which are all sstables but the ones being compacted.
-    std::vector<sstables::shared_sstable> get_candidates(compaction::table_state& t);
+    std::vector<sstables::shared_sstable> get_candidates(compaction::table_state& t) const;
+
+    template <std::ranges::range Range>
+    requires std::convertible_to<std::ranges::range_value_t<Range>, sstables::shared_sstable>
+    std::vector<sstables::shared_sstable> get_candidates(table_state& t, const Range& sstables) const;
 
     template <typename Iterator, typename Sentinel>
     requires std::same_as<Sentinel, Iterator> || std::sentinel_for<Sentinel, Iterator>
@@ -355,6 +336,9 @@ private:
     // gets the table's compaction state
     // throws std::out_of_range exception if not found.
     compaction_state& get_compaction_state(compaction::table_state* t);
+    const compaction_state& get_compaction_state(compaction::table_state* t) const {
+        return const_cast<compaction_manager*>(this)->get_compaction_state(t);
+    }
 
     // Return true if compaction manager is enabled and
     // table still exists and compaction is not disabled for the table.
@@ -375,9 +359,9 @@ private:
     // by retrieving set of candidates only after all compactions for table T were stopped, if any.
     template<typename TaskType, typename... Args>
     requires std::derived_from<TaskType, task>
-    future<compaction_stats_opt> perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func, Args... args);
+    future<compaction_stats_opt> perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, Args... args);
 
-    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
+    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
@@ -452,7 +436,14 @@ public:
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
     future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t);
+private:
+    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t);
 
+    // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
+    bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
+
+    future<> on_compaction_completion(table_state& t, sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy);
+public:
     // Submit a table to be upgraded and wait for its termination.
     future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version);
 
@@ -475,7 +466,7 @@ public:
     class compaction_reenabler {
         compaction_manager& _cm;
         compaction::table_state* _table;
-        compaction_manager::compaction_state& _compaction_state;
+        compaction::compaction_state& _compaction_state;
         gate::holder _holder;
 
     public:
@@ -488,7 +479,7 @@ public:
             return _table;
         }
 
-        const compaction_manager::compaction_state& compaction_state() const noexcept {
+        const compaction::compaction_state& compaction_state() const noexcept {
             return _compaction_state;
         }
     };
@@ -552,12 +543,20 @@ public:
         return _tombstone_gc_state;
     };
 
+    // Uncoditionally erase sst from `sstables_requiring_cleanup`
+    // Returns true iff sst was found and erased.
+    bool erase_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst);
+
+    // checks if the sstable is in the respective compaction_state.sstables_requiring_cleanup set.
+    bool requires_cleanup(table_state& t, const sstables::shared_sstable& sst) const;
+    const std::unordered_set<sstables::shared_sstable>& sstables_requiring_cleanup(table_state& t) const;
+
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
     friend class compaction_manager_test;
 };
 
-bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges, schema_ptr s);
+bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges);
 
 // Return all sstables but those that are off-strategy like the ones in maintenance set and staging dir.
 std::vector<sstables::shared_sstable> in_strategy_sstables(compaction::table_state& table_s);

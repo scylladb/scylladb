@@ -541,7 +541,7 @@ compaction_group& table::compaction_group_for_key(partition_key_view key, const 
     return compaction_group_for_token(dht::get_token(*s, key));
 }
 
-compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept {
+compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
     // FIXME: a sstable can belong to more than one group, change interface to reflect that.
     return compaction_group_for_token(sst->get_first_decorated_key().token());
 }
@@ -1811,11 +1811,12 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         tlogger.debug("cleaning out row cache");
     }));
     rebuild_statistics();
-    co_await coroutine::parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) {
+    co_await coroutine::parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) -> future<> {
         if (r.enable_backlog_tracker) {
             remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
         }
-        return sstables::sstable_directory::delete_atomically({r.sst});
+        co_await sstables::sstable_directory::delete_atomically({r.sst});
+        erase_sstable_cleanup_state(r.sst);
     });
     co_return p->rp;
 }
@@ -2482,6 +2483,7 @@ table::make_reader_v2_excluding_staging(schema_ptr s,
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
     auto units = co_await get_units(_sstable_deletion_sem, 1);
     sstables::sstable::delayed_commit_changes delay_commit;
+    std::unordered_set<compaction_group*> compaction_groups_to_notify;
     for (auto sst : sstables) {
         try {
             // Off-strategy can happen in parallel to view building, so the SSTable may be deleted already if the former
@@ -2489,12 +2491,16 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             // The _sstable_deletion_sem prevents list update on off-strategy completion and move_sstables_from_staging()
             // from stepping on each other's toe.
             co_await sst->move_to_new_dir(dir(), sst->generation(), &delay_commit);
+            auto& cg = compaction_group_for_sstable(sst);
+            if (get_compaction_manager().requires_cleanup(cg.as_table_state(), sst)) {
+                compaction_groups_to_notify.insert(&cg);
+            }
             // If view building finished faster, SSTable with repair origin still exists.
             // It can also happen the SSTable is not going through reshape, so it doesn't have a repair origin.
             // That being said, we'll only add this SSTable to tracker if its origin is other than repair.
             // Otherwise, we can count on off-strategy completion to add it when updating lists.
             if (sst->get_origin() != sstables::repair_origin) {
-                add_sstable_to_backlog_tracker(compaction_group_for_sstable(sst).get_backlog_tracker(), sst);
+                add_sstable_to_backlog_tracker(cg.get_backlog_tracker(), sst);
             }
         } catch (...) {
             tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
@@ -2503,6 +2509,10 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
     }
 
     co_await delay_commit.commit();
+
+    for (auto* cg : compaction_groups_to_notify) {
+        cg->get_staging_done_condition().broadcast();
+    }
 
     // Off-strategy timer will be rearmed, so if there's more incoming data through repair / streaming,
     // the timer can be updated once again. In practice, it allows off-strategy compaction to kick off
@@ -2697,6 +2707,10 @@ public:
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _t._compaction_manager.get_backlog_tracker(*this);
     }
+
+    seastar::condition_variable& get_staging_done_condition() noexcept override {
+        return _cg.get_staging_done_condition();
+    }
 };
 
 compaction_backlog_tracker& compaction_group::get_backlog_tracker() {
@@ -2722,6 +2736,24 @@ data_dictionary::table
 table::as_data_dictionary() const {
     static constinit data_dictionary_impl _impl;
     return _impl.wrap(*this);
+}
+
+bool table::erase_sstable_cleanup_state(const sstables::shared_sstable& sst) {
+    // FIXME: it's possible that the sstable belongs to multiple compaction_groups
+    auto& cg = compaction_group_for_sstable(sst);
+    return get_compaction_manager().erase_sstable_cleanup_state(cg.as_table_state(), sst);
+}
+
+bool table::requires_cleanup(const sstables::shared_sstable& sst) const {
+    auto& cg = compaction_group_for_sstable(sst);
+    return get_compaction_manager().requires_cleanup(cg.as_table_state(), sst);
+}
+
+bool table::requires_cleanup(const sstables::sstable_set& set) const {
+    return bool(set.for_each_sstable_until([this] (const sstables::shared_sstable &sst) {
+        auto& cg = compaction_group_for_sstable(sst);
+        return stop_iteration(_compaction_manager.requires_cleanup(cg.as_table_state(), sst));
+    }));
 }
 
 } // namespace replica

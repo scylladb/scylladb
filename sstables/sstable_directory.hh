@@ -129,7 +129,8 @@ private:
     future<> collect_output_sstables_from_reshaping(std::vector<sstables::shared_sstable> reshaped_sstables);
 
     template <typename Container, typename Func>
-    future<> parallel_for_each_restricted(Container&& C, Func&& func);
+    requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
+    future<> parallel_for_each_restricted(Container& C, Func func);
     future<> load_foreign_sstables(sstable_info_vector info_vec);
 
     std::vector<sstables::shared_sstable> _unsorted_sstables;
@@ -184,7 +185,8 @@ public:
     // A creator function must be passed that will create an SSTable object in the correct shard,
     // and an I/O priority must be specified.
     future<> reshard(sstable_info_vector info, compaction_manager& cm, replica::table& table,
-                     unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator);
+                     unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator,
+                     compaction::owned_ranges_ptr owned_ranges_ptr = nullptr);
 
     using sstable_filter_func_t = std::function<bool (const sstables::shared_sstable&)>;
 
@@ -201,7 +203,14 @@ public:
 
     // Helper function that processes all unshared SSTables belonging to this shard, respecting the
     // concurrency limit.
+    // Note that this function is destructive, draining _shared_local_sstables.
     future<> do_for_each_sstable(std::function<future<>(sstables::shared_sstable)> func);
+
+    // Helper function that processes all unshared SSTables belonging to this shard, respecting the
+    // concurrency limit.
+    // sstables for which `func` returns a true value are kept in _shared_local_sstables, while
+    // those for which `func` returns false are erased from the list.
+    future<> filter_sstables(std::function<future<bool>(sstables::shared_sstable)> func);
 
     // Retrieves the list of shared SSTables in this object. The list will be reset once this
     // is called.
