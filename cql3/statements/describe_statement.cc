@@ -45,6 +45,7 @@
 #include "data_dictionary/keyspace_element.hh"
 #include "db/system_keyspace.hh"
 #include "utils/sorting.hh"
+#include "replica/database.hh"
 
 static logging::logger dlogger("describe");
 

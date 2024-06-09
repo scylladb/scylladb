@@ -1,6 +1,7 @@
 add_library(lang STATIC)
 target_sources(lang
   PRIVATE
+    manager.cc
     lua.cc
     wasm.cc
     wasm_alien_thread_runner.cc

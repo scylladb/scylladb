@@ -28,11 +28,11 @@
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "utils/observable.hh"
-#include "lang/wasm.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
 
 
+namespace lang { class manager; }
 namespace service {
 class migration_manager;
 class query_state;
@@ -131,7 +131,7 @@ private:
     // don't bother with expiration on those.
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
-    wasm::manager& _wasm;
+    lang::manager& _lang_manager;
 public:
     static const sstring CQL_VERSION;
 
@@ -146,7 +146,7 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
-    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, wasm::manager& wasm);
+    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm);
 
     ~query_processor();
 
@@ -174,7 +174,7 @@ public:
         return _cql_stats;
     }
 
-    wasm::manager& wasm() { return _wasm; }
+    lang::manager& lang() { return _lang_manager; }
 
     db::system_keyspace::auth_version_t auth_version;
 

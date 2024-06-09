@@ -1049,14 +1049,6 @@ static void push_argument(lua_State* l, const data_value& arg) {
     ::visit(arg, to_lua_visitor{l});
 }
 
-lua::runtime_config lua::make_runtime_config(const db::config& config) {
-    utils::updateable_value<unsigned> max_bytes(config.user_defined_function_allocation_limit_bytes);
-    utils::updateable_value<unsigned> max_contiguous(config.user_defined_function_contiguous_allocation_limit_bytes());
-    utils::updateable_value<unsigned> timeout_in_ms(config.user_defined_function_time_limit_ms());
-
-    return lua::runtime_config{std::move(timeout_in_ms), std::move(max_bytes), std::move(max_contiguous)};
-}
-
 // run the script for at most max_instructions
 future<bytes_opt> lua::run_script(lua::bitcode_view bitcode, const std::vector<data_value>& values, data_type return_type, const lua::runtime_config& cfg) {
     lua_slice_state l = load_script(cfg, bitcode);

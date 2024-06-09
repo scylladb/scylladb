@@ -67,6 +67,7 @@
 #include "service/raft/raft_group0.hh"
 #include "sstables/sstables_manager.hh"
 #include "init.hh"
+#include "lang/manager.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -152,7 +153,7 @@ private:
     sharded<locator::shared_token_metadata> _token_metadata;
     sharded<locator::effective_replication_map_factory> _erm_factory;
     sharded<sstables::directory_semaphore> _sst_dir_semaphore;
-    sharded<wasm::manager> _wasm;
+    sharded<lang::manager> _lang_manager;
     sharded<cql3::cql_config> _cql_config;
     sharded<service::endpoint_lifecycle_notifier> _elc_notif;
     sharded<cdc::generation_service> _cdc_generation_service;
@@ -568,16 +569,27 @@ private:
             _sstm.start(std::ref(*cfg), sstables::storage_manager::config{}).get();
             auto stop_sstm = deferred_stop(_sstm);
 
-            std::optional<wasm::startup_context> wasm_ctx;
+            lang::manager::config lang_config;
+            lang_config.lua.max_bytes = cfg->user_defined_function_allocation_limit_bytes();
+            lang_config.lua.max_contiguous = cfg->user_defined_function_contiguous_allocation_limit_bytes();
+            lang_config.lua.timeout = std::chrono::milliseconds(cfg->user_defined_function_time_limit_ms());
             if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
-                wasm_ctx.emplace(*cfg, dbcfg);
+                lang_config.wasm = lang::manager::wasm_config {
+                    .udf_memory_limit = cfg->wasm_udf_memory_limit(),
+                    .cache_size = dbcfg.available_memory * cfg->wasm_cache_memory_fraction(),
+                    .cache_instance_size = cfg->wasm_cache_instance_size_limit(),
+                    .cache_timer_period = std::chrono::milliseconds(cfg->wasm_cache_timeout_in_ms()),
+                    .yield_fuel = cfg->wasm_udf_yield_fuel(),
+                    .total_fuel = cfg->wasm_udf_total_fuel(),
+                };
             }
 
-            _wasm.start(std::ref(wasm_ctx)).get();
-            auto stop_wasm = defer([this] { _wasm.stop().get(); });
+            _lang_manager.start(lang_config).get();
+            auto stop_lang_manager = defer([this] { _lang_manager.stop().get(); });
+            _lang_manager.invoke_on_all(&lang::manager::start).get();
 
 
-            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_wasm), std::ref(_sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([this] {
                 _db.stop().get();
             });
@@ -615,7 +627,7 @@ private:
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
-            _qp.start(std::ref(_proxy), std::move(local_data_dict), std::ref(_mnotifier), qp_mcfg, std::ref(_cql_config), auth_prep_cache_config, std::ref(_wasm)).get();
+            _qp.start(std::ref(_proxy), std::move(local_data_dict), std::ref(_mnotifier), qp_mcfg, std::ref(_cql_config), auth_prep_cache_config, std::ref(_lang_manager)).get();
             auto stop_qp = defer([this] { _qp.stop().get(); });
 
             _elc_notif.start().get();

@@ -102,8 +102,7 @@
 #include "tools/entry_point.hh"
 #include "test/perf/entry_point.hh"
 #include "db/per_partition_rate_limit_extension.hh"
-#include "lang/wasm_instance_cache.hh"
-#include "lang/wasm_alien_thread_runner.hh"
+#include "lang/manager.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/virtual_tables.hh"
 
@@ -1061,20 +1060,31 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sstm.stop().get();
             });
 
-            std::optional<wasm::startup_context> wasm_ctx;
+            lang::manager::config lang_config;
+            lang_config.lua.max_bytes = cfg->user_defined_function_allocation_limit_bytes();
+            lang_config.lua.max_contiguous = cfg->user_defined_function_contiguous_allocation_limit_bytes();
+            lang_config.lua.timeout = std::chrono::milliseconds(cfg->user_defined_function_time_limit_ms());
             if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
-                wasm_ctx.emplace(*cfg, dbcfg);
+                lang_config.wasm = lang::manager::wasm_config {
+                    .udf_memory_limit = cfg->wasm_udf_memory_limit(),
+                    .cache_size = dbcfg.available_memory * cfg->wasm_cache_memory_fraction(),
+                    .cache_instance_size = cfg->wasm_cache_instance_size_limit(),
+                    .cache_timer_period = std::chrono::milliseconds(cfg->wasm_cache_timeout_in_ms()),
+                    .yield_fuel = cfg->wasm_udf_yield_fuel(),
+                    .total_fuel = cfg->wasm_udf_total_fuel(),
+                };
             }
 
-            static sharded<wasm::manager> wasm;
-            wasm.start(std::ref(wasm_ctx)).get();
+            static sharded<lang::manager> langman;
+            langman.start(lang_config).get();
             // don't stop for real until query_processor stops
-            auto stop_wasm = defer_verbose_shutdown("wasm", [] { wasm.invoke_on_all(&wasm::manager::stop).get(); });
+            auto stop_lang_man = defer_verbose_shutdown("lang manager", [] { langman.invoke_on_all(&lang::manager::stop).get(); });
+            langman.invoke_on_all(&lang::manager::start).get();
 
             supervisor::notify("starting database");
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
-                    std::ref(cm), std::ref(sstm), std::ref(wasm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
+                    std::ref(cm), std::ref(sstm), std::ref(langman), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();
@@ -1151,7 +1161,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
-            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(wasm)).get();
+            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(langman)).get();
 
             supervisor::notify("starting lifecycle notifier");
             lifecycle_notifier.start().get();

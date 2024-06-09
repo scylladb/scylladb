@@ -24,6 +24,7 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "create_keyspace_statement.hh"
 #include "gms/feature_service.hh"
+#include "replica/database.hh"
 
 static logging::logger mylogger("alter_keyspace");
 

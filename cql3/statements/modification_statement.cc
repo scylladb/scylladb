@@ -25,6 +25,7 @@
 #include <boost/range/adaptor/indirected.hpp>
 #include "transport/messages/result_message.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include "replica/database.hh"
 #include <seastar/core/execution_stage.hh>
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
