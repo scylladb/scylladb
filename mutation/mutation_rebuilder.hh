@@ -21,7 +21,7 @@ public:
     // Returned reference is valid until consume_end_of_stream() or flush() is called.
     const mutation& consume_new_partition(const dht::decorated_key& dk) {
         assert(!_m);
-        _m = mutation(_s, std::move(dk));
+        _m = mutation(_s, dk);
         return *_m;
     }
 
