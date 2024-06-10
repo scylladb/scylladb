@@ -1351,6 +1351,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // before start_listen is called.
             messaging.invoke_on_all(&netw::messaging_service::start).get();
 
+            api::set_server_messaging_service(ctx, messaging).get();
+            auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
+                api::unset_server_messaging_service(ctx).get();
+            });
+
             supervisor::notify("starting gossiper");
             auto cluster_name = cfg->cluster_name();
             if (cluster_name.empty()) {
@@ -1698,11 +1703,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("starting storage service", true);
-
-            api::set_server_messaging_service(ctx, messaging).get();
-            auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
-                api::unset_server_messaging_service(ctx).get();
-            });
 
             api::set_server_task_manager(ctx, task_manager, cfg).get();
             auto stop_tm_api = defer_verbose_shutdown("task manager API", [&ctx] {
