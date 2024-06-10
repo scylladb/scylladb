@@ -44,6 +44,7 @@
 #include "utils/overloaded_functor.hh"
 #include "data_dictionary/keyspace_element.hh"
 #include "db/system_keyspace.hh"
+#include "db/extensions.hh"
 #include "utils/sorting.hh"
 #include "replica/database.hh"
 
@@ -623,6 +624,9 @@ future<std::vector<std::vector<bytes_opt>>> schema_describe_statement::describe(
             std::vector<description> schema_result;
 
             for (auto&& ks: keyspaces) {
+                if (!config.full_schema && db.extensions().is_extension_internal_keyspace(ks)) {
+                    continue;
+                }
                 auto ks_result = co_await describe_all_keyspace_elements(db, ks, _with_internals);
                 schema_result.insert(schema_result.end(), ks_result.begin(), ks_result.end());
             }
