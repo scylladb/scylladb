@@ -278,7 +278,7 @@ sync_point::shard_rps manager::calculate_current_sync_point(std::span<const gms:
         auto it = _ep_managers.find(*hid);
         if (it != _ep_managers.end()) {
             const hint_endpoint_manager& ep_man = it->second;
-            rps[addr] = ep_man.last_written_replay_position();
+            rps[*hid] = ep_man.last_written_replay_position();
         }
     }
 
@@ -316,10 +316,14 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     hid_rps.reserve(rps.size());
 
     for (const auto& [addr, rp] : rps) {
-        const auto maybe_hid = tmptr->get_host_id_if_known(addr);
-        // Ignore the IPs we cannot map.
-        if (maybe_hid) [[likely]] {
-            hid_rps.emplace(*maybe_hid, rp);
+        if (std::holds_alternative<gms::inet_address>(addr)) {
+            const auto maybe_hid = tmptr->get_host_id_if_known(std::get<gms::inet_address>(addr));
+            // Ignore the IPs we cannot map.
+            if (maybe_hid) [[likely]] {
+                hid_rps.emplace(*maybe_hid, rp);
+            }
+        } else {
+            hid_rps.emplace(std::get<locator::host_id>(addr), rp);
         }
     }
 
