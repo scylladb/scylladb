@@ -13,6 +13,9 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/sstable_utils.hh"
 
+#include "readers/from_mutations_v2.hh"
+#include "utils/bloom_filter.hh"
+
 SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components_and_reload_reclaimed_components) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
@@ -177,3 +180,46 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
         .available_memory = 500
     });
 }
+
+static void bloom_filters_require_equal(const utils::filter_ptr &f1, const utils::filter_ptr &f2) {
+    auto filter1 = static_cast<utils::filter::bloom_filter*>(f1.get());
+    auto filter2 = static_cast<utils::filter::bloom_filter*>(f2.get());
+    BOOST_REQUIRE_EQUAL(filter1->memory_size(), filter2->memory_size());
+    BOOST_REQUIRE_EQUAL(filter1->bits().size(), filter2->bits().size());
+    BOOST_REQUIRE(filter1->bits().get_storage() == filter2->bits().get_storage());
+}
+
+SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimate) {
+    return test_env::do_with_async([](test_env& env) {
+        simple_schema ss;
+        auto schema = ss.schema();
+        const auto actual_partition_count = 100;
+
+        // Create a bloom filter with optimal size for the given partition count.
+        utils::filter_ptr optimal_filter = utils::i_filter::get_filter(actual_partition_count, schema->bloom_filter_fp_chance(), utils::filter_format::m_format);
+
+        // Generate mutations for the table and add the keys to the bloom filter
+        std::vector<mutation> mutations;
+        auto pks = ss.make_pkeys(actual_partition_count);
+        mutations.reserve(actual_partition_count);
+        for (auto pk : pks) {
+            auto mut = mutation(schema, pk);
+            mut.partition().apply_insert(*schema, ss.make_ckey(1), ss.new_timestamp());
+            mutations.push_back(std::move(mut));
+            // add to optimal filter, so that we can verify the generated bloom filters against it
+            optimal_filter->add(key::from_partition_key(*schema.get(), pk.key()).get_bytes());
+        }
+
+        for (auto estimated_partition_count : {
+                 actual_partition_count / 2, // too low estimate
+                 actual_partition_count * 2, // too large estimate
+             }) {
+            // create sstable with the estimated partition count
+            auto sst = make_sstable_easy(env, make_mutation_reader_from_mutations_v2(schema, env.make_reader_permit(), mutations),
+                                         env.manager().configure_writer(), sstables::get_highest_sstable_version(), estimated_partition_count);
+
+            // Verify that the filter was rebuilt into the optimal size
+            bloom_filters_require_equal(sstables::test(sst).get_filter(), optimal_filter);
+        }
+    });
+};
