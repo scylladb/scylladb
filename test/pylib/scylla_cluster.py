@@ -917,10 +917,11 @@ class ScyllaCluster:
                 self.leased_ips.remove(ip_addr)
                 await self.host_registry.release_host(Host(ip_addr))
             raise
-        if start and not expected_error:
-            self.running[server.server_id] = server
-        else:
-            self.stopped[server.server_id] = server
+        finally:
+            if start and not expected_error:
+                self.running[server.server_id] = server
+            else:
+                self.stopped[server.server_id] = server
         self.logger.info("Cluster %s added %s", self, server)
         return ServerInfo(server.server_id, server.ip_addr, server.rpc_address)
 
