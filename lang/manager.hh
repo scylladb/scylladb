@@ -59,7 +59,7 @@ public:
     }
 
     using context = std::optional<cql3::functions::user_function::context>;
-    future<> create(sstring language, context& ctx, sstring name, const std::vector<sstring>& arg_names, std::string script);
+    future<context> create(sstring language, sstring name, const std::vector<sstring>& arg_names, std::string script);
 };
 
 } // lang namespace
