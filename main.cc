@@ -1660,6 +1660,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 repair.stop().get();
             });
             repair.invoke_on_all(&repair_service::start).get();
+            api::set_server_repair(ctx, repair).get();
+            auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
+                api::unset_server_repair(ctx).get();
+            });
 
             supervisor::notify("starting CDC Generation Management service");
             /* This service uses the system distributed keyspace.
@@ -1698,10 +1702,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_messaging_service(ctx, messaging).get();
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
-            });
-            api::set_server_repair(ctx, repair).get();
-            auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
-                api::unset_server_repair(ctx).get();
             });
 
             api::set_server_task_manager(ctx, task_manager, cfg).get();
