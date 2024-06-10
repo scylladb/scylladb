@@ -475,6 +475,12 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const read_command& r);
 };
 
+// Reverse read_command by reversing the schema version and transforming the slice from
+// the legacy reversed format to native reversed format. Shall be called with reversed
+// queries only.
+lw_shared_ptr<query::read_command> reversed(lw_shared_ptr<query::read_command>&& cmd);
+query::read_command reversed(query::read_command&& cmd);
+
 struct forward_request {
     enum class reduction_type {
         count,
