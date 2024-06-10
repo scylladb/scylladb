@@ -6,7 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include "mutation_query.hh"
+#include "schema/schema_registry.hh"
 
 reconcilable_result::~reconcilable_result() {}
 
@@ -75,4 +78,30 @@ auto fmt::formatter<reconcilable_result::printer>::format(
 
 reconcilable_result::printer reconcilable_result::pretty_printer(schema_ptr s) const {
     return { *this, std::move(s) };
+}
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> reversed(foreign_ptr<lw_shared_ptr<reconcilable_result>> result)
+{
+    for (auto& partition : result->partitions())
+    {
+        auto& m = partition.mut();
+        auto schema = local_schema_registry().get(m.schema_version());
+        m = frozen_mutation(reverse(m.unfreeze(schema)));
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return std::move(result);
+}
+
+future<reconcilable_result> reversed(reconcilable_result result)
+{
+    for (auto& partition : result.partitions())
+    {
+        auto& m = partition.mut();
+        auto schema = local_schema_registry().get(m.schema_version());
+        m = frozen_mutation(reverse(m.unfreeze(schema)));
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return std::move(result);
 }
