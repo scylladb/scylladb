@@ -723,6 +723,55 @@ private:
         auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
         auto src_ip = src_addr.addr;
         auto timeout = t ? *t : db::no_timeout;
+
+        // Verify whether read_command is provided in legacy or native reversed format by comparing
+        // schema version with table schema version. There are three options:
+        // 1. Versions are the same -> legacy format
+        // 2. schema version is equal to reversed table schema -> native format
+        // 3. table schema is outdated
+        static auto is_read_command_in_reversed_legacy_format = [](const query::read_command& cmd, schema_ptr table_schema) -> std::optional<bool> {
+            if (cmd.schema_version == table_schema->version()) {
+                return true;
+            }
+
+            if (cmd.schema_version == reversed(table_schema->version())) {
+                return false;
+            }
+
+            return std::nullopt;
+        };
+
+        // Detect whether a transformation from legacy reverse format into native reverse
+        // format is necessary before executing the read_command. That happens when the
+        // native_reverse_queries feature is turned off. A custer has mixed nodes.
+        bool format_reverse_required = false;
+
+        // Check if we have a reversed query
+        if (cmd->slice.is_reversed()) {
+            // Compare the schema version provided by read_command with the table schema replica holds.
+            auto table_schema = p->local_db().find_schema(cmd->cf_id);
+            if (auto status = is_read_command_in_reversed_legacy_format(*cmd, table_schema); status) {
+                table_schema->get_reversed();
+                format_reverse_required = *status;
+            }
+            else {
+                // The table schema is outdated. Still do not know the format of the read_command.
+                // Pull a schema to verify the format. There are two cases:
+                // 1. a mixed nodes cluster, cmd->schema_version is a table schema, a table schema is pulled
+                // 2. all new nodes cluster, cmd->schema_version is a reversed table schema, a reversed table schema is pulled
+                auto f_schema = co_await coroutine::as_future(get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout));
+                if (f_schema.failed()) {
+                    co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), f_schema.get_exception());
+                }
+                auto schema = f_schema.get();
+                // Call get reversed to ensure a newest table schema is in db in case schema is a reversed table schema
+                schema->get_reversed();
+                auto table_schema = p->local_db().find_schema(schema->id());
+                format_reverse_required = *is_read_command_in_reversed_legacy_format(*cmd, table_schema);
+            }
+        }
+        (void)format_reverse_required;
+
         auto f_s = co_await coroutine::as_future(get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout));
         if (f_s.failed()) {
             co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), f_s.get_exception());
