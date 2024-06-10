@@ -3072,6 +3072,19 @@ future<> database::mutate_token_metadata(sharded<database>& db, std::function<fu
     co_await replicate_to_all_cores(db, std::move(tmptr));
 }
 
+future<> database::set_this_node(sharded<database>& db, const locator::host_id& host_id, const gms::inet_address& endpoint,
+        std::optional<locator::endpoint_dc_rack> opt_dr,
+        std::optional<locator::node::state> opt_st,
+        std::optional<shard_id> opt_shard_count) {
+    dblog.info("Setting this node host_id={} address={}", host_id, endpoint);
+    co_await mutate_token_metadata(db, [&] (locator::token_metadata& tm) {
+        auto& topo = tm.get_topology();
+        topo.set_host_id_cfg(host_id);
+        topo.add_or_update_endpoint(host_id, endpoint, opt_dr, opt_st, opt_shard_count);
+        return make_ready_future();
+    });
+}
+
 } // namespace replica
 
 flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db,

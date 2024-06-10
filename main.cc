@@ -573,6 +573,8 @@ static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace
     if (!linfo.host_id) {
         linfo.host_id = locator::host_id::create_random_id();
         startlog.info("Setting local host id to {}", linfo.host_id);
+    } else {
+        startlog.info("Loaded local host id is {}", linfo.host_id);
     }
 
     linfo.listen_address = listen_address;
@@ -1285,14 +1287,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             const auto listen_address = utils::resolve(cfg->listen_address, family).get();
             const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg, broadcast_addr, broadcast_rpc_addr);
 
-          shared_token_metadata::mutate_on_all_shards(token_metadata, [host_id, endpoint = broadcast_addr] (locator::token_metadata& tm) {
-              // Makes local host id available in topology cfg as soon as possible.
-              // Raft topology discard the endpoint-to-id map, so the local id can
-              // still be found in the config.
-              tm.get_topology().set_host_id_cfg(host_id);
-              tm.get_topology().add_or_update_endpoint(host_id, endpoint);
-              return make_ready_future<>();
-          }).get();
+            // Makes local host id available in topology cfg as soon as possible.
+            // Raft topology discard the endpoint-to-id map, so the local id can
+            // still be found in the config.
+            replica::database::set_this_node(db, host_id, broadcast_addr).get();
 
             netw::messaging_service::config mscfg;
 

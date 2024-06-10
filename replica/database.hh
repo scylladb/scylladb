@@ -1634,6 +1634,10 @@ public:
     const locator::effective_replication_map_factory& get_erm_factory() const noexcept { return _erm_factory; }
 
     static future<> mutate_token_metadata(sharded<database>& db, std::function<future<>(locator::token_metadata&)> func);
+    static future<> set_this_node(sharded<database>& db, const locator::host_id& host_id, const gms::inet_address& endpoint,
+            std::optional<locator::endpoint_dc_rack> opt_dr = std::nullopt,
+            std::optional<locator::node::state> opt_st = std::nullopt,
+            std::optional<shard_id> opt_shard_count = std::nullopt);
 
     lang::manager& lang() noexcept { return _lang_manager; }
     const lang::manager& lang() const noexcept { return _lang_manager; }
