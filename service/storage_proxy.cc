@@ -727,11 +727,34 @@ private:
         auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
         auto src_ip = src_addr.addr;
         auto timeout = t ? *t : db::no_timeout;
+
+        // Pull a schema from the coordinator. There are two cases:
+        // 1. A mixed nodes cluster, cmd->schema_version is a table schema, a table schema is pulled
+        // 2. All new nodes cluster, cmd->schema_version is a reversed table schema, a reversed table schema is pulled.
+        //    Note that in this case, table schema is also pulled if outdated or missing.
         auto f_s = co_await coroutine::as_future(get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout));
         if (f_s.failed()) {
             co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), f_s.get_exception());
         }
         schema_ptr s = f_s.get();
+
+        // Detect whether a transformation from legacy reverse format into native reverse
+        // format is necessary before executing the read_command. That happens when the
+        // native_reverse_queries feature is turned off. A custer has mixed nodes.
+        bool format_reverse_required = false;
+
+        // Check if we have a reversed query
+        if (cmd->slice.is_reversed()) {
+            // Verify whether read_command is provided in legacy or native reversed format by comparing
+            // the schema version provided by read_command with the table schema replica holds. Note that
+            // with the get_schema_for_read call above, table_schema is up-to-date.
+            auto table_schema = p->local_db().find_schema(cmd->cf_id);
+            // Therefore there are only two options:
+            // 1. versions are the same -> legacy format
+            // 2. versions are different -> schema version is equal to reversed table schema version -> native format
+            format_reverse_required = cmd->schema_version == table_schema->version();
+        }
+        (void)format_reverse_required;
 
         co_await utils::get_local_injector().inject("storage_proxy::handle_read", [s] (auto& handler) -> future<> {
             const auto cf_name = handler.get("cf_name");
