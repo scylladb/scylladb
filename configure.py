@@ -1765,7 +1765,7 @@ def configure_abseil(build_dir, mode, mode_config):
     # added to cxx_ld_flags
     if args.coverage:
         for flag in COVERAGE_INST_FLAGS:
-            abseil_cflags = abseil_cflags.replace(f' {flag}', '')
+            cxx_flags = cxx_flags.replace(f' {flag}', '')
 
     cxx_flags += ' ' + abseil_cflags.strip()
     cmake_mode = mode_config['cmake_build_type']
