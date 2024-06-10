@@ -36,6 +36,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
 
     topology::config cfg = {
         .this_endpoint = ep1,
+        .this_host_id = id1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
 
@@ -48,9 +49,9 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
 
     std::unordered_set<const locator::node*> nodes;
 
+    nodes.insert(topo.this_node());
     nodes.insert(topo.add_node(id2, ep2, endpoint_dc_rack::default_location, node::state::normal));
-    nodes.insert(topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal));
-
+    BOOST_REQUIRE_THROW(topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id1, ep2, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep2, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
@@ -73,12 +74,11 @@ SEASTAR_THREAD_TEST_CASE(test_moving) {
 
     topology::config cfg = {
         .this_endpoint = ep1,
+        .this_host_id = id1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
 
     auto topo = topology(cfg);
-
-    topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal);
 
     BOOST_REQUIRE(topo.this_node()->topology() == &topo);
 
@@ -227,12 +227,12 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
 
     topology::config cfg = {
         .this_endpoint = ep1,
+        .this_host_id = id1,
         .local_dc_rack = dc_rack1
     };
 
     auto topo = topology(cfg);
 
-    topo.add_node(id1, ep1, dc_rack1, node::state::normal);
     topo.add_node(id2, ep2, dc_rack2, node::state::normal);
 
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{{"dc1", {ep1, ep2}}}));
@@ -383,6 +383,7 @@ SEASTAR_THREAD_TEST_CASE(test_left_node_is_kept_outside_dc) {
 
     topology::config cfg = {
         .this_endpoint = ep1,
+        .this_host_id = id1,
         .local_dc_rack = dc_rack1
     };
 

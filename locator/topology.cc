@@ -94,13 +94,16 @@ future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_nodes);
 }
 
-topology::topology(config cfg)
+topology::topology(config cfg, create_this_node do_create_this_node)
         : _shard(this_shard_id())
         , _cfg(cfg)
         , _sort_by_proximity(!cfg.disable_proximity_sorting)
 {
-    tlogger.trace("topology[{}]: constructing using config: endpoint={} dc={} rack={}", fmt::ptr(this),
-            cfg.this_endpoint, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
+    tlogger.trace("topology[{}]: constructing using config: endpoint={} host_id={} dc={} rack={} create_this_node={}", fmt::ptr(this),
+            cfg.this_endpoint, cfg.this_host_id, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack, do_create_this_node);
+    if (do_create_this_node && (cfg.this_host_id || cfg.this_endpoint != gms::inet_address{})) {
+        add_node(node::make(this, cfg.this_host_id, cfg.this_endpoint, cfg.local_dc_rack, node::state::none, smp::count, node::this_node::yes));
+    }
 }
 
 topology::topology(topology&& o) noexcept
@@ -136,7 +139,7 @@ topology& topology::operator=(topology&& o) noexcept {
 }
 
 future<topology> topology::clone_gently() const {
-    topology ret(_cfg);
+    topology ret(_cfg, create_this_node::no);
     tlogger.debug("topology[{}]: clone_gently to {} from shard {}", fmt::ptr(this), fmt::ptr(&ret), _shard);
     for (const auto& nptr : _nodes) {
         if (nptr) {
@@ -334,10 +337,22 @@ void topology::index_node(const node* node) {
             } else if (eit->second->is_leaving() || eit->second->left()) {
                 _nodes_by_endpoint.erase(node->endpoint());
             } else if (!node->is_leaving() && !node->left()) {
-                if (node->host_id()) {
-                    _nodes_by_host_id.erase(node->host_id());
+                if (eit->second->is_this_node()) {
+                    if (node->is_this_node()) {
+                        if (node->host_id()) {
+                            _nodes_by_host_id.erase(node->host_id());
+                        }
+                        on_internal_error(tlogger, format("topology[{}]: {}: this node endpoint already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(eit->second)));
+                    }
+                    // Silently allow indexing of the node we're replacing using the same ip address by its host_id
+                    // But otherwise this_node keeps owning the endpoint inet_address, as well as being present on the dc/rack lists
+                    return;
+                } else {
+                    if (node->host_id()) {
+                        _nodes_by_host_id.erase(node->host_id());
+                    }
+                    on_internal_error(tlogger, format("topology[{}]: {}: node endpoint already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(eit->second)));
                 }
-                on_internal_error(tlogger, format("topology[{}]: {}: node endpoint already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(eit->second)));
             }
         }
         if (node->get_state() != node::state::left) {
@@ -465,6 +480,10 @@ const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_addr
     tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
         id, opt_ep, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
         lazy_backtrace());
+
+    if (_cfg.this_host_id == id) {
+        return update_node(const_cast<node*>(_this_node), id, opt_ep, opt_dr, opt_st, shard_count);
+    }
 
     const auto* n = find_node(id);
     if (n) {

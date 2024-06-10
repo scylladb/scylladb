@@ -15,6 +15,8 @@
 #include <compare>
 #include <iostream>
 
+#include <boost/range/adaptors.hpp>
+
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/smp.hh>
@@ -170,12 +172,16 @@ public:
         inet_address this_endpoint;
         inet_address this_cql_address;   // corresponds to broadcast_rpc_address
         host_id this_host_id;
-        endpoint_dc_rack local_dc_rack;
+        endpoint_dc_rack local_dc_rack = endpoint_dc_rack::default_location;
         bool disable_proximity_sorting = false;
 
         bool operator==(const config&) const = default;
     };
-    topology(config cfg);
+
+    using create_this_node = bool_class<struct create_this_node_tag>;
+    topology(config cfg, create_this_node);
+public:
+    topology(config cfg) : topology(std::move(cfg), create_this_node::yes) {}
     topology(topology&&) noexcept;
 
     topology& operator=(topology&&) noexcept;
@@ -188,6 +194,9 @@ public:
 
     void set_host_id_cfg(host_id this_host_id) {
         _cfg.this_host_id = this_host_id;
+        if (_this_node) {
+            update_node(make_mutable(_this_node), this_host_id, std::nullopt, std::nullopt, std::nullopt);
+        }
     }
 
     const node* this_node() const noexcept {
@@ -476,5 +485,16 @@ struct fmt::formatter<locator::node::state> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const locator::node::state& state, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", locator::node::to_string(state));
+    }
+};
+
+template <std::ranges::range NodeRange>
+requires std::same_as<std::ranges::range_value_t<NodeRange>, const locator::node*>
+struct fmt::formatter<NodeRange> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const NodeRange& nodes, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "[{}]", fmt::join(nodes | boost::adaptors::transformed([] (const locator::node* n) {
+            return n ? fmt::format("{}", *n) : "null";
+        }), ", "));
     }
 };
