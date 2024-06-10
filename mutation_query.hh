@@ -121,6 +121,10 @@ public:
     printer pretty_printer(schema_ptr) const;
 };
 
+// Reverse reconcilable_result by reversing mutations for all partitions.
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> reversed(foreign_ptr<lw_shared_ptr<reconcilable_result>> result);
+future<reconcilable_result> reversed(reconcilable_result result);
+
 template <>
 struct fmt::formatter<reconcilable_result::printer> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
