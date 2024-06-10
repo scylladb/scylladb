@@ -104,7 +104,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
         pytest.skip('Failing source during target cleanup is pointless')
 
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True, 'failure_detector_timeout_in_ms': 2000}
     host_ids = []
     servers = []
 
