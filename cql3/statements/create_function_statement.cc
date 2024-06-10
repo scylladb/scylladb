@@ -36,8 +36,7 @@ seastar::future<shared_ptr<functions::function>> create_function_statement::crea
         arg_names.push_back(arg_name->to_string());
     }
 
-    lang::manager::context ctx;
-    co_await qp.lang().create(_language, ctx, _name.name, arg_names, _body);
+    auto ctx = co_await qp.lang().create(_language, _name.name, arg_names, _body);
     if (!ctx) {
         co_return nullptr;
     }
