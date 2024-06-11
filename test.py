@@ -795,6 +795,8 @@ class CQLApprovalTest(Test):
             "test/pylib/cql_repl/cql_repl.py",
             "--input={}".format(self.cql),
             "--output={}".format(self.tmpfile),
+            "--run_id={}".format(self.id),
+            "--mode={}".format(self.mode),
         ]
 
     async def run(self, options: argparse.Namespace) -> Test:
@@ -947,7 +949,10 @@ class PythonTest(Test):
             "-o",
             "junit_suite_name={}".format(self.suite.name),
             "--junit-xml={}".format(self.xmlout),
-            "-rs"]
+            "-rs",
+            "--run_id={}".format(self.id),
+            "--mode={}".format(self.mode)
+        ]
         if options.markers:
             self.args.append(f"-m={options.markers}")
 
@@ -1074,7 +1079,9 @@ class ToolTest(Test):
             "-o",
             "junit_family=xunit2",
             "--junit-xml={}".format(self.xmlout),
-            f"--mode={self.mode}"]
+            "--mode={}".format(self.mode),
+            "--run_id={}".format(self.id)
+        ]
         if options.markers:
             self.args.append(f"-m={options.markers}")
 

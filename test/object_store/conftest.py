@@ -21,10 +21,6 @@ def pytest_addoption(parser):
 
     parser.addoption('--manager-api', action='store', required=True,
                      help='Manager unix socket path')
-    parser.addoption('--mode', action='store', required=True,
-                     help='Scylla build mode. Tests can use it to adjust their behavior.')
-    parser.addoption('--run_id', action='store', default=None,
-                     help='Run id for the test run')
     parser.addoption('--tmpdir', action='store', type=str, dest='tmpdir',
                      help='Temporary directory where logs are stored')
     parser.addoption("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
