@@ -2285,11 +2285,9 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
             || s == system_keyspace::v3::scylla_views_builds_in_progress();
 }
 
-future<> system_keyspace::make(
-        locator::effective_replication_map_factory& erm_factory,
-        replica::database& db) {
+future<> system_keyspace::make(replica::database& db) {
     for (auto&& table : system_keyspace::all_tables(db.get_config())) {
-        co_await db.create_local_system_table(table, maybe_write_in_user_memory(table), erm_factory);
+        co_await db.create_local_system_table(table, maybe_write_in_user_memory(table));
         co_await db.find_column_family(table).init_storage();
     }
 }

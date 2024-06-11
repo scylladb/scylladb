@@ -67,7 +67,6 @@ namespace gms {
 }
 
 namespace locator {
-    class effective_replication_map_factory;
     class endpoint_dc_rack;
 } // namespace locator
 
@@ -324,9 +323,7 @@ public:
     static std::vector<schema_ptr> auth_tables();
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
 
-    future<> make(
-            locator::effective_replication_map_factory&,
-            replica::database&);
+    future<> make(replica::database&);
 
     void mark_writable();
 

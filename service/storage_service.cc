@@ -131,7 +131,6 @@ storage_service::storage_service(abort_source& abort_source,
     gms::feature_service& feature_service,
     sharded<service::migration_manager>& mm,
     locator::shared_token_metadata& stm,
-    locator::effective_replication_map_factory& erm_factory,
     sharded<netw::messaging_service>& ms,
     sharded<repair_service>& repair,
     sharded<streaming::stream_manager>& stream_manager,
@@ -158,7 +157,6 @@ storage_service::storage_service(abort_source& abort_source,
         , _group0(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
-        , _erm_factory(erm_factory)
         , _lifecycle_notifier(elc_notif)
         , _batchlog_manager(bm)
         , _sys_ks(sys_ks)
@@ -2979,7 +2977,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             if (rs->is_per_table()) {
                 continue;
             }
-            auto erm = co_await get_erm_factory().create_effective_replication_map(rs, tmptr);
+            auto erm = co_await db.get_erm_factory().create_effective_replication_map(rs, tmptr);
             pending_effective_replication_maps[base_shard].emplace(ks_name, std::move(erm));
         }
         co_await container().invoke_on_others([&] (storage_service& ss) -> future<> {
@@ -2990,7 +2988,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                     continue;
                 }
                 auto tmptr = pending_token_metadata_ptr[this_shard_id()];
-                auto erm = co_await ss.get_erm_factory().create_effective_replication_map(rs, tmptr);
+                auto erm = co_await db.get_erm_factory().create_effective_replication_map(rs, tmptr);
                 pending_effective_replication_maps[this_shard_id()].emplace(ks_name, std::move(erm));
             }
         });

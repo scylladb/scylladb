@@ -1554,7 +1554,7 @@ private:
     future<> flush_system_column_families();
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
-    future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
@@ -1568,7 +1568,7 @@ private:
     template<typename Future>
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
-    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, system_keyspace system);
     future<> remove(table&) noexcept;
     void drop_keyspace(const sstring& name);
     future<> update_keyspace(const keyspace_metadata& tmp_ksm);
@@ -1591,7 +1591,7 @@ public:
     // (keyspace/table definitions, column mappings etc.)
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory,
             compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
@@ -1639,8 +1639,7 @@ public:
     //
     // Note: 'system table' does not necessarily mean it sits in `system` keyspace, it could also be `system_schema`;
     // in general we mean local tables created by the system (not the user).
-    future<> create_local_system_table(
-            schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory&);
+    future<> create_local_system_table(schema_ptr table, bool write_in_user_memory);
 
     void init_schema_commitlog();
     using is_new_cf = bool_class<struct is_new_cf_tag>;
@@ -1655,7 +1654,7 @@ public:
      *
      * @return ready future when the operation is complete
      */
-    static future<> create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm);
+    static future<> create_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm);
     /* below, find_keyspace throws no_such_<type> on fail */
     keyspace& find_keyspace(std::string_view name);
     const keyspace& find_keyspace(std::string_view name) const;

@@ -607,7 +607,7 @@ private:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory)).get();
+            _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get(), std::ref(_feature_service), std::ref(_token_metadata)).get();
             auto stop_proxy = defer([this] { _proxy.stop().get(); });
 
             _cql_config.start(cql3::cql_config::default_tag{}).get();
@@ -642,7 +642,7 @@ private:
             _sys_ks.start(std::ref(_qp), std::ref(_db)).get();
             auto stop_sys_kd = defer([this] { _sys_ks.stop().get(); });
 
-            replica::distributed_loader::init_system_keyspace(_sys_ks, _erm_factory, _db).get();
+            replica::distributed_loader::init_system_keyspace(_sys_ks, _db).get();
             _db.local().init_schema_commitlog();
             _sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
 
@@ -778,7 +778,7 @@ private:
                 std::ref(_sys_ks),
                 std::ref(_sys_dist_ks),
                 std::ref(_feature_service), std::ref(_mm),
-                std::ref(_token_metadata), std::ref(_erm_factory), std::ref(_ms),
+                std::ref(_token_metadata), std::ref(_ms),
                 std::ref(_repair),
                 std::ref(_stream_manager),
                 std::ref(_elc_notif),

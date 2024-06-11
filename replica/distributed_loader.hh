@@ -49,10 +49,6 @@ class storage_proxy;
 
 }
 
-namespace locator {
-class effective_replication_map_factory;
-}
-
 class distributed_loader_for_tests;
 
 namespace replica {
@@ -75,7 +71,7 @@ class distributed_loader {
     static future<> populate_keyspace(distributed<replica::database>& db, sharded<db::system_keyspace>& sys_ks, keyspace& ks, sstring ks_name);
 
 public:
-    static future<> init_system_keyspace(sharded<db::system_keyspace>&, distributed<locator::effective_replication_map_factory>&, distributed<replica::database>&);
+    static future<> init_system_keyspace(sharded<db::system_keyspace>&, distributed<replica::database>&);
     static future<> init_non_system_keyspaces(distributed<replica::database>& db, distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks);
 
     /**

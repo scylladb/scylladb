@@ -216,14 +216,6 @@ public:
     gms::feature_service& features() noexcept { return _features; }
     const gms::feature_service& features() const { return _features; }
 
-    locator::effective_replication_map_factory& get_erm_factory() noexcept {
-        return _erm_factory;
-    }
-
-    const locator::effective_replication_map_factory& get_erm_factory() const noexcept {
-        return _erm_factory;
-    }
-
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
@@ -247,7 +239,6 @@ public:
 private:
     distributed<replica::database>& _db;
     const locator::shared_token_metadata& _shared_token_metadata;
-    locator::effective_replication_map_factory& _erm_factory;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
     smp_service_group _write_mv_smp_service_group;
@@ -471,7 +462,7 @@ private:
 
 public:
     storage_proxy(distributed<replica::database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm);
     ~storage_proxy();
 
     const distributed<replica::database>& get_db() const {

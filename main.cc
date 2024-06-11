@@ -1155,7 +1155,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             };
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get(),
-                    std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
+                    std::ref(feature_service), std::ref(token_metadata)).get();
 
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
@@ -1238,7 +1238,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
             supervisor::notify("loading system sstables");
-            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db).get();
+            replica::distributed_loader::init_system_keyspace(sys_ks, db).get();
 
             // 1. Here we notify dependent services that system tables have been loaded,
             //    and they in turn can load the necessary data from them;
@@ -1485,7 +1485,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
                 std::ref(db), std::ref(gossiper), std::ref(sys_ks), std::ref(sys_dist_ks),
-                std::ref(feature_service), std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
+                std::ref(feature_service), std::ref(mm), std::ref(token_metadata),
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(qp), std::ref(sl_controller),
