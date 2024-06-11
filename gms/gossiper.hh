@@ -131,7 +131,7 @@ private:
     generation_for_nodes _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
 
-    rpc::no_wait_type background_msg(sstring type, noncopyable_function<future<>(gossiper&)> fn);
+    future<rpc::no_wait_type> background_msg(sstring type, noncopyable_function<future<>(gossiper&)> fn);
 
 public:
     // Get current generation number for the given nodes

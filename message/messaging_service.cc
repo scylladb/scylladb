@@ -72,6 +72,7 @@
 #include "idl/replica_exception.dist.hh"
 #include "idl/per_partition_rate_limit_info.dist.hh"
 #include "idl/storage_proxy.dist.hh"
+#include "idl/gossip.dist.hh"
 #include "idl/storage_service.dist.hh"
 #include "idl/join_node.dist.hh"
 #include "message/rpc_protocol_impl.hh"
@@ -102,6 +103,7 @@
 #include "idl/replica_exception.dist.impl.hh"
 #include "idl/per_partition_rate_limit_info.dist.impl.hh"
 #include "idl/storage_proxy.dist.impl.hh"
+#include "idl/gossip.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
 #include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
@@ -1149,75 +1151,6 @@ future<> messaging_service::send_complete_message(msg_addr id, streaming::plan_i
 }
 future<> messaging_service::unregister_complete_message() {
     return unregister_handler(messaging_verb::COMPLETE_MESSAGE);
-}
-
-void messaging_service::register_gossip_echo(std::function<future<> (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number)>&& func) {
-    register_handler(this, messaging_verb::GOSSIP_ECHO, std::move(func));
-}
-future<> messaging_service::unregister_gossip_echo() {
-    return unregister_handler(netw::messaging_verb::GOSSIP_ECHO);
-}
-future<> messaging_service::send_gossip_echo(msg_addr id, int64_t generation_number, std::chrono::milliseconds timeout) {
-    gms::debug_validate_gossip_generation(generation_number);
-    return send_message_timeout<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), timeout, generation_number);
-}
-future<> messaging_service::send_gossip_echo(msg_addr id, int64_t generation_number, abort_source& as) {
-    gms::debug_validate_gossip_generation(generation_number);
-    return send_message_cancellable<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), as, generation_number);
-}
-
-void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from, rpc::optional<int64_t> generation_number)>&& func) {
-    register_handler(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(func));
-}
-future<> messaging_service::unregister_gossip_shutdown() {
-    return unregister_handler(netw::messaging_verb::GOSSIP_SHUTDOWN);
-}
-future<> messaging_service::send_gossip_shutdown(msg_addr id, inet_address from, int64_t generation_number) {
-    gms::debug_validate_gossip_generation(generation_number);
-    return send_message_oneway(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(from), generation_number);
-}
-
-// gossip syn
-void messaging_service::register_gossip_digest_syn(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gossip_digest_syn)>&& func) {
-    register_handler(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(func));
-}
-future<> messaging_service::unregister_gossip_digest_syn() {
-    return unregister_handler(netw::messaging_verb::GOSSIP_DIGEST_SYN);
-}
-future<> messaging_service::send_gossip_digest_syn(msg_addr id, gossip_digest_syn msg) {
-    return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(msg));
-}
-
-// gossip ack
-void messaging_service::register_gossip_digest_ack(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gossip_digest_ack)>&& func) {
-    register_handler(this, messaging_verb::GOSSIP_DIGEST_ACK, std::move(func));
-}
-future<> messaging_service::unregister_gossip_digest_ack() {
-    return unregister_handler(netw::messaging_verb::GOSSIP_DIGEST_ACK);
-}
-future<> messaging_service::send_gossip_digest_ack(msg_addr id, gossip_digest_ack msg) {
-    return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_ACK, std::move(id), std::move(msg));
-}
-
-// gossip ack2
-void messaging_service::register_gossip_digest_ack2(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gossip_digest_ack2)>&& func) {
-    register_handler(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(func));
-}
-future<> messaging_service::unregister_gossip_digest_ack2() {
-    return unregister_handler(netw::messaging_verb::GOSSIP_DIGEST_ACK2);
-}
-future<> messaging_service::send_gossip_digest_ack2(msg_addr id, gossip_digest_ack2 msg) {
-    return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(msg));
-}
-
-void messaging_service::register_gossip_get_endpoint_states(std::function<future<gms::gossip_get_endpoint_states_response> (const rpc::client_info& cinfo, gms::gossip_get_endpoint_states_request request)>&& func) {
-    register_handler(this, messaging_verb::GOSSIP_GET_ENDPOINT_STATES, std::move(func));
-}
-future<> messaging_service::unregister_gossip_get_endpoint_states() {
-    return unregister_handler(messaging_verb::GOSSIP_GET_ENDPOINT_STATES);
-}
-future<gms::gossip_get_endpoint_states_response> messaging_service::send_gossip_get_endpoint_states(msg_addr id, std::chrono::milliseconds timeout, gms::gossip_get_endpoint_states_request request) {
-    return send_message_timeout<future<gms::gossip_get_endpoint_states_response>>(this, messaging_verb::GOSSIP_GET_ENDPOINT_STATES, std::move(id), std::move(timeout), std::move(request));
 }
 
 void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,
