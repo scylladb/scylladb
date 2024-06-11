@@ -424,7 +424,7 @@ public:
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
     inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
-    host_id_vector_replica_set do_get_replicas(const token& tok, bool is_vnode) const;
+    const host_id_vector_replica_set& do_get_replicas(const token& tok, bool is_vnode) const;
     stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
 
 public:

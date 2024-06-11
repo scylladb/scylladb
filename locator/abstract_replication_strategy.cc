@@ -486,7 +486,7 @@ auto vnode_effective_replication_map::clone_data_gently() const -> future<std::u
     co_return std::move(result);
 }
 
-host_id_vector_replica_set vnode_effective_replication_map::do_get_replicas(const token& tok,
+const host_id_vector_replica_set& vnode_effective_replication_map::do_get_replicas(const token& tok,
     bool is_vnode) const
 {
     const token& key_token = _rs->natural_endpoints_depend_on_token()
