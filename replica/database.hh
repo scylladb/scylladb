@@ -1514,7 +1514,7 @@ private:
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
     std::vector<std::any> _listeners;
-    const locator::shared_token_metadata& _shared_token_metadata;
+    locator::shared_token_metadata& _shared_token_metadata;
     locator::effective_replication_map_factory& _erm_factory;
     lang::manager& _lang_manager;
 
@@ -1575,6 +1575,11 @@ private:
     static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func, std::function<future<>(replica::database&)> notifier);
 
     future<> foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func);
+
+    static future<> replicate_to_all_cores(sharded<database>& sharded_db, locator::mutable_token_metadata_ptr tmptr,
+            std::function<future<>(const database&)> per_shard_cb = [] (auto&) { return make_ready_future(); }) noexcept;
+
+    friend class service::storage_service;
 public:
     static table_schema_version empty_version;
 
@@ -1591,7 +1596,7 @@ public:
     // (keyspace/table definitions, column mappings etc.)
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory,
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory,
             compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
