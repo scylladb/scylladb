@@ -1249,7 +1249,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
-    cfg.enable_compacting_data_for_streaming_and_repair = db_config.enable_compacting_data_for_streaming_and_repair();
+    cfg.enable_compacting_data_for_streaming_and_repair = db_config.enable_compacting_data_for_streaming_and_repair;
 
     return cfg;
 }

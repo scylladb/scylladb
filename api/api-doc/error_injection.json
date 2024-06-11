@@ -63,6 +63,28 @@
                      "paramType":"path"
                   }
                ]
+            },
+            {
+               "method":"GET",
+               "summary":"Read the state of an injection from all shards",
+               "type":"array",
+               "items":{
+                  "type":"error_injection_info"
+               },
+               "nickname":"read_injection",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"injection",
+                     "description":"injection name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
             }
          ]
       },
@@ -151,6 +173,40 @@
                "type": "string"
             }
          }
+      }
+   },
+   "models":{
+      "mapper":{
+         "id":"mapper",
+         "description":"A key value mapping",
+         "properties":{
+            "key":{
+               "type":"string",
+               "description":"The key"
+            },
+            "value":{
+               "type":"string",
+               "description":"The value"
+            }
+         }
+      },
+       "error_injection_info":{
+         "id":"error_injection_info",
+         "description":"Information about an error injection",
+         "properties":{
+            "enabled":{
+               "type":"boolean",
+               "description":"Is the error injection enabled"
+            },
+            "parameters":{
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "description":"The parameter values"
+            }
+         },
+         "required":["enabled"]
       }
    }
 }
