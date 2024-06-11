@@ -151,6 +151,7 @@ class ManagerClient():
         self.test_finished_event.set()
         _client = self.client_for_asyncio_loop.get(asyncio.get_running_loop())
         logging.getLogger().removeHandler(self.test_log_fh)
+        pathlib.Path(self.test_log_fh.baseFilename).unlink()
         logger.debug("after_test for %s (success: %s)", test_case_name, success)
         cluster_str = await _client.put_json(f"/cluster/after-test/{success}",
                                                  response_type = "json")

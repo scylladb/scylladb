@@ -1386,6 +1386,7 @@ class ScyllaClusterManager:
             self.cluster.after_test(self.current_test_case_full_name, success)
         finally:
             logging.getLogger().removeHandler(self.test_case_log_fh)
+            pathlib.Path(self.test_case_log_fh.baseFilename).unlink()
             self.current_test_case_full_name = ''
         self.is_after_test_ok = True
         cluster_str = str(self.cluster)
