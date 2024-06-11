@@ -87,7 +87,7 @@ protected:
     query_function _query_function;
 
 public:
-    query_pager(service::storage_proxy& p, schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
+    query_pager(service::storage_proxy& p, schema_ptr query_schema, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
