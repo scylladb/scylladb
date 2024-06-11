@@ -12,6 +12,7 @@
 #pragma once
 
 #include <boost/program_options/errors.hpp>
+#include <optional>
 #include <iosfwd>
 #include <sstream>
 #include <type_traits>
@@ -63,9 +64,24 @@ requires HasMapInterface<decltype(Mapper::map())>
 class enum_option {
     using map_t = typename std::remove_reference<decltype(Mapper::map())>::type;
     typename map_t::mapped_type _value;
+    std::optional<typename map_t::key_type> _key;
+
+    static std::optional<typename map_t::key_type> map_value_to_key(const typename map_t::mapped_type& v) {
+        auto map = Mapper::map();
+        auto found = find_if(map.cbegin(), map.cend(),
+                             [&v](const auto& e) {
+                                 return e.second == v;
+                             });
+        if (found == map.cend()) {
+            return std::nullopt;
+        } else {
+            return found->first;
+        }
+    }
+
   public:
     // For smooth conversion from enum values:
-    enum_option(const typename map_t::mapped_type& v) : _value(v) {}
+    enum_option(const typename map_t::mapped_type& v) : _value(v), _key(map_value_to_key(_value)) { }
 
     // So values can be default-constructed before streaming into them:
     enum_option() {}
@@ -101,6 +117,7 @@ class enum_option {
             }
             throw boost::program_options::invalid_option_value(text);
         }
+        opt._key = key;
         opt._value = found->second;
         return s;
     }
@@ -113,15 +130,10 @@ template <typename Mapper>
 struct fmt::formatter<enum_option<Mapper>> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const enum_option<Mapper>& opt, fmt::format_context& ctx) const {
-        auto map = Mapper::map();
-        auto found = find_if(map.cbegin(), map.cend(),
-                             [&opt](const auto& e) {
-                                 return e.second == opt._value;
-                             });
-        if (found == map.cend()) {
+        if (!opt._key.has_value()) {
             return fmt::format_to(ctx.out(), "?unknown");
         } else {
-            return fmt::format_to(ctx.out(), "{}", found->first);
+            return fmt::format_to(ctx.out(), "{}", opt._key.value());
         }
     }
 };
