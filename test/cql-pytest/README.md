@@ -47,6 +47,28 @@ Additional useful pytest options, especially useful for debugging tests:
 * -v: show the names of each individual test running instead of just dots.
 * -s: show the full output of running tests (by default, pytest captures the test's output and only displays it if a test fails)
 
+The "run" script also has an ability to run tests against a specific old
+release of Scylla downloaded (pre-compiled) from ScyllaDB's official
+release collection. For example:
+
+```
+test/cql-pytest/run --release 2022.1 --runxfail \
+            test_prepare.py::test_duplicate_named_bind_marker_prepared
+test/cql-pytest/run --release 2022.2 --runxfail \
+            test_prepare.py::test_duplicate_named_bind_marker_prepared
+```
+
+can demonstrate a regression of a test between ScyllaDB Enterprise releases
+2022.1 and 2022.2. The `--release` option (which must be the first option
+to "run") downloads the requested official release and caches it in the
+`build/` directory (e.g., `build/2021.1.9`), and then runs the requested
+tests against that version.
+The `--release` option supports various version specifiers, such as 5.4.7
+(a specific version), 5.4 (asking for the latest version in the 5.4 branch),
+5.4.0~rc2 (a pre-release), or Enterprise releases such as 2021.1.9 or 2023.1
+(the latest in that branch).
+
+
 # Developing new cql-pytest tests
 
 The cql-pytest test framework is designed to encourage Scylla developers
