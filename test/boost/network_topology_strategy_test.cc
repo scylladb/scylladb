@@ -980,7 +980,10 @@ void topology::test_compare_endpoints(const inet_address& address, const inet_ad
             }
         }
     }
-    auto res = compare_endpoints(address, a1, a2);
+    auto n = find_node(address);
+    auto n1 = find_node(a1);
+    auto n2 = find_node(a2);
+    auto res = compare_nodes_proximity(n, n1, n2);
     testlog.debug("compare_endpoint: address={} [{}/{}] a1={} [{}/{}] a2={} [{}/{}]: res={} expected={} expected_value={}",
             address, loc.dc, loc.rack,
             a1, loc1.dc, loc1.rack,
@@ -1017,7 +1020,6 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
     std::generate_n(std::back_inserter(nodes), NODES, [&, i = 0u]() mutable {
         return make_address(++i);
     });
-    auto bogus_address = inet_address((127u << 24) | static_cast<int>(NODES + 1));
 
     semaphore sem(1);
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
@@ -1035,11 +1037,6 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
         topo.test_compare_endpoints(address, a1, a1);
         topo.test_compare_endpoints(address, a1, a2);
         topo.test_compare_endpoints(address, a2, a1);
-
-        topo.test_compare_endpoints(bogus_address, bogus_address, bogus_address);
-        topo.test_compare_endpoints(address, bogus_address, bogus_address);
-        topo.test_compare_endpoints(address, a1, bogus_address);
-        topo.test_compare_endpoints(address, bogus_address, a2);
         return make_ready_future<>();
     }).get();
 }

@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <boost/range/adaptors.hpp>
+
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -548,17 +550,33 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
 }
 
 void topology::sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const {
-    if (_sort_by_proximity) {
-        std::sort(addresses.begin(), addresses.end(), [this, &address](inet_address& a1, inet_address& a2) {
-            return compare_endpoints(address, a1, a2) < 0;
-        });
+    if (!_sort_by_proximity) {
+        return;
     }
+    auto get_node = [this] (const inet_address& ep) {
+        if (auto node = find_node(ep)) {
+            return node;
+        } else {
+            throw std::runtime_error(format("Requested location for node {} not in topology. backtrace {}", ep, lazy_backtrace()));
+        }
+    };
+    auto n = get_node(address);
+    auto nodes = boost::copy_range<utils::small_vector<const node*, 3>>(addresses | boost::adaptors::transformed([&] (const inet_address& ep) {
+        return get_node(ep);
+    }));
+    std::sort(nodes.begin(), nodes.end(), [this, n] (const node* n1, const node* n2) {
+        return compare_nodes_proximity(n, n1, n2) < 0;
+    });
+    addresses.clear();
+    addresses = boost::copy_range<inet_address_vector_replica_set>(nodes | boost::adaptors::transformed([&] (const node* n) {
+        return n->endpoint();
+    }));
 }
 
-std::weak_ordering topology::compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
-    const auto& loc = get_location(address);
-    const auto& loc1 = get_location(a1);
-    const auto& loc2 = get_location(a2);
+std::weak_ordering topology::compare_nodes_proximity(const node* address, const node* a1, const node* a2) const {
+    const auto& loc = address->dc_rack();
+    const auto& loc1 = a1->dc_rack();
+    const auto& loc2 = a2->dc_rack();
 
     // The farthest nodes from a given node are:
     // 1. Nodes in other DCs then the reference node

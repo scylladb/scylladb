@@ -397,7 +397,7 @@ private:
      * 2. Nodes in the same RACK as the reference node
      * 3. Nodes in the same DC as the reference node
      */
-    std::weak_ordering compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
+    std::weak_ordering compare_nodes_proximity(const node* address, const node* a1, const node* a2) const;
 
     unsigned _shard;
     config _cfg;
