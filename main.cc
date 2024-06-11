@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <functional>
 #include <yaml-cpp/yaml.h>
+#include <fmt/ranges.h>
 
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
@@ -781,6 +782,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                             "  Contact scylladb-users@googlegroups.com if you are using it in production", cfg->partitioner());
                     throw bad_configuration_error();
                 }
+            }
+
+            auto unused_features = cfg->experimental_features() | boost::adaptors::filtered([] (auto& f) {
+                return f == db::experimental_features_t::feature::UNUSED;
+            });
+            if (!unused_features.empty()) {
+                startlog.warn("Ignoring unused features found in config: {}", unused_features);
             }
 
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
