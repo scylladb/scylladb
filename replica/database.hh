@@ -1515,6 +1515,7 @@ private:
     gms::feature_service& _feat;
     std::vector<std::any> _listeners;
     const locator::shared_token_metadata& _shared_token_metadata;
+    locator::effective_replication_map_factory& _erm_factory;
     lang::manager& _lang_manager;
 
     utils::cross_shard_barrier _stop_barrier;
@@ -1624,6 +1625,8 @@ public:
 
     const locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
     const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
+    locator::effective_replication_map_factory& get_erm_factory() noexcept { return _erm_factory; }
+    const locator::effective_replication_map_factory& get_erm_factory() const noexcept { return _erm_factory; }
 
     lang::manager& lang() noexcept { return _lang_manager; }
     const lang::manager& lang() const noexcept { return _lang_manager; }

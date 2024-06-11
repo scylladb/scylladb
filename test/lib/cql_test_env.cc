@@ -589,7 +589,7 @@ private:
             _lang_manager.invoke_on_all(&lang::manager::start).get();
 
 
-            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([this] {
                 _db.stop().get();
             });

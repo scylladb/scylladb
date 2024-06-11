@@ -312,7 +312,7 @@ public:
     }
 };
 
-database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory,
         compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _user_types(std::make_shared<db_user_types_storage>(*this))
@@ -380,6 +380,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _mnotifier(mn)
     , _feat(feat)
     , _shared_token_metadata(stm)
+    , _erm_factory(erm_factory)
     , _lang_manager(langm)
     , _stop_barrier(std::move(barrier))
     , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
