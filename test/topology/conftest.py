@@ -205,7 +205,7 @@ async def manager(request, manager_internal, record_property, mode):
         # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
         # all related logs in one dir.
         # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
-        failed_test_dir_path = tmp_dir / mode / "failed_test" / f"{test_case_name}.{mode}.{run_id}"
+        failed_test_dir_path = tmp_dir / mode / "failed_test" / f"{test_case_name}"
         failed_test_dir_path.mkdir(parents=True, exist_ok=True)
         await manager_internal.gather_related_logs(
             failed_test_dir_path,
@@ -273,3 +273,9 @@ def skip_mode_fixture(request, mode):
 
 def pytest_configure(config):
     config.pluginmanager.register(ReportPlugin())
+
+
+def pytest_collection_modifyitems(items, config):
+    run_id = config.getoption('run_id')
+    for item in items:
+        item.name = f"{item.name}.{run_id}"
