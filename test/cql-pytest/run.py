@@ -275,11 +275,11 @@ def run_scylla_cmd(pid, dir):
         '--smp', '2',
         '-m', '1G',
         '--overprovisioned',
-        '--max-networking-io-control-blocks', '1000',
+        '--max-networking-io-control-blocks=1000',
         '--unsafe-bypass-fsync', '1',
-        '--kernel-page-cache', '1',
+        '--kernel-page-cache=1',
         '--commitlog-use-o-dsync', '0',
-        '--flush-schema-tables-after-modification', 'false',
+        '--flush-schema-tables-after-modification=false',
         '--api-address', ip,
         '--rpc-address', ip,
         '--listen-address', ip,
@@ -292,7 +292,7 @@ def run_scylla_cmd(pid, dir):
         '--logger-log-level', 'migration_manager=warn',
         # Use lower settings for some parameters to allow faster testing
         '--num-tokens', '16',
-        '--query-tombstone-page-limit', '1000',
+        '--query-tombstone-page-limit=1000',
         # Significantly increase default timeouts to allow running tests
         # on a very slow setup (but without network losses). Note that these
         # are server-side timeouts: The client should also avoid timing out
@@ -318,15 +318,15 @@ def run_scylla_cmd(pid, dir):
         # and other modules dependent on it: e.g. service levels
         '--authenticator', 'PasswordAuthenticator',
         '--authorizer', 'CassandraAuthorizer',
-        '--strict-allow-filtering', 'true',
-        '--strict-is-not-null-in-views', 'true',
+        '--strict-allow-filtering=true',
+        '--strict-is-not-null-in-views=true',
         '--permissions-update-interval-in-ms', '100',
         '--permissions-validity-in-ms', '5',
         '--shutdown-announce-in-ms', '0',
-        '--maintenance-socket', 'workdir',
-        '--service-levels-interval-ms', '500',
+        '--maintenance-socket=workdir',
+        '--service-levels-interval-ms=500',
         # Avoid unhelpful "guardrails" warnings
-        '--minimum-replication-factor-warn-threshold', '-1',
+        '--minimum-replication-factor-warn-threshold=-1',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
@@ -338,6 +338,55 @@ def run_scylla_ssl_cql_cmd(pid, dir):
             '--client-encryption-options', f'keyfile={dir}/scylla.key',
             '--client-encryption-options', f'certificate={dir}/scylla.crt',
     ]
+    return (cmd, env)
+
+# Download the requested precompiled Scylla release using fetch_scylla.py,
+# and cache it in a subdirectory of <source_path>/build whose name is
+# the specific release actually download.
+# This function returns a path of the executable to run Scylla (actually,
+# a shell-script wrapper that sets the LD_LIBRARY_PATH appropriately).
+def download_precompiled_scylla(release):
+    import fetch_scylla
+    return fetch_scylla.download_scylla(release, os.path.join(source_path, 'build'))
+
+# Instead of run_scylla_cmd, which runs Scylla executable compiled in this
+# build directory, run_precompiled_scylla_cmd runs a release of Scylla
+# downloaded by fetch_precompiled_scylla:
+def run_precompiled_scylla_cmd(exe, pid, dir):
+    (cmd, env) = run_scylla_cmd(pid, dir)
+    # run_scylla_cmd linked "test_scylla" to the built Scylla, we want to
+    # link it to the wrapper script we just downloaded:
+    scylla_link = os.path.join(dir, 'test_scylla')
+    os.unlink(scylla_link)
+    os.symlink(exe, scylla_link)
+    # Unfortunately, earlier Scylla versions required different command line
+    # options to run, so for some old versions we need to drop some of the
+    # command line options added above in run_scylla_cmd, or add more
+    # options.  We do this hard-coded for particular versions, which is
+    # kind of ugly and high-maintenance :-( Maybe in the future we could
+    # detect this automatically by using "--help" or something.
+    version = os.path.basename(os.path.dirname(exe)).split('~')[0].split('.')
+    major = [int(version[0]), int(version[1])]
+    enterprise = major[0] > 2000
+    if major[0] < 6 or (enterprise and major <= [2024,1]):
+        cmd.remove('--enable-tablets=true')
+        cmd.remove('--maintenance-socket=workdir')
+        cmd.remove('--service-levels-interval-ms=500')
+    if major < [5,4] or (enterprise and major <= [2023,1]):
+        cmd.remove('--strict-is-not-null-in-views=true')
+        cmd.remove('--minimum-replication-factor-warn-threshold=-1')
+    if major <= [5,1] or (enterprise and major <= [2022,2]):
+        cmd.remove('--query-tombstone-page-limit=1000')
+    if major <= [5,0] or (enterprise and major <= [2022,1]):
+        cmd.remove('--experimental-features=keyspace-storage-options')
+    if major <= [4,5] or (enterprise and major <= [2021,1]):
+        cmd.remove('--kernel-page-cache=1')
+        cmd.remove('--flush-schema-tables-after-modification=false')
+        cmd.remove('--strict-allow-filtering=true')
+    if major <= [4,5]:
+        cmd.remove('--max-networking-io-control-blocks=1000')
+    if major == [5,4] or major == [2024,1]:
+        cmd.append('--force-schema-commit-log=true')
     return (cmd, env)
 
 # Get a Cluster object to connect to CQL at the given IP address (and with
