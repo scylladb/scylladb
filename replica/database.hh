@@ -1633,6 +1633,8 @@ public:
     locator::effective_replication_map_factory& get_erm_factory() noexcept { return _erm_factory; }
     const locator::effective_replication_map_factory& get_erm_factory() const noexcept { return _erm_factory; }
 
+    static future<> mutate_token_metadata(sharded<database>& db, std::function<future<>(locator::token_metadata&)> func);
+
     lang::manager& lang() noexcept { return _lang_manager; }
     const lang::manager& lang() const noexcept { return _lang_manager; }
 

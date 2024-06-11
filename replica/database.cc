@@ -3064,6 +3064,14 @@ future<> database::replicate_to_all_cores(sharded<database>& sharded_db, locator
     }
 }
 
+future<> database::mutate_token_metadata(sharded<database>& db, std::function<future<>(locator::token_metadata&)> func) {
+    assert(this_shard_id() == 0);
+    auto& stm = db.local()._shared_token_metadata;
+    auto [lk, tmptr] = co_await stm.get_mutable_token_metadata_ptr();
+    co_await func(*tmptr);
+    co_await replicate_to_all_cores(db, std::move(tmptr));
+}
+
 } // namespace replica
 
 flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db,
