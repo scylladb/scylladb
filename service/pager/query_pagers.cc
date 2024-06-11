@@ -40,23 +40,23 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
 }
 
-query_pager::query_pager(service::storage_proxy& p, schema_ptr s,
+query_pager::query_pager(service::storage_proxy& p, schema_ptr query_schema,
                 shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges,
                 query_function query_function_override)
-                : _has_clustering_keys(has_clustering_keys(*s, *cmd))
+                : _has_clustering_keys(has_clustering_keys(*query_schema, *cmd))
                 , _max(cmd->get_row_limit())
                 , _per_partition_limit(cmd->slice.partition_row_limit())
                 , _last_pos(position_in_partition::for_partition_start())
                 , _proxy(p.shared_from_this())
-                , _schema(std::move(s))
+                , _schema(cmd->slice.is_reversed() ? query_schema->get_reversed() : std::move(query_schema))
                 , _selection(selection)
                 , _state(state)
                 , _options(options)
-                , _cmd(std::move(cmd))
+                , _cmd(cmd->slice.is_reversed() ? reversed(::make_lw_shared(*cmd)) : std::move(cmd))
                 , _ranges(std::move(ranges))
 {
     if (query_function_override) {
@@ -64,12 +64,15 @@ query_pager::query_pager(service::storage_proxy& p, schema_ptr s,
     } else {
         _query_function = [] (
                 service::storage_proxy& sp,
-                schema_ptr schema,
+                schema_ptr table_schema,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector&& partition_ranges,
                 db::consistency_level cl,
                 service::storage_proxy_coordinator_query_options optional_params) {
-            return sp.query_result(std::move(schema), std::move(cmd), std::move(partition_ranges), cl, std::move(optional_params));
+
+            auto query_schema = cmd->slice.is_reversed() ? table_schema->get_reversed() : table_schema;
+            cmd = cmd->slice.is_reversed() ? reversed(::make_lw_shared(*cmd)) : cmd;
+            return sp.query_result(std::move(query_schema), std::move(cmd), std::move(partition_ranges), cl, std::move(optional_params));
         };
     }
 }

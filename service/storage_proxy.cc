@@ -6062,18 +6062,22 @@ storage_proxy::query(schema_ptr s,
 }
 
 future<result<storage_proxy::coordinator_query_result>>
-storage_proxy::query_result(schema_ptr s,
-    lw_shared_ptr<query::read_command> cmd,
+storage_proxy::query_result(schema_ptr query_schema,
+    lw_shared_ptr<query::read_command> cmd1,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
     storage_proxy::coordinator_query_options query_options)
 {
+    const bool is_reversed = cmd1->slice.is_reversed();
+    auto cmd = is_reversed ? reversed(::make_lw_shared(*cmd1)) : cmd1;
+    auto table_schema =  is_reversed ? query_schema->get_reversed() : query_schema;
+
     if (slogger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
         auto query_id = next_id++;
 
-        slogger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, partition_ranges, query_id);
-        return do_query(s, cmd, std::move(partition_ranges), cl, std::move(query_options)).then_wrapped([query_id, cmd, s] (future<result<coordinator_query_result>> f) -> result<coordinator_query_result> {
+        slogger.trace("query {}.{} cmd={}, ranges={}, id={}", table_schema->ks_name(), table_schema->cf_name(), *cmd, partition_ranges, query_id);
+        return do_query(table_schema, cmd, std::move(partition_ranges), cl, std::move(query_options)).then_wrapped([query_id, cmd, table_schema] (future<result<coordinator_query_result>> f) -> result<coordinator_query_result> {
             auto rres = utils::result_try([&] {
                 return f.get();
             },  utils::result_catch_dots([&] (auto&& handle) {
@@ -6091,12 +6095,12 @@ storage_proxy::query_result(schema_ptr s,
             } else {
                 slogger.trace("query_result id={}, size={}", query_id, res->buf().size());
             }
-            qlogger.trace("id={}, {}", query_id, res->pretty_printer(s, cmd->slice));
+            qlogger.trace("id={}, {}", query_id, res->pretty_printer(table_schema, cmd->slice));
             return qr;
         });
     }
 
-    return do_query(s, cmd, std::move(partition_ranges), cl, std::move(query_options));
+    return do_query(table_schema, cmd, std::move(partition_ranges), cl, std::move(query_options));
 }
 
 future<result<storage_proxy::coordinator_query_result>>
