@@ -16,6 +16,7 @@ import requests.exceptions
 
 from test.nodetool.rest_api_mock import set_expected_requests, expected_request, get_expected_requests, \
     get_unexpected_requests, expected_requests_manager
+from test.pylib.report_plugin import ReportPlugin
 
 
 def pytest_addoption(parser):
@@ -31,6 +32,9 @@ def pytest_addoption(parser):
                      help="Path to the jmx binary, only used with --nodetool=cassandra")
     parser.addoption('--run-within-unshare', action='store_true',
                      help="Setup the 'lo' network if launched with unshare(1)")
+    parser.addoption('--run_id', action='store', default=1,
+                     help='Run id for the test run')
+
 
 class ServerAddress(NamedTuple):
     ip: str
@@ -221,3 +225,7 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
             return res
 
     return invoker
+
+
+def pytest_configure(config):
+    config.pluginmanager.register(ReportPlugin())
