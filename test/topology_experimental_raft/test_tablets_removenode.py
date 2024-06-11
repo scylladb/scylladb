@@ -13,6 +13,7 @@ import asyncio
 import logging
 
 from test.pylib.scylla_cluster import ReplaceConfig
+from test.pylib.util import start_writes
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ async def test_replace(manager: ManagerClient):
 
     await create_keyspace(cql, "test3", 32, rf=3)
     await cql.run_async("CREATE TABLE test3.test (pk int PRIMARY KEY, c int);")
+    await cql.run_async("CREATE TABLE test3.test2 (pk int PRIMARY KEY, c int);")
 
     logger.info("Populating table")
 
@@ -78,11 +80,20 @@ async def test_replace(manager: ManagerClient):
     # See https://github.com/scylladb/scylladb/issues/16527
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
+    finish_writes = await start_writes(cql, "test3", "test2")
+
     logger.info('Replacing a node')
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
     servers.append(await manager.server_add(replace_cfg))
     servers = servers[1:]
+
+    key_count = await finish_writes()
+    stmt = SimpleStatement("SELECT * FROM test3.test2;", consistency_level=ConsistencyLevel.QUORUM)
+    rows = await cql.run_async(stmt, all_pages=True)
+    assert len(rows) == key_count
+    for r in rows:
+        assert r.c == r.pk
 
     await check()
 
