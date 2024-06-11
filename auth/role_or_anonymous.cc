@@ -10,11 +10,6 @@
 
 namespace auth {
 
-std::ostream& operator<<(std::ostream& os, const role_or_anonymous& mr) {
-    os << mr.name.value_or("<anonymous>");
-    return os;
-}
-
 bool is_anonymous(const role_or_anonymous& mr) noexcept {
     return !mr.name.has_value();
 }
