@@ -22,7 +22,6 @@
 #include "db/commitlog/replay_position.hh"
 #include "db/hints/internal/common.hh"
 #include "db/hints/internal/hint_storage.hh"
-#include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "mutation/frozen_mutation.hh"
 #include "schema/schema.hh"
@@ -242,7 +241,7 @@ private:
     /// \param ermp points to the effective_replication_map used to obtain \c natural_endpoints
     /// \param natural_endpoints current replicas for the given mutation
     /// \return future that resolves when the operation is complete
-    future<> do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints);
+    future<> do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const host_id_vector_replica_set& natural_endpoints);
 
     /// \brief Send one mutation out.
     ///
