@@ -8,10 +8,10 @@
 
 #include <seastar/core/coroutine.hh>
 
-#include "api/api.hh"
 #include "api/api-doc/raft.json.hh"
 
 #include "service/raft/raft_group_registry.hh"
+#include "log.hh"
 
 using namespace seastar::httpd;
 
@@ -19,6 +19,7 @@ extern logging::logger apilog;
 
 namespace api {
 
+struct http_context;
 namespace r = httpd::raft_json;
 using namespace json;
 
