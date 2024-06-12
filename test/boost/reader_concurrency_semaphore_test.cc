@@ -1986,3 +1986,26 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_execution_stage_wakeu
 
     permit2_fut.get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_count) {
+    utils::updateable_value_source<int> count{1};
+    const uint32_t initial_memory = 4 * 1024;
+    const auto serialize_multiplier = std::numeric_limits<uint32_t>::max();
+    const auto kill_multiplier = std::numeric_limits<uint32_t>::max();
+
+    reader_concurrency_semaphore semaphore(
+            utils::updateable_value(count),
+            initial_memory,
+            get_name(),
+            100,
+            utils::updateable_value<uint32_t>(serialize_multiplier),
+            utils::updateable_value<uint32_t>(kill_multiplier),
+            reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(semaphore);
+
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(count(), initial_memory));
+
+    count.set(10);
+
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(count(), initial_memory));
+}

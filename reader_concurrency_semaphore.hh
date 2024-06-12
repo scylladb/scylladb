@@ -161,6 +161,7 @@ public:
 private:
     resources _initial_resources;
     resources _resources;
+    utils::observer<int> _count_observer;
 
     struct wait_queue {
         // Stores entries for permits waiting to be admitted.
@@ -273,13 +274,26 @@ public:
     /// Create a semaphore with the specified limits
     ///
     /// The semaphore's name has to be unique!
-    reader_concurrency_semaphore(int count,
+    reader_concurrency_semaphore(
+            utils::updateable_value<int> count,
             ssize_t memory,
             sstring name,
             size_t max_queue_length,
             utils::updateable_value<uint32_t> serialize_limit_multiplier,
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             register_metrics metrics);
+
+    reader_concurrency_semaphore(
+            int count,
+            ssize_t memory,
+            sstring name,
+            size_t max_queue_length,
+            utils::updateable_value<uint32_t> serialize_limit_multiplier,
+            utils::updateable_value<uint32_t> kill_limit_multiplier,
+            register_metrics metrics)
+        : reader_concurrency_semaphore(utils::updateable_value(count), memory, std::move(name), max_queue_length,
+                std::move(serialize_limit_multiplier), std::move(kill_limit_multiplier), metrics)
+    { }
 
     /// Create a semaphore with practically unlimited count and memory.
     ///
@@ -298,7 +312,7 @@ public:
             utils::updateable_value<uint32_t> serialize_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value<uint32_t> kill_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             register_metrics metrics = register_metrics::no)
-        : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler),
+        : reader_concurrency_semaphore(utils::updateable_value<uint32_t>(count), memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler),
                 std::move(kill_limit_multipler), register_metrics::no)
     {}
 
