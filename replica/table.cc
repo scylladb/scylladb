@@ -190,9 +190,9 @@ table::add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& reader
     // point queries can be optimized as they span a single compaction group.
     if (range.is_singular() && range.start()->value().has_key()) {
         const dht::ring_position& pos = range.start()->value();
-        auto sg = storage_group_for_token(pos.token());
-        reserve_fn(sg->memtable_count());
-        for (auto& cg : sg->compaction_groups()) {
+        auto& sg = storage_group_for_token(pos.token());
+        reserve_fn(sg.memtable_count());
+        for (auto& cg : sg.compaction_groups()) {
             add_memtables_from_cg(*cg);
         }
         return;
@@ -572,12 +572,12 @@ void storage_group_manager::remove_storage_group(size_t id) {
     }
 }
 
-storage_group* storage_group_manager::storage_group_for_id(const schema_ptr& s, size_t i) const {
+storage_group& storage_group_manager::storage_group_for_id(const schema_ptr& s, size_t i) const {
     auto it = _storage_groups.find(i);
     if (it == _storage_groups.end()) [[unlikely]] {
         throw std::out_of_range(format("Storage wasn't found for tablet {} of table {}.{}", i, s->ks_name(), s->cf_name()));
     }
-    return it->second.get();
+    return *it->second.get();
 }
 
 class single_storage_group_manager final : public storage_group_manager {
@@ -618,8 +618,8 @@ public:
     size_t log2_storage_groups() const override {
         return 0;
     }
-    storage_group* storage_group_for_token(dht::token token) const noexcept override {
-        return _single_sg;
+    storage_group& storage_group_for_token(dht::token token) const noexcept override {
+        return *_single_sg;
     }
 
     locator::table_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)>) const noexcept override {
@@ -666,7 +666,7 @@ private:
     // that were previously split.
     future<> handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
-    storage_group* storage_group_for_id(size_t i) const {
+    storage_group& storage_group_for_id(size_t i) const {
         return storage_group_manager::storage_group_for_id(schema(), i);
     }
 
@@ -682,10 +682,10 @@ private:
             on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size_log2={} size={} token={}",
                                                     idx, log2_storage_groups(), tablet_count(), t));
         }
-        auto* sg = storage_group_for_id(idx);
-        if (!t.is_minimum() && !t.is_maximum() && sg && !sg->token_range().contains(t, dht::token_comparator())) {
+        auto& sg = storage_group_for_id(idx);
+        if (!t.is_minimum() && !t.is_maximum() && !sg.token_range().contains(t, dht::token_comparator())) {
             on_fatal_internal_error(tlogger, format("storage_group_of: storage_group idx={} range={} does not contain token={}",
-                                                    idx, sg->token_range(), t));
+                                                    idx, sg.token_range(), t));
         }
 #endif
         return { idx, side };
@@ -723,7 +723,7 @@ public:
     size_t log2_storage_groups() const override {
         return log2ceil(tablet_map().tablet_count());
     }
-    storage_group* storage_group_for_token(dht::token token) const noexcept override {
+    storage_group& storage_group_for_token(dht::token token) const noexcept override {
         return storage_group_for_id(storage_group_of(token).first);
     }
 
@@ -897,20 +897,20 @@ std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
 }
 
 compaction_group* table::get_compaction_group(size_t id) const noexcept {
-    return storage_group_for_id(id)->main_compaction_group().get();
+    return storage_group_for_id(id).main_compaction_group().get();
 }
 
-storage_group* table::storage_group_for_token(dht::token token) const noexcept {
+storage_group& table::storage_group_for_token(dht::token token) const noexcept {
     return _sg_manager->storage_group_for_token(token);
 }
 
-storage_group* table::storage_group_for_id(size_t i) const {
+storage_group& table::storage_group_for_id(size_t i) const {
     return _sg_manager->storage_group_for_id(_schema, i);
 }
 
 compaction_group& tablet_storage_group_manager::compaction_group_for_token(dht::token token) const noexcept {
     auto [idx, range_side] = storage_group_of(token);
-    auto& sg = *storage_group_for_id(idx);
+    auto& sg = storage_group_for_id(idx);
     return *sg.select_compaction_group(range_side);
 }
 
@@ -962,13 +962,13 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
                                           sst->get_filename(), first_id, last_id));
     }
 
-    auto* sg = storage_group_for_id(first_id);
+    auto& sg = storage_group_for_id(first_id);
 
     if (first_range_side != last_range_side) {
-        return *sg->main_compaction_group();
+        return *sg.main_compaction_group();
     }
 
-    return *sg->select_compaction_group(first_range_side);
+    return *sg.select_compaction_group(first_range_side);
 }
 
 compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
@@ -1025,9 +1025,9 @@ table::clone_tablet_storage(locator::tablet_id tid) {
     auto holder = async_gate().hold();
     // FIXME: guard storage group with shared lock.
 
-    auto* sg = storage_group_for_id(tid.value());
-    co_await sg->flush();
-    auto set = sg->make_sstable_set();
+    auto& sg = storage_group_for_id(tid.value());
+    co_await sg.flush();
+    auto set = sg.make_sstable_set();
     co_await safe_foreach_sstable(*set, [&] (const sstables::shared_sstable& sst) -> future<> {
         ret.push_back(co_await sst->clone(calculate_generation_for_new_table()));
     });
@@ -1831,7 +1831,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
         co_await flush();
     }
 
-    auto& cg = *storage_group_for_id(0)->main_compaction_group().get();
+    auto& cg = *storage_group_for_id(0).main_compaction_group().get();
     co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state(), info);
 }
 
@@ -3302,10 +3302,10 @@ table::as_mutation_source_excluding_staging() const {
 }
 
 std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::token token) const {
-    auto sg = storage_group_for_token(token);
+    auto& sg = storage_group_for_token(token);
     std::vector<mutation_source> mss;
-    mss.reserve(sg->memtable_count());
-    for (auto& cg : sg->compaction_groups()) {
+    mss.reserve(sg.memtable_count());
+    for (auto& cg : sg.compaction_groups()) {
         for (auto& mt : *cg->memtables()) {
             mss.emplace_back(mt->as_data_source());
         }
@@ -3502,27 +3502,27 @@ future<> compaction_group::cleanup() {
     _t._cache.refresh_snapshot();
 }
 
-future<> table::clear_inactive_reads_for_tablet(database& db, storage_group* sg) {
-    for (auto& cg_ptr : sg->compaction_groups()) {
+future<> table::clear_inactive_reads_for_tablet(database& db, storage_group& sg) {
+    for (auto& cg_ptr : sg.compaction_groups()) {
         co_await db.clear_inactive_reads_for_tablet(_schema->id(), cg_ptr->token_range());
     }
 }
 
-future<> table::stop_compaction_groups(storage_group* sg) {
+future<> table::stop_compaction_groups(storage_group& sg) {
     // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
-    for (auto& cg_ptr : sg->compaction_groups()) {
+    for (auto& cg_ptr : sg.compaction_groups()) {
         co_await cg_ptr->stop();
     }
 }
 
-future<> table::flush_compaction_groups(storage_group* sg) {
-    for (auto& cg_ptr : sg->compaction_groups()) {
+future<> table::flush_compaction_groups(storage_group& sg) {
+    for (auto& cg_ptr : sg.compaction_groups()) {
         co_await cg_ptr->flush();
     }
 }
 
-future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group* sg) {
-    for (auto& cg_ptr : sg->compaction_groups()) {
+future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
+    for (auto& cg_ptr : sg.compaction_groups()) {
         co_await cg_ptr->cleanup();
         // FIXME: at this point _highest_rp might be greater than the replay_position of the last cleaned mutation,
         // and can cover some mutations which weren't cleaned, causing them to be lost during replay.
@@ -3531,7 +3531,7 @@ future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys
         // in the first place, but it would be better to extract the exact replay_position from
         // the actually flushed/deleted sstables, like discard_sstable() does, so that the mutations
         // cleaned from sstables are exactly the same as the ones cleaned from commitlog.
-        co_await sys_ks.save_commitlog_cleanup_record(schema()->id(), sg->token_range(), _highest_rp);
+        co_await sys_ks.save_commitlog_cleanup_record(schema()->id(), sg.token_range(), _highest_rp);
         // This is the only place (outside of reboot) where we delete unneeded commitlog cleanup
         // records. This isn't ideal -- it would be more natural if the unneeded records
         // were deleted as soon as they become unneeded -- but this gets the job done with a
@@ -3545,7 +3545,7 @@ future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys
 future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
     auto holder = async_gate().hold();
     rwlock::holder exclusive_lock = co_await _sg_manager->get_rwlock().hold_write_lock();
-    auto* sg = storage_group_for_id(tid.value());
+    auto& sg = storage_group_for_id(tid.value());
 
     co_await clear_inactive_reads_for_tablet(db, sg);
     // compaction_group::stop takes care of flushing.
@@ -3558,7 +3558,7 @@ future<> table::cleanup_tablet_without_deallocation(database& db, db::system_key
     auto holder = async_gate().hold();
     // Hold shared lock to keep storage group alive.
     rwlock::holder shared_lock = co_await _sg_manager->get_rwlock().hold_read_lock();
-    auto* sg = storage_group_for_id(tid.value());
+    auto& sg = storage_group_for_id(tid.value());
 
     co_await clear_inactive_reads_for_tablet(db, sg);
     co_await flush_compaction_groups(sg);

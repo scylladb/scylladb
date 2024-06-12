@@ -590,9 +590,8 @@ private:
     future<> handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap);
 
     // Select a storage group from a given token.
-    storage_group* storage_group_for_token(dht::token token) const noexcept;
-    // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
-    storage_group* storage_group_for_id(size_t i) const;
+    storage_group& storage_group_for_token(dht::token token) const noexcept;
+    storage_group& storage_group_for_id(size_t i) const;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
     compaction_group* get_compaction_group(size_t id) const noexcept;
@@ -846,10 +845,10 @@ public:
     future<> update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
 private:
-    future<> clear_inactive_reads_for_tablet(database& db, storage_group* sg);
-    future<> stop_compaction_groups(storage_group* sg);
-    future<> flush_compaction_groups(storage_group* sg);
-    future<> cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group* sg);
+    future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
+    future<> stop_compaction_groups(storage_group& sg);
+    future<> flush_compaction_groups(storage_group& sg);
+    future<> cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg);
 public:
     future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id);
     // For tests only.
