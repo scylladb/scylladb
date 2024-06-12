@@ -1030,6 +1030,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 task_manager.stop().get();
             });
 
+            api::set_server_task_manager(ctx, task_manager, cfg).get();
+            auto stop_tm_api = defer_verbose_shutdown("task manager API", [&ctx] {
+                api::unset_server_task_manager(ctx).get();
+            });
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+            api::set_server_task_manager_test(ctx, task_manager).get();
+            auto stop_tm_test_api = defer_verbose_shutdown("task manager API", [&ctx] {
+                api::unset_server_task_manager_test(ctx).get();
+            });
+#endif
+
             // Note: changed from using a move here, because we want the config object intact.
             replica::database_config dbcfg;
             dbcfg.compaction_scheduling_group = make_sched_group("compaction", "comp", 1000);
@@ -1368,6 +1379,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // before start_listen is called.
             messaging.invoke_on_all(&netw::messaging_service::start).get();
 
+            api::set_server_messaging_service(ctx, messaging).get();
+            auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
+                api::unset_server_messaging_service(ctx).get();
+            });
+
             supervisor::notify("starting gossiper");
             auto cluster_name = cfg->cluster_name();
             if (cluster_name.empty()) {
@@ -1688,6 +1704,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 repair.stop().get();
             });
             repair.invoke_on_all(&repair_service::start).get();
+            api::set_server_repair(ctx, repair).get();
+            auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
+                api::unset_server_repair(ctx).get();
+            });
 
             supervisor::notify("starting CDC Generation Management service");
             /* This service uses the system distributed keyspace.
@@ -1723,25 +1743,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("starting storage service", true);
 
-            api::set_server_messaging_service(ctx, messaging).get();
-            auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
-                api::unset_server_messaging_service(ctx).get();
-            });
-            api::set_server_repair(ctx, repair).get();
-            auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
-                api::unset_server_repair(ctx).get();
-            });
-
-            api::set_server_task_manager(ctx, task_manager, cfg).get();
-            auto stop_tm_api = defer_verbose_shutdown("task manager API", [&ctx] {
-                api::unset_server_task_manager(ctx).get();
-            });
-#ifndef SCYLLA_BUILD_MODE_RELEASE
-            api::set_server_task_manager_test(ctx, task_manager).get();
-            auto stop_tm_test_api = defer_verbose_shutdown("task manager API", [&ctx] {
-                api::unset_server_task_manager_test(ctx).get();
-            });
-#endif
             gossiper.local().register_(ss.local().shared_from_this());
             auto stop_listening = defer_verbose_shutdown("storage service notifications", [&gossiper, &ss] {
                 gossiper.local().unregister_(ss.local().shared_from_this()).get();
