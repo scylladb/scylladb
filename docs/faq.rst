@@ -355,11 +355,6 @@ function: it assists with gossip convergence. See :doc:`Scylla Seed Nodes </kb/s
 
 We recommend updating your ScyllaDB to version 4.3 or later (Open Source) or 2021.1 or later (Enterprise).
 
-Does single seed mean single point of failure?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The ring can operate or boot without a seed; however, you will not be able to add new nodes to the cluster. It is recommended to configure multiple seeds in production systems.
-
 .. _faq-raid0-required:
 
 Is RAID0 required for Scylla? Why?
