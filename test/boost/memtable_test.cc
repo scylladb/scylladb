@@ -1039,6 +1039,9 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
     std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
     return make_ready_future<>();
 #else
+    auto db_config = make_shared<db::config>();
+    db_config->unspooled_dirty_soft_limit.set(1.0);
+
     return do_with_cql_env_thread([](cql_test_env& env) {
         replica::database& db = env.local_db();
         service::migration_manager& mm = env.migration_manager().local();
@@ -1086,7 +1089,7 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         }));
 
         std::move(f).get();
-    });
+    }, db_config);
 #endif
 }
 
