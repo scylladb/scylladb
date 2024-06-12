@@ -903,7 +903,7 @@ class ScyllaCluster:
                           property_file: Optional[dict[str, Any]] = None,
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
-                          expected_error: Optional[str] = None) -> [ServerInfo]:
+                          expected_error: Optional[str] = None) -> List[ServerInfo]:
         """Add multiple servers to the cluster concurrently"""
         assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
 
