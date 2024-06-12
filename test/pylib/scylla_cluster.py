@@ -902,11 +902,12 @@ class ScyllaCluster:
                           config: Optional[dict[str, Any]] = None,
                           property_file: Optional[dict[str, Any]] = None,
                           start: bool = True,
+                          seeds: Optional[List[IPAddress]] = None,
                           expected_error: Optional[str] = None) -> [ServerInfo]:
         """Add multiple servers to the cluster concurrently"""
         assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
 
-        return await asyncio.gather(*(self.add_server(None, cmdline, config, property_file, start, expected_error)
+        return await asyncio.gather(*(self.add_server(None, cmdline, config, property_file, start, seeds, expected_error)
                                       for _ in range(servers_num)))
 
     def endpoint(self) -> str:
@@ -1418,7 +1419,7 @@ class ScyllaClusterManager:
         data = await request.json()
         s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'),
                                                  data.get('property_file'), data.get('start', True),
-                                                 data.get('expected_error', None))
+                                                 data.get('seeds', None), data.get('expected_error', None))
         return [
             {"server_id": s_info.server_id, "ip_addr": s_info.ip_addr, "rpc_address": s_info.rpc_address}
             for s_info in s_infos
