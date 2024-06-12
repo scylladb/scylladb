@@ -11,7 +11,6 @@
 #pragma once
 
 #include "exceptions.hh"
-#include <seastar/core/shared_ptr.hh>
 #include "cql3/column_identifier.hh"
 
 namespace exceptions {

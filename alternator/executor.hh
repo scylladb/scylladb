@@ -9,7 +9,6 @@
 #pragma once
 
 #include <seastar/core/future.hh>
-#include <seastar/http/httpd.hh>
 #include "seastarx.hh"
 #include <seastar/json/json_elements.hh>
 #include <seastar/core/sharded.hh>
