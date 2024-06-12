@@ -3,10 +3,9 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-
-from rest_api_mock import expected_request
+from test.nodetool.utils import check_nodetool_fails_with
+from test.nodetool.rest_api_mock import expected_request
 import pytest
-import utils
 
 
 @pytest.mark.parametrize("key_option", (None, "-hf", "--hex-format"))
@@ -35,7 +34,7 @@ def test_getsstables(nodetool, key_option):
 
 
 def test_getsstables_unknown_ks(nodetool, scylla_only):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("getsstables", "unknown_ks", "tbl", "mykey"),
             {"expected_requests": [expected_request("GET", "/column_family/",
@@ -45,7 +44,7 @@ def test_getsstables_unknown_ks(nodetool, scylla_only):
 
 
 def test_getsstables_unknown_tbl(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("getsstables", "ks", "unknown_tbl", "mykey"),
             {"expected_requests": [expected_request("GET", "/column_family/",

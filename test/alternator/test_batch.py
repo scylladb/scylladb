@@ -6,14 +6,17 @@
 # Note that various other tests in other files also use these operations,
 # so they are actually tested by other tests as well.
 
-import pytest
 import random
-from botocore.exceptions import ClientError, HTTPClientError
-from util import random_string, full_scan, full_query, multiset, scylla_inject_error
-import urllib3
-import traceback
 import sys
-from conftest import new_dynamodb_session
+import traceback
+
+import pytest
+import urllib3
+from botocore.exceptions import ClientError, HTTPClientError
+
+from test.alternator.conftest import new_dynamodb_session
+from test.alternator.util import random_string, full_query, multiset, scylla_inject_error
+
 
 # Test ensuring that items inserted by a batched statement can be properly extracted
 # via GetItem. Schema has both hash and sort keys.

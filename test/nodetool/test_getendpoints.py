@@ -5,7 +5,7 @@
 #
 
 import pytest
-from rest_api_mock import expected_request
+from test.nodetool.rest_api_mock import expected_request
 
 
 @pytest.mark.parametrize("num_endpoints", [1, 2])

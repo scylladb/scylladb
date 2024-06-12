@@ -6,8 +6,8 @@
 
 from typing import NamedTuple
 import pytest
-from rest_api_mock import expected_request
-from utils import check_nodetool_fails_with_error_contains
+from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import check_nodetool_fails_with_error_contains
 
 
 class Record(NamedTuple):

@@ -7,7 +7,7 @@
 import pytest
 from datetime import timedelta
 from uuid import uuid1
-from rest_api_mock import expected_request
+from test.nodetool.rest_api_mock import expected_request
 
 
 def create_task(i, num_pending_tasks):

@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from rest_api_mock import expected_request
-import utils
+from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import check_nodetool_fails_with
 
 
 def test_decommission(nodetool):
@@ -65,7 +65,7 @@ def test_removenode_force(nodetool):
 
 
 def test_removenode_status_with_ignore_dead_nodes(nodetool, scylla_only):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("removenode", "status", "--ignore-dead-nodes", "675ed9f4-6564-6dbd-can8-43fddce952gy"),
             {"expected_requests": []},
@@ -73,7 +73,7 @@ def test_removenode_status_with_ignore_dead_nodes(nodetool, scylla_only):
 
 
 def test_removenode_force_with_ignore_dead_nodes(nodetool, scylla_only):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("removenode", "force", "--ignore-dead-nodes", "675ed9f4-6564-6dbd-can8-43fddce952gy"),
             {"expected_requests": []},

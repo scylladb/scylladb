@@ -5,16 +5,17 @@
 #
 
 import os
-import pytest
 import random
-import rest_api_mock
 import subprocess
 import sys
-import requests.exceptions
 import time
 from typing import NamedTuple
 
-import rest_api_mock
+import pytest
+import requests.exceptions
+
+from test.nodetool.rest_api_mock import set_expected_requests, expected_request, get_expected_requests, \
+    get_unexpected_requests, expected_requests_manager
 
 
 def pytest_addoption(parser):
@@ -30,7 +31,6 @@ def pytest_addoption(parser):
                      help="Path to the jmx binary, only used with --nodetool=cassandra")
     parser.addoption('--run-within-unshare', action='store_true',
                      help="Setup the 'lo' network if launched with unshare(1)")
-
 
 class ServerAddress(NamedTuple):
     ip: str
@@ -72,7 +72,7 @@ def rest_api_mock_server(request, server_address):
             # process terminated
             raise subprocess.CalledProcessError(returncode, server_process.args)
         try:
-            rest_api_mock.get_expected_requests(server_address)
+            get_expected_requests(server_address)
             break
         except requests.exceptions.ConnectionError:
             time.sleep(interval)
@@ -104,7 +104,7 @@ def jmx(request, rest_api_mock_server):
     workdir = os.path.join(os.path.dirname(jmx_path), "..")
     ip, api_port = rest_api_mock_server
     expected_requests = [
-            rest_api_mock.expected_request(
+            expected_request(
                 "GET",
                 "/column_family/",
                 response=[{"ks": "system_schema",
@@ -113,11 +113,11 @@ def jmx(request, rest_api_mock_server):
                           {"ks": "system_schema",
                            "cf": "computed_columns",
                            "type": "ColumnFamilies"}]),
-            rest_api_mock.expected_request(
+            expected_request(
                 "GET",
                 "/stream_manager/",
                 response=[])]
-    rest_api_mock.set_expected_requests(rest_api_mock_server, expected_requests)
+    set_expected_requests(rest_api_mock_server, expected_requests)
 
     # Our nodetool launcher script ignores the host param, so this has to be 127.0.0.1, matching the internal default.
     jmx_ip = "127.0.0.1"
@@ -138,7 +138,7 @@ def jmx(request, rest_api_mock_server):
     # Wait until jmx starts up
     # We rely on the expected requests being consumed for this
     i = 0
-    while len(rest_api_mock.get_expected_requests(rest_api_mock_server)) > 0:
+    while len(get_expected_requests(rest_api_mock_server)) > 0:
         if i == 50:  # 5 seconds
             raise RuntimeError("timed out waiting for JMX to start")
         time.sleep(0.1)
@@ -192,7 +192,7 @@ def cassandra_only(request):
 @pytest.fixture(scope="module")
 def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
     def invoker(method, *args, expected_requests=None, check_return_code=True):
-        with rest_api_mock.expected_requests(rest_api_mock_server, expected_requests or []):
+        with expected_requests_manager(rest_api_mock_server, expected_requests or []):
             if request.config.getoption("nodetool") == "scylla":
                 api_ip, api_port = rest_api_mock_server
                 cmd = [nodetool_path, "nodetool", method,
@@ -207,10 +207,10 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
             sys.stdout.write(res.stdout)
             sys.stderr.write(res.stderr)
 
-            expected_requests = [r for r in rest_api_mock.get_expected_requests(rest_api_mock_server)
+            expected_requests = [r for r in get_expected_requests(rest_api_mock_server)
                                  if not r.exhausted()]
 
-            unexpected_requests = rest_api_mock.get_unexpected_requests(rest_api_mock_server)
+            unexpected_requests = get_unexpected_requests(rest_api_mock_server)
 
             # Check the return-code first, if the command failed probably not all requests were consumed
             if check_return_code:

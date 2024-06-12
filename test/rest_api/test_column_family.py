@@ -9,9 +9,9 @@ import threading
 import time
 
 # Use the util.py library from ../cql-pytest:
-sys.path.insert(1, sys.path[0] + '/../cql-pytest')
+sys.path.insert(1, sys.path[0] + '/test/cql-pytest')
 from util import new_test_table, new_test_keyspace
-from rest_util import scylla_inject_error
+from test.rest_api.rest_util import scylla_inject_error
 
 def do_test_column_family_attribute_api_table(cql, this_dc, rest_api, api_name):
     ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"

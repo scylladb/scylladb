@@ -3,10 +3,10 @@ import sys
 import threading
 
 # Use the util.py library from ../cql-pytest:
-sys.path.insert(1, sys.path[0] + '/../cql-pytest')
+sys.path.insert(1, sys.path[0] + '/test/cql-pytest')
 from util import new_test_table, new_test_keyspace
-from rest_util import set_tmp_task_ttl, scylla_inject_error
-from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks, abort_task, get_task_status, get_task_status_recursively, get_children
+from test.rest_api.rest_util import set_tmp_task_ttl, scylla_inject_error
+from test.rest_api.task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks, abort_task, get_task_status, get_task_status_recursively, get_children
 
 module_name = "compaction"
 long_time = 1000000000

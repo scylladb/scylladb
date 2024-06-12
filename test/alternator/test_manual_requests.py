@@ -5,14 +5,17 @@
 # Tests for manual requests - not necessarily generated
 # by boto3, in order to allow non-validated input to get through
 
+import base64
+import json
+
 import pytest
 import requests
-import json
 import urllib3
-import base64
 from botocore.exceptions import BotoCoreError, ClientError
 from packaging.version import Version
-from util import random_bytes
+
+from test.alternator.util import random_bytes
+
 
 def gen_json(n):
     return '{"":'*n + '{}' + '}'*n

@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from rest_api_mock import expected_request
-import utils
+from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import check_nodetool_fails_with
 
 
 def test_cleanup(nodetool, scylla_only):
@@ -39,7 +39,7 @@ def test_cleanup_tables(nodetool):
 
 
 def test_cleanup_nonexistent_keyspace(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("cleanup", "non_existent_ks"),
             {"expected_requests": [

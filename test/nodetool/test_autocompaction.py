@@ -4,9 +4,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from rest_api_mock import expected_request
-import utils
-
+from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import check_nodetool_fails_with
 
 def test_disableautocompaction(nodetool):
     nodetool("disableautocompaction", expected_requests=[
@@ -39,7 +38,7 @@ def test_disableautocompaction_two_tables(nodetool):
 
 
 def test_disableautocompaction_none_existent_keyspace(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("disableautocompaction", "non_existent_ks"),
             {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks1", "ks2"])]},
@@ -78,7 +77,7 @@ def test_enableautocompaction_two_tables(nodetool):
 
 
 def test_enableautocompaction_none_existent_keyspace(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("enableautocompaction", "non_existent_ks"),
             {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks1", "ks2"])]},

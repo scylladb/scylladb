@@ -8,8 +8,8 @@ import datetime
 import json
 import yaml
 
-from rest_api_mock import expected_request
-import utils
+from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import check_nodetool_fails_with
 
 
 def format_compacted_at(compacted_at: int):
@@ -131,7 +131,7 @@ def test_yaml(nodetool):
 
 
 def test_invalid_format(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("compactionhistory", "-F", "foo"),
             {},

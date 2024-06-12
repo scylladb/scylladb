@@ -6,7 +6,7 @@
 
 from collections import defaultdict
 from enum import Enum
-from rest_api_mock import expected_request
+from test.nodetool.rest_api_mock import expected_request
 from socket import getnameinfo
 from typing import NamedTuple
 

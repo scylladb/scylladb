@@ -4,14 +4,17 @@
 
 # Tests for the Time To Live (TTL) feature for item expiration.
 
-import pytest
-import time
-import re
 import math
-from botocore.exceptions import ClientError
-from util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform
+import re
+import time
 from contextlib import contextmanager
 from decimal import Decimal
+
+import pytest
+from botocore.exceptions import ClientError
+
+from test.alternator.util import new_test_table, random_string, full_query, unique_table_name, is_aws, \
+    client_no_transform
 
 # All tests in this file are expected to fail with tablets due to #16567.
 # To ensure that Alternator TTL is still being tested, instead of

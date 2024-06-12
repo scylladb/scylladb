@@ -5,7 +5,7 @@
 
 
 import pytest
-from rest_api_mock import expected_request
+from test.nodetool.rest_api_mock import expected_request
 
 
 def test_upgradesstables_all_one_keyspace(nodetool):
