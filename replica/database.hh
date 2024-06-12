@@ -1213,6 +1213,7 @@ private:
     timer<> _off_strategy_trigger;
     void do_update_off_strategy_trigger();
 
+    compaction_group* try_get_compaction_group_with_static_sharding() const;
 public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();

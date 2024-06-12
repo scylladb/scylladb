@@ -1823,7 +1823,8 @@ future<bool> table::perform_offstrategy_compaction(std::optional<tasks::task_inf
 future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
                                            std::optional<tasks::task_info> info,
                                            do_flush do_flush) {
-    if (!uses_static_sharding()) {
+    auto* cg = try_get_compaction_group_with_static_sharding();
+    if (!cg) {
         co_return;
     }
 
@@ -1831,8 +1832,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
         co_await flush();
     }
 
-    auto& cg = *storage_group_for_id(0).main_compaction_group().get();
-    co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state(), info);
+    co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg->as_table_state(), info);
 }
 
 unsigned table::estimate_pending_compactions() const {
@@ -3415,11 +3415,19 @@ compaction::table_state& compaction_group::as_table_state() const noexcept {
     return *_table_state;
 }
 
-compaction::table_state& table::try_get_table_state_with_static_sharding() const {
+compaction_group* table::try_get_compaction_group_with_static_sharding() const {
     if (!uses_static_sharding()) {
+        return nullptr;
+    }
+    return get_compaction_group(0);
+}
+
+compaction::table_state& table::try_get_table_state_with_static_sharding() const {
+    auto* cg = try_get_compaction_group_with_static_sharding();
+    if (!cg) {
         throw std::runtime_error("Getting table state is allowed only with static sharding");
     }
-    return get_compaction_group(0)->as_table_state();
+    return cg->as_table_state();
 }
 
 future<> table::parallel_foreach_table_state(std::function<future<>(table_state&)> action) {
