@@ -1838,19 +1838,19 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
     return cf.apply(m, std::move(h), timeout);
 }
 
-future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+future<mutation> database::apply_counter_update(schema_ptr query_schema, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<mutation>(timed_out_error{});
     }
   return update_write_metrics(seastar::futurize_invoke([&] {
-    if (!s->is_synced()) {
-        throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
-                                        s->ks_name(), s->cf_name(), s->version()));
+    if (auto table_schema = find_schema(query_schema->id()); !table_schema->is_synced()) {
+        throw std::runtime_error(format("attempted to mutate using not synced table schema of {}.{}, version={}",
+                                        table_schema->ks_name(), table_schema->cf_name(), table_schema->version()));
     }
     try {
         auto& cf = find_column_family(m.column_family_id());
-        return do_apply_counter_update(cf, m, s, timeout, std::move(trace_state));
+        return do_apply_counter_update(cf, m, query_schema, timeout, std::move(trace_state));
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         throw;
@@ -2085,28 +2085,30 @@ void database::update_write_metrics_for_timed_out_write() {
     ++_stats->total_writes_timedout;
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+future<> database::apply(schema_ptr query_schema, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     if (dblog.is_enabled(logging::log_level::trace)) {
-        dblog.trace("apply {}", m.pretty_printer(s));
+        dblog.trace("apply {}", m.pretty_printer(query_schema));
     }
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<>(timed_out_error{});
     }
-    if (!s->is_synced()) {
-        on_internal_error(dblog, format("attempted to apply mutation using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
+    if (auto table_schema = find_schema(query_schema->id()); !table_schema->is_synced()) {
+        on_internal_error(dblog, format("attempted to apply mutation using not synced tableschema of {}.{}, version={}",
+                                        table_schema->ks_name(), table_schema->cf_name(), table_schema->version()));
     }
-    return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, sync, rate_limit_info);
+    return _apply_stage(this, std::move(query_schema), seastar::cref(m), std::move(tr_state), timeout, sync, rate_limit_info);
 }
 
-future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
+future<> database::apply_hint(schema_ptr query_schema, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
-        dblog.trace("apply hint {}", m.pretty_printer(s));
+        dblog.trace("apply hint {}", m.pretty_printer(query_schema));
     }
-    if (!s->is_synced()) {
-        on_internal_error(dblog, format("attempted to apply hint using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
+    if (auto table_schema = find_schema(query_schema->id()); !table_schema->is_synced()) {
+        on_internal_error(dblog, format("attempted to apply hint using not synced table schema of {}.{}, version={}",
+                                        table_schema->ks_name(), table_schema->cf_name(), table_schema->version()));
     }
-    return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, s = std::move(s), &m, tr_state = std::move(tr_state), timeout] () mutable {
+    return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, s = std::move(query_schema), &m, tr_state = std::move(tr_state), timeout] () mutable {
         return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no, std::monostate{});
     });
 }
