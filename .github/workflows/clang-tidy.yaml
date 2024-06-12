@@ -55,9 +55,9 @@ jobs:
             -S .
       # see https://github.com/actions/toolkit/blob/main/docs/problem-matchers.md
       - run: |
-          echo "::add-matcher::.github/clang-tidy-matcher.json"
+          echo "::add-matcher::.github/clang-matcher.json"
       - name: Build with clang-tidy enabled
         run: |
           cmake --build $BUILD_DIR --target scylla
       - run: |
-          echo "::remove-matcher owner=clang-tidy::"
+          echo "::remove-matcher owner=clang::"

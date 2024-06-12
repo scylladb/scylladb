@@ -1,7 +1,7 @@
 {
     "problemMatcher": [
         {
-            "owner": "clang-tidy",
+            "owner": "clang",
             "pattern": [
                 {
                     "regexp": "^([^:]+):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*?)\\s+\\[(.*?)\\]$",
