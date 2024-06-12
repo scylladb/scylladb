@@ -8,11 +8,14 @@
 # need to create new tables and/or new LSIs of different types, operations
 # which are extremely slow in DynamoDB, often taking minutes (!).
 
-import pytest
 import time
+
+import pytest
 import requests
 from botocore.exceptions import ClientError
-from util import create_test_table, new_test_table, random_string, full_scan, full_query, multiset, list_tables
+
+from test.alternator.util import create_test_table, new_test_table, random_string, full_scan, full_query, multiset
+
 
 # LSIs support strongly-consistent reads, so the following functions do not
 # need to retry like we did in test_gsi.py for GSIs:

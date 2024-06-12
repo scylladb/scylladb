@@ -5,15 +5,16 @@
 # Tests for stream operations: ListStreams, DescribeStream, GetShardIterator,
 # GetRecords.
 
-import pytest
 import time
 import urllib.request
-
-from botocore.exceptions import ClientError
-from util import list_tables, unique_table_name, create_test_table, new_test_table, random_string, freeze
 from contextlib import contextmanager, ExitStack
 from urllib.error import URLError
+
+import pytest
 from boto3.dynamodb.types import TypeDeserializer
+from botocore.exceptions import ClientError
+
+from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, freeze
 
 # All tests in this file are expected to fail with tablets due to #16317.
 # To ensure that Alternator Streams is still being tested, instead of

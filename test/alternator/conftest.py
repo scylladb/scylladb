@@ -13,7 +13,8 @@ import pytest
 import boto3
 import requests
 import re
-from util import create_test_table, is_aws, scylla_log
+
+from test.alternator.util import create_test_table, is_aws, scylla_log
 from urllib.parse import urlparse
 from functools import cache
 

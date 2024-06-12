@@ -14,12 +14,14 @@
 # through out-of-band HTTP requests.
 ##############################################################################
 
+import json
+import time
+
 import pytest
 import requests
-import time
-import json
-from botocore.exceptions import ClientError
-from util import random_string, full_scan, full_query, create_test_table
+
+from test.alternator.util import random_string, full_scan, full_query, create_test_table
+
 
 # The "with_tracing" fixture ensures that tracing is enabled throughout
 # the run of a test function, and disabled when it ends. If tracing cannot be

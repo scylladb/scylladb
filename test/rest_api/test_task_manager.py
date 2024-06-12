@@ -2,8 +2,8 @@ from enum import Enum
 import requests
 import time
 
-from rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper
-from task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task
+from test.rest_api.rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper
+from test.rest_api.task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task
 
 long_time = 1000000000
 

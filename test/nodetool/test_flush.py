@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from rest_api_mock import expected_request
-import utils
+from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import check_nodetool_fails_with
 
 
 # `scylla nodetool flush` invokes the newly added global flush api
@@ -47,7 +47,7 @@ def test_flush_two_tables(nodetool):
 
 
 def test_flush_none_existent_keyspace(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("flush", "non_existent_ks"),
             {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks1", "ks2"])]},

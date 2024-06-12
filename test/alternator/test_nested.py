@@ -4,9 +4,7 @@
 
 # Test for operations on items with *nested* attributes.
 
-import pytest
-from botocore.exceptions import ClientError
-from util import random_string
+from test.alternator.util import random_string
 
 # Test that we can write a top-level attribute that is a nested document, and
 # read it back correctly.

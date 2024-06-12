@@ -9,7 +9,7 @@ from copy import deepcopy
 from enum import Enum, auto
 from textwrap import indent
 from typing import NamedTuple
-from rest_api_mock import expected_request
+from test.nodetool.rest_api_mock import expected_request
 
 
 # see gms/application_state.hh

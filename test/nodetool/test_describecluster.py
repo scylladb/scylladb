@@ -7,7 +7,7 @@
 import pytest
 from textwrap import indent
 from uuid import uuid1
-from rest_api_mock import expected_request
+from test.nodetool.rest_api_mock import expected_request
 
 
 def create_schema_version(num_hosts):

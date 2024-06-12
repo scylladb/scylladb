@@ -1,13 +1,6 @@
 #!/usr/bin/python3
 
-import os
-import sys
-import logging
-import pytest
-import pathlib
-
 # use minio_server
-sys.path.insert(1, sys.path[0] + '/../..')
 from test.pylib.minio_server import MinioServer
 from test.pylib.cql_repl import conftest
 from test.topology.conftest import *
@@ -73,17 +66,6 @@ class S3_Server:
 
     async def stop(self):
         pass
-
-
-@pytest.fixture(scope="function")
-def test_tempdir(tmpdir, request):
-    tempdir = tmpdir.strpath
-    try:
-        yield tempdir
-    finally:
-        if request.config.getoption('--keep-tmp'):
-            return
-        _remove_all_but(tempdir, 'log')
 
 
 @pytest.fixture(scope="function")

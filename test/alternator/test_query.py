@@ -11,11 +11,14 @@
 #   * test_query_filter.py: the QueryFilter parameter.
 
 import random
-import pytest
-from botocore.exceptions import ClientError
 from decimal import Decimal
-from util import random_string, random_bytes, full_query, multiset
-from boto3.dynamodb.conditions import Key, Attr
+
+import pytest
+from boto3.dynamodb.conditions import Attr
+from botocore.exceptions import ClientError
+
+from test.alternator.util import random_string, random_bytes, full_query, multiset
+
 
 def test_query_nonexistent_table(dynamodb):
     client = dynamodb.meta.client

@@ -7,9 +7,11 @@
 # syntax. That older syntax is tested in test_query.py and test_key_conditions.py.
 
 import pytest
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
-import random
-from util import random_string, full_query, multiset
+
+from test.alternator.util import random_string, full_query, multiset
+
 
 # The test_table_{sn,ss,sb}_with_sorted_partition fixtures are the regular
 # test_table_{sn,ss,sb} fixture with a partition inserted with many items.
@@ -544,7 +546,6 @@ def test_key_condition_expression_unsigned_bytes(test_table_sb):
 # the KeyConditionExpression string, it uses boto3's "Key" condition builder.
 # That shouldn't make any difference, however - that builder also builds a
 # string.
-from boto3.dynamodb.conditions import Key
 def test_query_key_condition_expression(dynamodb, filled_test_table):
     test_table, items = filled_test_table
     paginator = dynamodb.meta.client.get_paginator('query')

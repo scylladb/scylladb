@@ -14,7 +14,7 @@ import yaml
 from collections import defaultdict
 from textwrap import indent
 from typing import NamedTuple
-from rest_api_mock import expected_request
+from test.nodetool.rest_api_mock import expected_request
 
 
 class Table(NamedTuple):

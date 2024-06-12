@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from rest_api_mock import expected_request
-import utils
+from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import check_nodetool_fails_with
 
 
 def test_gettraceprobability(nodetool):
@@ -21,7 +21,7 @@ def test_settraceprobability(nodetool):
 
 
 def test_settraceprobability_missing_param(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("settraceprobability",),
             {},
@@ -30,7 +30,7 @@ def test_settraceprobability_missing_param(nodetool):
 
 
 def test_settraceprobability_invalid_type(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("settraceprobability", "adadad"),
             {},
@@ -40,7 +40,7 @@ def test_settraceprobability_invalid_type(nodetool):
 
 def test_settraceprobability_out_of_bounds(nodetool):
     for value in ("-0.1", "1.1", "9000"):
-        utils.check_nodetool_fails_with(
+        check_nodetool_fails_with(
                 nodetool,
                 ("settraceprobability", "--", value),
                 {},

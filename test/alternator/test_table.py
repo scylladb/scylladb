@@ -7,12 +7,15 @@
 # enables more elaborate features (such as GSI or Streams) and those are
 # tested elsewhere.
 
-import pytest
-import time
 import threading
-from botocore.exceptions import ClientError
-from util import list_tables, multiset, unique_table_name, create_test_table, random_string, new_test_table
+import time
 from re import fullmatch
+
+import pytest
+from botocore.exceptions import ClientError
+
+from test.alternator.util import list_tables, unique_table_name, create_test_table, random_string, new_test_table, is_aws
+
 
 # Utility function for create a table with a given name and some valid
 # schema.. This function initiates the table's creation, but doesn't
@@ -449,7 +452,6 @@ def test_update_table_non_existent(dynamodb, test_table):
 # fixture. When consistent mode becomes the default, this fixture can be removed.
 @pytest.fixture(scope="session")
 def check_pre_consistent_cluster_management(dynamodb):
-    from util import is_aws
     # If not running on Scylla, return false.
     if is_aws(dynamodb):
         return False

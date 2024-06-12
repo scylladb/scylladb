@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from rest_api_mock import expected_request
+from test.nodetool.rest_api_mock import expected_request
 
 
 def test_disablegossip(nodetool):

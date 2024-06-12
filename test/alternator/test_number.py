@@ -25,10 +25,8 @@
 # is a number). The tests in this file focus just on the precision and
 # magnitude that the number type can store.
 
-import pytest
-from botocore.exceptions import ClientError
+import decimal
 from decimal import Decimal
-from util import random_string, client_no_transform
 
 # Monkey-patch the boto3 library to stop doing its own error-checking on
 # numbers. This works around a bug https://github.com/boto/boto3/issues/2500
@@ -36,7 +34,11 @@ from util import random_string, client_no_transform
 # its own error checking of requests, to allow us to check the server's
 # handling of such errors.
 import boto3.dynamodb.types
-import decimal
+import pytest
+from botocore.exceptions import ClientError
+
+from test.alternator.util import random_string, client_no_transform
+
 boto3.dynamodb.types.DYNAMODB_CONTEXT = decimal.Context(prec=100)
 
 # Test that numbers of allowed magnitudes - between to 1e-130 and 1e125 -

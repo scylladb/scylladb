@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from rest_api_mock import expected_request
-import utils
+from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import check_nodetool_fails_with
 
 
 def test_getlogginglevels(nodetool):
@@ -27,7 +27,7 @@ def test_setlogginglevel(nodetool):
 
 
 def test_setlogginglevel_reset_logger(nodetool, scylla_only):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("setlogginglevel", "wasm"),
             {"expected_requests": []},
@@ -35,7 +35,7 @@ def test_setlogginglevel_reset_logger(nodetool, scylla_only):
 
 
 def test_setlogginglevel_reset_all_loggers(nodetool, scylla_only):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("setlogginglevel",),
             {"expected_requests": []},
