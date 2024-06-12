@@ -1090,15 +1090,15 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         // Trigger flush
         auto f = t.flush();
 
-        BOOST_ASSERT(eventually_true([&] {
+        BOOST_REQUIRE(eventually_true([&] {
             return db.cf_stats()->failed_memtables_flushes_count - failed_memtables_flushes_count >= 4;
         }));
 
         // The flush failed, make sure there is still data in memtable.
-        BOOST_ASSERT(t.min_memtable_timestamp() < api::max_timestamp);
+        BOOST_REQUIRE_LT(t.min_memtable_timestamp(), api::max_timestamp);
         utils::get_local_injector().disable("table_seal_active_memtable_reacquire_write_permit");
 
-        BOOST_ASSERT(eventually_true([&] {
+        BOOST_REQUIRE(eventually_true([&] {
             // The error above is no longer being injected, so
             // seal_active_memtable retry loop should eventually succeed
             return t.min_memtable_timestamp() == api::max_timestamp;
