@@ -419,15 +419,16 @@ void topology::unindex_node(const node* node) {
     if (ep_it != _nodes_by_endpoint.end() && ep_it->second == node) {
         _nodes_by_endpoint.erase(ep_it);
     }
-    if (_this_node == node) {
-        _this_node = nullptr;
-    }
 }
 
-node_holder topology::pop_node(const node* node) {
+void topology::pop_node(const node* node) {
     tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
 
     unindex_node(node);
+
+    if (_this_node == node) {
+        return;
+    }
 
     auto nh = std::exchange(_nodes[node->idx()], {});
 
@@ -436,8 +437,6 @@ node_holder topology::pop_node(const node* node) {
     if (std::cmp_equal(node->idx(), _nodes.size() - 1)) {
         _nodes.resize(node->idx());
     }
-
-    return nh;
 }
 
 // Finds a node by its host_id
@@ -446,6 +445,9 @@ const node* topology::find_node(host_id id) const noexcept {
     auto it = _nodes_by_host_id.find(id);
     if (it != _nodes_by_host_id.end()) {
         return it->second;
+    }
+    if (id == _cfg.this_host_id) {
+        return this_node();
     }
     return nullptr;
 }

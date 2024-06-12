@@ -866,15 +866,17 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
         out = std::fill_n(out, rf, std::cref(dc));
     }
 
-    if (auto this_node = topo.this_node()) {
-        topo.remove_node(this_node->host_id());
-    }
     unsigned i = 0;
     for (auto& node : nodes) {
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo.add_node(node, inet_address((127u << 24) | ++i), {dc, to_sstring(r)}, locator::node::state::normal);
+        auto ep = inet_address((127u << 24) | ++i);
+        if (node != topo.my_host_id()) {
+            topo.add_node(node, ep, {dc, to_sstring(r)}, locator::node::state::normal);
+        } else {
+            topo.update_node(const_cast<locator::node*>(topo.this_node()), node, ep, std::make_optional<endpoint_dc_rack>(dc, to_sstring(r)), locator::node::state::normal);
+        }
     }
 }
 

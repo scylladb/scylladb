@@ -382,7 +382,7 @@ private:
 
     void index_node(const node* node);
     void unindex_node(const node* node);
-    node_holder pop_node(const node* node);
+    void pop_node(const node* node);
 
     static node* make_mutable(const node* nptr) {
         return const_cast<node*>(nptr);
