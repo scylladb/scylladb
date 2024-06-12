@@ -589,8 +589,7 @@ private:
     // that were previously split.
     future<> handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap);
 
-    // Select a compaction group from a given token.
-    std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token token) const noexcept;
+    // Select a storage group from a given token.
     storage_group* storage_group_for_token(dht::token token) const noexcept;
     // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
     storage_group* storage_group_for_id(size_t i) const;

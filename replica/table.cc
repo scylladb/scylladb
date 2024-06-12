@@ -615,9 +615,6 @@ public:
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept override {
         return get_compaction_group();
     }
-    std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const override {
-        return {0, locator::tablet_range_side{}};
-    }
     size_t log2_storage_groups() const override {
         return 0;
     }
@@ -676,6 +673,23 @@ private:
     size_t tablet_id_for_token(dht::token t) const noexcept {
         return tablet_map().get_tablet_id(t).value();
     }
+
+    std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token t) const {
+        auto [id, side] = tablet_map().get_tablet_id_and_range_side(t);
+        auto idx = id.value();
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+        if (idx >= tablet_count()) {
+            on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size_log2={} size={} token={}",
+                                                    idx, log2_storage_groups(), tablet_count(), t));
+        }
+        auto* sg = storage_group_for_id(idx);
+        if (!t.is_minimum() && !t.is_maximum() && sg && !sg->token_range().contains(t, dht::token_comparator())) {
+            on_fatal_internal_error(tlogger, format("storage_group_of: storage_group idx={} range={} does not contain token={}",
+                                                    idx, sg->token_range(), t));
+        }
+#endif
+        return { idx, side };
+    }
 public:
     tablet_storage_group_manager(table& t, const locator::effective_replication_map& erm)
         : _t(t)
@@ -706,22 +720,6 @@ public:
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept override;
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept override;
 
-    std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token t) const override {
-        auto [id, side] = tablet_map().get_tablet_id_and_range_side(t);
-        auto idx = id.value();
-#ifndef SCYLLA_BUILD_MODE_RELEASE
-        if (idx >= tablet_count()) {
-            on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size_log2={} size={} token={}",
-                                                    idx, log2_storage_groups(), tablet_count(), t));
-        }
-        auto* sg = storage_group_for_id(idx);
-        if (!t.is_minimum() && !t.is_maximum() && sg && !sg->token_range().contains(t, dht::token_comparator())) {
-            on_fatal_internal_error(tlogger, format("storage_group_of: storage_group idx={} range={} does not contain token={}",
-                    idx, sg->token_range(), t));
-        }
-#endif
-        return { idx, side };
-    }
     size_t log2_storage_groups() const override {
         return log2ceil(tablet_map().tablet_count());
     }
@@ -900,11 +898,6 @@ std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
 
 compaction_group* table::get_compaction_group(size_t id) const noexcept {
     return storage_group_for_id(id)->main_compaction_group().get();
-}
-
-std::pair<size_t, locator::tablet_range_side>
-table::storage_group_of(dht::token token) const noexcept {
-    return _sg_manager->storage_group_of(token);
 }
 
 storage_group* table::storage_group_for_token(dht::token token) const noexcept {

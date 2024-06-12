@@ -273,7 +273,6 @@ public:
     virtual compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept = 0;
     virtual compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept = 0;
 
-    virtual std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const = 0;
     virtual size_t log2_storage_groups() const = 0;
     virtual storage_group* storage_group_for_token(dht::token) const noexcept = 0;
 
