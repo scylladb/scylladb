@@ -21,6 +21,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/shared_mutex.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/coroutine/exception.hh>
@@ -50,7 +51,6 @@
 // STD.
 #include <algorithm>
 #include <exception>
-#include <shared_mutex>
 #include <variant>
 
 namespace db::hints {
@@ -286,18 +286,8 @@ sync_point::shard_rps manager::calculate_current_sync_point(std::span<const gms:
 }
 
 future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps) {
-    using lock_type = std::shared_lock<seastar::shared_mutex>;
     // Prevent the migration to host-ID-based hinted handoff until this function finishes its execution.
-    const auto shared_lock = co_await std::invoke(coroutine::lambda([&] () -> future<lock_type> {
-        co_await _migration_mutex.lock_shared();
-
-        try {
-            co_return lock_type{_migration_mutex, std::adopt_lock_t{}};
-        } catch (...) {
-            _migration_mutex.unlock_shared();
-            throw;
-        }
-   }));
+    const auto shared_lock = co_await get_shared_lock(_migration_mutex);
 
     abort_source local_as;
 
@@ -892,7 +882,6 @@ future<> manager::perform_migration() {
     //   2. we suspend new drain requests -- to prevent data races.
     const auto lock = co_await seastar::get_units(_drain_lock, 1);
 
-    using lock_type = std::unique_lock<seastar::shared_mutex>;
     // We're taking this lock because we're about to stop endpoint managers here, whereas
     // `manager::wait_for_sync_point` browses them and awaits their corresponding sync points.
     // If we stop them during that process, that function will get exceptions.
@@ -900,17 +889,7 @@ future<> manager::perform_migration() {
     // Although in the current implementation there is no danger of race conditions
     // (or at least race conditions that could be harmful in any way), it's better
     // to avoid them anyway. Hence this lock.
-    const auto unique_lock = co_await std::invoke(coroutine::lambda([&] () -> future<lock_type> {
-        co_await _migration_mutex.lock();
-
-        try {
-            co_return lock_type{_migration_mutex, std::adopt_lock_t{}};
-        } catch (...) {
-            _migration_mutex.unlock();
-            throw;
-        }
-    }));
-
+    const auto unique_lock = co_await get_unique_lock(_migration_mutex);
     // Step 3. Stop endpoint managers. We will modify the hint directory contents, so this is necessary.
     co_await coroutine::parallel_for_each(_ep_managers | std::views::values, [] (auto& ep_manager) -> future<> {
         return ep_manager.stop(drain::no);
