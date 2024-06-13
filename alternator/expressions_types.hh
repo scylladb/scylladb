@@ -66,7 +66,6 @@ public:
     std::vector<std::variant<std::string, unsigned>>& operators() {
         return _operators;
     }
-    friend std::ostream& operator<<(std::ostream&, const path&);
 };
 
 // When an expression is first parsed, all constants are references, like
