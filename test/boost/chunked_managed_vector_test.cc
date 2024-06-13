@@ -194,12 +194,11 @@ SEASTAR_TEST_CASE(tests_reserve_partial) {
 
     for (int i = 0; i < 100; ++i) {
         lsa::chunked_managed_vector<uint8_t> v;
-        const auto orig_size = size_dist(rand);
-        auto size = orig_size;
-        while (size) {
-            size = v.reserve_partial(size);
+        const auto size = size_dist(rand);
+        while (v.capacity() != size) {
+            v.reserve_partial(size);
         }
-        BOOST_REQUIRE_EQUAL(v.capacity(), orig_size);
+        BOOST_REQUIRE_EQUAL(v.capacity(), size);
     }
    });
   });
