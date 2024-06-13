@@ -271,5 +271,24 @@ future<> clear_gently(seastar::optimized_optional<T>& opt) noexcept {
     }
 }
 
+namespace internal {
+
+template <typename T>
+concept gently_reservable = requires(T x) {
+    { x.capacity() } -> std::same_as<size_t>;
+    { x.reserve_partial(10) } -> std::same_as<void>;
+
+};
+
+} // namespace internal
+
+// reserve_gently gently reserves memory in containers which support partial reserve.
+future<> reserve_gently(internal::gently_reservable auto& container, size_t size) {
+    return seastar::do_until([&container, size] { return container.capacity() == size; }, [&container, size]() {
+        container.reserve_partial(size);
+        return seastar::make_ready_future();
+    });
+}
+
 }
 
