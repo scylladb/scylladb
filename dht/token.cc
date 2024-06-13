@@ -54,11 +54,6 @@ std::strong_ordering token_comparator::operator()(const token& t1, const token& 
     return t1 <=> t2;
 }
 
-std::ostream& operator<<(std::ostream& out, const token& t) {
-    fmt::print(out, "{}", t);
-    return out;
-}
-
 sstring token::to_sstring() const {
     return seastar::to_sstring<sstring>(long_token(*this));
 }

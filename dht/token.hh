@@ -215,7 +215,6 @@ const token& minimum_token() noexcept;
 const token& maximum_token() noexcept;
 std::strong_ordering operator<=>(const token& t1, const token& t2);
 inline bool operator==(const token& t1, const token& t2) { return t1 <=> t2 == 0; }
-std::ostream& operator<<(std::ostream& out, const token& t);
 
 // Returns a successor for token t.
 // The caller must ensure there is a next token, otherwise
