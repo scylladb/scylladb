@@ -8,9 +8,15 @@
 
 #include "test/lib/log.hh"
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/random_schema.hh"
+#include "test/lib/random_utils.hh"
+#include "test/lib/sstable_test_env.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
 
 #include "db/config.hh"
 #include "index/secondary_index_manager.hh"
+#include "sstables/sstable_writer.hh"
+#include "readers/from_mutations_v2.hh"
 #include "tools/schema_loader.hh"
 #include "view_info.hh"
 
@@ -276,4 +282,55 @@ SEASTAR_THREAD_TEST_CASE(test_mv_index) {
                     "    PRIMARY KEY (v2, pk);"
                     "CREATE INDEX ON ks.cf (v1);").get(),
             {view_type::view, view_type::index, view_type::view, view_type::index});
+}
+
+void check_sstable_schema(sstables::test_env& env, std::filesystem::path sst_path, const std::vector<mutation>& mutations) {
+    db::config dbcfg;
+
+    auto schema = tools::load_schema_from_sstable(dbcfg, sst_path).get();
+
+    const auto ed = sstables::parse_path(sst_path, "ks", "tbl");
+    const auto dir_path = sst_path.parent_path();
+    data_dictionary::storage_options local;
+    auto sst = env.manager().make_sstable(schema, dir_path.c_str(), local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
+
+    sst->load(schema->get_sharder()).get();
+
+    auto rd = assert_that(sst->make_reader(schema, env.make_reader_permit(), query::full_partition_range, schema->full_slice()));
+    for (const auto& m : mutations) {
+        rd.produces(m);
+    }
+    rd.produces_end_of_stream();
+}
+
+SEASTAR_TEST_CASE(test_load_schema_from_sstable) {
+    return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+                get_name(),
+                std::uniform_int_distribution<size_t>(1, 4), // partition-key
+                std::uniform_int_distribution<size_t>(0, 4), // clustering-key
+                std::uniform_int_distribution<size_t>(0, 8), // static
+                std::uniform_int_distribution<size_t>(0, 8)); // regular
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+
+        const auto mutations = tests::generate_random_mutations(random_schema, 10).get();
+
+        for (const auto& version : sstables::writable_sstable_versions) {
+            auto sst = env.make_sstable(schema, version);
+
+            {
+                auto mr = make_flat_mutation_reader_from_mutations_v2(schema, env.make_reader_permit(), mutations);
+                auto close_mr = deferred_close(mr);
+
+                const auto cfg = env.manager().configure_writer();
+                auto wr = sst->get_writer(*schema, mutations.size(), cfg, encoding_stats{});
+                mr.consume_in_thread(std::move(wr));
+            }
+
+            // Do the check in a separate method to ensure we don't accidentally
+            // re-use the original schema.
+            check_sstable_schema(env, std::filesystem::path(sst->get_filename()), mutations);
+        }
+    });
 }

@@ -744,13 +744,24 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
                 system_scylla_local_reference_dump,
                 env={"SCYLLA_HOME": scylla_home_dir})
 
-    def test_fail_schema_autodetect(self, scylla_path, system_scylla_local_sstable_prepared, temp_workdir):
+    def test_external_dir_autodetect_sstable_serialization_header_keyspace_table(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir):
         ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
         # It is important to use a controlled workdir, so scylla-sstable doesn't accidentally pick up a scylla.yaml.
-        self.check_fail(
+        self.check(
                 scylla_path,
                 ["--keyspace", self.keyspace, "--table", self.table],
                 ext_sstable,
+                system_scylla_local_reference_dump,
+                cwd=temp_workdir)
+
+    def test_external_dir_autodetect_sstable_serialization_header(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        # It is important to use a controlled workdir, so scylla-sstable doesn't accidentally pick up a scylla.yaml.
+        self.check(
+                scylla_path,
+                [],
+                ext_sstable,
+                system_scylla_local_reference_dump,
                 cwd=temp_workdir)
 
     def test_fail_nonexistent_keyspace(self, scylla_path, system_scylla_local_sstable_prepared, temp_workdir, scylla_home_dir):
