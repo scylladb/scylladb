@@ -197,12 +197,11 @@ table::add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& reader
         }
         return;
     }
-    reserve_fn(boost::accumulate(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::memtable_count)), uint64_t(0)));
     auto token_range = range.transform(std::mem_fn(&dht::ring_position::token));
-    for (compaction_group& cg : compaction_groups()) {
-        if (cg.token_range().overlaps(token_range, dht::token_comparator())) {
-            add_memtables_from_cg(cg);
-        }
+    auto cgs = compaction_groups_for_token_range(token_range);
+    reserve_fn(boost::accumulate(cgs | boost::adaptors::transformed(std::mem_fn(&compaction_group::memtable_count)), uint64_t(0)));
+    for (auto& cg : cgs) {
+        add_memtables_from_cg(*cg);
     }
 }
 
