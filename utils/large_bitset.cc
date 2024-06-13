@@ -7,6 +7,8 @@
  */
 
 #include "large_bitset.hh"
+#include "stall_free.hh"
+
 #include <seastar/core/align.hh>
 #include <seastar/core/thread.hh>
 
@@ -16,10 +18,7 @@ large_bitset::large_bitset(size_t nr_bits) : _nr_bits(nr_bits) {
     assert(thread::running_in_thread());
 
     size_t nr_ints = align_up(nr_bits, bits_per_int()) / bits_per_int();
-    while (_storage.capacity() != nr_ints) {
-        _storage.reserve_partial(nr_ints);
-        thread::maybe_yield();
-    }
+    utils::reserve_gently(_storage, nr_ints).get();
     while (nr_ints) {
         _storage.push_back(0);
         --nr_ints;
