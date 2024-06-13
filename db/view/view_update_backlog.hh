@@ -23,12 +23,32 @@ namespace db::view {
  * backlog - how much view hints are consuming. The size of a backlog is relative
  * to its maximum size.
  */
-struct update_backlog {
-    size_t current;
-    size_t max;
+class update_backlog {
+    size_t _current;
+    size_t _max;
+
+public:
+    update_backlog(size_t current, size_t max)
+            : _current(current), _max(max) {
+        if (max == 0) {
+            // We might have received an invalid backlog in a message from an old node,
+            // where we didn't check the max. In this case, fall back to the empty backlog.
+            _current = 0;
+            _max = std::numeric_limits<size_t>::max();
+        }
+    }
+    update_backlog() = delete;
 
     float relative_size() const {
-        return float(current) / float(max);
+        return float(_current) / float(_max);
+    }
+
+    const size_t& get_current_bytes() const {
+        return _current;
+    }
+
+    const size_t& get_max_bytes() const {
+        return _max;
     }
 
     std::partial_ordering operator<=>(const update_backlog &rhs) const {
