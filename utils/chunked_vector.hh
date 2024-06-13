@@ -177,17 +177,15 @@ public:
     ///
     /// Allows reserving the memory chunk-by-chunk, avoiding stalls when a lot of
     /// chunks are needed. To drive the reservation to completion, call this
-    /// repeatedly with the value returned from the previous call until it
-    /// returns 0, yielding between calls when necessary. Example usage:
+    /// repeatedly until the vector's capacity reaches the expected size, yielding
+    /// between calls when necessary. Example usage:
     ///
-    ///     return do_until([&size] { return !size; }, [&my_vector, &size] () mutable {
-    ///         size = my_vector.reserve_partial(size);
+    ///     return do_until([&my_vector, size] { return my_vector.capacity() == size; }, [&my_vector, size] () mutable {
+    ///         my_vector.reserve_partial(size);
     ///     });
     ///
     /// Here, `do_until()` takes care of yielding between iterations when
     /// necessary.
-    ///
-    /// \returns the memory that remains to be reserved
     size_t reserve_partial(size_t n) {
         if (n > _capacity) {
             return make_room(n, true);
