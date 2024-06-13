@@ -237,6 +237,7 @@ protected:
     // The list entries are unlinked automatically when the storage group, they belong to, is removed.
     compaction_group_list _compaction_groups;
     storage_group_map _storage_groups;
+    std::forward_list<std::unique_ptr<storage_group>> _storage_groups_marked_for_remove;
     // Prevents _storage_groups from having its elements inserted or deleted while other layer iterates
     // over them (or over _compaction_groups).
     seastar::rwlock _lock;
@@ -256,7 +257,9 @@ public:
 
     future<> for_each_storage_group_gently(std::function<future<>(size_t, storage_group&)> f);
     void for_each_storage_group(std::function<void(size_t, storage_group&)> f) const;
-    void remove_storage_group(size_t id);
+    // Storage group will not be found by lookup but is only destroyed by the
+    // next `update_effective_replication_map()` call.
+    void mark_storage_group_for_remove(size_t id);
     // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
     storage_group* storage_group_for_id(const schema_ptr&, size_t i) const;
 
