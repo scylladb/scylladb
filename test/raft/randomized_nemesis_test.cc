@@ -2927,7 +2927,8 @@ public:
     }
 
     static elem_t digest_append(elem_t d, elem_t x) {
-        assert(0 <= d && d < magic);
+        BOOST_REQUIRE_LE(0, d);
+        BOOST_REQUIRE_LT(d, magic);
 
         auto y = (d + x) % magic;
         assert(digest_remove(y, x) == d);
@@ -2935,7 +2936,9 @@ public:
     }
 
     static elem_t digest_remove(elem_t d, elem_t x) {
-        assert(0 <= d && d < magic);
+        BOOST_REQUIRE_LE(0, d);
+        BOOST_REQUIRE_LT(d, magic);
+
         auto y = (d - x) % magic;
         return y < 0 ? y + magic : y;
     }
