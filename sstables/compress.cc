@@ -333,8 +333,7 @@ compression::locate(uint64_t position, const compression::segmented_offsets::acc
 
 }
 
-template <typename ChecksumType>
-requires ChecksumUtils<ChecksumType>
+template <ChecksumUtils ChecksumType>
 class compressed_file_data_source_impl : public data_source_impl {
     std::optional<input_stream<char>> _input_stream;
     sstables::compression* _compression_metadata;
@@ -451,8 +450,7 @@ public:
     }
 };
 
-template <typename ChecksumType>
-requires ChecksumUtils<ChecksumType>
+template <ChecksumUtils ChecksumType>
 class compressed_file_data_source : public data_source {
 public:
     compressed_file_data_source(file f, sstables::compression* cm,
@@ -462,8 +460,7 @@ public:
         {}
 };
 
-template <typename ChecksumType>
-requires ChecksumUtils<ChecksumType>
+template <ChecksumUtils ChecksumType>
 inline input_stream<char> make_compressed_file_input_stream(
         file f, sstables::compression *cm, uint64_t offset, size_t len,
         file_input_stream_options options, reader_permit permit)
