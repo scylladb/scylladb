@@ -1039,6 +1039,9 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
     std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
     return make_ready_future<>();
 #else
+    auto db_config = make_shared<db::config>();
+    db_config->unspooled_dirty_soft_limit.set(1.0);
+
     return do_with_cql_env_thread([](cql_test_env& env) {
         replica::database& db = env.local_db();
         service::migration_manager& mm = env.migration_manager().local();
@@ -1071,22 +1074,22 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         // Trigger flush
         auto f = t.flush();
 
-        BOOST_ASSERT(eventually_true([&] {
+        BOOST_REQUIRE(eventually_true([&] {
             return db.cf_stats()->failed_memtables_flushes_count - failed_memtables_flushes_count >= 4;
         }));
 
         // The flush failed, make sure there is still data in memtable.
-        BOOST_ASSERT(t.min_memtable_timestamp() < api::max_timestamp);
+        BOOST_REQUIRE_LT(t.min_memtable_timestamp(), api::max_timestamp);
         utils::get_local_injector().disable("table_seal_active_memtable_reacquire_write_permit");
 
-        BOOST_ASSERT(eventually_true([&] {
+        BOOST_REQUIRE(eventually_true([&] {
             // The error above is no longer being injected, so
             // seal_active_memtable retry loop should eventually succeed
             return t.min_memtable_timestamp() == api::max_timestamp;
         }));
 
         std::move(f).get();
-    });
+    }, db_config);
 #endif
 }
 
