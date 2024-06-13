@@ -2917,7 +2917,7 @@ private:
     size_t _end; // <= _seq.size()
     elem_t _digest; // sum of all elements modulo `magic`
 
-    static const elem_t magic = 54313;
+    static constexpr elem_t magic = 54313;
 
 public:
     append_seq(std::vector<elem_t> v) : _seq{make_lw_shared<std::vector<elem_t>>(std::move(v))}, _end{_seq->size()}, _digest{0} {
