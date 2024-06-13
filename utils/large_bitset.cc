@@ -20,16 +20,12 @@ large_bitset::large_bitset(size_t nr_bits) : _nr_bits(nr_bits) {
     size_t nr_ints = align_up(nr_bits, bits_per_int()) / bits_per_int();
     while (_storage.capacity() != nr_ints) {
         _storage.reserve_partial(nr_ints);
-        if (need_preempt()) {
-            thread::yield();
-        }
+        thread::maybe_yield();
     }
     while (nr_ints) {
         _storage.push_back(0);
         --nr_ints;
-        if (need_preempt()) {
-            thread::yield();
-        }
+        thread::maybe_yield();
     }
 }
 
@@ -38,8 +34,6 @@ large_bitset::clear() {
     assert(thread::running_in_thread());
     for (auto&& pos: _storage) {
         pos = 0;
-        if (need_preempt()) {
-            thread::yield();
-        }
+        thread::maybe_yield();
     }
 }
