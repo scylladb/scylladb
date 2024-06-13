@@ -180,7 +180,7 @@ if args.config != "":
     if not os.path.isfile(args.config):
         traceln("Config file ", args.config, " is missing, terminating")
         sys.exit(0)
-    config = configparser.SafeConfigParser()
+    config = configparser.ConfigParser()
     config.read(args.config)
 uid = None
 if args.uuid != "":
