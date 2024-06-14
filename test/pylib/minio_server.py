@@ -208,8 +208,8 @@ class MinioServer:
 
     def _unset_environ(self):
         for env in self._get_environs():
-            if self.old_env[env] is not None:
-                os.environ[env] = self.old_env[env]
+            if value := self.old_env.get(env):
+                os.environ[env] = value
             else:
                 del os.environ[env]
 
