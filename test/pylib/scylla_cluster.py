@@ -35,6 +35,8 @@ import aiohttp.web
 import yaml
 import signal
 import glob
+import errno
+import re
 
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
@@ -323,6 +325,31 @@ class ScyllaServer:
         for f in glob.iglob(f"./{keyspace}/{table}-????????????????????????????????/**/*", root_dir=root_dir, recursive=True):
             if ((root_dir/f).is_file()):
                 (root_dir/f).unlink()
+
+    def get_sstables_disk_usage(self, keyspace: str, table: str) -> int:
+        size = 0
+
+        if self.cmd is not None:
+            deleted_sstable_re = f"^.*/{keyspace}/{table}-[0-9a-f]{{32}}/.* \(deleted\)$"
+            deleted_sstable_re = re.compile(deleted_sstable_re)
+            for f in pathlib.Path(f"/proc/{self.cmd.pid}/fd/").iterdir():
+                try:
+                    link = f.readlink()
+                    if deleted_sstable_re.match(str(link)) is not None:
+                        size += f.stat().st_size
+                except OSError as e:
+                    if e.errno != errno.ENOENT:
+                        raise
+
+        table_dir = self.workdir/"data"
+        for f in table_dir.glob(f"{keyspace}/{table}-????????????????????????????????/**/*"):
+            try:
+                size += f.stat().st_size
+            except OSError as e:
+                if e.errno != errno.ENOENT:
+                    raise
+
+        return size
 
     async def install_and_start(self, api: ScyllaRESTAPIClient, expected_error: Optional[str] = None) -> None:
         """Setup and start this server"""
@@ -1120,6 +1147,12 @@ class ScyllaCluster:
         self.is_dirty = True
         server.wipe_sstables(keyspace, table)
 
+    def get_sstables_disk_usage(self, server_id: ServerNum, keyspace: str, table: str) -> int:
+        """Measure the disk usage of sstables for the given <node, keyspace, table>."""
+        assert server_id in self.servers, f"Server {server_id} unknown"
+        server = self.servers[server_id]
+        return server.get_sstables_disk_usage(keyspace, table)
+
 class ScyllaClusterManager:
     """Manages a Scylla cluster for running test cases
        Provides an async API for tests to request changes in the Cluster.
@@ -1281,6 +1314,7 @@ class ScyllaClusterManager:
         add_get('/cluster/server/{server_id}/maintenance_socket_path', self._server_get_maintenance_socket_path)
         add_get('/cluster/server/{server_id}/exe', self._server_get_exe)
         add_put('/cluster/server/{server_id}/wipe_sstables', self._cluster_server_wipe_sstables)
+        add_get('/cluster/server/{server_id}/sstables_disk_usage', self._server_get_sstables_disk_usage)
 
     async def _manager_up(self, _request) -> bool:
         return self.is_running
@@ -1597,6 +1631,11 @@ class ScyllaClusterManager:
         data = await request.json()
         server_id = ServerNum(int(request.match_info["server_id"]))
         return self.cluster.wipe_sstables(server_id, data["keyspace"], data["table"])
+
+    async def _server_get_sstables_disk_usage(self, request: aiohttp.web.Request) -> int:
+        data = request.query
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        return self.cluster.get_sstables_disk_usage(server_id, data["keyspace"], data["table"])
 
 @asynccontextmanager
 async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
