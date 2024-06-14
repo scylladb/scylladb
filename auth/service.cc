@@ -311,21 +311,13 @@ future<permission_set> service::get_permissions(const role_or_anonymous& maybe_r
 }
 
 future<bool> service::has_superuser(std::string_view role_name) const {
-    return get_roles(std::move(role_name)).then([this](role_set roles) {
-        return do_with(std::move(roles), [this](const role_set& roles) {
-            return do_with(false, roles.begin(), [this, &roles](bool& any_super, auto& iter) {
-                return do_until(
-                        [&roles, &any_super, &iter] { return any_super || (iter == roles.end()); },
-                        [this, &any_super, &iter] {
-                    return _role_manager->is_superuser(*iter++).then([&any_super](bool super) {
-                        any_super = super;
-                    });
-                }).then([&any_super] {
-                    return any_super;
-                });
-            });
-        });
-    });
+    auto roles = co_await get_roles(role_name);
+    for (const auto& role : roles) {
+        if (co_await _role_manager->is_superuser(role)) {
+            co_return true;
+        }
+    }
+    co_return false;
 }
 
 static void validate_authentication_options_are_supported(
