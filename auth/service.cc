@@ -315,6 +315,7 @@ future<permission_set> service::get_permissions(const role_or_anonymous& maybe_r
 }
 
 future<bool> service::has_superuser(std::string_view role_name) const {
+<<<<<<< HEAD
     return this->get_roles(std::move(role_name)).then([this](role_set roles) {
         return do_with(std::move(roles), [this](const role_set& roles) {
             return do_with(false, roles.begin(), [this, &roles](bool& any_super, auto& iter) {
@@ -330,6 +331,15 @@ future<bool> service::has_superuser(std::string_view role_name) const {
             });
         });
     });
+=======
+    auto roles = co_await get_roles(role_name);
+    for (const auto& role : roles) {
+        if (co_await _role_manager->is_superuser(role)) {
+            co_return true;
+        }
+    }
+    co_return false;
+>>>>>>> 00a24507cb (auth: coroutinize service::has_superuser)
 }
 
 future<role_set> service::get_roles(std::string_view role_name) const {
