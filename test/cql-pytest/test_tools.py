@@ -13,6 +13,7 @@ import functools
 import json
 import nodetool
 import os
+import pathlib
 import pytest
 import subprocess
 import tempfile
@@ -1232,3 +1233,26 @@ def test_scylla_sstable_bad_scylla_yaml(cql, test_keyspace, scylla_path, scylla_
                     "error processing configuration item: Unknown option : foo",
                     "Successfully read scylla.yaml from"):
                 assert any(map(lambda stderr_line: expected_msg in stderr_line, stderr_lines))
+
+
+def test_scylla_sstable_format_version(cql, test_keyspace, scylla_data_dir):
+    # Reproduces https://github.com/scylladb/scylladb/issues/16551
+    #
+    # an sstable component filename looks like:
+    #  me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
+    sstable_re = re.compile(r"""(?P<version>la|m[cde])- # the sstable version
+                                (?P<id>[^-]+)-          # sstable identifier
+                                (?P<format>\w+)-        # format: 'big'
+                                (?P<component>.*)       # component: e.g., 'Data'""", re.X)
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, sstables):
+        for fn in sstables:
+            stem = pathlib.Path(fn).stem
+            matched = sstable_re.match(stem)
+            assert matched is not None, f"unmatched sstable component path: {fn}"
+            sstable_version = matched["version"]
+            # "me" is specified by sstables_manager::_format, so new sstables
+            # created by a scylla instance are always persisted with "me" sstable
+            # format, unless the "sstable_format" setting persisted in
+            # "system.scylla_local" system tables has a different setting. but in a
+            # new installation of scylla, this setting does not exist.
+            assert sstable_version == "me", f"unexpected sstable format: {sstable_version}"
