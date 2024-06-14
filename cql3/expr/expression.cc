@@ -1021,16 +1021,6 @@ std::ostream& operator<<(std::ostream& os, const column_value& cv) {
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const expression& expr) {
-    expression::printer pr {
-        .expr_to_print = expr,
-        .debug_mode = false
-    };
-
-    fmt::print(os, "{}", pr);
-    return os;
-}
-
 }
 }
 
@@ -1506,11 +1496,6 @@ expression search_and_replace(const expression& e,
                 },
             }, e);
     }
-}
-
-std::ostream& operator<<(std::ostream& s, oper_t op) {
-    fmt::print(s, "{}", op);
-    return s;
 }
 
 std::vector<expression> extract_single_column_restrictions_for_column(const expression& expr,

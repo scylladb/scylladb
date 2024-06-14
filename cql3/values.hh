@@ -302,14 +302,3 @@ template <> struct fmt::formatter<cql3::raw_value> : fmt::formatter<string_view>
         return fmt::format_to(ctx.out(), "{}", value.view());
     }
 };
-
-namespace cql3 {
-static inline std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
-    fmt::print(os, "{}", value);
-    return os;
-}
-static inline std::ostream& operator<<(std::ostream& os, const raw_value& value) {
-    fmt::print(os, "{}", value);
-    return os;
-}
-}

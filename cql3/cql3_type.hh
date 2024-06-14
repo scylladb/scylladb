@@ -64,7 +64,6 @@ public:
         static shared_ptr<raw> set(shared_ptr<raw> t);
         static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts);
         static shared_ptr<raw> frozen(shared_ptr<raw> t);
-        friend std::ostream& operator<<(std::ostream& os, const raw& r);
         friend sstring format_as(const raw& r) {
             return r.to_string();
         }
@@ -78,9 +77,6 @@ private:
     class raw_tuple;
     friend std::string_view format_as(const cql3_type& t) {
         return t.to_string();
-    }
-    friend std::ostream& operator<<(std::ostream& os, const cql3_type& t) {
-        return os << t.to_string();
     }
 
 public:

@@ -420,11 +420,6 @@ cql3_type::values() {
     return v;
 }
 
-std::ostream&
-operator<<(std::ostream& os, const cql3_type::raw& r) {
-    return os << r.to_string();
-}
-
 namespace util {
 
 sstring maybe_quote(const sstring& identifier) {

@@ -58,12 +58,6 @@ inline bool is_exact_match(assignment_testable::test_result tr) {
     return assignment_testable::is_exact_match(tr);
 }
 
-inline
-std::ostream&
-operator<<(std::ostream& os, const assignment_testable& at) {
-    return os << at.assignment_testable_source_context();
-}
-
 }
 
 template <>
