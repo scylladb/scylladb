@@ -222,10 +222,11 @@ class ManagerClient():
         data = {"expected_error": expected_error}
         await self.client.put_json(f"/cluster/server/{server_id}/start", data, timeout=timeout)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
-        if self.cql:
-            self._driver_update()
-        else:
-            await self.driver_connect()
+        if expected_error is None:
+            if self.cql:
+                self._driver_update()
+            else:
+                await self.driver_connect()
 
     async def server_restart(self, server_id: ServerNum, wait_others: int = 0,
                              wait_interval: float = 45) -> None:
@@ -335,10 +336,11 @@ class ManagerClient():
         except Exception as exc:
             raise RuntimeError(f"server_add got invalid server data {server_info}") from exc
         logger.debug("ManagerClient added %s", s_info)
-        if self.cql:
-            self._driver_update()
-        elif start:
-            await self.driver_connect()
+        if expected_error is None:
+            if self.cql:
+                self._driver_update()
+            elif start:
+                await self.driver_connect()
         return s_info
 
     async def servers_add(self, servers_num: int = 1,
@@ -347,7 +349,7 @@ class ManagerClient():
                           property_file: Optional[dict[str, Any]] = None,
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
-                          expected_error: Optional[str] = None) -> [ServerInfo]:
+                          expected_error: Optional[str] = None) -> List[ServerInfo]:
         """Add new servers concurrently.
         This function can be called only if the cluster uses consistent topology changes, which support
         concurrent bootstraps. If your test does not fulfill this condition and you want to add multiple
@@ -375,10 +377,11 @@ class ManagerClient():
                 raise RuntimeError(f"servers_add got invalid server data {server_info}") from exc
 
         logger.debug("ManagerClient added %s", s_infos)
-        if self.cql:
-            self._driver_update()
-        elif start:
-            await self.driver_connect()
+        if expected_error is None:
+            if self.cql:
+                self._driver_update()
+            elif start:
+                await self.driver_connect()
         return s_infos
 
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
