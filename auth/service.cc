@@ -258,13 +258,13 @@ service::get_uncached_permissions(const role_or_anonymous& maybe_role, const res
         co_return co_await _authorizer->authorize(maybe_role, r);
     }
     const std::string_view role_name = *maybe_role.name;
-    auto superuser = co_await has_superuser(role_name);
+    auto all_roles = co_await get_roles(role_name);
+    auto superuser = co_await has_superuser(role_name, all_roles);
     if (superuser) {
         co_return r.applicable_permissions();
     }
     // Aggregate the permissions from all granted roles.
     permission_set all_perms;
-    auto all_roles = co_await get_roles(role_name);
     co_await coroutine::parallel_for_each(all_roles, [this, &r, &all_perms](std::string_view role_name) -> future<> {
         auto perms = co_await _authorizer->authorize(role_name, r);
         all_perms = permission_set::from_mask(all_perms.mask() | perms.mask());
@@ -276,14 +276,18 @@ future<permission_set> service::get_permissions(const role_or_anonymous& maybe_r
     return _permissions_cache->get(maybe_role, r);
 }
 
-future<bool> service::has_superuser(std::string_view role_name) const {
-    auto roles = co_await get_roles(role_name);
+future<bool> service::has_superuser(std::string_view role_name, const role_set& roles) const {
     for (const auto& role : roles) {
         if (co_await _role_manager->is_superuser(role)) {
             co_return true;
         }
     }
     co_return false;
+}
+
+future<bool> service::has_superuser(std::string_view role_name) const {
+    auto roles = co_await get_roles(role_name);
+    co_return co_await has_superuser(role_name, roles);
 }
 
 future<role_set> service::get_roles(std::string_view role_name) const {
