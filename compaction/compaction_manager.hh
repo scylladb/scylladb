@@ -580,6 +580,11 @@ public:
         return _compaction_data.abort.abort_requested();
     }
 
+<<<<<<< HEAD
+=======
+    void abort(abort_source& as) noexcept;
+
+>>>>>>> 3463f495b1 (tasks: fix tasks abort)
     void stop_compaction(sstring reason) noexcept;
 
     sstables::compaction_stopped_exception make_compaction_stopped_exception() const;

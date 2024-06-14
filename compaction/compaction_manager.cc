@@ -484,6 +484,17 @@ public:
     virtual ~sstables_task_executor() = default;
 
     virtual void release_resources() noexcept override;
+<<<<<<< HEAD
+=======
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
+    }
+
+    virtual void abort() noexcept override {
+        return compaction_task_executor::abort(_as);
+    }
+>>>>>>> 3463f495b1 (tasks: fix tasks abort)
 protected:
     virtual future<> run() override {
         return perform();
@@ -498,7 +509,21 @@ public:
             tasks::task_id parent_id)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, sstables::compaction_type::Compaction, "Major compaction")
         , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
+<<<<<<< HEAD
     {}
+=======
+    {
+        _status.progress_units = "bytes";
+    }
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
+    }
+
+    virtual void abort() noexcept override {
+        return compaction_task_executor::abort(_as);
+    }
+>>>>>>> 3463f495b1 (tasks: fix tasks abort)
 protected:
     virtual future<> run() override {
         return perform();
@@ -605,6 +630,17 @@ public:
     virtual std::string type() const override {
         return fmt::format("{} compaction", compaction_type());
     }
+<<<<<<< HEAD
+=======
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
+    }
+
+    virtual void abort() noexcept override {
+        return compaction_task_executor::abort(_as);
+    }
+>>>>>>> 3463f495b1 (tasks: fix tasks abort)
 protected:
     virtual future<> run() override {
         return perform();
@@ -828,6 +864,16 @@ void compaction_task_executor::finish_compaction(state finish_state) noexcept {
     _compaction_state.compaction_done.signal();
 }
 
+<<<<<<< HEAD
+=======
+void compaction_task_executor::abort(abort_source& as) noexcept {
+    if (!as.abort_requested()) {
+        as.request_abort();
+        stop_compaction("user requested abort");
+    }
+}
+
+>>>>>>> 3463f495b1 (tasks: fix tasks abort)
 void compaction_task_executor::stop_compaction(sstring reason) noexcept {
     _compaction_data.stop(std::move(reason));
 }
@@ -1142,6 +1188,13 @@ public:
         : compaction_task_executor(mgr, do_throw_if_stopping, &t, sstables::compaction_type::Compaction, "Compaction")
         , regular_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), t.schema()->ks_name(), t.schema()->cf_name(), "", tasks::task_id::create_null_id())
     {}
+<<<<<<< HEAD
+=======
+
+    virtual void abort() noexcept override {
+        return compaction_task_executor::abort(_as);
+    }
+>>>>>>> 3463f495b1 (tasks: fix tasks abort)
 protected:
     virtual future<> run() override {
         return perform();
@@ -1303,6 +1356,17 @@ public:
     bool performed() const noexcept {
         return _performed;
     }
+<<<<<<< HEAD
+=======
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
+    }
+
+    virtual void abort() noexcept override {
+        return compaction_task_executor::abort(_as);
+    }
+>>>>>>> 3463f495b1 (tasks: fix tasks abort)
 protected:
     virtual future<> run() override {
         return perform();
@@ -1646,6 +1710,17 @@ public:
         _compacting.release_all();
         _owned_ranges_ptr = nullptr;
     }
+<<<<<<< HEAD
+=======
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
+    }
+
+    virtual void abort() noexcept override {
+        return compaction_task_executor::abort(_as);
+    }
+>>>>>>> 3463f495b1 (tasks: fix tasks abort)
 protected:
     virtual future<> run() override {
         return perform();

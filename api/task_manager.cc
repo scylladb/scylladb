@@ -180,7 +180,7 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
                 if (!task->is_abortable()) {
                     co_await coroutine::return_exception(std::runtime_error("Requested task cannot be aborted"));
                 }
-                co_await task->abort();
+                task->abort();
             });
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());

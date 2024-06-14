@@ -10,6 +10,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/util/defer.hh>
 
 #include "task_manager.hh"
 #include "test_module.hh"
@@ -35,7 +36,7 @@ task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_
     // Child tasks do not need to subscribe to abort source because they will be aborted recursively by their parents.
     if (!parent_id) {
         _shutdown_subscription = module->abort_source().subscribe([this] () noexcept {
-            (void)abort();
+            abort();
         });
     }
 }
@@ -88,10 +89,28 @@ is_internal task_manager::task::impl::is_internal() const noexcept {
     return tasks::is_internal(bool(_parent_id));
 }
 
-future<> task_manager::task::impl::abort() noexcept {
+static future<> abort_children(task_manager::module_ptr module, task_id parent_id) noexcept {
+    auto entered = module->async_gate().try_enter();
+    if (!entered) {
+        return make_ready_future();
+    }
+    auto leave_gate = defer([&module] () {
+        module->async_gate().leave();
+    });
+    return module->get_task_manager().container().invoke_on_all([parent_id] (task_manager& tm) {
+        for (auto& task : tm.get_all_tasks()) {
+            if (task.second->get_parent_id() == parent_id) {
+                task.second->abort();
+            }
+        }
+    });
+}
+
+void task_manager::task::impl::abort() noexcept {
     if (!_as.abort_requested()) {
         _as.request_abort();
 
+<<<<<<< HEAD
         std::vector<task_info> children_info{_children.size()};
         boost::transform(_children, children_info.begin(), [] (const auto& child) {
             return task_info{child->id(), child.get_owner_shard()};
@@ -106,6 +125,9 @@ future<> task_manager::task::impl::abort() noexcept {
                 return make_ready_future<>();
             });
         });
+=======
+        (void)abort_children(_module, _status.id);
+>>>>>>> 3463f495b1 (tasks: fix tasks abort)
     }
 }
 
@@ -224,8 +246,8 @@ is_internal task_manager::task::is_internal() const noexcept {
     return _impl->is_internal();
 }
 
-future<> task_manager::task::abort() noexcept {
-    return _impl->abort();
+void task_manager::task::abort() noexcept {
+    _impl->abort();
 }
 
 bool task_manager::task::abort_requested() const noexcept {
@@ -328,7 +350,7 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
         });
     }
     if (abort) {
-        co_await task->abort();
+        task->abort();
     }
     co_return task;
 }
