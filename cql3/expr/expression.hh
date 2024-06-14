@@ -504,13 +504,9 @@ E* as_if(expression* e) {
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
 
-extern std::ostream& operator<<(std::ostream&, oper_t);
-
 extern sstring to_string(const expression&);
 
 extern std::ostream& operator<<(std::ostream&, const column_value&);
-
-extern std::ostream& operator<<(std::ostream&, const expression&);
 
 data_type type_of(const expression& e);
 

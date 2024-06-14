@@ -130,12 +130,3 @@ template <> struct fmt::formatter<cql3::column_identifier_raw> : fmt::formatter<
         return fmt::format_to(ctx.out(), "{}", id.text());
     }
 };
-
-namespace cql3 {
-
-static inline std::ostream& operator<<(std::ostream& out, const column_identifier& i) {
-    fmt::print(out, "{}", i);
-    return out;
-}
-
-}
