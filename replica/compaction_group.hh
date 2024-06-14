@@ -257,8 +257,7 @@ public:
     future<> for_each_storage_group_gently(std::function<future<>(size_t, storage_group&)> f);
     void for_each_storage_group(std::function<void(size_t, storage_group&)> f) const;
     void remove_storage_group(size_t id);
-    // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
-    storage_group* storage_group_for_id(const schema_ptr&, size_t i) const;
+    storage_group& storage_group_for_id(const schema_ptr&, size_t i) const;
 
     // Caller must keep the current effective_replication_map_ptr valid
     // until the storage_group_manager finishes update_effective_replication_map
@@ -273,9 +272,8 @@ public:
     virtual compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept = 0;
     virtual compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept = 0;
 
-    virtual std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const = 0;
     virtual size_t log2_storage_groups() const = 0;
-    virtual storage_group* storage_group_for_token(dht::token) const noexcept = 0;
+    virtual storage_group& storage_group_for_token(dht::token) const noexcept = 0;
 
     virtual locator::table_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept = 0;
     virtual bool all_storage_groups_split() = 0;
