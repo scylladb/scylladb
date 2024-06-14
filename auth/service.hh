@@ -163,7 +163,7 @@ public:
 
 private:
     future<bool> has_existing_legacy_users() const;
-
+    future<bool> has_superuser(std::string_view role_name, const role_set& roles) const;
     future<> create_keyspace_if_missing(::service::migration_manager& mm) const;
 };
 
