@@ -6,9 +6,11 @@
 
 import random
 from typing import NamedTuple
+
 import pytest
-from rest_api_mock import expected_request
-from utils import format_size
+
+from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import format_size
 
 
 class moving_average(NamedTuple):

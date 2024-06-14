@@ -7,7 +7,9 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from util import random_string
+
+from test.alternator.util import random_string
+
 
 # Test trivial support for the ReturnValues parameter in PutItem, UpdateItem
 # and DeleteItem - test that "NONE" works (and changes nothing), while a

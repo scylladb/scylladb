@@ -55,13 +55,6 @@ def unique_key_int():
     return unique_key_int.i
 unique_key_int.i = 0
 
-def format_tuples(tuples=None, **kwargs):
-    '''format a dict to structured values (tuples) in CQL'''
-    if tuples is None:
-        tuples = {}
-    tuples.update(kwargs)
-    body = ', '.join(f"'{key}': '{value}'" for key, value in tuples.items())
-    return f'{{ {body} }}'
 
 def is_scylla(cql):
     """ Check whether we are running against Scylla or not """

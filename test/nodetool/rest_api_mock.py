@@ -309,7 +309,7 @@ def set_expected_requests(server, expected_requests):
 
 
 @contextlib.contextmanager
-def expected_requests(server, expected_requests):
+def expected_requests_manager(server, expected_requests):
     clear_expected_requests(server)
     set_expected_requests(server, expected_requests)
     try:

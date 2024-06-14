@@ -3,12 +3,11 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-
-from rest_api_mock import expected_request, approximate_value
+from test.nodetool.utils import check_nodetool_fails_with
+from test.nodetool.rest_api_mock import expected_request, approximate_value
 import pytest
 import re
 import time
-import utils
 from typing import NamedTuple
 
 
@@ -35,7 +34,7 @@ def test_clearnapshot_keyspaces(nodetool):
 
 
 def test_clearnapshot_nonexistent_keyspaces(nodetool, scylla_only):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("clearsnapshot", "non_existent_ks"),
             {"expected_requests": [
@@ -278,7 +277,7 @@ def test_snapshot_options_matrix(nodetool, tag, ktlist, skip_flush):
 
 
 def test_snapshot_multiple_keyspace_with_table(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("snapshot", "--table", "tbl1", "ks1", "ks2"),
             {"expected_requests": []},
@@ -288,7 +287,7 @@ def test_snapshot_multiple_keyspace_with_table(nodetool):
 
 
 def test_snapshot_table_with_ktlist(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("snapshot", "--table", "tbl1", "-kt", "ks1.tbl1"),
             {"expected_requests": []},
@@ -299,7 +298,7 @@ def test_snapshot_table_with_ktlist(nodetool):
 
 
 def test_snapshot_keyspace_with_ktlist(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("snapshot", "-kt", "ks1.tbl1", "ks1"),
             {"expected_requests": []},
@@ -310,7 +309,7 @@ def test_snapshot_keyspace_with_ktlist(nodetool):
 
 
 def test_snapshot_keyspace_with_tables(nodetool, scylla_only):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("snapshot", "--table", "tbl1", "-cf", "tbl2", "ks1"),
             {"expected_requests": []},

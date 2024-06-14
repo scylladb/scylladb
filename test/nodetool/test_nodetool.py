@@ -4,9 +4,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from rest_api_mock import expected_request, expected_requests
+from test.nodetool.rest_api_mock import expected_request, expected_requests_manager
 import subprocess
-import utils
+from test.nodetool.utils import check_nodetool_fails_with_all, check_nodetool_fails_with_error_contains
 
 
 def test_jmx_compatibility_args(nodetool, scylla_only):
@@ -51,7 +51,7 @@ def test_nodetool_api_request_failed(nodetool, scylla_only, rest_api_mock_server
             " remote replied with status code 500 Internal Server Error:",
             "ERROR MESSAGE"]
 
-    utils.check_nodetool_fails_with_all(
+    check_nodetool_fails_with_all(
         nodetool,
         ("compact",),
         {"expected_requests": [expected_request("POST",
@@ -62,7 +62,7 @@ def test_nodetool_api_request_failed(nodetool, scylla_only, rest_api_mock_server
 
 
 def test_nodetool_nonexistent_command(nodetool, scylla_only):
-    utils.check_nodetool_fails_with_error_contains(
+    check_nodetool_fails_with_error_contains(
             nodetool,
             ("non-existent-command",),
             {},
@@ -70,7 +70,7 @@ def test_nodetool_nonexistent_command(nodetool, scylla_only):
 
 
 def test_global_options_order(nodetool_path, rest_api_mock_server, scylla_only):
-    with expected_requests(rest_api_mock_server, [
+    with expected_requests_manager(rest_api_mock_server, [
             expected_request("POST", "/storage_service/compact", multiple=expected_request.MULTIPLE)]):
 
         ip, port = rest_api_mock_server
@@ -86,7 +86,7 @@ def test_global_options_order(nodetool_path, rest_api_mock_server, scylla_only):
 
 
 def test_jvm_options(nodetool_path, rest_api_mock_server, scylla_only):
-    with expected_requests(rest_api_mock_server, [
+    with expected_requests_manager(rest_api_mock_server, [
             expected_request("POST", "/storage_service/compact", multiple=expected_request.MULTIPLE)]):
 
         ip, port = rest_api_mock_server
@@ -100,7 +100,7 @@ def test_jvm_options(nodetool_path, rest_api_mock_server, scylla_only):
 
 
 def test_alternative_api_port(nodetool_path, rest_api_mock_server, scylla_only):
-    with expected_requests(rest_api_mock_server, [
+    with expected_requests_manager(rest_api_mock_server, [
             expected_request("POST", "/storage_service/compact", multiple=expected_request.MULTIPLE)]):
 
         ip, port = rest_api_mock_server

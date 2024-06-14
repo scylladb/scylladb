@@ -5,8 +5,9 @@
 #
 
 import pytest
-from rest_api_mock import expected_request
-import utils
+
+from test.nodetool.utils import check_nodetool_fails_with
+from test.nodetool.rest_api_mock import expected_request
 
 
 def test_refresh(nodetool):
@@ -29,7 +30,7 @@ def test_refresh_load_and_stream_and_primary_replica_only(nodetool, load_and_str
 
 
 def test_refresh_no_table(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("refresh", "ks"),
             {"expected_requests": []},
@@ -38,7 +39,7 @@ def test_refresh_no_table(nodetool):
 
 
 def test_refresh_no_table_no_keyspace(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("refresh",),
             {"expected_requests": []},
@@ -47,7 +48,7 @@ def test_refresh_no_table_no_keyspace(nodetool):
 
 
 def test_refresh_primary_replica_only(nodetool, scylla_only):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("refresh", "ks", "tbl", "--primary-replica-only"),
             {"expected_requests": []},

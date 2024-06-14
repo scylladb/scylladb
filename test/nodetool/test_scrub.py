@@ -6,8 +6,9 @@
 
 import enum
 import pytest
-from rest_api_mock import expected_request
-import utils
+
+from test.nodetool.utils import check_nodetool_fails_with
+from test.nodetool.rest_api_mock import expected_request
 
 
 class scrub_status(enum.Enum):
@@ -46,7 +47,7 @@ def test_scrub_two_tables(nodetool):
 
 
 def test_scrub_non_existent_keyspace(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("scrub", "non_existent_ks"),
             {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks"])]},
@@ -105,7 +106,7 @@ def test_scrub_skip_corrupted(nodetool):
 
 
 def test_scrub_skip_corrupted_with_mode(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("scrub", "ks", "--skip-corrupted", "--mode", "ABORT"),
             {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks"])]},
@@ -142,7 +143,7 @@ def test_scrub_validation_errors_exit_code(nodetool, scylla_only):
         expected_request("GET", "/storage_service/keyspace_scrub/ks", params={"scrub_mode": "VALIDATE"},
                          response=scrub_status.successful.value)])
 
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("scrub", "ks", "--mode=VALIDATE"),
             {"expected_requests": [
@@ -152,7 +153,7 @@ def test_scrub_validation_errors_exit_code(nodetool, scylla_only):
             ["scrub failed: there are invalid sstables"])
 
     # Check that when the first scrub fails, nodetool goes on to scrub the remainder
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("scrub", "--mode=VALIDATE"),
             {"expected_requests": [
@@ -170,7 +171,7 @@ def test_scrub_abort_exit_code(nodetool, scylla_only):
         expected_request("GET", "/storage_service/keyspace_scrub/ks", params={"scrub_mode": "ABORT"},
                          response=scrub_status.successful.value)])
 
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("scrub", "ks", "--mode=ABORT"),
             {"expected_requests": [
@@ -180,7 +181,7 @@ def test_scrub_abort_exit_code(nodetool, scylla_only):
             ["scrub failed: aborted"])
 
     # Check that when the first scrub fails, nodetool goes on to scrub the remainder
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("scrub", "--mode=ABORT"),
             {"expected_requests": [

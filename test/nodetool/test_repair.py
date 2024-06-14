@@ -5,8 +5,9 @@
 #
 
 import pytest
-from rest_api_mock import expected_request
-import utils
+
+from test.nodetool.utils import check_nodetool_fails_with_error_contains, check_nodetool_fails_with
+from test.nodetool.rest_api_mock import expected_request
 
 
 JMX_COLUMN_FAMILIES_REQUEST = expected_request(
@@ -231,7 +232,7 @@ Repair session 1 finished
 
 
 def test_repair_failed(nodetool):
-    utils.check_nodetool_fails_with_error_contains(
+    check_nodetool_fails_with_error_contains(
         nodetool,
         ("repair", "ks"),
         {"expected_requests": [
@@ -297,7 +298,7 @@ def test_repair_all_three_keyspaces_failed(nodetool):
         expected_request("GET", "/storage_service/repair_async/ks2", params={"id": "11"}, response="FAILED")]
 
     # Check that repair of ks3 is not even started, after repair of ks2 failed
-    utils.check_nodetool_fails_with_error_contains(
+    check_nodetool_fails_with_error_contains(
         nodetool,
         ("repair",),
         {"expected_requests": expected_requests},
@@ -558,7 +559,7 @@ Repair session 1 finished
 
 
 def test_repair_pr_and_dcs(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
         nodetool,
         ("repair", "ks", "-pr", "-dc", "DC1"),
         {"expected_requests": [
@@ -569,7 +570,7 @@ def test_repair_pr_and_dcs(nodetool):
 
 
 def test_repair_pr_and_hosts(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
         nodetool,
         ("repair", "ks", "-pr", "-hosts", "127.0.0.2"),
         {"expected_requests": [

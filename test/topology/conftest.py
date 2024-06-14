@@ -12,6 +12,7 @@ import platform
 from functools import partial
 from typing import List, Optional, Dict
 from test.pylib.random_tables import RandomTables
+from test.pylib.report_plugin import ReportPlugin
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient, IPAddress
 from test.pylib.async_cql import event_loop, run_async
@@ -270,3 +271,7 @@ def skip_mode_fixture(request, mode):
     for reason, platform_key in skipped_funcs.get((request.function, mode), []):
         if platform_key is None or platform_key in platform.platform():
             pytest.skip(f'{request.node.name} skipped, reason: {reason}')
+
+
+def pytest_configure(config):
+    config.pluginmanager.register(ReportPlugin())

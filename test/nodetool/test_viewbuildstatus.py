@@ -6,7 +6,7 @@
 
 import pytest
 from subprocess import CalledProcessError
-from rest_api_mock import expected_request
+from test.nodetool.rest_api_mock import expected_request
 
 
 def get_keyspace_view_from_args(args):

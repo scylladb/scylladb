@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from rest_api_mock import expected_request
-import utils
+from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import check_nodetool_fails_with
 import pytest
 
 
@@ -32,7 +32,7 @@ def test_keyspace(nodetool):
 
 
 def test_nonexistent_keyspace(nodetool):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("compact", "non_existent_ks"),
             {"expected_requests": [
@@ -77,7 +77,7 @@ def test_token_range_compatibility_argument(nodetool):
 
 
 def test_user_defined(nodetool, scylla_only):
-    utils.check_nodetool_fails_with(
+    check_nodetool_fails_with(
             nodetool,
             ("compact", "--user-defined", "/var/lib/scylla/data/system/local-7ad54392bcdd35a684174e047860b377/"
              "me-3g8w_11cg_4317k2ppfb6d5vgp0w-big-Data.db"),
