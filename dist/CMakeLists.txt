@@ -9,7 +9,7 @@ add_custom_command(
       --debian-dir ${CMAKE_BINARY_DIR}/debian
       ${unstripped_dist_pkg}
   DEPENDS
-    scylla
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/scylla
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
     ${CMAKE_BINARY_DIR}/debian
