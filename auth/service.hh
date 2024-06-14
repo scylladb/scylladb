@@ -162,9 +162,14 @@ public:
     }
 
 private:
+<<<<<<< HEAD
     future<bool> has_existing_legacy_users() const;
 
     future<> create_keyspace_if_missing(::service::migration_manager& mm) const;
+=======
+    future<> create_legacy_keyspace_if_missing(::service::migration_manager& mm) const;
+    future<bool> has_superuser(std::string_view role_name, const role_set& roles) const;
+>>>>>>> 95673907ca (auth: reuse roles select query during cache population)
 };
 
 future<bool> has_superuser(const service&, const authenticated_user&);
