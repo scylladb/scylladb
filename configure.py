@@ -2546,16 +2546,15 @@ def configure_using_cmake(args):
                    'dev': BuildType(True, 'Dev'),
                    'sanitize': BuildType(False, 'Sanitize'),
                    'coverage': BuildType(False, 'Coverage')}
-    selected_modes = list(build_modes[mode] for mode in
-                          args.selected_modes or build_modes.keys())
-    selected_configs = ';'.join(mode.cmake_build_type for mode in selected_modes)
-    default_configs = ';'.join(mode.cmake_build_type for mode in selected_modes
-                               if mode.build_by_default)
-
+    default_modes = list(name for name, mode in build_modes.items()
+                         if mode.build_by_default)
+    selected_modes = args.selected_modes or default_modes
+    selected_configs = ';'.join(build_modes[mode].cmake_build_type for mode
+                                in selected_modes)
     settings = {
         'CMAKE_CONFIGURATION_TYPES': selected_configs,
-        'CMAKE_CROSS_CONFIGS': default_configs,
-        'CMAKE_DEFAULT_CONFIGS': default_configs,
+        'CMAKE_CROSS_CONFIGS': selected_configs,
+        'CMAKE_DEFAULT_CONFIGS': selected_configs,
         'CMAKE_C_COMPILER': args.cc,
         'CMAKE_CXX_COMPILER': args.cxx,
         'CMAKE_CXX_FLAGS': args.user_cflags,
