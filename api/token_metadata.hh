@@ -9,13 +9,16 @@
 #pragma once
 
 #include <seastar/core/sharded.hh>
-#include "api/api_init.hh"
+
+namespace seastar::httpd {
+class routes;
+}
 
 namespace locator { class shared_token_metadata; }
 
 namespace api {
-
-void set_token_metadata(http_context& ctx, httpd::routes& r, sharded<locator::shared_token_metadata>& tm);
-void unset_token_metadata(http_context& ctx, httpd::routes& r);
+struct http_context;
+void set_token_metadata(http_context& ctx, seastar::httpd::routes& r, seastar::sharded<locator::shared_token_metadata>& tm);
+void unset_token_metadata(http_context& ctx, seastar::httpd::routes& r);
 
 }

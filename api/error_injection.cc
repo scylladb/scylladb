@@ -7,10 +7,8 @@
  */
 
 #include "api/api-doc/error_injection.json.hh"
-#include "api/api.hh"
-
+#include "api/api_init.hh"
 #include <seastar/http/exception.hh>
-#include "log.hh"
 #include "utils/error_injection.hh"
 #include "utils/rjson.hh"
 #include <seastar/core/future-util.hh>
