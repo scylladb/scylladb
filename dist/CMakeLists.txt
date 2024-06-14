@@ -1,12 +1,13 @@
 set(unstripped_dist_pkg
-  ${CMAKE_CURRENT_BINARY_DIR}/${Scylla_PRODUCT}-unstripped-${Scylla_VERSION}-${Scylla_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}.tar.gz)
+  ${CMAKE_BINARY_DIR}/$<CONFIG>/dist/tar/${Scylla_PRODUCT}-unstripped-${Scylla_VERSION}-${Scylla_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}.tar.gz)
 add_custom_command(
   OUTPUT ${unstripped_dist_pkg}
-  COMMAND scripts/create-relocatable-package.py
-    --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
-    --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
-    --debian-dir ${CMAKE_BINARY_DIR}/debian
-    ${unstripped_dist_pkg}
+  COMMAND
+    scripts/create-relocatable-package.py
+      --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
+      --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
+      --debian-dir ${CMAKE_BINARY_DIR}/debian
+      ${unstripped_dist_pkg}
   DEPENDS
     scylla
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune
@@ -80,7 +81,7 @@ add_custom_command(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 set(stripped_dist_pkg
-  "${CMAKE_BINARY_DIR}/$<CONFIG>/${Scylla_PRODUCT}-${Scylla_VERSION}-${Scylla_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}.tar.gz")
+  "${CMAKE_BINARY_DIR}/$<CONFIG>/dist/tar/${Scylla_PRODUCT}-${Scylla_VERSION}-${Scylla_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}.tar.gz")
 add_custom_command(
   OUTPUT
     ${stripped_dist_pkg}
