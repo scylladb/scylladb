@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <set>
 #include <fmt/chrono.h>
+#include <fmt/ostream.h>
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/queue.hh>
@@ -1774,12 +1775,9 @@ class json_mutation_stream_parser {
             return boost::algorithm::join(_state_stack | boost::adaptors::transformed([] (state s) { return std::string(to_string(s)); }), "|");
         }
 
-        bool error(const char* msg, auto&&... args) {
-#if FMT_VERSION >= 80000
-            auto parse_error = fmt::format(fmt::runtime(msg), std::forward<decltype(args)>(args)...);
-#else
-            auto parse_error = fmt::format(msg, std::forward<decltype(args)>(args)...);
-#endif
+        template<typename... Args>
+        bool error(fmt::format_string<Args...> fmt, Args&&... args) {
+            auto parse_error = fmt::format(fmt, std::forward<Args>(args)...);
             sst_log.trace("{}", parse_error);
             _queue.abort(std::make_exception_ptr(std::runtime_error(parse_error)));
             return false;
@@ -1796,7 +1794,7 @@ class json_mutation_stream_parser {
                 auto raw = from_hex(*_string);
                 _pkey.emplace(partition_key::from_bytes(raw));
             } catch (...) {
-                return error("failed to parse partition key from raw string: {}", std::current_exception());
+                return error("failed to parse partition key from raw string: {}", fmt::streamed(std::current_exception()));
             }
             return true;
         }
@@ -1806,7 +1804,7 @@ class json_mutation_stream_parser {
                 auto raw = from_hex(*_string);
                 _ckey.emplace(clustering_key::from_bytes(raw));
             } catch (...) {
-                return error("failed to parse clustering key from raw string: {}", std::current_exception());
+                return error("failed to parse clustering key from raw string: {}", fmt::streamed(std::current_exception()));
             }
             return true;
         }
