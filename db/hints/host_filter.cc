@@ -68,11 +68,6 @@ host_filter host_filter::parse_from_dc_list(sstring opt) {
     return host_filter(std::unordered_set<sstring>(dcs.begin(), dcs.end()));
 }
 
-std::ostream& operator<<(std::ostream& os, const host_filter& f) {
-    fmt::print(os, "{}", f);
-    return os;
-}
-
 std::istream& operator>>(std::istream& is, host_filter& f) {
     sstring tmp;
     is >> tmp;
