@@ -2387,20 +2387,6 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     deleting_done.set_value();
 }
 
-namespace db {
-
-std::ostream& operator<<(std::ostream& os, const commitlog::segment_manager::named_file& f) {
-    fmt::print(os, "{}", f);
-    return os;
-}
-
-std::ostream& operator<<(std::ostream& os, commitlog::segment_manager::dispose_mode mode) {
-    fmt::print(os, "{}", mode);
-    return os;
-}
-
-}
-
 future<> db::commitlog::segment_manager::orphan_all() {
     _segments.clear();
     return clear_reserve_segments();

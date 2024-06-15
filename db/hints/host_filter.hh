@@ -85,7 +85,6 @@ public:
     friend fmt::formatter<host_filter>;
 };
 
-std::ostream& operator<<(std::ostream& os, const host_filter& f);
 std::istream& operator>>(std::istream& is, host_filter& f);
 
 class hints_configuration_parse_error : public std::runtime_error {
