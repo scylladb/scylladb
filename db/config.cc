@@ -74,9 +74,9 @@ hinted_handoff_enabled_to_json(const db::config::hinted_handoff_enabled_type& h)
     return value_to_json(h.to_configuration_string());
 }
 
-// Convert a value that can be printed with operator<<, or a vector of
+// Convert a value that can be printed with fmt::format, or a vector of
 // such values, to JSON. An example is enum_option<T>, because enum_option<T>
-// has a operator<<.
+// has a specialization for fmt::formatter.
 template <typename T>
 static json::json_return_type
 printable_to_json(const T& e) {
