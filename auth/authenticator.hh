@@ -22,9 +22,10 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "auth/authentication_options.hh"
-#include "auth/common.hh"
 #include "auth/resource.hh"
 #include "auth/sasl_challenge.hh"
+
+#include "service/raft/raft_group0_client.hh"
 
 namespace db {
     class config;

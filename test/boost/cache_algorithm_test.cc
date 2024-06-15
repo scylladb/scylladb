@@ -9,6 +9,7 @@
 #include <fmt/ranges.h>
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
+#include "db/config.hh"
 
 // These tests are slow, and tuned to a particular amount of memory
 // (and --memory is ignored in debug mode).
