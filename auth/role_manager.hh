@@ -20,7 +20,6 @@
 #include "auth/resource.hh"
 #include "seastarx.hh"
 #include "exceptions/exceptions.hh"
-#include "auth/common.hh"
 #include "service/raft/raft_group0_client.hh"
 
 namespace auth {

@@ -11,6 +11,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/config.hh"
 
 // Test that `canonical_token_range(tr)` contains the same tokens as `tr`.
 SEASTAR_TEST_CASE(test_canonical_token_range) {

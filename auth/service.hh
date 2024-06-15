@@ -27,7 +27,6 @@
 #include "service/raft/raft_group0_client.hh"
 #include "utils/observable.hh"
 #include "utils/serialized_action.hh"
-#include "db/config.hh"
 #include "service/maintenance_mode.hh"
 
 namespace cql3 {

@@ -23,7 +23,6 @@
 #include "service/migration_manager.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "timeout_config.hh"
-#include "db/config.hh"
 #include "utils/error_injection.hh"
 
 namespace auth {
