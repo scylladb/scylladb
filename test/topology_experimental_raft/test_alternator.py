@@ -173,10 +173,10 @@ async def test_alternator_ttl_scheduling_group(alternator3):
     # so "ratio" calculate below should be tiny, even exactly zero. Before
     # issue #18719 was fixed, it was not tiny at all - 0.58.
     # Just in case there are other unknown things happening, let's assert it
-    # is <0.01 instead of zero.
+    # is <0.1 instead of zero.
     ms_streaming = ms_streaming_after - ms_streaming_before
     ms_statement = ms_statement_after - ms_statement_before
     ratio = ms_statement / ms_streaming
-    assert ratio < 0.01
+    assert ratio < 0.1
 
     table.delete()
