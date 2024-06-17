@@ -110,7 +110,7 @@ WantedBy=local-fs.target scylla-server.service
         try:
             coreinfo = run('coredumpctl --no-pager --no-legend info {}'.format(pid), shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
         except subprocess.CalledProcessError:
-            print('Does not able to detect coredump, failed to configure systemd-coredump.')
+            print('Unable to detect coredump, failed to configure systemd-coredump.')
             sys.exit(1)
 
         print(coreinfo)
