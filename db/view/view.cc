@@ -188,6 +188,13 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
     std::vector<column_id> base_regular_columns_in_view_pk;
     std::vector<column_id> base_static_columns_in_view_pk;
 
+    _is_partition_key_permutation_of_base_partition_key =
+        boost::algorithm::all_of(_schema.partition_key_columns(), [&base] (const column_definition& view_col) {
+            const column_definition* base_col = base.get_column_definition(view_col.name());
+            return base_col && base_col->is_partition_key();
+            })
+        && _schema.partition_key_size() == base.partition_key_size();
+
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
         if (view_col.is_computed()) {
             // we are not going to find it in the base table...
@@ -678,7 +685,7 @@ private:
 
 
 std::vector<view_updates::view_row_entry>
-view_updates::get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing) {
+view_updates::get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, row_tombstone row_delete_tomb) {
     value_getter getter(*_base, base_key, update, existing);
     auto get_value = boost::adaptors::transformed(std::ref(getter));
 
@@ -701,6 +708,14 @@ view_updates::get_view_rows(const partition_key& base_key, const clustering_or_s
         clustering_key ckey = clustering_key::from_range(boost::adaptors::transform(ck, view_managed_key_view_and_action::get_key_view));
         auto action = (action_column < pk.size() ? pk[action_column] : ck[action_column - pk.size()])._action;
         mutation_partition& partition = partition_for(std::move(pkey));
+
+        // Skip adding the row if we already wrote a partition tombstone for this partition, and the update
+        // is deleting the row with an equal row tombstone. This means the entire partition is deleted
+        // so we don't need to generate updates for individual rows.
+        if (partition.partition_tombstone() && partition.partition_tombstone() == row_delete_tomb.tomb()) {
+            return;
+        }
+
         ret.push_back({&partition.clustered_row(*_view, std::move(ckey)), action});
     };
 
@@ -912,7 +927,7 @@ void view_updates::create_entry(data_dictionary::database db, const partition_ke
         return;
     }
 
-    auto view_rows = get_view_rows(base_key, update, std::nullopt);
+    auto view_rows = get_view_rows(base_key, update, std::nullopt, {});
     auto update_marker = compute_row_marker(update);
     const auto kind = update.column_kind();
     for (const auto& [r, action]: view_rows) {
@@ -940,7 +955,7 @@ void view_updates::delete_old_entry(data_dictionary::database db, const partitio
 }
 
 void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now) {
-    auto view_rows = get_view_rows(base_key, existing, std::nullopt);
+    auto view_rows = get_view_rows(base_key, existing, std::nullopt, update.tomb());
     const auto kind = existing.column_kind();
     for (const auto& [r, action] : view_rows) {
         const auto& col_ids = existing.is_clustering_row()
@@ -1081,7 +1096,7 @@ void view_updates::update_entry(data_dictionary::database db, const partition_ke
         return;
     }
 
-    auto view_rows = get_view_rows(base_key, update, std::nullopt);
+    auto view_rows = get_view_rows(base_key, update, std::nullopt, {});
     auto update_marker = compute_row_marker(update);
     const auto kind = update.column_kind();
     for (const auto& [r, action] : view_rows) {
@@ -1103,7 +1118,7 @@ void view_updates::update_entry_for_computed_column(
         const clustering_or_static_row& update,
         const std::optional<clustering_or_static_row>& existing,
         gc_clock::time_point now) {
-    auto view_rows = get_view_rows(base_key, update, existing);
+    auto view_rows = get_view_rows(base_key, update, existing, {});
     for (const auto& [r, action] : view_rows) {
         struct visitor {
             deletable_row* row;
@@ -1232,6 +1247,62 @@ void view_updates::generate_update(
     }
 }
 
+bool view_updates::is_partition_key_permutation_of_base_partition_key() const {
+    return _view_info.is_partition_key_permutation_of_base_partition_key();
+}
+
+std::optional<partition_key> view_updates::construct_view_partition_key_from_base(const partition_key& base_pk)
+{
+    // We check that the view partition key is a permutation of the
+    // base partition key. If so, we can construct the corresponding
+    // view partition key from the base key and apply an optimized
+    // partition level update. Otherwise, we return std::nullopt.
+
+    if (!is_partition_key_permutation_of_base_partition_key()) {
+        return std::nullopt;
+    }
+
+    auto base_exploded_pk = base_pk.explode();
+    std::vector<bytes> view_exploded_pk(_view->partition_key_size());
+
+    // Construct the view partition key by finding each component
+    // in the base partition key.
+    for (const column_definition& view_cdef : _view->partition_key_columns()) {
+        const column_definition* base_cdef = _base->get_column_definition(view_cdef.name());
+        if (base_cdef && base_cdef->is_partition_key()) {
+            view_exploded_pk[view_cdef.id] = base_exploded_pk[base_cdef->id];
+        } else {
+            // This shouldn't happen because we already checked that all
+            // the view partition key columns appear in the base partition key.
+            on_internal_error(vlogger, format("Unexpected failure to construct view partition update for view {}.{} of {}.{}, ",
+                _view->ks_name(), _view->cf_name(), _base->ks_name(), _base->cf_name()));
+        }
+    }
+
+    partition_key view_pk = partition_key::from_exploded(view_exploded_pk);
+    return view_pk;
+}
+
+void view_updates::generate_partition_tombstone_update(
+        data_dictionary::database db,
+        const partition_key& base_key,
+        tombstone partition_tomb) {
+
+    // Try to construct the view partition key from the base partition key.
+    // This will succeed if the view partition key columns are a permutation
+    // of the base partition key columns. If it fails, we skip the optimization.
+    auto view_key_opt = construct_view_partition_key_from_base(base_key);
+    if (!view_key_opt) {
+        return;
+    }
+
+    // Apply the partition tombstone on the view partition
+    mutation_partition& mp = partition_for(std::move(*view_key_opt));
+    mp.apply(partition_tomb);
+
+    _op_count++;
+}
+
 future<> view_update_builder::close() noexcept {
     return when_all_succeed(_updates.close(), _existings->close()).discard_result();
 }
@@ -1278,6 +1349,16 @@ future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_up
         _key = std::move(std::move(_update)->as_partition_start().key().key());
         _update_partition_tombstone = _update->as_partition_start().partition_tombstone();
         do_advance_updates = true;
+
+        if (_update_partition_tombstone) {
+            // For views that have the same partition key as base, generate an update of partition tombstone to delete
+            // the entire partition in one operation, instead of generating an update for each row.
+            for (auto&& v : _view_updates) {
+                if (v.is_partition_key_permutation_of_base_partition_key()) {
+                    v.generate_partition_tombstone_update(_db, _key, _update_partition_tombstone);
+                }
+            }
+        }
     }
     if (_existing && _existing->is_partition_start()) {
         _existing_partition_tombstone = _existing->as_partition_start().partition_tombstone();

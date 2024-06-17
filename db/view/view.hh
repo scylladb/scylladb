@@ -223,8 +223,13 @@ public:
     future<> move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations);
 
     void generate_update(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, gc_clock::time_point now);
+    void generate_partition_tombstone_update(data_dictionary::database db, const partition_key& base_key, tombstone partition_tomb);
 
     size_t op_count() const;
+
+    bool is_partition_key_permutation_of_base_partition_key() const;
+
+    std::optional<partition_key> construct_view_partition_key_from_base(const partition_key& base_pk);
 
 private:
     mutation_partition& partition_for(partition_key&& key);
@@ -233,7 +238,7 @@ private:
         deletable_row* _row;
         view_key_and_action::action _action;
     };
-    std::vector<view_row_entry> get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing);
+    std::vector<view_row_entry> get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, row_tombstone update_tomb);
     bool can_skip_view_updates(const clustering_or_static_row& update, const clustering_or_static_row& existing) const;
     void create_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, gc_clock::time_point now);
     void delete_old_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now);
