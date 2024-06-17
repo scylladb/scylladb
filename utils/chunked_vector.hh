@@ -79,7 +79,7 @@ public:
 private:
     std::pair<chunk_ptr, size_t> get_chunk_before_emplace_back();
     void set_chunk_after_emplace_back(std::pair<chunk_ptr, size_t>) noexcept;
-    size_t make_room(size_t n, bool stop_after_one);
+    void make_room(size_t n, bool stop_after_one);
     chunk_ptr new_chunk(size_t n);
     T* addr(size_t i) const {
         return &_chunks[i / max_chunk_capacity()][i % max_chunk_capacity()];
@@ -182,22 +182,19 @@ public:
     ///
     /// Allows reserving the memory chunk-by-chunk, avoiding stalls when a lot of
     /// chunks are needed. To drive the reservation to completion, call this
-    /// repeatedly with the value returned from the previous call until it
-    /// returns 0, yielding between calls when necessary. Example usage:
+    /// repeatedly until the vector's capacity reaches the expected size, yielding
+    /// between calls when necessary. Example usage:
     ///
-    ///     return do_until([&size] { return !size; }, [&my_vector, &size] () mutable {
-    ///         size = my_vector.reserve_partial(size);
+    ///     return do_until([&my_vector, size] { return my_vector.capacity() == size; }, [&my_vector, size] () mutable {
+    ///         my_vector.reserve_partial(size);
     ///     });
     ///
     /// Here, `do_until()` takes care of yielding between iterations when
     /// necessary.
-    ///
-    /// \returns the memory that remains to be reserved
-    size_t reserve_partial(size_t n) {
+    void reserve_partial(size_t n) {
         if (n > _capacity) {
-            return make_room(n, true);
+            make_room(n, true);
         }
-        return 0;
     }
 
     size_t memory_size() const {
@@ -418,7 +415,7 @@ chunked_vector<T, max_contiguous_allocation>::migrate(T* begin, T* end, T* resul
 }
 
 template <typename T, size_t max_contiguous_allocation>
-size_t
+void
 chunked_vector<T, max_contiguous_allocation>::make_room(size_t n, bool stop_after_one) {
     // First, if the last chunk is below max_chunk_capacity(), enlarge it
 
@@ -450,7 +447,6 @@ chunked_vector<T, max_contiguous_allocation>::make_room(size_t n, bool stop_afte
         _capacity += now;
         stop = stop_after_one;
     }
-    return (n - _capacity);
 }
 
 template <typename T, size_t max_contiguous_allocation>
