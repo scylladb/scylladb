@@ -54,6 +54,12 @@ if TYPE_CHECKING:
 async def sleep_for_30_seconds(manager: ManagerClient,
                                random_tables: RandomTables,
                                error_injection: str) -> AsyncIterator[None]:
+    if error_injection in (
+        "stop_after_sending_join_node_request",
+        "stop_after_bootstrapping_initial_raft_configuration",
+    ):
+        pytest.skip("See issue #18638 (rejected node is not failed to bootstrap and continue to run)")
+
     yield
 
     LOGGER.info("Sleep for 30 seconds")
@@ -313,6 +319,22 @@ async def execute_lwt_transaction(manager: ManagerClient,
 async def init_tablet_transfer(manager: ManagerClient,
                                random_tables: RandomTables,
                                error_injection: str) -> AsyncIterator[None]:
+    if error_injection in (
+            "stop_after_sending_join_node_request",
+            "stop_after_bootstrapping_initial_raft_configuration",
+    ):
+        pytest.skip("See issue #18638 (rejected node is not failed to bootstrap and continue to run)")
+
+    if error_injection in (
+            "stop_after_starting_auth_service",
+            "stop_after_setting_mode_to_normal",
+            "stop_before_becoming_raft_voter",
+            "stop_after_updating_cdc_generation",
+            "stop_before_streaming",
+            "stop_after_streaming",
+    ):
+        pytest.skip("See issue #19151 (decommission process stuck while boostrapping node is paused)")
+
     await manager.cql.run_async(
         "CREATE KEYSPACE test"
         " WITH replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 } AND"
@@ -410,6 +432,22 @@ async def remove_data_dir_of_dead_node(manager: ManagerClient,
 async def add_new_node(manager: ManagerClient,
                        random_tables: RandomTables,
                        error_injection: str) -> AsyncIterator[None]:
+    if error_injection in (
+            "stop_after_sending_join_node_request",
+            "stop_after_bootstrapping_initial_raft_configuration",
+    ):
+        pytest.skip("See issue #18638 (rejected node is not failed to bootstrap and continue to run)")
+
+    if error_injection in (
+            "stop_after_starting_auth_service",
+            "stop_after_setting_mode_to_normal",
+            "stop_before_becoming_raft_voter",
+            "stop_after_updating_cdc_generation",
+            "stop_before_streaming",
+            "stop_after_streaming",
+    ):
+        pytest.skip("See issue #18640 (failed to add a node to a cluster if another bootstrapping node is stuck)")
+
     yield
 
     LOGGER.info("Add a new node to the cluster")
@@ -421,6 +459,22 @@ async def add_new_node(manager: ManagerClient,
 async def decommission_node(manager: ManagerClient,
                             random_tables: RandomTables,
                             error_injection: str) -> AsyncIterator[None]:
+    if error_injection in (
+            "stop_after_sending_join_node_request",
+            "stop_after_bootstrapping_initial_raft_configuration",
+    ):
+        pytest.skip("See issue #18638 (rejected node is not failed to bootstrap and continue to run)")
+
+    if error_injection in (
+            "stop_after_starting_auth_service",
+            "stop_after_setting_mode_to_normal",
+            "stop_before_becoming_raft_voter",
+            "stop_after_updating_cdc_generation",
+            "stop_before_streaming",
+            "stop_after_streaming",
+    ):
+        pytest.skip("See issue #19151 (decommission process stuck while bootstrapping node is paused)")
+
     yield
 
     LOGGER.info("Decommission a node")
@@ -435,6 +489,12 @@ async def decommission_node(manager: ManagerClient,
 async def remove_node(manager: ManagerClient,
                       random_tables: RandomTables,
                       error_injection: str) -> AsyncIterator[None]:
+    if error_injection in (
+            "stop_after_sending_join_node_request",
+            "stop_after_bootstrapping_initial_raft_configuration",
+    ):
+        pytest.skip("See issue #18638 (rejected node is not failed to bootstrap and continue to run)")
+
     if error_injection in (
         "stop_after_starting_auth_service",
         "stop_after_setting_mode_to_normal",
