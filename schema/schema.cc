@@ -983,6 +983,59 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
     return os;
 }
 
+<<<<<<< HEAD
+=======
+std::ostream& schema::schema_properties(replica::database& db, std::ostream& os) const {
+    os << "bloom_filter_fp_chance = " << bloom_filter_fp_chance();
+    os << "\n    AND caching = {";
+    map_as_cql_param(os, caching_options().to_map());
+    os << "}";
+    os << "\n    AND comment = " << cql3::util::single_quote(comment());
+    os << "\n    AND compaction = {'class': '" <<  sstables::compaction_strategy::name(compaction_strategy()) << "'";
+    map_as_cql_param(os, compaction_strategy_options(), false) << "}";
+    os << "\n    AND compression = {";
+    map_as_cql_param(os,  get_compressor_params().get_options());
+    os << "}";
+
+    os << "\n    AND crc_check_chance = " << crc_check_chance();
+    os << "\n    AND default_time_to_live = " << default_time_to_live().count();
+    os << "\n    AND gc_grace_seconds = " << gc_grace_seconds().count();
+    os << "\n    AND max_index_interval = " << max_index_interval();
+    os << "\n    AND memtable_flush_period_in_ms = " << memtable_flush_period();
+    os << "\n    AND min_index_interval = " << min_index_interval();
+    os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
+    
+    for (auto& [type, ext] : extensions()) {
+        os << "\n    AND " << type << " = " << ext->options_to_string();
+    }
+    if (is_view() && !is_index(db, view_info()->base_id(), *this)) {
+        auto is_sync_update = db::find_tag(*this, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
+        if (is_sync_update.has_value()) {
+            os << "\n    AND synchronous_updates = " << *is_sync_update;
+        }
+    }
+    return os;
+}
+
+std::ostream& schema::describe_alter_with_properties(replica::database& db, std::ostream& os) const {
+    os << "ALTER "; 
+    if (is_view()) {
+        if (is_index(db, view_info()->base_id(), *this)) {
+            on_internal_error(dblog, "ALTER statement is not supported for index");
+        }
+        
+        os << "MATERIALIZED VIEW ";
+    } else {
+        os << "TABLE ";
+    }
+    os << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " WITH ";
+    schema_properties(db, os);
+    os << ";\n";
+
+    return os;
+}
+
+>>>>>>> 73abc56d79 (schema: Make "describe" use extensions to string)
 const sstring&
 column_definition::name_as_text() const {
     return column_specification->name->text();
