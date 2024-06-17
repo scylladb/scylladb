@@ -42,6 +42,7 @@
 #include <utility>
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
+#include "seastar/rpc/rpc_types.hh"
 #include "utils/exceptions.hh"
 #include "utils/error_injection.hh"
 #include "utils/to_string.hh"
@@ -409,7 +410,7 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
     co_await apply_state_locally(std::move(remote_ep_state_map));
 }
 
-future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t> generation_number_opt) {
+future<> gossiper::handle_echo_msg(gms::inet_address from, seastar::rpc::opt_time_point timeout, std::optional<int64_t> generation_number_opt, bool notify_up) {
     bool respond = true;
     if (!_advertise_myself) {
         respond = false;
@@ -434,9 +435,22 @@ future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t
         }
     }
     if (!respond) {
-        return make_exception_future(std::runtime_error("Not ready to respond gossip echo message"));
+        throw std::runtime_error("Not ready to respond gossip echo message");
     }
-    return make_ready_future<>();
+    if (notify_up) {
+        if (!timeout) {
+            on_internal_error(logger, "UP notification should have a timeout");
+        }
+        co_await container().invoke_on(0, [from, timeout] (gossiper& g) -> future<> {
+            try {
+                while (rpc::rpc_clock_type::now() < *timeout && !g.is_alive(from)) {
+                    co_await sleep_abortable(std::chrono::milliseconds(100), g._abort_source);
+                }
+            } catch(...) {
+                logger.warn("handle_echo_msg: UP notification from {} failed with {}", from, std::current_exception());
+            }
+        });
+    }
 }
 
 future<> gossiper::handle_shutdown_msg(inet_address from, std::optional<int64_t> generation_number_opt) {
@@ -513,9 +527,9 @@ void gossiper::init_messaging_service_handler() {
             return gossiper.handle_ack2_msg(from, std::move(msg));
         });
     });
-    ser::gossip_rpc_verbs::register_gossip_echo(&_messaging, [this] (const rpc::client_info& cinfo, seastar::rpc::opt_time_point, rpc::optional<int64_t> generation_number_opt) {
+    ser::gossip_rpc_verbs::register_gossip_echo(&_messaging, [this] (const rpc::client_info& cinfo, seastar::rpc::opt_time_point timeout, rpc::optional<int64_t> generation_number_opt, rpc::optional<bool> notify_up_opt) {
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return handle_echo_msg(from, generation_number_opt);
+        return handle_echo_msg(from, timeout, generation_number_opt, notify_up_opt.value_or(false));
     });
     ser::gossip_rpc_verbs::register_gossip_shutdown(&_messaging, [this] (inet_address from, rpc::optional<int64_t> generation_number_opt) {
         return background_msg("GOSSIP_SHUTDOWN", [from, generation_number_opt] (gms::gossiper& gossiper) {
@@ -951,7 +965,7 @@ future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, genera
         bool failed = false;
         try {
             logger.debug("failure_detector_loop: Send echo to node {}, status = started", node);
-            co_await ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, netw::msg_addr(node), netw::messaging_service::clock_type::now() + max_duration, gossip_generation.value());
+            co_await ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, netw::msg_addr(node), netw::messaging_service::clock_type::now() + max_duration, gossip_generation.value(), false);
             logger.debug("failure_detector_loop: Send echo to node {}, status = ok", node);
         } catch (...) {
             failed = true;
@@ -1651,6 +1665,19 @@ void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_
     }
 }
 
+future<> gossiper::notify_nodes_on_up(std::unordered_set<inet_address> dsts) {
+    co_await coroutine::parallel_for_each(dsts, [this] (inet_address dst) -> future<>  {
+        if (dst != get_broadcast_address()) {
+            try {
+                auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
+                co_await ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, netw::msg_addr(dst), netw::messaging_service::clock_type::now() + std::chrono::seconds(10), generation.value(), true);
+            } catch (...) {
+                logger.warn("Failed to notify node {} that I am UP: {}", dst, std::current_exception());
+            }
+        }
+    });
+}
+
 void gossiper::mark_alive(inet_address addr) {
     // Enter the _background_msg gate so stop() would wait on it
     auto inserted = _pending_mark_alive_endpoints.insert(addr).second;
@@ -1673,7 +1700,7 @@ void gossiper::mark_alive(inet_address addr) {
     // Enter the _background_msg gate so stop() would wait on it
     auto gh = _background_msg.hold();
     logger.debug("Sending a EchoMessage to {}, with generation_number={}", id, generation);
-    (void) ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, id, netw::messaging_service::clock_type::now() + std::chrono::milliseconds(15000), generation.value()).then([this, addr] {
+    (void) ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, id, netw::messaging_service::clock_type::now() + std::chrono::milliseconds(15000), generation.value(), false).then([this, addr] {
         logger.trace("Got EchoMessage Reply");
         return real_mark_alive(addr);
     }).handle_exception([addr, gh = std::move(gh), unmark_pending = std::move(unmark_pending)] (auto ep) {

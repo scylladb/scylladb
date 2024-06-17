@@ -111,7 +111,7 @@ private:
     future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
     future<> handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg);
-    future<> handle_echo_msg(inet_address from, std::optional<int64_t> generation_number_opt);
+    future<> handle_echo_msg(inet_address from, seastar::rpc::opt_time_point, std::optional<int64_t> generation_number_opt, bool notify_up);
     future<> handle_shutdown_msg(inet_address from, std::optional<int64_t> generation_number_opt);
     future<> do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest);
@@ -704,6 +704,8 @@ public:
     void check_snitch_name_matches(sstring local_snitch_name) const;
     int get_down_endpoint_count() const noexcept;
     int get_up_endpoint_count() const noexcept;
+    // Send UP notification to all nodes in the set
+    future<> notify_nodes_on_up(std::unordered_set<inet_address>);
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version);

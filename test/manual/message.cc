@@ -109,7 +109,7 @@ public:
             return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
         });
 
-        ser::gossip_rpc_verbs::register_gossip_echo(&ms, [] (const rpc::client_info& cinfo, rpc::opt_time_point, rpc::optional<int64_t> gen_opt) {
+        ser::gossip_rpc_verbs::register_gossip_echo(&ms, [] (const rpc::client_info& cinfo, rpc::opt_time_point, rpc::optional<int64_t> gen_opt, rpc::optional<bool> notify_up) {
             test_logger.info("Server got gossip echo msg");
             throw std::runtime_error("I'm throwing runtime_error exception");
             return make_ready_future<>();
@@ -155,7 +155,7 @@ public:
         test_logger.info("=== {} ===", __func__);
         auto id = get_msg_addr();
         int64_t gen = 0x1;
-        return ser::gossip_rpc_verbs::send_gossip_echo(&ms, id, netw::messaging_service::clock_type::now() + std::chrono::seconds(10), gen).then_wrapped([] (auto&& f) {
+        return ser::gossip_rpc_verbs::send_gossip_echo(&ms, id, netw::messaging_service::clock_type::now() + std::chrono::seconds(10), gen, false).then_wrapped([] (auto&& f) {
             try {
                 f.get();
                 return make_ready_future<>();
