@@ -73,25 +73,25 @@ std::vector<column_definition> create_table_statement::get_columns() const
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 create_table_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
-    ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
     try {
         m = co_await service::prepare_new_column_family_announcement(qp.proxy(), get_cf_meta_data(qp.db()), ts);
-
-        using namespace cql_transport;
-        ret = ::make_shared<event::schema_change>(
-            event::schema_change::change_type::CREATED,
-            event::schema_change::target_type::TABLE,
-            keyspace(),
-            column_family());
     } catch (const exceptions::already_exists_exception& e) {
         if (!_if_not_exists) {
             co_return coroutine::exception(std::current_exception());
         }
     }
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    // If an IF NOT EXISTS clause was used and resource was already created
+    // we shouldn't emit created event. However it interacts badly with
+    // concurrent clients creating resources. The client seeing no create event
+    // assumes resource already previously existed and proceeds with its logic
+    // which may depend on that resource. But it may send requests to nodes which
+    // are not yet aware of new schema or client's metadata may be outdated.
+    // To force synchronization always emit the event (see
+    // github.com/scylladb/scylladb/issues/16909).
+    co_return std::make_tuple(created_event(), std::move(m), std::vector<sstring>());
 }
 
 /**
@@ -493,6 +493,14 @@ std::optional<sstring> check_restricted_table_properties(
         }
    }
     return std::nullopt;
+}
+
+::shared_ptr<schema_altering_statement::event_t> create_table_statement::created_event() const {
+    return make_shared<event_t>(
+            event_t::change_type::CREATED,
+            event_t::target_type::TABLE,
+            keyspace(),
+            column_family());
 }
 
 }

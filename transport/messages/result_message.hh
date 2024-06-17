@@ -218,10 +218,6 @@ public:
         return _change;
     }
 
-    virtual bool is_schema_change() const override {
-        return true;
-    }
-
     virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }

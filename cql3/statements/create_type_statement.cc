@@ -119,19 +119,11 @@ std::optional<user_type> create_type_statement::make_type(query_processor& qp) c
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> create_type_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
-    ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
     try {
         auto t = make_type(qp);
         if (t) {
             m = co_await service::prepare_new_type_announcement(qp.proxy(), *t, ts);
-            using namespace cql_transport;
-
-            ret = ::make_shared<event::schema_change>(
-                event::schema_change::change_type::CREATED,
-                event::schema_change::target_type::TYPE,
-                keyspace(),
-                _name.get_string_type_name());
         } else {
             if (!_if_not_exists) {
                 co_await coroutine::return_exception(exceptions::invalid_request_exception(format("A user type of name {} already exists", _name.to_cql_string())));
@@ -141,13 +133,29 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
         co_return coroutine::exception(std::current_exception());
     }
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    // If an IF NOT EXISTS clause was used and resource was already created
+    // we shouldn't emit created event. However it interacts badly with
+    // concurrent clients creating resources. The client seeing no create event
+    // assumes resource already previously existed and proceeds with its logic
+    // which may depend on that resource. But it may send requests to nodes which
+    // are not yet aware of new schema or client's metadata may be outdated.
+    // To force synchronization always emit the event (see
+    // github.com/scylladb/scylladb/issues/16909).
+    co_return std::make_tuple(created_event(), std::move(m), std::vector<sstring>());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
 create_type_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_type_statement>(*this));
 }
+
+::shared_ptr<schema_altering_statement::event_t> create_type_statement::created_event() const {
+        return make_shared<event_t>(
+                event_t::change_type::CREATED,
+                event_t::target_type::TYPE,
+                keyspace(),
+                _name.get_string_type_name());
+    }
 
 }
 

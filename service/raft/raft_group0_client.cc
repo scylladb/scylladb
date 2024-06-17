@@ -598,4 +598,9 @@ future<std::pair<std::vector<mutation>, ::service::group0_guard>> group0_batch::
     co_await materialize_mutations();
     co_return std::make_pair(std::move(_muts), std::move(*_guard));
 }
+
+bool group0_batch::empty() const {
+    return _muts.empty() && _generators.empty();
+}
+
 }

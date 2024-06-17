@@ -27,6 +27,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
 #include "transport/messages/result_message.hh"
+#include "transport/messages/result_message_base.hh"
 #include "utils/big_decimal.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -5828,4 +5829,35 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
             });
         }).get();
     }, tablet_cql_test_config());
+}
+
+// check if create statements emit schema change event properly
+// we emit it even if resource wasn't created due to github.com/scylladb/scylladb/issues/16909
+SEASTAR_TEST_CASE(test_schema_change_events) {
+     return do_with_cql_env_thread([] (cql_test_env& e) {
+        using event_t = cql_transport::messages::result_message::schema_change;
+        // keyspace
+        auto res = e.execute_cql("create keyspace ks2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+        BOOST_REQUIRE(dynamic_pointer_cast<event_t>(res));
+        res = e.execute_cql("create keyspace if not exists ks2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+        BOOST_REQUIRE(dynamic_pointer_cast<event_t>(res));
+
+        // table
+        res = e.execute_cql("create table users (user_name varchar PRIMARY KEY);").get();
+        BOOST_REQUIRE(dynamic_pointer_cast<event_t>(res));
+        res = e.execute_cql("create table if not exists users (user_name varchar PRIMARY KEY);").get();
+        BOOST_REQUIRE(dynamic_pointer_cast<event_t>(res));
+
+        // view
+        res = e.execute_cql("create materialized view users_view as select user_name from users where user_name is not null primary key (user_name)").get();
+        BOOST_REQUIRE(dynamic_pointer_cast<event_t>(res));
+        res = e.execute_cql("create materialized view if not exists users_view as select user_name from users where user_name is not null primary key (user_name)").get();
+        BOOST_REQUIRE(dynamic_pointer_cast<event_t>(res));
+
+        // type
+        res = e.execute_cql("create type my_type (first text);").get();
+        BOOST_REQUIRE(dynamic_pointer_cast<event_t>(res));
+        res = e.execute_cql("create type if not exists my_type (first text);").get();
+        BOOST_REQUIRE(dynamic_pointer_cast<event_t>(res));
+     });
 }
