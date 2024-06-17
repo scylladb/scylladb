@@ -993,15 +993,9 @@ std::ostream& schema::schema_properties(replica::database& db, std::ostream& os)
     os << "\n    AND memtable_flush_period_in_ms = " << memtable_flush_period();
     os << "\n    AND min_index_interval = " << min_index_interval();
     os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
-    os << "\n    AND paxos_grace_seconds = " << paxos_grace_seconds().count();
-    os << "\n    AND tombstone_gc = {";
-    map_as_cql_param(os, tombstone_gc_options().to_map());
-    os << "}";
     
-    if (cdc_options().enabled()) {
-        os << "\n    AND cdc = {";
-        map_as_cql_param(os, cdc_options().to_map());
-        os << "}";
+    for (auto& [type, ext] : extensions()) {
+        os << "\n    AND " << type << " = " << ext->options_to_string();
     }
     if (is_view() && !is_index(db, view_info()->base_id(), *this)) {
         auto is_sync_update = db::find_tag(*this, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
