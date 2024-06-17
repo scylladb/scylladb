@@ -238,8 +238,7 @@ std::vector<mutation> make_update_table_mutations(
     lw_shared_ptr<keyspace_metadata> keyspace,
     schema_ptr old_table,
     schema_ptr new_table,
-    api::timestamp_type timestamp,
-    bool from_thrift);
+    api::timestamp_type timestamp);
 
 future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 

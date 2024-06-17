@@ -18,7 +18,6 @@
 #include <seastar/core/on_internal_error.hh>
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
-#include "thrift/server.hh"
 #include "cql3/query_processor.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
@@ -461,6 +460,7 @@ schema_ptr system_keyspace::built_indexes() {
        builder.remove_column("scylla_cpu_sharding_algorithm");
        builder.remove_column("scylla_nr_shards");
        builder.remove_column("scylla_msb_ignore");
+       builder.remove_column("thrift_version");
        return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
@@ -1544,7 +1544,7 @@ future<system_keyspace::local_info> system_keyspace::load_local_info() {
 
 future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_dc_rack location, gms::inet_address broadcast_address, gms::inet_address broadcast_rpc_address) {
     auto& cfg = _db.get_config();
-    sstring req = fmt::format("INSERT INTO system.{} (key, host_id, cluster_name, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    sstring req = fmt::format("INSERT INTO system.{} (key, host_id, cluster_name, release_version, cql_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     , db::system_keyspace::LOCAL);
 
     return execute_cql(req, sstring(db::system_keyspace::LOCAL),
@@ -1552,7 +1552,6 @@ future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_
                             sysinfo.cluster_name,
                             version::release(),
                             cql3::query_processor::CQL_VERSION,
-                            ::cassandra::thrift_version,
                             to_sstring(unsigned(cql_serialization_format::latest().protocol_version())),
                             location.dc,
                             location.rack,

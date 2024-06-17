@@ -616,15 +616,14 @@ void cql_server::connection::on_connection_close()
     _server._notifier->unregister_connection(this);
 }
 
-std::tuple<net::inet_address, int, client_type> cql_server::connection::make_client_key(const service::client_state& cli_state) {
-    return std::make_tuple(cli_state.get_client_address().addr(),
-            cli_state.get_client_port(),
-            cli_state.is_thrift() ? client_type::thrift : client_type::cql);
+std::pair<net::inet_address, int> cql_server::connection::make_client_key(const service::client_state& cli_state) {
+    return {cli_state.get_client_address().addr(),
+            cli_state.get_client_port()};
 }
 
 client_data cql_server::connection::make_client_data() const {
     client_data cd;
-    std::tie(cd.ip, cd.port, cd.ct) = make_client_key(_client_state);
+    std::tie(cd.ip, cd.port) = make_client_key(_client_state);
     cd.shard_id = this_shard_id();
     cd.protocol_version = _version;
     cd.driver_name = _client_state.get_driver_name();
@@ -1064,14 +1063,14 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
     return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &client_state] (unsigned int c) mutable {
         if (c != cpu_id) {
             return smp::submit_to(c, [this, query, &client_state] () mutable {
-                return _server._query_processor.local().prepare(std::move(query), client_state, false).discard_result();
+                return _server._query_processor.local().prepare(std::move(query), client_state).discard_result();
             });
         } else {
             return make_ready_future<>();
         }
     }).then([this, query, stream, &client_state, trace_state] () mutable {
         tracing::trace(trace_state, "Done preparing on remote shards");
-        return _server._query_processor.local().prepare(std::move(query), client_state, false).then([this, stream, trace_state] (auto msg) {
+        return _server._query_processor.local().prepare(std::move(query), client_state).then([this, stream, trace_state] (auto msg) {
             tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
                 return messages::result_message::prepared::cql::get_id(msg);
             }));

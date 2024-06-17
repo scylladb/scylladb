@@ -46,7 +46,6 @@ class snitch_ptr;
 } // namespace locator
 
 namespace cql_transport { class controller; }
-class thrift_controller;
 namespace db {
 class snapshot_ctl;
 class config;
@@ -100,8 +99,8 @@ future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair);
 future<> unset_server_repair(http_context& ctx);
 future<> set_transport_controller(http_context& ctx, cql_transport::controller& ctl);
 future<> unset_transport_controller(http_context& ctx);
-future<> set_rpc_controller(http_context& ctx, thrift_controller& ctl);
-future<> unset_rpc_controller(http_context& ctx);
+future<> set_thrift_controller(http_context& ctx);
+future<> unset_thrift_controller(http_context& ctx);
 future<> set_server_authorization_cache(http_context& ctx, sharded<auth::service> &auth_service);
 future<> unset_server_authorization_cache(http_context& ctx);
 future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl);

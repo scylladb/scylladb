@@ -655,24 +655,17 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
 query_processor::prepare(sstring query_string, service::query_state& query_state) {
     auto& client_state = query_state.get_client_state();
-    return prepare(std::move(query_string), client_state, client_state.is_thrift());
+    return prepare(std::move(query_string), client_state);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-query_processor::prepare(sstring query_string, const service::client_state& client_state, bool for_thrift) {
+query_processor::prepare(sstring query_string, const service::client_state& client_state) {
     using namespace cql_transport::messages;
-    if (for_thrift) {
-        return prepare_one<result_message::prepared::thrift>(
-                std::move(query_string),
-                client_state,
-                compute_thrift_id, prepared_cache_key_type::thrift_id);
-    } else {
-        return prepare_one<result_message::prepared::cql>(
-                std::move(query_string),
-                client_state,
-                compute_id,
-                prepared_cache_key_type::cql_id);
-    }
+    return prepare_one<result_message::prepared::cql>(
+            std::move(query_string),
+            client_state,
+            compute_id,
+            prepared_cache_key_type::cql_id);
 }
 
 static std::string hash_target(std::string_view query_string, std::string_view keyspace) {
@@ -685,16 +678,6 @@ prepared_cache_key_type query_processor::compute_id(
         std::string_view query_string,
         std::string_view keyspace) {
     return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace)));
-}
-
-prepared_cache_key_type query_processor::compute_thrift_id(
-        const std::string_view& query_string,
-        const sstring& keyspace) {
-    uint32_t h = 0;
-    for (auto&& c : hash_target(query_string, keyspace)) {
-        h = 31*h + c;
-    }
-    return prepared_cache_key_type(static_cast<int32_t>(h));
 }
 
 std::unique_ptr<prepared_statement>
@@ -1067,22 +1050,6 @@ future<> query_processor::announce_schema_statement(const statements::schema_alt
         co_return;
     }
     co_await remote_.get().mm.announce(std::move(m), std::move(guard), description);
-}
-
-future<std::string>
-query_processor::execute_thrift_schema_command(
-        std::function<future<std::vector<mutation>>(data_dictionary::database, api::timestamp_type)> prepare_schema_mutations,
-        std::string_view description) {
-    assert(this_shard_id() == 0);
-
-    auto [remote_, holder] = remote();
-    auto& mm = remote_.get().mm;
-    auto group0_guard = co_await mm.start_group0_operation();
-    auto ts = group0_guard.write_timestamp();
-
-    co_await mm.announce(co_await prepare_schema_mutations(db(), ts), std::move(group0_guard), description);
-
-    co_return std::string(db().get_version().to_sstring());
 }
 
 query_processor::migration_subscriber::migration_subscriber(query_processor* qp) : _qp{qp} {

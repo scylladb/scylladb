@@ -1251,7 +1251,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         auto schema = builder.build();
 
-        auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, false,  std::vector<view_ptr>(), group0_guard.write_timestamp());
+        auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema,  std::vector<view_ptr>(), group0_guard.write_timestamp());
 
         co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: update {} table", tab->cf_name()));
 

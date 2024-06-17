@@ -68,7 +68,7 @@ Procedure
 
     - **endpoint_snitch** - Set the selected snitch
 
-    - **rpc_address** - Address for client connection (Thrift, CQL)
+    - **rpc_address** - Address for CQL client connection
 
 #. Add the ``replace_node_first_boot`` parameter to the ``scylla.yaml`` config file on the new node. This line can be added to any place in the config file. After a successful node replacement, there is no need to remove it from the ``scylla.yaml`` file. (Note: The obsolete parameters "replace_address" and "replace_address_first_boot" are not supported and should not be used). The value of the ``replace_node_first_boot`` parameter should be the Host ID of the node to be replaced.
 

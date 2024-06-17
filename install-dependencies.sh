@@ -40,9 +40,7 @@ debian_base_packages=(
     libsnappy-dev
     libjsoncpp-dev
     rapidjson-dev
-    scylla-libthrift010-dev
     scylla-antlr35-c++-dev
-    thrift-compiler
     git
     pigz
     libunistring-dev
@@ -61,7 +59,6 @@ fedora_packages=(
     gdb
     lua-devel
     yaml-cpp-devel
-    thrift-devel
     antlr3-tool
     antlr3-C++-devel
     jsoncpp-devel
@@ -152,7 +149,6 @@ pip_symlinks=(
 centos_packages=(
     gdb
     yaml-cpp-devel
-    thrift-devel
     scylla-antlr35-tool
     scylla-antlr35-C++-devel
     jsoncpp-devel snappy-devel
@@ -184,7 +180,6 @@ arch_packages=(
     python3
     rapidjson
     snappy
-    thrift
 )
 
 go_arch() {
@@ -318,7 +313,7 @@ if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     else
         apt-get -y install libsystemd-dev antlr3 libyaml-cpp-dev
     fi
-    echo -e "Configure example:\n\t./configure.py --enable-dpdk --mode=release --static-thrift --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7 --cflags=\"-I/opt/scylladb/include -L/opt/scylladb/lib/x86-linux-gnu/\" --ldflags=\"-Wl,-rpath=/opt/scylladb/lib\""
+    echo -e "Configure example:\n\t./configure.py --enable-dpdk --mode=release --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7 --cflags=\"-I/opt/scylladb/include -L/opt/scylladb/lib/x86-linux-gnu/\" --ldflags=\"-Wl,-rpath=/opt/scylladb/lib\""
 elif [ "$ID" = "fedora" ]; then
     if rpm -q --quiet yum-utils; then
         echo

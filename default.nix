@@ -150,7 +150,6 @@ in derive ({
     rapidjson
     snappy
     systemd
-    thrift
     valgrind
     xorg.libpciaccess
     xxHash

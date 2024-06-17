@@ -48,7 +48,6 @@
 #include "db/extensions.hh"
 #include "db/snapshot-ctl.hh"
 #include "transport/controller.hh"
-#include "thrift/controller.hh"
 #include "locator/token_metadata.hh"
 #include "cdc/generation_service.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -337,36 +336,17 @@ void unset_transport_controller(http_context& ctx, routes& r) {
     ss::is_native_transport_running.unset(r);
 }
 
-void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl) {
-    ss::stop_rpc_server.set(r, [&ctl](std::unique_ptr<http::request> req) {
-        return smp::submit_to(0, [&] {
-            return ctl.request_stop_server();
-        }).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
-    ss::start_rpc_server.set(r, [&ctl](std::unique_ptr<http::request> req) {
-        return smp::submit_to(0, [&] {
-            return ctl.start_server();
-        }).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
-    ss::is_rpc_server_running.set(r, [&ctl] (std::unique_ptr<http::request> req) {
-        return smp::submit_to(0, [&] {
-            return !ctl.listen_addresses().empty();
-        }).then([] (bool running) {
-            return make_ready_future<json::json_return_type>(running);
+// NOTE: preserved only for backward compatibility
+void set_thrift_controller(http_context& ctx, routes& r) {
+    ss::is_thrift_server_running.set(r, [] (std::unique_ptr<http::request> req) {
+        return smp::submit_to(0, [] {
+            return make_ready_future<json::json_return_type>(false);
         });
     });
 }
 
-void unset_rpc_controller(http_context& ctx, routes& r) {
-    ss::stop_rpc_server.unset(r);
-    ss::start_rpc_server.unset(r);
-    ss::is_rpc_server_running.unset(r);
+void unset_thrift_controller(http_context& ctx, routes& r) {
+    ss::is_thrift_server_running.unset(r);
 }
 
 void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {

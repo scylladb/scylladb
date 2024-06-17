@@ -131,7 +131,7 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         }
 
         // Origin TODO: we could lift that limitation
-        if ((schema->is_dense() || !schema->thrift().has_compound_comparator()) && cd->is_primary_key()) {
+        if ((schema->is_dense() || !schema->is_compound()) && cd->is_primary_key()) {
             throw exceptions::invalid_request_exception(
                     "Secondary indexes are not supported on PRIMARY KEY columns in COMPACT STORAGE tables");
         }
@@ -382,7 +382,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
     std::vector<mutation> m;
 
     if (res) {
-        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), false, {}, ts);
+        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), {}, ts);
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,

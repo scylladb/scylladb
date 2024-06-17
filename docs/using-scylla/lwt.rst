@@ -534,7 +534,6 @@ Other limitations are more minor:
 
 * While a non-LWT batch can be UNLOGGED, a conditional batch cannot;
 * IF conditions must be a perfect conjunct (... AND ... AND ...);
-* Unlike Cassandra, Scylla doesn't have LWT support in Thrift protocol and doesn't plan to add it;
 * Conditional batches are always logged in system.paxos table, so UNLOGGED keyword is silently ignored for them.
 
 Additional Information

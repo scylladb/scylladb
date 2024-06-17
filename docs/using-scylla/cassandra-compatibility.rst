@@ -30,9 +30,10 @@ Interfaces
      - | Fully compatible with version 3.3.1, with additional features from later CQL versions (for example, :ref:`Duration type <durations>`).
        | Fully compatible with protocol v4, with additional features from v5.
      - More below
-   * - Thrift 
-     - Deprecated in ScyllaDB and Cassandra
-     - Support for the Thrift protocol is deprecated and will be dropped in future releases of ScyllaDB. 
+   * - Thrift
+     - Not supported anymore in ScyllaDB 6.0
+     - | deprecated in Apache Cassandra and got dropped in 4.0
+       | deprecated in ScyllaDB 5.2 and got dropped in 6.0
    * - SSTable format (all versions)
      - 3.11(mc / md / me), 2.2(la), 2.1.8 (ka)
      - | ``me`` - supported in ScyllaDB Open Source 5.1 and ScyllaDB Enterprise 2022.2.0 (and later)

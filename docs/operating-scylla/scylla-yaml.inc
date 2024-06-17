@@ -77,7 +77,7 @@ seeds           IP address of an existing node in the cluster. It allows a new n
 --------------  --------------------------------------------------  
 listen_address  IP address that the Scylla use to connect to other Scylla nodes in the cluster
 --------------  --------------------------------------------------  
-rpc_address     IP address of the interface for client connections (Thrift, CQL)  
+rpc_address     IP address of the interface for CQL client connections
 ==============  ==================================================  
 
 .. _yaml_enabling_experimental_features:

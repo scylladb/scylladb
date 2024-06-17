@@ -60,7 +60,7 @@ Procedure
      * **seeds** - Specify the IP of the node you chose to be a seed node. See :doc:`Scylla Seed Nodes </kb/seed-nodes/>` for details.
      * **listen_address** - IP address that Scylla used to connect to other Scylla nodes in the cluster.
      * **endpoint_snitch** - Set the selected snitch.
-     * **rpc_address** - Address for client connection (Thrift, CQL).
+     * **rpc_address** - Address for CQL client connection.
      * **broadcast_address** - The IP address a node tells other nodes in the cluster to contact it by.
      * **broadcast_rpc_address** - Default: unset. The RPC address to broadcast to drivers and other Scylla nodes. It cannot be set to 0.0.0.0. If left blank, it will be set to the value of ``rpc_address``. If ``rpc_address`` is set to 0.0.0.0, ``broadcast_rpc_address`` must be explicitly configured.
 

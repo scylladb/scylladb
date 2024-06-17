@@ -199,8 +199,7 @@ cas_contention_timeout_in_ms: 1000
 # of the snitch, which will be assumed to be on your classpath.
 endpoint_snitch: SimpleSnitch
 
-# The address or interface to bind the Thrift RPC service and native transport
-# server to.
+# The address or interface to bind the native transport server to.
 #
 # Set rpc_address OR rpc_interface, not both. Interfaces must correspond
 # to a single address, IP aliasing is not supported.
@@ -220,9 +219,6 @@ endpoint_snitch: SimpleSnitch
 rpc_address: localhost
 # rpc_interface: eth1
 # rpc_interface_prefer_ipv6: false
-
-# port for Thrift to listen for clients on
-rpc_port: 9160
 
 # port for REST API server
 api_port: 10000
@@ -355,9 +351,6 @@ commitlog_total_space_in_mb: -1
 # The maximum size of allowed frame. Frame (requests) larger than this will
 # be rejected as invalid. The default is 256MB.
 # native_transport_max_frame_size_in_mb: 256
-
-# Whether to start the thrift rpc server.
-# start_rpc: true
 
 # enable or disable keepalive on rpc/native connections
 # rpc_keepalive: true

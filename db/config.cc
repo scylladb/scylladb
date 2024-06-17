@@ -416,16 +416,16 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     */
     , commit_failure_policy(this, "commit_failure_policy", value_status::Unused, "stop",
         "Policy for commit disk failures:\n"
-        "* die          Shut down gossip and Thrift and kill the JVM, so the node can be replaced.\n"
-        "* stop         Shut down gossip and Thrift, leaving the node effectively dead, but can be inspected using JMX.\n"
+        "* die          Shut down gossip, so the node can be replaced.\n"
+        "* stop         Shut down gossip, leaving the node effectively dead, but can be inspected using the RESTful APIs.\n"
         "* stop_commit  Shut down the commit log, letting writes collect but continuing to service reads (as in pre-2.0.5 Cassandra).\n"
         "* ignore       Ignore fatal errors and let the batches fail."
         , {"die", "stop", "stop_commit", "ignore"})
     , disk_failure_policy(this, "disk_failure_policy", value_status::Unused, "stop",
         "Sets how Scylla responds to disk failure. Recommend settings are stop or best_effort.\n"
-        "* die              Shut down gossip and Thrift and kill the JVM for any file system errors or single SSTable errors, so the node can be replaced.\n"
-        "* stop_paranoid    Shut down gossip and Thrift even for single SSTable errors.\n"
-        "* stop             Shut down gossip and Thrift, leaving the node effectively dead, but available for inspection using JMX.\n"
+        "* die              Shut down gossip for any file system errors or single SSTable errors, so the node can be replaced.\n"
+        "* stop_paranoid    Shut down gossip even for single SSTable errors.\n"
+        "* stop             Shut down gossip, leaving the node effectively dead, but available for inspection using the RESTful APIs.\n"
         "* best_effort      Stop using the failed disk and respond to requests based on the remaining available SSTables. This means you will see obsolete data at consistency level of ONE.\n"
         "* ignore           Ignores fatal errors and lets the requests fail; all file system errors are logged but otherwise ignored. Scylla acts as in versions prior to Cassandra 1.2.\n"
         "Related information: Handling Disk Failures In Cassandra 1.2 blog and Recovering from a single disk failure using JBOD.\n"
@@ -442,7 +442,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\n"
         "Related information: Snitches\n")
     , rpc_address(this, "rpc_address", value_status::Used, "localhost",
-        "The listen address for client connections (Thrift RPC service and native transport).Valid values are:\n"
+        "The listen address for client connections (native transport).Valid values are:\n"
         "* unset: Resolves the address using the hostname configuration of the node. If left unset, the hostname must resolve to the IP address of this node using /etc/hostname, /etc/hosts, or DNS.\n"
         "* 0.0.0.0: Listens on all configured interfaces, but you must set the broadcast_rpc_address to a value other than 0.0.0.0.\n"
         "* IP address\n"
@@ -799,26 +799,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     */
     , broadcast_rpc_address(this, "broadcast_rpc_address", value_status::Used, {/* unset */},
         "RPC address to broadcast to drivers and other Scylla nodes. This cannot be set to 0.0.0.0. If blank, it is set to the value of the rpc_address or rpc_interface. If rpc_address or rpc_interfaceis set to 0.0.0.0, this property must be set.\n")
-    , rpc_port(this, "rpc_port", "thrift_port", value_status::Used, 9160,
+    , rpc_port(this, "rpc_port", "thrift_port", value_status::Unused, 0,
         "Thrift port for client connections.")
-    , start_rpc(this, "start_rpc", value_status::Used, false,
+    , start_rpc(this, "start_rpc", value_status::Unused, false,
         "Starts the Thrift RPC server")
     , rpc_keepalive(this, "rpc_keepalive", value_status::Used, true,
-        "Enable or disable keepalive on client connections (RPC or native).")
-    , rpc_max_threads(this, "rpc_max_threads", value_status::Invalid, 0,
-        "Regardless of your choice of RPC server (rpc_server_type), the number of maximum requests in the RPC thread pool dictates how many concurrent requests are possible. However, if you are using the parameter sync in the rpc_server_type, it also dictates the number of clients that can be connected. For a large number of client connections, this could cause excessive memory usage for the thread stack. Connection pooling on the client side is highly recommended. Setting a maximum thread pool size acts as a safeguard against misbehaved clients. If the maximum is reached, Cassandra blocks additional connections until a client disconnects.")
-    , rpc_min_threads(this, "rpc_min_threads", value_status::Invalid, 16,
-        "Sets the minimum thread pool size for remote procedure calls.")
-    , rpc_recv_buff_size_in_bytes(this, "rpc_recv_buff_size_in_bytes", value_status::Unused, 0,
-        "Sets the receiving socket buffer size for remote procedure calls.")
-    , rpc_send_buff_size_in_bytes(this, "rpc_send_buff_size_in_bytes", value_status::Unused, 0,
-        "Sets the sending socket buffer size in bytes for remote procedure calls.")
-    , rpc_server_type(this, "rpc_server_type", value_status::Unused, "sync",
-        "Cassandra provides three options for the RPC server. On Windows, sync is about 30% slower than hsha. On Linux, sync and hsha performance is about the same, but hsha uses less memory.\n"
-        "* sync    (Default One thread per Thrift connection.) For a very large number of clients, memory is the limiting factor. On a 64-bit JVM, 180KB is the minimum stack size per thread and corresponds to your use of virtual memory. Physical memory may be limited depending on use of stack space.\n"
-        "* hsh      Half synchronous, half asynchronous. All Thrift clients are handled asynchronously using a small number of threads that does not vary with the number of clients and thus scales well to many clients. The RPC requests are synchronous (one thread per active request).\n"
-        "*         Note: When selecting this option, you must change the default value (unlimited) of rpc_max_threads.\n"
-        "* Your own RPC server: You must provide a fully-qualified class name of an o.a.c.t.TServerFactory that can create a server instance.")
+        "Enable or disable keepalive on client connections (CQL native, Redis and the maintenance socket).")
     , cache_hit_rate_read_balancing(this, "cache_hit_rate_read_balancing", value_status::Used, true,
         "This boolean controls whether the replicas for read query will be chosen based on cache hit ratio.")
     /**
@@ -864,14 +850,6 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "* throttle_limit: The number of in-flight requests per client. Requests beyond this limit are queued up until running requests complete. Recommended value is ((concurrent_reads + concurrent_writes) × 2)\n"
         "* default_weight: (Default: 1 **)  How many requests are handled during each turn of the RoundRobin.\n"
         "* weights: (Default: Keyspace: 1)  Takes a list of keyspaces. It sets how many requests are handled during each turn of the RoundRobin, based on the request_scheduler_id.")
-    /**
-    * @Group Thrift interface properties
-    * @GroupDescription Legacy API for older clients. CQL is a simpler and better API for Scylla.
-    */
-    , thrift_framed_transport_size_in_mb(this, "thrift_framed_transport_size_in_mb", value_status::Unused, 15,
-        "Frame size (maximum field length) for Thrift. The frame is the row or part of the row the application is inserting.")
-    , thrift_max_message_length_in_mb(this, "thrift_max_message_length_in_mb", value_status::Used, 16,
-        "The maximum length of a Thrift message in megabytes, including all fields and internal Thrift overhead (1 byte of overhead for each frame). Message length is usually used in conjunction with batches. A frame length greater than or equal to 24 accommodates a batch with four inserts, each of which is 24 bytes. The required message length is greater than or equal to 24+24+24+24+4 (number of frames).")
     /**
     * @Group Security properties
     * @GroupDescription Server and client security settings.

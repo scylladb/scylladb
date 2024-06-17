@@ -45,7 +45,7 @@ Primary Options:
 
 -rate: Thread count, rate limit or automatic mode (default is auto).
 
--mode: Thrift or CQL with options.
+-mode: CQL with options.
 
 -errors: How to handle errors when encountered during stress.
 

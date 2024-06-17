@@ -31,7 +31,7 @@ The ``docker run`` command starts a new Docker instance in the background named 
  CONTAINER ID        IMAGE               COMMAND                  CREATED             STATUS              PORTS                                          NAMES
  616ee646cb9d        scylladb/scylla     "/docker-entrypoint.p"   4 seconds ago       Up 4 seconds        7000-7001/tcp, 9042/tcp, 9160/tcp, 10000/tcp   some-scylla
 
-As seen from the ``docker ps`` output, the image exposes ports **7000-7001** (Inter-node RPC), **9042** (CQL), **9160** (Thrift), and **10000** (REST API).
+As seen from the ``docker ps`` output, the image exposes ports **7000-7001** (Inter-node RPC), **9042** (CQL), and **10000** (REST API).
 
 
 Viewing ScyllaDB Server Logs

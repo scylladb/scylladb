@@ -328,9 +328,6 @@ void schema::rebuild() {
         _column_mapping = column_mapping(std::move(cm_columns), static_columns_count());
     }
 
-    thrift()._compound = is_compound();
-    thrift()._is_dynamic = clustering_key_size() > 0;
-
     if (is_counter()) {
         for (auto&& cdef : boost::range::join(static_columns(), regular_columns())) {
             if (!cdef.type->is_counter()) {
@@ -415,8 +412,6 @@ schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> 
             def._dropped_at = std::max(def._dropped_at, dropped_at_it->second.timestamp);
         }
 
-        def._thrift_bits = column_definition::thrift_bits();
-
         {
             // is_on_all_components
             // TODO : In origin, this predicate is "componentIndex == null", which is true in
@@ -436,7 +431,6 @@ schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> 
                 [[fallthrough]];
             default:
                 // Or any other column where "comparator" is not compound
-                def._thrift_bits.is_on_all_components = !thrift().has_compound_comparator();
                 break;
             }
         }
@@ -517,18 +511,6 @@ schema::~schema() {
 schema_registry_entry*
 schema::registry_entry() const noexcept {
     return _registry_entry;
-}
-
-sstring schema::thrift_key_validator() const {
-    if (partition_key_size() == 1) {
-        return partition_key_columns().begin()->type->name();
-    } else {
-        auto type_params = fmt::join(partition_key_columns()
-                            | boost::adaptors::transformed(std::mem_fn(&column_definition::type))
-                            | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)),
-                                        ", ");
-        return format("org.apache.cassandra.db.marshal.CompositeType({})", type_params);
-    }
 }
 
 bool
@@ -699,7 +681,6 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     out = fmt::format_to(out, ",comment={}", s._raw._comment);
     out = fmt::format_to(out, ",tombstoneGcOptions={}", s.tombstone_gc_options().to_sstring());
     out = fmt::format_to(out, ",gcGraceSeconds={}", s._raw._gc_grace_seconds);
-    out = fmt::format_to(out, ",keyValidator={}", s.thrift_key_validator());
     out = fmt::format_to(out, ",minCompactionThreshold={}", s._raw._min_compaction_threshold);
     out = fmt::format_to(out, ",maxCompactionThreshold={}", s._raw._max_compaction_threshold);
     out = fmt::format_to(out, ",columnMetadata=[");
@@ -1051,14 +1032,6 @@ bool operator==(const column_definition& x, const column_definition& y)
 table_id
 generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
     return table_id(utils::UUID_gen::get_name_UUID(ks_name + cf_name));
-}
-
-bool thrift_schema::has_compound_comparator() const {
-    return _compound;
-}
-
-bool thrift_schema::is_dynamic() const {
-    return _is_dynamic;
 }
 
 schema_builder& schema_builder::set_compaction_strategy_options(std::map<sstring, sstring>&& options) {

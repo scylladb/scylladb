@@ -301,7 +301,7 @@ future<> system_distributed_keyspace::start() {
 
             // The service_levels table exists. Update it if it lacks new columns.
             if (table->cf_name() == SERVICE_LEVELS && !get_current_service_levels(db)->equal_columns(*table)) {
-                auto update_mutations = co_await service::prepare_column_family_update_announcement(_sp, table, false, std::vector<view_ptr>(), ts);
+                auto update_mutations = co_await service::prepare_column_family_update_announcement(_sp, table, std::vector<view_ptr>(), ts);
                 std::move(update_mutations.begin(), update_mutations.end(), std::back_inserter(mutations));
             }
         });

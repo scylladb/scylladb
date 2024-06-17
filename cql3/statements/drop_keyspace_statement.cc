@@ -38,9 +38,6 @@ future<> drop_keyspace_statement::check_access(query_processor& qp, const servic
 void drop_keyspace_statement::validate(query_processor&, const service::client_state& state) const
 {
     warn(unimplemented::cause::VALIDATION);
-#if 0
-    ThriftValidation.validateKeyspaceNotSystem(keyspace);
-#endif
 }
 
 const sstring& drop_keyspace_statement::keyspace() const

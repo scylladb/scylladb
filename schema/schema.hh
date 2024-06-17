@@ -305,7 +305,6 @@ public:
             , _is_counter(other._is_counter)
             , _is_view_virtual(other._is_view_virtual)
             , _computation(other.get_computation_ptr())
-            , _thrift_bits(other._thrift_bits)
             , type(other.type)
             , id(other.id)
             , ordinal_id(other.ordinal_id)
@@ -375,18 +374,6 @@ public:
 };
 
 class schema_builder;
-
-/*
- * Sub-schema for thrift aspects. Should be kept isolated (and starved)
- */
-class thrift_schema {
-    bool _compound = true;
-    bool _is_dynamic = false;
-public:
-    bool has_compound_comparator() const;
-    bool is_dynamic() const;
-    friend class schema;
-};
 
 bool operator==(const column_definition&, const column_definition&);
 
@@ -610,7 +597,6 @@ private:
     };
     raw_schema _raw;
     schema_static_props _static_props;
-    thrift_schema _thrift;
     v3_columns _v3_columns;
     mutable schema_registry_entry* _registry_entry = nullptr;
     std::unique_ptr<::view_info> _view_info;
@@ -674,7 +660,6 @@ public:
     double bloom_filter_fp_chance() const {
         return _raw._bloom_filter_fp_chance;
     }
-    sstring thrift_key_validator() const;
     const compression_parameters& get_compressor_params() const {
         return _raw._compressor_params;
     }
@@ -699,12 +684,6 @@ public:
         return !is_super() && !is_dense() && !is_compound();
     }
 
-    thrift_schema& thrift() {
-        return _thrift;
-    }
-    const thrift_schema& thrift() const {
-        return _thrift;
-    }
     const table_id& id() const {
         return _raw._id;
     }

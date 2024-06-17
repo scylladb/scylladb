@@ -35,7 +35,6 @@ std::string_view format_as(cause c) {
         case cause::LEGACY_COMPOSITE_KEYS: return "LEGACY_COMPOSITE_KEYS";
         case cause::COLLECTION_RANGE_TOMBSTONES: return "COLLECTION_RANGE_TOMBSTONES";
         case cause::RANGE_DELETES: return "RANGE_DELETES";
-        case cause::THRIFT: return "THRIFT";
         case cause::VALIDATION: return "VALIDATION";
         case cause::REVERSED: return "REVERSED";
         case cause::COMPRESSION: return "COMPRESSION";

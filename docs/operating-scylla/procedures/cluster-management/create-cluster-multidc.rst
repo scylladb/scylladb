@@ -67,7 +67,7 @@ The file can be found under ``/etc/scylla/``.
 - **seeds** - Specify the IP of the node you chose to be a seed node. New nodes will use the IP of this seed node to connect to the cluster and learn the cluster topology and state.
 - **listen_address** - IP address that the Scylla use to connect to other Scylla nodes in the cluster
 - **endpoint_snitch** - Set the selected snitch
-- **rpc_address** - Address for client connection (Thrift, CQLSH)
+- **rpc_address** - Address for CQL client connection
 
 3. In the ``cassandra-rackdc.properties`` file, edit the rack and data center information. 
 The file can be found under ``/etc/scylla/``.

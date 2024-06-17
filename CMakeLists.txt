@@ -100,7 +100,6 @@ find_package(libdeflate REQUIRED)
 find_package(libxcrypt REQUIRED)
 find_package(Snappy REQUIRED)
 find_package(RapidJSON REQUIRED)
-find_package(Thrift REQUIRED)
 find_package(xxHash REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
@@ -198,7 +197,6 @@ add_subdirectory(dht)
 add_subdirectory(gms)
 add_subdirectory(idl)
 add_subdirectory(index)
-add_subdirectory(interface)
 add_subdirectory(lang)
 add_subdirectory(locator)
 add_subdirectory(message)
@@ -216,7 +214,6 @@ add_subdirectory(service)
 add_subdirectory(sstables)
 add_subdirectory(streaming)
 add_subdirectory(test)
-add_subdirectory(thrift)
 add_subdirectory(tools)
 add_subdirectory(tracing)
 add_subdirectory(transport)
@@ -257,7 +254,6 @@ target_link_libraries(scylla PRIVATE
     sstables
     streaming
     test-perf
-    thrift
     tools
     tracing
     transport
