@@ -7,7 +7,7 @@
 import time
 import pytest
 
-from util import new_test_table, unique_name, new_materialized_view
+from util import new_test_table, unique_name, new_materialized_view, ScyllaMetrics
 from cassandra.protocol import InvalidRequest, SyntaxException
 
 import nodetool
@@ -992,3 +992,209 @@ def test_base_clustering_prefix_deletion(cql, test_keyspace):
             # After the deletion, all data should be gone from both base and view
             assert [] == list(cql.execute(f"SELECT c2 FROM {table}"))
             assert [] == list(cql.execute(f"SELECT c2 FROM {mv}"))
+
+# Test deleting an entire base partition, where there is a view with the same or
+# different partition key.  When the view has the same partition key as base,
+# the partition deletion can be done on the base in one update of partition
+# tombstone.  In other cases, a tombstone is generated for each row that
+# corresponds to the deleted base partition.
+def test_base_partition_deletion_with_same_view_partition_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p,c)') as table:
+        # Insert into two base partitions. We will delete one of them
+        v = 42
+        insert = cql.prepare(f'INSERT INTO {table} (p,c,v) VALUES (?,?,{v})')
+        # Create multiple views with different primary keys.
+        # The first view has the same partition key as the base, so the entire partition will be deleted on the view as well.
+        # The other views have different partition key than the base, so they will have individual rows removed.
+        with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null') as mv1, \
+             new_materialized_view(cql, table, '*', 'c,p', 'p is not null and c is not null') as mv2, \
+             new_materialized_view(cql, table, '*', '(p,c),v', 'p is not null and c is not null and v is not null') as mv3:
+            N = 10
+            for i in range(N):
+                cql.execute(insert, [1, i])
+                cql.execute(insert, [2, i])
+
+            # Before the deletion, all N rows should exist in the base and the view
+            allN = list(range(N))
+            assert allN == [x.c for x in cql.execute(f"SELECT c FROM {table} WHERE p=1")]
+            assert allN == sorted([x.c for x in cql.execute(f"SELECT c FROM {mv1} WHERE p=1")])
+            assert allN == [x.c for x in cql.execute(f"SELECT c FROM {table} WHERE p=2")]
+            assert allN == sorted([x.c for x in cql.execute(f"SELECT c FROM {mv1} WHERE p=2")])
+            assert [1,2] == sorted([x.p for x in cql.execute(f"SELECT p FROM {mv2} WHERE c=0")])
+            assert [1,2] == sorted([x.p for x in cql.execute(f"SELECT p FROM {mv2} WHERE c=1")])
+            assert [1,2] == sorted([x.p for x in cql.execute(f"SELECT p FROM {mv2} WHERE c=2")])
+
+            cql.execute(f"DELETE FROM {table} WHERE p=1")
+
+            # After the deletion, all data should be gone from both base and view
+            assert [] == list(cql.execute(f"SELECT c FROM {table} WHERE p=1"))
+            assert [] == list(cql.execute(f"SELECT c FROM {mv1} WHERE p=1"))
+            assert [] == list(cql.execute(f"SELECT c FROM {mv2} WHERE p=1 ALLOW FILTERING"))
+            assert [] == list(cql.execute(f"SELECT c FROM {mv3} WHERE p=1 ALLOW FILTERING"))
+
+            assert allN == [x.c for x in cql.execute(f"SELECT c FROM {table} WHERE p=2")]
+            assert allN == sorted([x.c for x in cql.execute(f"SELECT c FROM {mv1} WHERE p=2")])
+
+            for i in range(N):
+                assert [2] == sorted([x.p for x in cql.execute(f"SELECT p FROM {mv2} WHERE c={i}")])
+
+            for i in range(N):
+                assert [v] == sorted([x.v for x in cql.execute(f"SELECT v FROM {mv3} WHERE p=2 AND c={i}")])
+
+# The partition key of the view is strictly contained in the base partition key,
+# so multiple base partitions are combined into one view partition.
+# Test deleting a base partition and verify it is deleted correctly in the view.
+def test_base_partition_deletion_with_smaller_view_partition_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p1 int, p2 int, c int, primary key ((p1,p2),c)') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (p1,p2,c) VALUES (?,?,?)')
+        with new_materialized_view(cql, table, '*', 'p1,p2,c', 'p1 is not null and p2 is not null and c is not null') as mv:
+            # Insert into two separate base partitions.
+            # In the view, the rows have the same partition key.
+            cql.execute(insert, [0, 0, 10])
+            cql.execute(insert, [0, 1, 20])
+
+            # Delete one of the partitions
+            cql.execute(f"DELETE FROM {table} WHERE p1=0 AND p2=0")
+
+            assert [] == list(cql.execute(f"SELECT c FROM {table} WHERE p1=0 AND p2=0"))
+            assert [20] == [x.c for x in cql.execute(f"SELECT c FROM {table} WHERE p1=0 AND p2=1")]
+
+            assert [(1,20)] == [(x.p2, x.c) for x in cql.execute(f"SELECT p2, c FROM {mv} WHERE p1=0")]
+
+# Test deleting a large partition when there is a view with the same partition
+# key, and verify that view updates metrics is increased by exactly 1. Deleting
+# a partition in this case is expected to generate one view update for deleting
+# the corresponding view partition by a partition tombstone.
+def test_base_partition_deletion_with_same_view_partition_key_metrics(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p,c)') as table:
+        # Insert into two base partitions. We will delete one of them
+        v = 42
+        insert = cql.prepare(f'INSERT INTO {table} (p,c,v) VALUES (?,?,{v})')
+        # Create a view with the same partition key as the base.
+        with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null') as mv:
+            N = 1000
+            for i in range(N):
+                cql.execute(insert, [1, i])
+
+            # Before the deletion, all N rows should exist in the base and the view
+            allN = list(range(N))
+            assert allN == [x.c for x in cql.execute(f"SELECT c FROM {table} WHERE p=1")]
+            assert allN == sorted([x.c for x in cql.execute(f"SELECT c FROM {mv} WHERE p=1")])
+
+            metrics_before = ScyllaMetrics.query(cql)
+            updates_before = metrics_before.get('scylla_database_total_view_updates_pushed_local')
+
+            cql.execute(f"DELETE FROM {table} WHERE p=1")
+
+            # After the deletion, all data should be gone from both base and view
+            assert [] == list(cql.execute(f"SELECT c FROM {table} WHERE p=1"))
+            assert [] == list(cql.execute(f"SELECT c FROM {mv} WHERE p=1"))
+
+            metrics_after = ScyllaMetrics.query(cql)
+            updates_after = metrics_after.get('scylla_database_total_view_updates_pushed_local')
+
+            print(f"scylla_database_total_view_updates_pushed_local: {updates_before} -> {updates_after}")
+            assert updates_after == updates_before + 1
+
+# Same as above test, except the view partition key is a permutation of
+# the base partition key. The delete partition optimization should still
+# apply and delete the view partition in one update.
+def test_base_partition_deletion_with_permutated_view_partition_key_metrics(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key ((p,c),v)') as table:
+        # Insert into two base partitions. We will delete one of them
+        insert = cql.prepare(f'INSERT INTO {table} (p,c,v) VALUES (?,?,?)')
+        # The view partition key is a permutation of the base partition key.
+        with new_materialized_view(cql, table, '*', '(c,p),v', 'p is not null and c is not null and v is not null') as mv:
+            N = 1000
+            for i in range(N):
+                cql.execute(insert, [1, 10, i])
+                cql.execute(insert, [2, 20, i])
+
+            # Before the deletion, all N rows should exist in the base and the view
+            allN = list(range(N))
+            assert allN == [x.v for x in cql.execute(f"SELECT v FROM {table} WHERE p=1 AND c=10")]
+            assert allN == sorted([x.v for x in cql.execute(f"SELECT v FROM {mv} WHERE c=10 AND p=1")])
+            assert allN == [x.v for x in cql.execute(f"SELECT v FROM {table} WHERE p=2 AND c=20")]
+            assert allN == sorted([x.v for x in cql.execute(f"SELECT v FROM {mv} WHERE c=20 AND p=2")])
+
+            metrics_before = ScyllaMetrics.query(cql)
+            updates_before = metrics_before.get('scylla_database_total_view_updates_pushed_local')
+
+            cql.execute(f"DELETE FROM {table} WHERE p=1 AND c=10")
+
+            # After the deletion, all data should be gone from both base and view
+            assert [] == list(cql.execute(f"SELECT v FROM {table} WHERE p=1 AND c=10"))
+            assert [] == list(cql.execute(f"SELECT v FROM {mv} WHERE c=10 AND p=1"))
+            assert allN == [x.v for x in cql.execute(f"SELECT v FROM {table} WHERE p=2 AND c=20")]
+            assert allN == sorted([x.v for x in cql.execute(f"SELECT v FROM {mv} WHERE c=20 AND p=2")])
+
+            metrics_after = ScyllaMetrics.query(cql)
+            updates_after = metrics_after.get('scylla_database_total_view_updates_pushed_local')
+
+            print(f"scylla_database_total_view_updates_pushed_local: {updates_before} -> {updates_after}")
+            assert updates_after == updates_before + 1
+
+# Perform a batch operation, deleting a partition and also inserting a row
+# to that partition with a newer timestamp, and verify that the insertion
+# is not lost in the MV update.
+def test_base_partition_deletion_in_batch_with_insert(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, primary key (p,c)') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (p,c) VALUES (?,?) USING TIMESTAMP 99')
+        with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null') as mv:
+            cql.execute(insert, [0, 1])
+            cql.execute(insert, [0, 2])
+            cql.execute(insert, [0, 3])
+
+            # This should delete all the existing partition rows, and the new
+            # row insertion survives and remains the only row after the operation
+            # since it has the most recent timestamp.
+            cmd = 'BEGIN UNLOGGED BATCH '
+            cmd += f'DELETE FROM {table} USING TIMESTAMP 100 WHERE p=0; '
+            cmd += f'INSERT INTO {table} (p,c) VALUES (0,4) USING TIMESTAMP 101; '
+            cmd += 'APPLY BATCH;'
+            cql.execute(cmd)
+
+            # Verify it is correct both in the table and the view
+            assert [4] == [x.c for x in cql.execute(f"SELECT c FROM {table} WHERE p=0")]
+            assert [4] == [x.c for x in cql.execute(f"SELECT c FROM {mv} WHERE p=0")]
+
+# Similar to the test above, perform a deletion of a base partition in a batch with
+# deletion of individual rows. Verify the partition is deleted correctly and that
+# a single update is generated for the view for deleting the whole partition, and no
+# view updates for each row.
+def test_base_partition_deletion_in_batch_with_delete_row_metrics(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key ((p,c),v)') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (p,c,v) VALUES (?,?,?)')
+        # The view partition key is the same as the base partition key.
+        with new_materialized_view(cql, table, '*', '(p,c),v', 'p is not null and c is not null and v is not null') as mv:
+            N = 1000
+            for i in range(N):
+                cql.execute(insert, [1, 10, i])
+
+            # Before the deletion, all N rows should exist in the base and the view
+            allN = list(range(N))
+            assert allN == [x.v for x in cql.execute(f"SELECT v FROM {table} WHERE p=1 AND c=10")]
+            assert allN == sorted([x.v for x in cql.execute(f"SELECT v FROM {mv} WHERE p=1 AND c=10")])
+
+            metrics_before = ScyllaMetrics.query(cql)
+            updates_before = metrics_before.get('scylla_database_total_view_updates_pushed_local')
+
+            # The batch deletes the entire partition and also, redundantly, deleting individual rows in the partition.
+            # We expect the view update to contain only a single update for deleting the partition.
+            cmd = 'BEGIN UNLOGGED BATCH '
+            for i in range(100,500):
+                cmd += f'DELETE FROM {table} WHERE p=1 AND c=10 AND v={i}; '
+            cmd += f'DELETE FROM {table} WHERE p=1 AND c=10; '
+            cmd += 'APPLY BATCH;'
+            cql.execute(cmd)
+
+            # Verify the partition is deleted
+            assert [] == list(cql.execute(f"SELECT v FROM {table} WHERE p=1 AND c=10"))
+            assert [] == list(cql.execute(f"SELECT v FROM {mv} WHERE p=1 AND c=10"))
+
+            # Verify there is a single view update
+            metrics_after = ScyllaMetrics.query(cql)
+            updates_after = metrics_after.get('scylla_database_total_view_updates_pushed_local')
+
+            print(f"scylla_database_total_view_updates_pushed_local: {updates_before} -> {updates_after}")
+            assert updates_after == updates_before + 1
