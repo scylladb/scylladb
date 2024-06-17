@@ -1700,11 +1700,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 lifecycle_notifier.local().register_subscriber(&local_proxy);
             }).get();
 
-            auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy, &lifecycle_notifier] {
+            auto unsubscribe_proxy = defer_verbose_shutdown("unsubscribe storage proxy", [&proxy, &lifecycle_notifier] {
                 proxy.invoke_on_all([&lifecycle_notifier] (service::storage_proxy& local_proxy) mutable {
-                    return lifecycle_notifier.local().unregister_subscriber(&local_proxy).finally([&local_proxy] {
-                        return local_proxy.drain_on_shutdown();
-                    });
+                    return lifecycle_notifier.local().unregister_subscriber(&local_proxy);
                 }).get();
             });
 

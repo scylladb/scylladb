@@ -6440,6 +6440,7 @@ void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, 
 }
 
 future<> storage_proxy::stop_remote() {
+    co_await drain_on_shutdown();
     co_await _remote->stop();
     _remote = nullptr;
 }

@@ -546,6 +546,7 @@ private:
     }
 
     mutation do_get_batchlog_mutation_for(schema_ptr schema, const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
+    future<> drain_on_shutdown();
 public:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
@@ -695,7 +696,6 @@ public:
     future<> stop();
     future<> start_hints_manager(shared_ptr<gms::gossiper>);
     void allow_replaying_hints() noexcept;
-    future<> drain_on_shutdown();
     future<> abort_view_writes();
 
     future<> change_hints_host_filter(db::hints::host_filter new_filter);
