@@ -50,7 +50,7 @@ def pytest_addoption(parser):
         help='Omit scylla\'s output from the test output')
     parser.addoption('--host', action='store', default='localhost',
         help='Scylla server host to connect to')
-    parser.addoption('--mode', action='store', required=True,
+    parser.addoption('--mode', action='store', default='no_mode',
                      help='Scylla build mode. Tests can use it to adjust their behavior.')
     parser.addoption('--run_id', action='store', default=1,
                      help='Run id for the test run')
