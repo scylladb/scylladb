@@ -27,6 +27,8 @@ future<> apply_gently(mutation_partition& target, const schema& s, mutation_part
         p2.upgrade(p_schema, s);
     }
     apply_resume res;
+    // we only move from p2.static_row() in the first iteration when target.static_row() is empty
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     while (target.apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::yes, res) == stop_iteration::no) {
         co_await yield();
     }
@@ -39,6 +41,8 @@ future<> apply_gently(mutation_partition& target, const schema& s, const mutatio
         p2.upgrade(p_schema, s);
     }
     apply_resume res;
+    // we only move from p2.static_row() in the first iteration when target.static_row() is empty
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     while (target.apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::yes, res) == stop_iteration::no) {
         co_await yield();
     }
@@ -46,6 +50,8 @@ future<> apply_gently(mutation_partition& target, const schema& s, const mutatio
 
 future<> apply_gently(mutation_partition& target, const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
     apply_resume res;
+    // we only move from p2.static_row() in the first iteration when target.static_row() is empty
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     while (target.apply_monotonically(s, std::move(p), no_cache_tracker, app_stats, is_preemptible::yes, res) == stop_iteration::no) {
         co_await yield();
     }
