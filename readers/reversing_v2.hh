@@ -42,6 +42,6 @@ namespace query {
 /// \param slice serves as a convenience slice storage for reads that have to
 ///     store an edited slice somewhere. This is common for reads that work
 ///     with a native-reversed slice and so have to convert the one used in the
-///     query -- which is in half-reversed format.
+///     query -- which is in reversed format.
 mutation_reader
 make_reversing_reader(mutation_reader original, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice = {});

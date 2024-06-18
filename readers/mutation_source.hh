@@ -36,7 +36,7 @@ partition_presence_checker make_default_partition_presence_checker() {
 // when invoking the source.
 //
 // When reading in reverse, a reverse schema has to be passed (compared to the
-// table's schema), and a half-reverse (legacy) slice.
+// table's schema), and a reverse (native) slice.
 // See docs/dev/reverse-reads.md for more details.
 // Partition-range forwarding is not yet supported in reverse mode.
 class mutation_source {
