@@ -1047,7 +1047,4 @@ template <> struct fmt::formatter<data_value> {
     auto format(const data_value&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-std::ostream& operator<<(std::ostream& out, const data_value& v);
-
 using data_value_list = std::initializer_list<data_value_or_unset>;
-
