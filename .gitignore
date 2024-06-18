@@ -3,6 +3,7 @@
 .settings
 build
 build.ninja
+build.ninja.new
 cscope.*
 /debian/
 dist/ami/files/*.rpm
