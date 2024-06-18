@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import os
 
 # use minio_server
 from test.pylib.minio_server import MinioServer
