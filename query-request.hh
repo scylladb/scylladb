@@ -83,21 +83,20 @@ typedef std::vector<clustering_range> clustering_row_ranges;
 /// Trim the clustering ranges.
 ///
 /// Equivalent of intersecting each clustering range with [pos, +inf) position
-/// in partition range, or (-inf, pos] position in partition range if
-/// reversed == true. Ranges that do not intersect are dropped. Ranges that
+/// in partition range. Ranges that do not intersect are dropped. Ranges that
 /// partially overlap are trimmed.
-/// Result: each range will overlap fully with [pos, +inf), or (-int, pos] if
-/// reversed is true.
-void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition pos, bool reversed = false);
+/// Result: each range will overlap fully with [pos, +inf).
+/// Works both with forward schema and ranges, and reversed schema and native reversed ranges
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition pos);
 
 /// Trim the clustering ranges.
 ///
 /// Equivalent of intersecting each clustering range with (key, +inf) clustering
-/// range, or (-inf, key) clustering range if reversed == true. Ranges that do
-/// not intersect are dropped. Ranges that partially overlap are trimmed.
-/// Result: each range will overlap fully with (key, +inf), or (-int, key) if
-/// reversed is true.
-void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key, bool reversed = false);
+/// range. Ranges that do not intersect are dropped. Ranges that partially overlap
+/// are trimmed.
+/// Result: each range will overlap fully with (key, +inf).
+/// Works both with forward schema and ranges, and reversed schema and native reversed ranges
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key);
 
 class specific_ranges {
 public:
