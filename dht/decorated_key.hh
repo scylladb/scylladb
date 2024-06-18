@@ -84,8 +84,6 @@ public:
 
 using decorated_key_opt = std::optional<decorated_key>;
 
-std::ostream& operator<<(std::ostream& out, const decorated_key& t);
-
 } // namespace dht
 
 namespace std {
