@@ -52,7 +52,7 @@ query_pager::query_pager(service::storage_proxy& p, schema_ptr query_schema,
                 , _per_partition_limit(cmd->slice.partition_row_limit())
                 , _last_pos(position_in_partition::for_partition_start())
                 , _proxy(p.shared_from_this())
-                , _schema(std::move(query_schema))
+                , _query_schema(std::move(query_schema))
                 , _selection(selection)
                 , _state(state)
                 , _options(options)
@@ -103,7 +103,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
     qlogger.trace("fetch_page query id {}", _cmd->query_uuid);
 
     if (_last_pkey) {
-        auto dpk = dht::decorate_key(*_schema, *_last_pkey);
+        auto dpk = dht::decorate_key(*_query_schema, *_last_pkey);
         dht::ring_position lo(dpk);
 
         qlogger.trace("PKey={}, Pos={}, reversed={}", dpk, _last_pos, _cmd->slice.is_reversed());
@@ -155,17 +155,17 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
 
         // If we have no clustering keys, it should mean we only have one row
         // per PK. Thus we can just bypass the last one.
-        modify_ranges(_ranges, lo, has_ck, dht::ring_position_comparator(*_schema));
+        modify_ranges(_ranges, lo, has_ck, dht::ring_position_comparator(*_query_schema));
 
         if (has_ck) {
             query::clustering_row_ranges row_ranges = _cmd->slice.default_row_ranges();
             position_in_partition next_pos = _last_pos;
             if (_last_pos.has_key()) {
-                next_pos = position_in_partition::after_key(*_schema, _last_pos);
+                next_pos = position_in_partition::after_key(*_query_schema, _last_pos);
             }
-            query::trim_clustering_row_ranges_to(*_schema, row_ranges, next_pos, false);
+            query::trim_clustering_row_ranges_to(*_query_schema, row_ranges, next_pos, false);
 
-            _cmd->slice.set_range(*_schema, *_last_pkey, row_ranges);
+            _cmd->slice.set_range(*_query_schema, *_last_pkey, row_ranges);
         }
     }
 
@@ -189,7 +189,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
     auto command = ::make_lw_shared<query::read_command>(*_cmd);
     return _query_function(
             *_proxy,
-            _schema,
+            _query_schema,
             std::move(command),
             std::move(ranges),
             _options.get_consistency(),
@@ -206,7 +206,7 @@ future<result<>> query_pager::fetch_page_result(cql3::selection::result_set_buil
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
         return builder.with_thread_if_needed([this, &builder, page_size, now, qr = std::move(qr)] () mutable -> result<> {
-            handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection),
+            handle_result(cql3::selection::result_set_builder::visitor(builder, *_query_schema, *_selection),
                           std::move(qr.query_result), page_size, now);
             return bo::success();
         });
@@ -242,7 +242,7 @@ future<result<cql3::result_generator>> query_pager::fetch_page_generator_result(
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
         handle_result(noop_visitor(), qr.query_result, page_size, now);
-        return make_ready_future<result<cql3::result_generator>>(cql3::result_generator(_schema, std::move(qr.query_result), _cmd, _selection, stats));
+        return make_ready_future<result<cql3::result_generator>>(cql3::result_generator(_query_schema, std::move(qr.query_result), _cmd, _selection, stats));
     }));
 }
 
@@ -268,8 +268,8 @@ public:
             qr.query_result->ensure_counts();
             _stats.rows_read_total += *qr.query_result->row_count();
             return builder.with_thread_if_needed([&builder, this, query_result = std::move(qr.query_result), page_size, now] () mutable -> result<> {
-                handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
-                            cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options, _max, _schema, _per_partition_limit, _last_pkey, _rows_fetched_for_last_partition)),
+                handle_result(cql3::selection::result_set_builder::visitor(builder, *_query_schema, *_selection,
+                            cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options, _max, _query_schema, _per_partition_limit, _last_pkey, _rows_fetched_for_last_partition)),
                             std::move(query_result), page_size, now);
                 return bo::success();
             });
@@ -316,7 +316,7 @@ public:
             _query_read_repair_decision = qr.read_repair_decision;
             qr.query_result->ensure_counts();
             return seastar::async([this, query_result = std::move(qr.query_result), page_size, now] () mutable -> result<> {
-                handle_result(db::view::delete_ghost_rows_visitor{_proxy, _state, view_ptr(_schema), _timeout_duration},
+                handle_result(db::view::delete_ghost_rows_visitor{_proxy, _state, view_ptr(_query_schema), _timeout_duration},
                         std::move(query_result), page_size, now);
                 return bo::success();
             });
@@ -377,7 +377,7 @@ void query_pager::handle_result(
         // a single extra range, we must clear out the old one
         // Even if it was not so of course, leaving junk in the slice
         // is bad.
-        _cmd->slice.clear_range(*_schema, last_pkey);
+        _cmd->slice.clear_range(*_query_schema, last_pkey);
     };
 
     auto view = query::result_view(*results);
@@ -397,7 +397,7 @@ void query_pager::handle_result(
         _exhausted = (v.total_rows < page_size && !results->is_short_read() && v.dropped_rows == 0) || _max == 0;
         // If per partition limit is defined, we need to accumulate rows fetched for last partition key if the key matches
         if (_cmd->slice.partition_row_limit() < query::max_rows_if_set) {
-            if (_last_pkey && v.last_pkey && _last_pkey->equal(*_schema, *v.last_pkey)) {
+            if (_last_pkey && v.last_pkey && _last_pkey->equal(*_query_schema, *v.last_pkey)) {
                 _rows_fetched_for_last_partition += v.last_partition_row_count;
             } else {
                 _rows_fetched_for_last_partition = v.last_partition_row_count;
