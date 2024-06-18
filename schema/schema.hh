@@ -521,6 +521,10 @@ public:
     virtual bool is_placeholder() const {
         return false;
     }
+    using default_map_type = std::map<sstring, sstring>;
+    // default impl assumes options are in a map.
+    // implementations should override if not
+    virtual std::string options_to_string() const;
 };
 
 struct schema_static_props {
