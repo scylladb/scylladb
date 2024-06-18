@@ -132,6 +132,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         std::vector<sstring> warnings;
         auto ks_options = _attrs->get_all_options_flattened(feat);
         auto ts = mc.write_timestamp();
+        auto global_request_id = mc.new_group0_state_id();
 
         // we only want to run the tablets path if there are actually any tablets changes, not only schema changes
         if (changes_tablets(qp)) {
@@ -147,7 +148,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
 
             service::topology_mutation_builder builder(ts);
             builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
-            builder.set_global_topology_request_id(this->global_req_id);
+            builder.set_global_topology_request_id(global_request_id);
             builder.set_new_keyspace_rf_change_data(_name, ks_options);
             service::topology_change change{{builder.build()}};
 
@@ -156,7 +157,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 return cm.to_mutation(topo_schema);
             });
 
-            service::topology_request_tracking_mutation_builder rtbuilder{utils::UUID{this->global_req_id}};
+            service::topology_request_tracking_mutation_builder rtbuilder{global_request_id};
             rtbuilder.set("done", false)
                      .set("start_time", db_clock::now());
             service::topology_change req_change{{rtbuilder.build()}};
