@@ -1009,7 +1009,7 @@ auto fmt::formatter<mutation_partition::printer>::format(const mutation_partitio
             out = fmt::format_to(out, "{}{}'{}':{},\n",
                                  indent, indent, column_def.name_as_text(),
                                  atomic_cell_or_collection::printer(column_def, cell));
-        }); 
+        });
         out = fmt::format_to(out, "{}}},\n", indent);
     }
 
@@ -2165,7 +2165,7 @@ void reconcilable_result_builder::consume_new_partition(const dht::decorated_key
         !has_ck_selector(_slice.row_ranges(*_query_schema, dk.key()));
     _static_row_is_alive = false;
     _live_rows = 0;
-    _mutation_consumer.emplace(streamed_mutation_freezer(*_query_schema, dk.key(), false));
+    _mutation_consumer.emplace(streamed_mutation_freezer(*_query_schema, dk.key()));
     _used_at_entry = _memory_accounter.used_memory();
 }
 
