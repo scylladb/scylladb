@@ -2,17 +2,7 @@
 Reference 
 ===============
 
-.. toctree::
-   :maxdepth: 2
-   :hidden:
-
-   AWS Images </reference/aws-images>
-   Azure Images </reference/azure-images>
-   GCP Images </reference/gcp-images>
-   Configuration Parameters </reference/configuration-parameters>
-   Glossary </reference/glossary>
-   API Reference (BETA) </reference/api-reference>
-   Metrics (BETA) </reference/metrics>
+.. scylladb_include_flag:: reference-toc.rst
 
 
 * ScyllaDB images for AWS, Azure, and GCP.
@@ -24,3 +14,4 @@ Reference
 * :doc:`Glossary </reference/glossary>` - ScyllaDB-related terms and definitions.
 * :doc:`API Reference (BETA) </reference/api-reference>`
 * :doc:`Metrics (BETA) </reference/metrics>`
+* .. scylladb_include_flag:: enterprise-vs-oss-matrix-link.rst
