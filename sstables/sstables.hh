@@ -271,8 +271,6 @@ public:
     // Returns a mutation_reader for given range of partitions.
     //
     // Precondition: if the slice is reversed, the schema must be reversed as well.
-    // Reversed slices must be provided in the 'half-reversed' format (the order of ranges
-    // being reversed, but the ranges themselves are not).
     mutation_reader make_reader(
             schema_ptr query_schema,
             reader_permit permit,
