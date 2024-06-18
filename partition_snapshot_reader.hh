@@ -9,8 +9,8 @@
 #pragma once
 
 #include "mutation/partition_version.hh"
-#include "readers/flat_mutation_reader_fwd.hh"
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader_fwd.hh"
+#include "readers/mutation_reader.hh"
 #include "readers/range_tombstone_change_merger.hh"
 #include "clustering_key_filter.hh"
 #include "query-request.hh"
@@ -21,7 +21,7 @@
 extern seastar::logger mplog;
 
 template <bool Reversing, typename Accounter>
-class partition_snapshot_flat_reader : public flat_mutation_reader_v2::impl, public Accounter {
+class partition_snapshot_flat_reader : public mutation_reader::impl, public Accounter {
     struct row_info {
         mutation_fragment_v2 row;
         tombstone rt_for_row;
@@ -294,7 +294,7 @@ public:
 };
 
 template <bool Reversing, typename Accounter, typename... Args>
-inline flat_mutation_reader_v2
+inline mutation_reader
 make_partition_snapshot_flat_reader(schema_ptr s,
                                     reader_permit permit,
                                     dht::decorated_key dk,
@@ -307,7 +307,7 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     streamed_mutation::forwarding fwd,
                                     Args&&... args)
 {
-    auto res = make_flat_mutation_reader_v2<partition_snapshot_flat_reader<Reversing, Accounter>>(std::move(s), std::move(permit), std::move(dk),
+    auto res = make_mutation_reader<partition_snapshot_flat_reader<Reversing, Accounter>>(std::move(s), std::move(permit), std::move(dk),
             snp, std::move(crr), digest_requested, region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
     if (fwd) {
         return make_forwardable(std::move(res)); // FIXME: optimize

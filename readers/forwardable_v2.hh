@@ -8,7 +8,7 @@
 
 #pragma once
 
-class flat_mutation_reader_v2;
+class mutation_reader;
 
-flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m);
+mutation_reader make_forwardable(mutation_reader m);
 

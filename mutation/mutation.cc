@@ -281,7 +281,7 @@ future<> split_mutation(mutation source, std::vector<mutation>& target, size_t m
         reader_concurrency_semaphore::register_metrics::no);
     {
         auto s = source.schema();
-        auto reader = make_flat_mutation_reader_from_mutations_v2(s,
+        auto reader = make_mutation_reader_from_mutations_v2(s,
             sem.make_tracking_only_permit(s, "split_mutation", db::no_timeout, {}),
             std::move(source));
         co_await reader.consume(mutation_by_size_splitter(s, target, max_size));

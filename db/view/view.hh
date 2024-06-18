@@ -11,7 +11,7 @@
 #include "gc_clock.hh"
 #include "query-request.hh"
 #include "schema/schema_fwd.hh"
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 #include "mutation/frozen_mutation.hh"
 #include "data_dictionary/data_dictionary.hh"
 
@@ -246,8 +246,8 @@ class view_update_builder {
     const replica::table& _base;
     schema_ptr _schema; // The base schema
     std::vector<view_updates> _view_updates;
-    flat_mutation_reader_v2 _updates;
-    flat_mutation_reader_v2_opt _existings;
+    mutation_reader _updates;
+    mutation_reader_opt _existings;
     tombstone _update_partition_tombstone;
     tombstone _update_current_tombstone;
     tombstone _existing_partition_tombstone;
@@ -260,8 +260,8 @@ public:
 
     view_update_builder(data_dictionary::database db, const replica::table& base, schema_ptr s,
         std::vector<view_updates>&& views_to_update,
-        flat_mutation_reader_v2&& updates,
-        flat_mutation_reader_v2_opt&& existings,
+        mutation_reader&& updates,
+        mutation_reader_opt&& existings,
         gc_clock::time_point now)
             : _db(std::move(db))
             , _base(base)
@@ -302,8 +302,8 @@ view_update_builder make_view_update_builder(
         const replica::table& base_table,
         const schema_ptr& base_schema,
         std::vector<view_and_base>&& views_to_update,
-        flat_mutation_reader_v2&& updates,
-        flat_mutation_reader_v2_opt&& existings,
+        mutation_reader&& updates,
+        mutation_reader_opt&& existings,
         gc_clock::time_point now);
 
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(

@@ -117,9 +117,11 @@ using seastar::future;
 /// \section Consuming
 ///
 /// The best way to consume those mutation_fragments is to call
-/// flat_mutation_reader::consume with a consumer that receives the fragments.
-class flat_mutation_reader_v2 final {
+/// mutation_reader::consume with a consumer that receives the fragments.
+class mutation_reader final {
 public:
+    class partition_range_forwarding_tag;
+    using forwarding = bool_class<partition_range_forwarding_tag>;
     using tracked_buffer = circular_buffer<mutation_fragment_v2, tracking_allocator<mutation_fragment_v2>>;
 
     class impl {
@@ -138,7 +140,7 @@ public:
 
         schema_ptr _schema;
         reader_permit _permit;
-        friend class flat_mutation_reader_v2;
+        friend class mutation_reader;
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
@@ -257,10 +259,10 @@ public:
     private:
         template<typename Consumer>
         struct consumer_adapter {
-            flat_mutation_reader_v2::impl& _reader;
+            mutation_reader::impl& _reader;
             std::optional<dht::decorated_key> _decorated_key;
             Consumer _consumer;
-            consumer_adapter(flat_mutation_reader_v2::impl& reader, Consumer c)
+            consumer_adapter(mutation_reader::impl& reader, Consumer c)
                     : _reader(reader)
                     , _consumer(std::move(c))
             { }
@@ -338,7 +340,7 @@ public:
         };
 
         /*
-         * fast_forward_to is forbidden on flat_mutation_reader_v2 created for a single partition.
+         * fast_forward_to is forbidden on mutation_reader created for a single partition.
          */
         virtual future<> fast_forward_to(const dht::partition_range&) = 0;
         virtual future<> fast_forward_to(position_range) = 0;
@@ -390,21 +392,21 @@ public:
 private:
     std::unique_ptr<impl> _impl;
 
-    flat_mutation_reader_v2() = default;
+    mutation_reader() = default;
     explicit operator bool() const noexcept { return bool(_impl); }
-    friend class optimized_optional<flat_mutation_reader_v2>;
+    friend class optimized_optional<mutation_reader>;
     void do_upgrade_schema(const schema_ptr&);
     static void on_close_error(std::unique_ptr<impl>, std::exception_ptr ep) noexcept;
 
 public:
-    flat_mutation_reader_v2(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
-    flat_mutation_reader_v2(const flat_mutation_reader_v2&) = delete;
-    flat_mutation_reader_v2(flat_mutation_reader_v2&&) = default;
+    mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
+    mutation_reader(const mutation_reader&) = delete;
+    mutation_reader(mutation_reader&&) = default;
 
-    flat_mutation_reader_v2& operator=(const flat_mutation_reader_v2&) = delete;
-    flat_mutation_reader_v2& operator=(flat_mutation_reader_v2&& o) noexcept;
+    mutation_reader& operator=(const mutation_reader&) = delete;
+    mutation_reader& operator=(mutation_reader&& o) noexcept;
 
-    ~flat_mutation_reader_v2();
+    ~mutation_reader();
 
     future<mutation_fragment_v2_opt> operator()() {
         return _impl->operator()();
@@ -639,11 +641,11 @@ public:
     }
 };
 
-using flat_mutation_reader_v2_opt = optimized_optional<flat_mutation_reader_v2>;
+using mutation_reader_opt = optimized_optional<mutation_reader>;
 
 template<typename Impl, typename... Args>
-flat_mutation_reader_v2 make_flat_mutation_reader_v2(Args &&... args) {
-    return flat_mutation_reader_v2(std::make_unique<Impl>(std::forward<Args>(args)...));
+mutation_reader make_mutation_reader(Args &&... args) {
+    return mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
 
 // Consumes mutation fragments until StopCondition is true.
@@ -656,7 +658,7 @@ requires requires(StopCondition stop, ConsumeMutationFragment consume_mf, Consum
     { consume_eos() } -> std::same_as<future<>>;
 }
 future<> consume_mutation_fragments_until(
-        flat_mutation_reader_v2& r,
+        mutation_reader& r,
         StopCondition&& stop,
         ConsumeMutationFragment&& consume_mf,
         ConsumeEndOfStream&& consume_eos)
@@ -678,9 +680,9 @@ future<> consume_mutation_fragments_until(
 // Creates a stream which is like r but with transformation applied to the elements.
 template<typename T>
 requires StreamedMutationTranformerV2<T>
-flat_mutation_reader_v2 transform(flat_mutation_reader_v2 r, T t) {
-    class transforming_reader : public flat_mutation_reader_v2::impl {
-        flat_mutation_reader_v2 _reader;
+mutation_reader transform(mutation_reader r, T t) {
+    class transforming_reader : public mutation_reader::impl {
+        mutation_reader _reader;
         T _t;
         struct consumer {
             transforming_reader* _owner;
@@ -690,7 +692,7 @@ flat_mutation_reader_v2 transform(flat_mutation_reader_v2 r, T t) {
             }
         };
     public:
-        transforming_reader(flat_mutation_reader_v2&& r, T&& t)
+        transforming_reader(mutation_reader&& r, T&& t)
                 : impl(t(r.schema()), r.permit())
                 , _reader(std::move(r))
                 , _t(std::move(t))
@@ -726,12 +728,12 @@ flat_mutation_reader_v2 transform(flat_mutation_reader_v2 r, T t) {
             return _reader.close();
         }
     };
-    return make_flat_mutation_reader_v2<transforming_reader>(std::move(r), std::move(t));
+    return make_mutation_reader<transforming_reader>(std::move(r), std::move(t));
 }
 
 
 // Reads a single partition from a reader. Returns empty optional if there are no more partitions to be read.
-future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2&);
+future<mutation_opt> read_mutation_from_mutation_reader(mutation_reader&);
 
 // Calls the consumer for each element of the reader's stream until end of stream
 // is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
@@ -740,10 +742,10 @@ future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reade
 template <typename Consumer>
 requires MutationConsumer<Consumer>
 inline
-future<> consume_partitions(flat_mutation_reader_v2& reader, Consumer consumer) {
+future<> consume_partitions(mutation_reader& reader, Consumer consumer) {
     return do_with(std::move(consumer), [&reader] (Consumer& c) -> future<> {
         return repeat([&reader, &c] () {
-            return read_mutation_from_flat_mutation_reader(reader).then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
+            return read_mutation_from_mutation_reader(reader).then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
                 if (!mo) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
@@ -753,7 +755,7 @@ future<> consume_partitions(flat_mutation_reader_v2& reader, Consumer consumer) 
     });
 }
 
-/// A consumer function that is passed a flat_mutation_reader to be consumed from
+/// A consumer function that is passed a mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.
 /// Note: the function assumes ownership of the reader and must close it in all cases.
-using reader_consumer_v2 = std::function<future<> (flat_mutation_reader_v2)>;
+using reader_consumer_v2 = std::function<future<> (mutation_reader)>;

@@ -9,7 +9,7 @@
 #pragma once
 
 #include <functional>
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 #include "dht/token.hh"
 
 namespace mutation_writer {
@@ -23,6 +23,6 @@ using classify_by_token_group = std::function<token_group_id(dht::token)>;
 // Therefore, it's guaranteed that the segregator will emit data for only
 // one group at a time. When moving to the next group, we're guaranteed
 // that producer won't longer emit data for the previous group.
-future<> segregate_by_token_group(flat_mutation_reader_v2 producer, classify_by_token_group classify, reader_consumer_v2 consumer);
+future<> segregate_by_token_group(mutation_reader producer, classify_by_token_group classify, reader_consumer_v2 consumer);
 
 } // namespace mutation_writer

@@ -17,7 +17,7 @@
 #include "query-result-set.hh"
 #include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "mutation_partition_view.hh"
 
@@ -263,7 +263,7 @@ public:
     }
 };
 
-future<> fragment_and_freeze(flat_mutation_reader_v2 mr, frozen_mutation_consumer_fn c, size_t fragment_size)
+future<> fragment_and_freeze(mutation_reader mr, frozen_mutation_consumer_fn c, size_t fragment_size)
 {
     std::exception_ptr ex;
     try {

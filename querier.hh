@@ -32,7 +32,7 @@ extern logging::logger qrlogger;
 /// consumer's `consume_end_of_stream()` method returns.
 template <typename Consumer>
 requires CompactedFragmentsConsumerV2<Consumer>
-auto consume_page(flat_mutation_reader_v2& reader,
+auto consume_page(mutation_reader& reader,
         lw_shared_ptr<compact_for_query_state_v2> compaction_state,
         const query::partition_slice& slice,
         Consumer&& consumer,
@@ -66,13 +66,13 @@ protected:
     reader_permit _permit;
     lw_shared_ptr<const dht::partition_range> _range;
     std::unique_ptr<const query::partition_slice> _slice;
-    std::variant<flat_mutation_reader_v2, reader_concurrency_semaphore::inactive_read_handle> _reader;
+    std::variant<mutation_reader, reader_concurrency_semaphore::inactive_read_handle> _reader;
     dht::partition_ranges_view _query_ranges;
     querier_config _qr_config;
 
 public:
     querier_base(reader_permit permit, lw_shared_ptr<const dht::partition_range> range,
-            std::unique_ptr<const query::partition_slice> slice, flat_mutation_reader_v2 reader, dht::partition_ranges_view query_ranges)
+            std::unique_ptr<const query::partition_slice> slice, mutation_reader reader, dht::partition_ranges_view query_ranges)
         : _schema(reader.schema())
         , _permit(std::move(permit))
         , _range(std::move(range))
@@ -170,7 +170,7 @@ public:
             uint32_t partition_limit,
             gc_clock::time_point query_time,
             tracing::trace_state_ptr trace_ptr = {}) {
-        return ::query::consume_page(std::get<flat_mutation_reader_v2>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
+        return ::query::consume_page(std::get<mutation_reader>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
                 partition_limit, query_time).then_wrapped([this, trace_ptr = std::move(trace_ptr)] (auto&& fut) {
             const auto& cstats = _compaction_state->stats();
             tracing::trace(trace_ptr, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
@@ -224,7 +224,7 @@ private:
             std::unique_ptr<const dht::partition_range_vector> query_ranges,
             lw_shared_ptr<const dht::partition_range> reader_range,
             std::unique_ptr<const query::partition_slice> reader_slice,
-            flat_mutation_reader_v2 reader,
+            mutation_reader reader,
             reader_permit permit,
             full_position nominal_pos)
         : querier_base(permit, std::move(reader_range), std::move(reader_slice), std::move(reader), *query_ranges)
@@ -238,7 +238,7 @@ public:
             const dht::partition_range_vector query_ranges,
             lw_shared_ptr<const dht::partition_range> reader_range,
             std::unique_ptr<const query::partition_slice> reader_slice,
-            flat_mutation_reader_v2 reader,
+            mutation_reader reader,
             reader_permit permit,
             full_position nominal_pos)
         : shard_mutation_querier(std::make_unique<const dht::partition_range_vector>(std::move(query_ranges)), std::move(reader_range),
@@ -257,8 +257,8 @@ public:
         return std::move(_slice);
     }
 
-    flat_mutation_reader_v2 reader() && {
-        return std::move(std::get<flat_mutation_reader_v2>(_reader));
+    mutation_reader reader() && {
+        return std::move(std::get<mutation_reader>(_reader));
     }
 };
 

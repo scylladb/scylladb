@@ -1,13 +1,13 @@
 #pragma once
 
-#include "flat_mutation_reader_v2.hh"
+#include "mutation_reader.hh"
 #include "mutation/mutation_fragment.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "reader_permit.hh"
 #include "mutation/range_tombstone_assembler.hh"
 
 class mutation_fragment_v1_stream final {
-    flat_mutation_reader_v2 _reader;
+    mutation_reader _reader;
     schema_ptr _schema;
     reader_permit _permit;
 
@@ -72,7 +72,7 @@ class mutation_fragment_v1_stream final {
     }
 
 public:
-    explicit mutation_fragment_v1_stream(flat_mutation_reader_v2 reader) noexcept
+    explicit mutation_fragment_v1_stream(mutation_reader reader) noexcept
         : _reader(std::move(reader))
         , _schema(_reader.schema())
         , _permit(_reader.permit())
@@ -223,6 +223,6 @@ public:
 };
 
 // Reads a single partition from the stream. Returns empty optional if there are no more partitions to be read.
-inline future<mutation_opt> read_mutation_from_flat_mutation_reader(mutation_fragment_v1_stream& s) {
+inline future<mutation_opt> read_mutation_from_mutation_reader(mutation_fragment_v1_stream& s) {
     return s.consume(mutation_rebuilder(s.schema()));
 }

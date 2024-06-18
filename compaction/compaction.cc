@@ -666,7 +666,7 @@ public:
     }
 private:
     // Default range sstable reader that will only return mutation that belongs to current shard.
-    virtual flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+    virtual mutation_reader make_sstable_reader(schema_ptr s,
                                                         reader_permit permit,
                                                         const dht::partition_range& range,
                                                         const query::partition_slice& slice,
@@ -674,7 +674,7 @@ private:
                                                         streamed_mutation::forwarding fwd,
                                                         mutation_reader::forwarding) const = 0;
 
-    flat_mutation_reader_v2 setup_sstable_reader() const {
+    mutation_reader setup_sstable_reader() const {
         if (!_owned_ranges_checker) {
             return make_sstable_reader(_schema,
                                        _permit,
@@ -779,7 +779,7 @@ private:
     // compacting_reader. It's useful for allowing data from different buckets
     // to be compacted together.
     future<> consume_without_gc_writer(gc_clock::time_point compaction_time) {
-        auto consumer = make_interposer_consumer([this] (flat_mutation_reader_v2 reader) mutable {
+        auto consumer = make_interposer_consumer([this] (mutation_reader reader) mutable {
             return seastar::async([this, reader = std::move(reader)] () mutable {
                 auto close_reader = deferred_close(reader);
                 auto cfc = get_compacted_fragments_writer();
@@ -798,7 +798,7 @@ private:
         if (!enable_garbage_collected_sstable_writer() && use_interposer_consumer()) {
             return consume_without_gc_writer(now);
         }
-        auto consumer = make_interposer_consumer([this, now] (flat_mutation_reader_v2 reader) mutable
+        auto consumer = make_interposer_consumer([this, now] (mutation_reader reader) mutable
         {
             return seastar::async([this, reader = std::move(reader), now] () mutable {
                 auto close_reader = deferred_close(reader);
@@ -1089,7 +1089,7 @@ public:
     {
     }
 
-    flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+    mutation_reader make_sstable_reader(schema_ptr s,
                                                 reader_permit permit,
                                                 const dht::partition_range& range,
                                                 const query::partition_slice& slice,
@@ -1236,7 +1236,7 @@ public:
         return _max_sstable_size != std::numeric_limits<uint64_t>::max() && bool(_replacer);
     }
 
-    flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+    mutation_reader make_sstable_reader(schema_ptr s,
                                                 reader_permit permit,
                                                 const dht::partition_range& range,
                                                 const query::partition_slice& slice,
@@ -1313,7 +1313,7 @@ public:
     }
 
     reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
-        return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
+        return [this, end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
             return mutation_writer::segregate_by_token_group(std::move(reader),
                     _options.classifier,
                     _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer)));
@@ -1341,11 +1341,11 @@ public:
 
 private:
 
-    class reader : public flat_mutation_reader_v2::impl {
+    class reader : public mutation_reader::impl {
         using skip = bool_class<class skip_tag>;
     private:
         compaction_type_options::scrub::mode _scrub_mode;
-        flat_mutation_reader_v2 _reader;
+        mutation_reader _reader;
         mutation_fragment_stream_validator _validator;
         bool _skip_to_next_partition = false;
         uint64_t& _validation_errors;
@@ -1493,7 +1493,7 @@ private:
         }
 
     public:
-        reader(flat_mutation_reader_v2 underlying, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors)
+        reader(mutation_reader underlying, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors)
             : impl(underlying.schema(), underlying.permit())
             , _scrub_mode(scrub_mode)
             , _reader(std::move(underlying))
@@ -1567,7 +1567,7 @@ public:
         return _scrub_finish_description;
     }
 
-    flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+    mutation_reader make_sstable_reader(schema_ptr s,
                                                 reader_permit permit,
                                                 const dht::partition_range& range,
                                                 const query::partition_slice& slice,
@@ -1578,7 +1578,7 @@ public:
             on_internal_error(clogger, fmt::format("Scrub compaction in mode {} expected full partition range, but got {} instead", _options.operation_mode, range));
         }
         auto crawling_reader = _compacting->make_crawling_reader(std::move(s), std::move(permit), nullptr, unwrap_monitor_generator());
-        return make_flat_mutation_reader_v2<reader>(std::move(crawling_reader), _options.operation_mode, _validation_errors);
+        return make_mutation_reader<reader>(std::move(crawling_reader), _options.operation_mode, _validation_errors);
     }
 
     uint64_t partitions_per_sstable() const override {
@@ -1595,10 +1595,10 @@ public:
         if (!use_interposer_consumer()) {
             return end_consumer;
         }
-        return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
+        return [this, end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
             auto cfg = mutation_writer::segregate_config{memory::stats().total_memory() / 10};
             return mutation_writer::segregate_by_partition(std::move(reader), cfg,
-                    [consumer = std::move(end_consumer), this] (flat_mutation_reader_v2 rd) {
+                    [consumer = std::move(end_consumer), this] (mutation_reader rd) {
                 ++_bucket_count;
                 return consumer(std::move(rd));
             });
@@ -1615,11 +1615,11 @@ public:
         return ret;
     }
 
-    friend flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors);
+    friend mutation_reader make_scrubbing_reader(mutation_reader rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors);
 };
 
-flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors) {
-    return make_flat_mutation_reader_v2<scrub_compaction::reader>(std::move(rd), scrub_mode, validation_errors);
+mutation_reader make_scrubbing_reader(mutation_reader rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors) {
+    return make_mutation_reader<scrub_compaction::reader>(std::move(rd), scrub_mode, validation_errors);
 }
 
 class resharding_compaction final : public compaction {
@@ -1668,7 +1668,7 @@ public:
     ~resharding_compaction() { }
 
     // Use reader that makes sure no non-local mutation will not be filtered out.
-    flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+    mutation_reader make_sstable_reader(schema_ptr s,
                                                 reader_permit permit,
                                                 const dht::partition_range& range,
                                                 const query::partition_slice& slice,
@@ -1687,7 +1687,7 @@ public:
     }
 
     reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
-        return [end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
+        return [end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
             return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
         };
     }

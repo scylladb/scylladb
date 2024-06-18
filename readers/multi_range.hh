@@ -11,12 +11,13 @@
 #include "dht/i_partitioner_fwd.hh"
 #include <functional>
 #include <optional>
-#include "readers/flat_mutation_reader_fwd.hh"
+#include "readers/mutation_reader_fwd.hh"
+#include "readers/mutation_reader.hh"
 #include "tracing/trace_state.hh"
 
 using namespace seastar;
 
-class flat_mutation_reader_v2;
+class mutation_reader;
 class reader_permit;
 class mutation_source;
 
@@ -29,12 +30,12 @@ namespace query {
 ///
 /// \param ranges An range vector that has to contain strictly monotonic
 ///     partition ranges, such that successively calling
-///     `flat_mutation_reader::fast_forward_to()` with each one is valid.
+///     `mutation_reader::fast_forward_to()` with each one is valid.
 ///     An range vector range with 0 or 1 elements is also valid.
 /// \param fwd_mr It is only respected when `ranges` contains 0 or 1 partition
 ///     ranges. Otherwise the reader is created with
 ///     mutation_reader::forwarding::yes.
-flat_mutation_reader_v2
+mutation_reader
 make_flat_multi_range_reader(
         schema_ptr s, reader_permit permit, mutation_source source, const dht::partition_range_vector& ranges,
         const query::partition_slice& slice,
@@ -45,7 +46,7 @@ make_flat_multi_range_reader(
 ///
 /// Generator overload. The ranges returned by the generator have to satisfy the
 /// same requirements as the `ranges` param of the vector overload.
-flat_mutation_reader_v2
+mutation_reader
 make_flat_multi_range_reader(
         schema_ptr s,
         reader_permit permit,

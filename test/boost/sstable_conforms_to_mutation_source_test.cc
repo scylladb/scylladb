@@ -17,7 +17,7 @@
 #include "row_cache.hh"
 #include "test/lib/simple_schema.hh"
 #include "partition_slice_builder.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/random_schema.hh"
 
@@ -35,7 +35,7 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
     return sst->as_mutation_source();
 }
 
-static void consume_all(flat_mutation_reader_v2& rd) {
+static void consume_all(mutation_reader& rd) {
     while (auto mfopt = rd().get()) {}
 }
 

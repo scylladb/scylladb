@@ -23,7 +23,7 @@ namespace replica::mutation_dump {
 
 namespace {
 
-class mutation_dump_reader : public flat_mutation_reader_v2::impl {
+class mutation_dump_reader : public mutation_reader::impl {
     struct mutation_source_with_params {
         mutation_source ms;
         std::vector<interval<partition_region>> region_intervals;
@@ -42,7 +42,7 @@ private:
     dht::partition_range _underlying_pr;
     // has to be sorted, because it is part of the clustering key
     std::map<sstring, mutation_source_with_params> _underlying_mutation_sources;
-    flat_mutation_reader_v2_opt _underlying_reader;
+    mutation_reader_opt _underlying_reader;
     bool _partition_start_emitted = false;
     bool _partition_end_emitted = false;
 
@@ -395,7 +395,7 @@ public:
     }
 };
 
-future<flat_mutation_reader_v2> make_partition_mutation_dump_reader(
+future<mutation_reader> make_partition_mutation_dump_reader(
         schema_ptr output_schema,
         schema_ptr underlying_schema,
         reader_permit permit,
@@ -407,21 +407,21 @@ future<flat_mutation_reader_v2> make_partition_mutation_dump_reader(
     const auto& tbl = db.local().find_column_family(underlying_schema);
     const auto shard = tbl.shard_for_reads(dk.token());
     if (shard == this_shard_id()) {
-        co_return make_flat_mutation_reader_v2<mutation_dump_reader>(std::move(output_schema), std::move(underlying_schema), std::move(permit),
+        co_return make_mutation_reader<mutation_dump_reader>(std::move(output_schema), std::move(underlying_schema), std::move(permit),
                 db.local(), dk, ps, std::move(ts));
     }
     auto gos = global_schema_ptr(output_schema);
     auto gus = global_schema_ptr(underlying_schema);
     auto gts = tracing::global_trace_state_ptr(ts);
     auto remote_reader = co_await db.invoke_on(shard,
-            [gos = std::move(gos), gus = std::move(gus), &dk, &ps, gts = std::move(gts), timeout] (replica::database& local_db) -> future<foreign_ptr<std::unique_ptr<flat_mutation_reader_v2>>> {
+            [gos = std::move(gos), gus = std::move(gus), &dk, &ps, gts = std::move(gts), timeout] (replica::database& local_db) -> future<foreign_ptr<std::unique_ptr<mutation_reader>>> {
         auto output_schema = gos.get();
         auto underlying_schema = gus.get();
         auto ts = gts.get();
         auto permit = co_await local_db.obtain_reader_permit(underlying_schema, "mutation-dump-remote-read", timeout, ts);
-        auto reader = make_flat_mutation_reader_v2<mutation_dump_reader>(std::move(output_schema), std::move(underlying_schema), std::move(permit),
+        auto reader = make_mutation_reader<mutation_dump_reader>(std::move(output_schema), std::move(underlying_schema), std::move(permit),
                 local_db, dk, ps, std::move(ts));
-        co_return make_foreign(std::make_unique<flat_mutation_reader_v2>(std::move(reader)));
+        co_return make_foreign(std::make_unique<mutation_reader>(std::move(reader)));
     });
     co_return make_foreign_reader(std::move(output_schema), std::move(permit), std::move(remote_reader));
 }

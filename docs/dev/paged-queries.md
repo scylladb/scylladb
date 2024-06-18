@@ -306,12 +306,12 @@ from all shards on a replica.
 
 #### multishard_combining_reader
 
-Using the querier mandates using a `flat_mutation_reader`. Range scans
+Using the querier mandates using a `mutation_reader`. Range scans
 used an open-coded algorithm on the replica for the read. As already
 explained in [the introduction](#range-scans) this algorithm
 uses several calls to `database::query_muations()` to the remote shards
 then merging the produced `reconcilable_result`. This algorithm did not
-lend itself for being wrapped in a `flat_mutation_reader` so a new,
+lend itself for being wrapped in a `mutation_reader` so a new,
 suitable one was written from scratch. This is
 `multishard_combining_reader`. In addition to implementing a
 multishard-reading algorithm that is suspendable, an effort was made to
@@ -337,7 +337,7 @@ some serious problems:
   in a querier. All the shard readers have to be saved on their home
   shard and made individually evictable as well but this has to be
   transparent to the multishard reader which, being a plain
-  `flat_mutation_reader`, has no way to be told that the query is
+  `mutation_reader`, has no way to be told that the query is
   "suspended" and later "resumed" and thus could not do the
   save/lookup/recreate itself.
 * It mandates the consistent usage of the same shard throughout all the

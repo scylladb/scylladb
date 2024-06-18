@@ -18,7 +18,7 @@
 
 namespace replica {
 
-static flat_mutation_reader_v2 make_partition_snapshot_flat_reader_from_snp_schema(
+static mutation_reader make_partition_snapshot_flat_reader_from_snp_schema(
         bool is_reversed,
         reader_permit permit,
         dht::decorated_key dk,
@@ -372,7 +372,7 @@ protected:
         return {};
     }
 
-    flat_mutation_reader_v2 delegate_reader(reader_permit permit,
+    mutation_reader delegate_reader(reader_permit permit,
                                     const dht::partition_range& delegate,
                                     const query::partition_slice& slice,
                                     streamed_mutation::forwarding fwd,
@@ -407,9 +407,9 @@ public:
     void operator()(const partition_end& eop) {}
 };
 
-class scanning_reader final : public flat_mutation_reader_v2::impl, private iterator_reader {
+class scanning_reader final : public mutation_reader::impl, private iterator_reader {
     std::optional<dht::partition_range> _delegate_range;
-    flat_mutation_reader_v2_opt _delegate;
+    mutation_reader_opt _delegate;
     const query::partition_slice& _slice;
     mutation_reader::forwarding _fwd_mr;
 
@@ -599,7 +599,7 @@ public:
     }
 };
 
-static flat_mutation_reader_v2 make_partition_snapshot_flat_reader_from_snp_schema(
+static mutation_reader make_partition_snapshot_flat_reader_from_snp_schema(
         bool is_reversed,
         reader_permit permit,
         dht::decorated_key dk,
@@ -619,12 +619,12 @@ static flat_mutation_reader_v2 make_partition_snapshot_flat_reader_from_snp_sche
     }
 }
 
-class flush_reader final : public flat_mutation_reader_v2::impl, private iterator_reader {
+class flush_reader final : public mutation_reader::impl, private iterator_reader {
     // FIXME: Similarly to scanning_reader we have an underlying
-    // flat_mutation_reader for each partition. This is suboptimal.
+    // mutation_reader for each partition. This is suboptimal.
     // Partition snapshot reader should be devirtualised and called directly
     // without using any intermediate buffers.
-    flat_mutation_reader_v2_opt _partition_reader;
+    mutation_reader_opt _partition_reader;
     flush_memory_accounter _flushed_memory;
 public:
     flush_reader(schema_ptr s, reader_permit permit, lw_shared_ptr<memtable> m)
@@ -706,7 +706,7 @@ partition_snapshot_ptr memtable_entry::snapshot(memtable& mtbl) {
     return _pe.read(mtbl.region(), mtbl.cleaner(), no_cache_tracker);
 }
 
-flat_mutation_reader_v2_opt
+mutation_reader_opt
 memtable::make_flat_reader_opt(schema_ptr s,
                       reader_permit permit,
                       const dht::partition_range& range,
@@ -740,7 +740,7 @@ memtable::make_flat_reader_opt(schema_ptr s,
         rd.upgrade_schema(s);
         return rd;
     } else {
-        auto res = make_flat_mutation_reader_v2<scanning_reader>(std::move(s), shared_from_this(), std::move(permit), range, slice, fwd_mr);
+        auto res = make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit), range, slice, fwd_mr);
         if (fwd == streamed_mutation::forwarding::yes) {
             return make_forwardable(std::move(res));
         } else {
@@ -749,13 +749,13 @@ memtable::make_flat_reader_opt(schema_ptr s,
     }
 }
 
-flat_mutation_reader_v2
+mutation_reader
 memtable::make_flush_reader(schema_ptr s, reader_permit permit) {
     if (!_merged_into_cache) {
-        return make_flat_mutation_reader_v2<flush_reader>(std::move(s), std::move(permit), shared_from_this());
+        return make_mutation_reader<flush_reader>(std::move(s), std::move(permit), shared_from_this());
     } else {
         auto& full_slice = s->full_slice();
-        return make_flat_mutation_reader_v2<scanning_reader>(std::move(s), shared_from_this(), std::move(permit),
+        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit),
                       query::full_partition_range, full_slice, mutation_reader::forwarding::no);
     }
 }

@@ -91,7 +91,7 @@ sstables::generation_type table::calculate_generation_for_new_table() {
     return ret;
 }
 
-flat_mutation_reader_v2
+mutation_reader
 table::make_sstable_reader(schema_ptr s,
                                    reader_permit permit,
                                    lw_shared_ptr<const sstables::sstable_set> sstables,
@@ -142,8 +142,8 @@ void table::refresh_compound_sstable_set() {
 future<table::const_mutation_partition_ptr>
 table::find_partition(schema_ptr s, reader_permit permit, const dht::decorated_key& key) const {
     return do_with(dht::partition_range::make_singular(key), [s = std::move(s), permit = std::move(permit), this] (auto& range) mutable {
-        return with_closeable(this->make_reader_v2(std::move(s), std::move(permit), range), [] (flat_mutation_reader_v2& reader) {
-            return read_mutation_from_flat_mutation_reader(reader).then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
+        return with_closeable(this->make_reader_v2(std::move(s), std::move(permit), range), [] (mutation_reader& reader) {
+            return read_mutation_from_mutation_reader(reader).then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
                 if (!mo) {
                     return {};
                 }
@@ -170,7 +170,7 @@ table::find_row(schema_ptr s, reader_permit permit, const dht::decorated_key& pa
 }
 
 void
-table::add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& readers,
+table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
         const schema_ptr& s,
         const reader_permit& permit,
         const dht::partition_range& range,
@@ -205,7 +205,7 @@ table::add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& reader
     }
 }
 
-flat_mutation_reader_v2
+mutation_reader
 table::make_reader_v2(schema_ptr s,
                            reader_permit permit,
                            const dht::partition_range& range,
@@ -227,7 +227,7 @@ table::make_reader_v2(schema_ptr s,
     }
     auto& slice = unreversed_slice ? *unreversed_slice : query_slice;
 
-    std::vector<flat_mutation_reader_v2> readers;
+    std::vector<mutation_reader> readers;
 
     // We're assuming that cache and memtables are both read atomically
     // for single-key queries, so we don't need to special case memtable
@@ -287,7 +287,7 @@ sstables::shared_sstable table::make_streaming_staging_sstable() {
     return newtab;
 }
 
-static flat_mutation_reader_v2 maybe_compact_for_streaming(flat_mutation_reader_v2 underlying, const compaction_manager& cm, gc_clock::time_point compaction_time, bool compaction_enabled) {
+static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, const compaction_manager& cm, gc_clock::time_point compaction_time, bool compaction_enabled) {
     utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_enabled", fmt::to_string(compaction_enabled));
     if (!compaction_enabled) {
         return underlying;
@@ -300,7 +300,7 @@ static flat_mutation_reader_v2 maybe_compact_for_streaming(flat_mutation_reader_
             streamed_mutation::forwarding::no);
 }
 
-flat_mutation_reader_v2
+mutation_reader
 table::make_streaming_reader(schema_ptr s, reader_permit permit,
                            const dht::partition_range_vector& ranges,
                            gc_clock::time_point compaction_time) const {
@@ -308,7 +308,7 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
 
     auto source = mutation_source([this] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
                                       tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
-        std::vector<flat_mutation_reader_v2> readers;
+        std::vector<mutation_reader> readers;
         add_memtables_to_reader_list(readers, s, permit, range, slice, trace_state, fwd, fwd_mr, [&] (size_t memtable_count) {
             readers.reserve(memtable_count + 1);
         });
@@ -323,12 +323,12 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
             _config.enable_compacting_data_for_streaming_and_repair());
 }
 
-flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
         const query::partition_slice& slice, mutation_reader::forwarding fwd_mr, gc_clock::time_point compaction_time) const {
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
 
-    std::vector<flat_mutation_reader_v2> readers;
+    std::vector<mutation_reader> readers;
     add_memtables_to_reader_list(readers, schema, permit, range, slice, trace_state, fwd, fwd_mr, [&] (size_t memtable_count) {
         readers.reserve(memtable_count + 1);
     });
@@ -340,7 +340,7 @@ flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_p
             _config.enable_compacting_data_for_streaming_and_repair());
 }
 
-flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
         lw_shared_ptr<sstables::sstable_set> sstables, gc_clock::time_point compaction_time) const {
     auto& slice = schema->full_slice();
     auto trace_state = tracing::trace_state_ptr();
@@ -354,7 +354,7 @@ flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_p
             _config.enable_compacting_data_for_streaming_and_repair());
 }
 
-flat_mutation_reader_v2 table::make_nonpopulating_cache_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+mutation_reader table::make_nonpopulating_cache_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
         const query::partition_slice& slice, tracing::trace_state_ptr ts) {
     if (!range.is_singular()) {
         throw std::runtime_error("table::make_cache_reader(): only singular ranges are supported");
@@ -402,7 +402,7 @@ api::timestamp_type table::min_memtable_timestamp() const {
 future<bool>
 table::for_all_partitions_slow(schema_ptr s, reader_permit permit, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
     struct iteration_state {
-        flat_mutation_reader_v2 reader;
+        mutation_reader reader;
         std::function<bool (const dht::decorated_key&, const mutation_partition&)> func;
         bool ok = true;
         bool empty = false;
@@ -417,7 +417,7 @@ table::for_all_partitions_slow(schema_ptr s, reader_permit permit, std::function
 
     return do_with(iteration_state(std::move(s), std::move(permit), *this, std::move(func)), [] (iteration_state& is) {
         return do_until([&is] { return is.done(); }, [&is] {
-            return read_mutation_from_flat_mutation_reader(is.reader).then([&is](mutation_opt&& mo) {
+            return read_mutation_from_mutation_reader(is.reader).then([&is](mutation_opt&& mo) {
                 if (!mo) {
                     is.empty = true;
                 } else {
@@ -1345,7 +1345,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.as_table_state());
         }
 
-        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (flat_mutation_reader_v2 reader) mutable -> future<> {
+        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
           std::exception_ptr ex;
           try {
             sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
@@ -2898,7 +2898,7 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
 template void table::do_apply(compaction_group& cg, db::rp_handle&&, const frozen_mutation&, const schema_ptr&);
 
 future<>
-write_memtable_to_sstable(flat_mutation_reader_v2 reader,
+write_memtable_to_sstable(mutation_reader reader,
                           memtable& mt, sstables::shared_sstable sst,
                           size_t estimated_partitions,
                           sstables::write_monitor& monitor,
@@ -3132,7 +3132,7 @@ void table::set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {
     }
 }
 
-flat_mutation_reader_v2
+mutation_reader
 table::make_reader_v2_excluding_staging(schema_ptr s,
         reader_permit permit,
         const dht::partition_range& range,
@@ -3140,7 +3140,7 @@ table::make_reader_v2_excluding_staging(schema_ptr s,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) const {
-    std::vector<flat_mutation_reader_v2> readers;
+    std::vector<mutation_reader> readers;
 
     add_memtables_to_reader_list(readers, s, permit, range, slice, trace_state, fwd, fwd_mr, [&] (size_t memtable_count) {
         readers.reserve(memtable_count + 1);

@@ -2491,7 +2491,7 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
 {
     struct range_and_reader {
         dht::partition_range range;
-        flat_mutation_reader_v2 reader;
+        mutation_reader reader;
 
         range_and_reader(range_and_reader&&) = delete;
         range_and_reader(const range_and_reader&) = delete;

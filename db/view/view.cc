@@ -1494,8 +1494,8 @@ view_update_builder make_view_update_builder(
         const replica::table& base_table,
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
-        flat_mutation_reader_v2&& updates,
-        flat_mutation_reader_v2_opt&& existings,
+        mutation_reader&& updates,
+        mutation_reader_opt&& existings,
         gc_clock::time_point now) {
     auto vs = boost::copy_range<std::vector<view_updates>>(views_to_update | boost::adaptors::transformed([&] (view_and_base v) {
         if (base->version() != v.base->base_schema()->version()) {
@@ -2483,7 +2483,7 @@ public:
             _fragments.emplace_front(*_step.reader.schema(), _builder._permit, partition_start(_step.current_key, tombstone()));
             auto base_schema = _step.base->schema();
             auto views = with_base_info_snapshot(_views_to_build);
-            auto reader = make_flat_mutation_reader_from_fragments(_step.reader.schema(), _builder._permit, std::move(_fragments));
+            auto reader = make_mutation_reader_from_fragments(_step.reader.schema(), _builder._permit, std::move(_fragments));
             auto close_reader = defer([&reader] { reader.close().get(); });
             reader.upgrade_schema(base_schema);
             _gen->populate_views(

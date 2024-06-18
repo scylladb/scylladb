@@ -476,7 +476,7 @@ mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_ma
             ck_strings,
             sstables);
 
-    std::vector<flat_mutation_reader_v2> readers;
+    std::vector<mutation_reader> readers;
     readers.reserve(sstables.size());
     for (const auto& sst : sstables) {
         readers.emplace_back(sst->make_reader(schema_table_schema, permit, pr, ps));
@@ -484,7 +484,7 @@ mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_ma
     auto reader = make_combined_reader(schema_table_schema, permit, std::move(readers));
     auto close_reader = deferred_close(reader);
 
-    auto mut_opt = read_mutation_from_flat_mutation_reader(reader).get();
+    auto mut_opt = read_mutation_from_mutation_reader(reader).get();
 
     if (mut_opt) {
         sllog.debug("read_schema_table_mutation(): read mutation for table={}.{}, pr={} ({}), cr={} ({})\n{}",

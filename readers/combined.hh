@@ -10,7 +10,8 @@
 
 #include "schema/schema_fwd.hh"
 #include "dht/ring_position.hh"
-#include "readers/flat_mutation_reader_fwd.hh"
+#include "readers/mutation_reader_fwd.hh"
+#include "readers/mutation_reader.hh"
 
 class reader_permit;
 
@@ -23,8 +24,8 @@ public:
 
     virtual ~reader_selector() = default;
     // Call only if has_new_readers() returned true.
-    virtual std::vector<flat_mutation_reader_v2> create_new_readers(const std::optional<dht::ring_position_view>& pos) = 0;
-    virtual std::vector<flat_mutation_reader_v2> fast_forward_to(const dht::partition_range& pr) = 0;
+    virtual std::vector<mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) = 0;
+    virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) = 0;
 
     // Can be false-positive but never false-negative!
     bool has_new_readers(const std::optional<dht::ring_position_view>& pos) const noexcept {
@@ -36,19 +37,19 @@ public:
 // Creates a mutation reader which combines data return by supplied readers.
 // Returns mutation of the same schema only when all readers return mutations
 // of the same schema.
-flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
+mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
-        std::vector<flat_mutation_reader_v2>,
+        std::vector<mutation_reader>,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
-flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
+mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
         std::unique_ptr<reader_selector>,
         streamed_mutation::forwarding,
         mutation_reader::forwarding);
-flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
+mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
-        flat_mutation_reader_v2&& a,
-        flat_mutation_reader_v2&& b,
+        mutation_reader&& a,
+        mutation_reader&& b,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);

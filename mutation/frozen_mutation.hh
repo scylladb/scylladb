@@ -20,7 +20,7 @@
 #include <span>
 
 class mutation;
-class flat_mutation_reader_v2;
+class mutation_reader;
 
 namespace ser {
 class mutation_view;
@@ -267,7 +267,7 @@ public:
 static constexpr size_t default_frozen_fragment_size = 128 * 1024;
 
 using frozen_mutation_consumer_fn = std::function<future<stop_iteration>(frozen_mutation, bool)>;
-future<> fragment_and_freeze(flat_mutation_reader_v2 mr, frozen_mutation_consumer_fn c,
+future<> fragment_and_freeze(mutation_reader mr, frozen_mutation_consumer_fn c,
                              size_t fragment_size = default_frozen_fragment_size);
 
 class reader_permit;

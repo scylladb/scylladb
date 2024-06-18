@@ -37,7 +37,8 @@
 #include "sstables/storage.hh"
 #include "sstables/generation_type.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
-#include "readers/flat_mutation_reader_fwd.hh"
+#include "readers/mutation_reader_fwd.hh"
+#include "readers/mutation_reader.hh"
 #include "tracing/trace_state.hh"
 #include "utils/updateable_value.hh"
 #include "dht/decorated_key.hh"
@@ -272,7 +273,7 @@ public:
     // Precondition: if the slice is reversed, the schema must be reversed as well.
     // Reversed slices must be provided in the 'half-reversed' format (the order of ranges
     // being reversed, but the ranges themselves are not).
-    flat_mutation_reader_v2 make_reader(
+    mutation_reader make_reader(
             schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
@@ -284,7 +285,7 @@ public:
 
     // A reader which doesn't use the index at all. It reads everything from the
     // sstable and it doesn't support skipping.
-    flat_mutation_reader_v2 make_crawling_reader(
+    mutation_reader make_crawling_reader(
             schema_ptr schema,
             reader_permit permit,
             tracing::trace_state_ptr trace_state = {},
@@ -294,7 +295,7 @@ public:
     // The mutation_source shares ownership of this sstable.
     mutation_source as_mutation_source();
 
-    future<> write_components(flat_mutation_reader_v2 mr,
+    future<> write_components(mutation_reader mr,
             uint64_t estimated_partitions,
             schema_ptr schema,
             const sstable_writer_config&,

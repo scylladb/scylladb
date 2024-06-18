@@ -8,6 +8,6 @@
 
 #pragma once
 
-class flat_mutation_reader_v2;
+class mutation_reader;
 
-flat_mutation_reader_v2 make_nonforwardable(flat_mutation_reader_v2, bool);
+mutation_reader make_nonforwardable(mutation_reader, bool);

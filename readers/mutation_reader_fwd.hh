@@ -13,14 +13,9 @@ using namespace seastar;
 
 class mutation_source;
 class position_in_partition;
-class flat_mutation_reader_v2;
+class mutation_reader;
 
 namespace streamed_mutation {
     class forwarding_tag;
     using forwarding = bool_class<forwarding_tag>;
-}
-
-namespace mutation_reader {
-    class partition_range_forwarding_tag;
-    using forwarding = bool_class<partition_range_forwarding_tag>;
 }

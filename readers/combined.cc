@@ -21,7 +21,7 @@ static constexpr size_t merger_small_vector_size = 4;
 template<typename T>
 using merger_vector = utils::small_vector<T, merger_small_vector_size>;
 
-using stream_id_t = const flat_mutation_reader_v2*;
+using stream_id_t = const mutation_reader*;
 
 struct mutation_fragment_and_stream_id {
     mutation_fragment_v2 fragment;
@@ -42,7 +42,7 @@ concept FragmentProducer = requires(Producer p, dht::partition_range part_range,
     { p() } -> std::same_as<future<mutation_fragment_batch>>;
 
     // The following functions have the same semantics as their
-    // flat_mutation_reader counterparts.
+    // mutation_reader counterparts.
     { p.next_partition() } -> std::same_as<future<>>;
     { p.fast_forward_to(part_range) } -> std::same_as<future<>>;
     { p.fast_forward_to(pos_range) } -> std::same_as<future<>>;
@@ -150,7 +150,7 @@ public:
 // stream of mutation-fragments.
 class mutation_reader_merger {
 public:
-    using reader_iterator = std::list<flat_mutation_reader_v2>::iterator;
+    using reader_iterator = std::list<mutation_reader>::iterator;
 
     struct reader_and_fragment {
         reader_iterator reader{};
@@ -190,7 +190,7 @@ private:
     std::unique_ptr<reader_selector> _selector;
     // We need a list because we need stable addresses across additions
     // and removals.
-    std::list<flat_mutation_reader_v2> _all_readers;
+    std::list<mutation_reader> _all_readers;
     // We launch a close call to an unneeded reader one at a time, using
     // a continuation chain. We'll only wait for their completion if the
     // submission rate is higher than the retire rate, to prevent memory
@@ -230,7 +230,7 @@ private:
     future<mutation_fragment_batch_opt> maybe_produce_batch();
     void maybe_add_readers_at_partition_boundary();
     void maybe_add_readers(const std::optional<dht::ring_position_view>& pos);
-    void add_readers(std::vector<flat_mutation_reader_v2> new_readers);
+    void add_readers(std::vector<mutation_reader> new_readers);
     bool in_gallop_mode() const;
     future<needs_merge> prepare_one(reader_and_last_fragment_kind rk, reader_galloping reader_galloping);
     future<needs_merge> advance_galloping_reader();
@@ -259,9 +259,9 @@ public:
  * See `mutation_fragment_merger` for details.
  *
  * This class is a simple adapter over `mutation_fragment_merger` that provides
- * a `flat_mutation_reader` interface. */
+ * a `mutation_reader` interface. */
 template <FragmentProducer Producer>
-class merging_reader : public flat_mutation_reader_v2::impl {
+class merging_reader : public mutation_reader::impl {
     mutation_fragment_merger<Producer> _merger;
     streamed_mutation::forwarding _fwd_sm;
 public:
@@ -283,10 +283,10 @@ public:
 // Dumb selector implementation for mutation_reader_merger that simply
 // forwards it's list of readers.
 class list_reader_selector : public reader_selector {
-    std::vector<flat_mutation_reader_v2> _readers;
+    std::vector<mutation_reader> _readers;
 
 public:
-    explicit list_reader_selector(schema_ptr s, std::vector<flat_mutation_reader_v2> readers)
+    explicit list_reader_selector(schema_ptr s, std::vector<mutation_reader> readers)
         : reader_selector(s, dht::ring_position_view::min())
         , _readers(std::move(readers)) {
     }
@@ -297,12 +297,12 @@ public:
     list_reader_selector(list_reader_selector&&) = default;
     list_reader_selector& operator=(list_reader_selector&&) = default;
 
-    virtual std::vector<flat_mutation_reader_v2> create_new_readers(const std::optional<dht::ring_position_view>&) override {
+    virtual std::vector<mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>&) override {
         _selector_position = dht::ring_position_view::max();
         return std::exchange(_readers, {});
     }
 
-    virtual std::vector<flat_mutation_reader_v2> fast_forward_to(const dht::partition_range&) override {
+    virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range&) override {
         return {};
     }
 };
@@ -313,7 +313,7 @@ void mutation_reader_merger::maybe_add_readers(const std::optional<dht::ring_pos
     }
 }
 
-void mutation_reader_merger::add_readers(std::vector<flat_mutation_reader_v2> new_readers) {
+void mutation_reader_merger::add_readers(std::vector<mutation_reader> new_readers) {
     for (auto&& new_reader : new_readers) {
         _all_readers.emplace_back(std::move(new_reader));
         _next.emplace_back(std::prev(_all_readers.end()), mutation_fragment_v2::kind::partition_end);
@@ -413,7 +413,7 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
             // end are out of data for good for the current range.
             _halted_readers.push_back(rk);
         } else if (_fwd_mr == mutation_reader::forwarding::no) {
-            flat_mutation_reader_v2 r = std::move(*rk.reader);
+            mutation_reader r = std::move(*rk.reader);
             _all_readers.erase(rk.reader);
             _pending_close++;
             _to_close = _to_close.then([this, r = std::move(r)] () mutable {
@@ -429,7 +429,7 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
         if (reader_galloping) {
             _gallop_mode_hits = 0;
         }
-        // to_close is a chain of flat_mutation_reader close futures,
+        // to_close is a chain of mutation_reader close futures,
         // therefore it can not fail.
         // To prevent memory usage from growing unbounded, we'll wait for pending closes
         // if we're submitting them faster than we can retire them.
@@ -572,7 +572,7 @@ future<mutation_fragment_batch_opt> mutation_reader_merger::maybe_produce_batch(
 future<> mutation_reader_merger::next_partition() {
     // If the last batch of fragments returned by operator() came from partition P,
     // we must forward to the partition immediately following P (as per the `next_partition`
-    // contract in `flat_mutation_reader`).
+    // contract in `mutation_reader`).
     //
     // The readers in _next are those which returned the last batch of fragments, thus they are
     // currently positioned either inside P or at the end of P, hence we need to forward them.
@@ -600,7 +600,7 @@ future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr)
     for (auto it = _all_readers.begin(); it != _all_readers.end(); ++it) {
         _next.emplace_back(it, mutation_fragment_v2::kind::partition_end);
     }
-    return parallel_for_each(_all_readers, [&pr] (flat_mutation_reader_v2& mr) {
+    return parallel_for_each(_all_readers, [&pr] (mutation_reader& mr) {
         return mr.fast_forward_to(pr);
     }).then([this, &pr] {
         add_readers(_selector->fast_forward_to(pr));
@@ -616,7 +616,7 @@ future<> mutation_reader_merger::fast_forward_to(position_range pr) {
 
 future<> mutation_reader_merger::close() noexcept {
     return std::exchange(_to_close, make_ready_future<>()).then([this] {
-        return parallel_for_each(std::move(_all_readers), [] (flat_mutation_reader_v2& mr) {
+        return parallel_for_each(std::move(_all_readers), [] (mutation_reader& mr) {
             return mr.close();
         });
     });
@@ -652,7 +652,7 @@ future<> merging_reader<P>::next_partition() {
         // by the producer came from the current partition, meaning that the producer
         // is still inside the current partition.
         // Thus we need to call next_partition on it (see the `next_partition` contract
-        // of `flat_mutation_reader`, which `FragmentProducer` follows).
+        // of `mutation_reader`, which `FragmentProducer` follows).
         if (is_buffer_empty()) {
             return _merger.next_partition();
         }
@@ -679,20 +679,20 @@ future<> merging_reader<P>::close() noexcept {
     return _merger.close();
 }
 
-flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
+mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
         std::unique_ptr<reader_selector> selector,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader_v2<merging_reader<mutation_reader_merger>>(schema,
+    return make_mutation_reader<merging_reader<mutation_reader_merger>>(schema,
             std::move(permit),
             fwd_sm,
             mutation_reader_merger(schema, std::move(selector), fwd_sm, fwd_mr));
 }
 
-flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
+mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
-        std::vector<flat_mutation_reader_v2> readers,
+        std::vector<mutation_reader> readers,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr) {
     if (readers.empty()) {
@@ -708,13 +708,13 @@ flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
             fwd_mr);
 }
 
-flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
+mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
-        flat_mutation_reader_v2&& a,
-        flat_mutation_reader_v2&& b,
+        mutation_reader&& a,
+        mutation_reader&& b,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr) {
-    std::vector<flat_mutation_reader_v2> v;
+    std::vector<mutation_reader> v;
     v.reserve(2);
     v.push_back(std::move(a));
     v.push_back(std::move(b));
@@ -1139,11 +1139,11 @@ public:
     }
 };
 
-flat_mutation_reader_v2 make_clustering_combined_reader(schema_ptr schema,
+mutation_reader make_clustering_combined_reader(schema_ptr schema,
         reader_permit permit,
         streamed_mutation::forwarding fwd_sm,
         std::unique_ptr<position_reader_queue> rq) {
-    return make_flat_mutation_reader_v2<merging_reader<clustering_order_reader_merger>>(
+    return make_mutation_reader<merging_reader<clustering_order_reader_merger>>(
             schema, permit, fwd_sm,
             clustering_order_reader_merger(schema, permit, fwd_sm, std::move(rq)));
 }

@@ -11,7 +11,7 @@
 #include "test/lib/random_schema.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/sstable_test_env.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 
 #include "db/config.hh"
 #include "index/secondary_index_manager.hh"
@@ -320,7 +320,7 @@ SEASTAR_TEST_CASE(test_load_schema_from_sstable) {
             auto sst = env.make_sstable(schema, version);
 
             {
-                auto mr = make_flat_mutation_reader_from_mutations_v2(schema, env.make_reader_permit(), mutations);
+                auto mr = make_mutation_reader_from_mutations_v2(schema, env.make_reader_permit(), mutations);
                 auto close_mr = deferred_close(mr);
 
                 const auto cfg = env.manager().configure_writer();

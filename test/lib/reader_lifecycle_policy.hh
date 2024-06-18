@@ -14,7 +14,7 @@
 class test_reader_lifecycle_policy
         : public reader_lifecycle_policy_v2
         , public enable_shared_from_this<test_reader_lifecycle_policy> {
-    using factory_function = std::function<flat_mutation_reader_v2(
+    using factory_function = std::function<mutation_reader(
             schema_ptr,
             reader_permit,
             const dht::partition_range&,
@@ -44,7 +44,7 @@ public:
         , _contexts(smp::count)
         , _evict_paused_readers(evict_paused_readers) {
     }
-    virtual flat_mutation_reader_v2 create_reader(
+    virtual mutation_reader create_reader(
             schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,

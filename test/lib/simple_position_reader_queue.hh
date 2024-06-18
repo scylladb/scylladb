@@ -7,14 +7,14 @@
  */
 
 #include "readers/clustering_combined.hh"
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 
 /*
  * Single-partition reader, a lower bound and an upper bound for the set of positions
  * of fragments returned by the reader. The bounds don't need to be exact.
  */
 struct reader_bounds {
-    flat_mutation_reader_v2 r;
+    mutation_reader r;
     position_in_partition lower;
     position_in_partition upper;
 };

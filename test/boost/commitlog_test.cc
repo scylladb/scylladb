@@ -954,7 +954,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         }
 
         {
-            std::vector<flat_mutation_reader_v2> readers;
+            std::vector<mutation_reader> readers;
             readers.reserve(memtables.size());
             auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(s, "test", db::no_timeout, {});
             for (auto mt : memtables) {
@@ -962,11 +962,11 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
             }
             auto rd = make_combined_reader(s, permit, std::move(readers));
             auto close_rd = deferred_close(rd);
-            auto mopt = read_mutation_from_flat_mutation_reader(rd).get();
+            auto mopt = read_mutation_from_mutation_reader(rd).get();
             BOOST_REQUIRE(mopt);
 
             mopt = {};
-            mopt = read_mutation_from_flat_mutation_reader(rd).get();
+            mopt = read_mutation_from_mutation_reader(rd).get();
             BOOST_REQUIRE(!mopt);
         }
     });

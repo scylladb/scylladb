@@ -25,8 +25,8 @@ using namespace seastar;
 struct frozen_mutation_and_schema;
 class mutation;
 class reader_permit;
-class flat_mutation_reader_v2;
-using flat_mutation_reader_v2_opt = optimized_optional<flat_mutation_reader_v2>;
+class mutation_reader;
+using mutation_reader_opt = optimized_optional<mutation_reader>;
 
 namespace dht {
 class token;
@@ -106,7 +106,7 @@ public:
     future<> populate_views(const replica::table& base,
             std::vector<view_and_base>,
             dht::token base_token,
-            flat_mutation_reader_v2&&,
+            mutation_reader&&,
             gc_clock::time_point);
 
     future<> generate_and_propagate_view_updates(const replica::table& table,
@@ -114,7 +114,7 @@ public:
             reader_permit permit,
             std::vector<view_and_base>&& views,
             mutation&& m,
-            flat_mutation_reader_v2_opt existings,
+            mutation_reader_opt existings,
             tracing::trace_state_ptr tr_state,
             gc_clock::time_point now,
             db::timeout_clock::time_point timeout);

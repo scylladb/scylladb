@@ -29,7 +29,7 @@ namespace bi = boost::intrusive;
 
 class row_cache;
 class cache_tracker;
-class flat_mutation_reader_v2;
+class mutation_reader;
 
 namespace replica {
 class memtable_entry;
@@ -40,7 +40,7 @@ namespace tracing { class trace_state_ptr; }
 namespace cache {
 
 class autoupdating_underlying_reader;
-class cache_flat_mutation_reader;
+class cache_mutation_reader;
 class read_context;
 class lsa_manager;
 
@@ -62,8 +62,8 @@ class cache_entry {
     } _flags{};
     friend class size_calculator;
 
-    flat_mutation_reader_v2 do_read(row_cache&, cache::read_context& ctx);
-    flat_mutation_reader_v2 do_read(row_cache&, std::unique_ptr<cache::read_context> unique_ctx);
+    mutation_reader do_read(row_cache&, cache::read_context& ctx);
+    mutation_reader do_read(row_cache&, std::unique_ptr<cache::read_context> unique_ctx);
 public:
     friend class row_cache;
     friend class cache_tracker;
@@ -128,10 +128,10 @@ public:
     const partition_entry& partition() const noexcept { return _pe; }
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const noexcept { return _pe.get_schema(); }
-    flat_mutation_reader_v2 read(row_cache&, cache::read_context&);
-    flat_mutation_reader_v2 read(row_cache&, std::unique_ptr<cache::read_context>);
-    flat_mutation_reader_v2 read(row_cache&, cache::read_context&, utils::phased_barrier::phase_type);
-    flat_mutation_reader_v2 read(row_cache&, std::unique_ptr<cache::read_context>, utils::phased_barrier::phase_type);
+    mutation_reader read(row_cache&, cache::read_context&);
+    mutation_reader read(row_cache&, std::unique_ptr<cache::read_context>);
+    mutation_reader read(row_cache&, cache::read_context&, utils::phased_barrier::phase_type);
+    mutation_reader read(row_cache&, std::unique_ptr<cache::read_context>, utils::phased_barrier::phase_type);
     bool continuous() const noexcept { return _flags._continuous; }
     void set_continuous(bool value) noexcept { _flags._continuous = value; }
 
@@ -160,7 +160,7 @@ public:
     friend class cache::autoupdating_underlying_reader;
     friend class single_partition_populating_reader;
     friend class cache_entry;
-    friend class cache::cache_flat_mutation_reader;
+    friend class cache::cache_mutation_reader;
     friend class cache::lsa_manager;
     friend class cache::read_context;
     friend class partition_range_cursor;
@@ -261,8 +261,8 @@ private:
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
-    flat_mutation_reader_v2 create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
-    flat_mutation_reader_v2 make_scanning_reader(const dht::partition_range&, std::unique_ptr<cache::read_context>);
+    mutation_reader create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
+    mutation_reader make_scanning_reader(const dht::partition_range&, std::unique_ptr<cache::read_context>);
     void on_partition_hit();
     void on_partition_miss();
     void on_row_hit();
@@ -369,7 +369,7 @@ public:
     // as long as the reader is used.
     // The range must not wrap around.
 
-    flat_mutation_reader_v2 make_reader(schema_ptr s,
+    mutation_reader make_reader(schema_ptr s,
                                      reader_permit permit,
                                      const dht::partition_range& range,
                                      const query::partition_slice& slice,
@@ -384,7 +384,7 @@ public:
     }
     // Same as make_reader, but returns an empty optional instead of a no-op reader when there is nothing to
     // read. This is an optimization.
-    flat_mutation_reader_v2_opt make_reader_opt(schema_ptr,
+    mutation_reader_opt make_reader_opt(schema_ptr,
                                      reader_permit permit,
                                      const dht::partition_range&,
                                      const query::partition_slice&,
@@ -393,7 +393,7 @@ public:
                                      streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                      mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
-    flat_mutation_reader_v2 make_reader(schema_ptr s,
+    mutation_reader make_reader(schema_ptr s,
                                     reader_permit permit,
                                     const dht::partition_range& range = query::full_partition_range,
                                     const tombstone_gc_state* gc_state = nullptr) {
@@ -405,7 +405,7 @@ public:
     // Only reads what is in the cache, doesn't populate.
     // Supports reading singular ranges only, for now.
     // Does not support reading in reverse.
-    flat_mutation_reader_v2 make_nonpopulating_reader(schema_ptr s, reader_permit permit, const dht::partition_range& range,
+    mutation_reader make_nonpopulating_reader(schema_ptr s, reader_permit permit, const dht::partition_range& range,
             const query::partition_slice& slice, tracing::trace_state_ptr ts);
 
     const stats& stats() const { return _stats; }

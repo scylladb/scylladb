@@ -622,17 +622,17 @@ class sstable_position_reader_queue : public position_reader_queue {
 
     position_in_partition::tri_compare _cmp;
 
-    std::function<flat_mutation_reader_v2(sstable&)> _create_reader;
+    std::function<mutation_reader(sstable&)> _create_reader;
     std::function<bool(const sstable&)> _filter;
 
     // After construction contains a reader which returns only the partition
     // start (and end, if not in forwarding mode) markers. This is the first
     // returned reader.
-    std::optional<flat_mutation_reader_v2> _dummy_reader;
+    std::optional<mutation_reader> _dummy_reader;
 
     bool _reversed;
 
-    flat_mutation_reader_v2 create_reader(sstable& sst) {
+    mutation_reader create_reader(sstable& sst) {
         return _create_reader(sst);
     }
 
@@ -646,7 +646,7 @@ public:
     // For reversed reads `query_schema` must be reversed (see docs/dev/reverse-reads.md).
     sstable_position_reader_queue(const time_series_sstable_set& set,
             schema_ptr query_schema,
-            std::function<flat_mutation_reader_v2(sstable&)> create_reader,
+            std::function<mutation_reader(sstable&)> create_reader,
             std::function<bool(const sstable&)> filter,
             partition_key pk,
             reader_permit permit,
@@ -659,7 +659,7 @@ public:
         , _cmp(*_query_schema)
         , _create_reader(std::move(create_reader))
         , _filter(std::move(filter))
-        , _dummy_reader(make_flat_mutation_reader_from_mutations_v2(_query_schema,
+        , _dummy_reader(make_mutation_reader_from_mutations_v2(_query_schema,
                 std::move(permit), mutation(_query_schema, std::move(pk)), _query_schema->full_slice(), fwd_sm))
         , _reversed(reversed)
     {
@@ -734,7 +734,7 @@ public:
 };
 
 std::unique_ptr<position_reader_queue> time_series_sstable_set::make_position_reader_queue(
-        std::function<flat_mutation_reader_v2(sstable&)> create_reader,
+        std::function<mutation_reader(sstable&)> create_reader,
         std::function<bool(const sstable&)> filter,
         partition_key pk, schema_ptr query_schema, reader_permit permit,
         streamed_mutation::forwarding fwd_sm, bool reversed) const {
@@ -770,7 +770,7 @@ compaction_strategy::make_sstable_set(schema_ptr schema) const {
             _compaction_strategy_impl->make_sstable_set(schema));
 }
 
-using sstable_reader_factory_type = std::function<flat_mutation_reader_v2(shared_sstable&, const dht::partition_range& pr)>;
+using sstable_reader_factory_type = std::function<mutation_reader(shared_sstable&, const dht::partition_range& pr)>;
 
 static logging::logger irclogger("incremental_reader_selector");
 
@@ -785,7 +785,7 @@ class incremental_reader_selector : public reader_selector {
     std::unordered_set<generation_type> _read_sstable_gens;
     sstable_reader_factory_type _fn;
 
-    flat_mutation_reader_v2 create_reader(shared_sstable sst) {
+    mutation_reader create_reader(shared_sstable sst) {
         tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
         return _fn(sst, *_pr);
     }
@@ -814,10 +814,10 @@ public:
     incremental_reader_selector(incremental_reader_selector&&) = delete;
     incremental_reader_selector& operator=(incremental_reader_selector&&) = delete;
 
-    virtual std::vector<flat_mutation_reader_v2> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
+    virtual std::vector<mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
         irclogger.trace("{}: {}({})", fmt::ptr(this), __FUNCTION__, seastar::lazy_deref(pos));
 
-        auto readers = std::vector<flat_mutation_reader_v2>();
+        auto readers = std::vector<mutation_reader>();
 
         do {
             auto selection = _selector->select({_selector_position, _pr});
@@ -826,7 +826,7 @@ public:
             irclogger.trace("{}: {} sstables to consider, advancing selector to {}", fmt::ptr(this), selection.sstables.size(),
                     _selector_position);
 
-            readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(selection.sstables
+            readers = boost::copy_range<std::vector<mutation_reader>>(selection.sstables
                     | boost::adaptors::filtered([this] (auto& sst) { return _read_sstable_gens.emplace(sst->generation()).second; })
                     | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
         } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
@@ -842,7 +842,7 @@ public:
         return readers;
     }
 
-    virtual std::vector<flat_mutation_reader_v2> fast_forward_to(const dht::partition_range& pr) override {
+    virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
         _pr = &pr;
 
         auto pos = dht::ring_position_view::for_range_start(*_pr);
@@ -929,7 +929,7 @@ sstable_set_impl::all_sstable_runs() const {
     throw_with_backtrace<std::bad_function_call>();
 }
 
-flat_mutation_reader_v2
+mutation_reader
 sstable_set_impl::create_single_key_sstable_reader(
         replica::column_family* cf,
         schema_ptr schema,
@@ -948,7 +948,7 @@ sstable_set_impl::create_single_key_sstable_reader(
     if (!num_sstables) {
         return make_empty_flat_reader_v2(schema, permit);
     }
-    auto readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(
+    auto readers = boost::copy_range<std::vector<mutation_reader>>(
         filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
         | boost::adaptors::transformed([&] (const shared_sstable& sstable) {
             tracing::trace(trace_state, "Reading key {} from sstable {}", pos, seastar::value_of([&sstable] { return sstable->get_filename(); }));
@@ -960,19 +960,19 @@ sstable_set_impl::create_single_key_sstable_reader(
     // we want to emit partition_start/end if no rows were found,
     // to prevent https://github.com/scylladb/scylla/issues/3552.
     //
-    // Use `make_flat_mutation_reader_from_mutations` with an empty mutation to emit
+    // Use `make_mutation_reader_from_mutations` with an empty mutation to emit
     // the partition_start/end pair and append it to the list of readers passed
     // to make_combined_reader to ensure partition_start/end are emitted even if
     // all sstables actually containing the partition were filtered.
     auto num_readers = readers.size();
     if (num_readers != num_sstables) {
-        readers.push_back(make_flat_mutation_reader_from_mutations_v2(schema, permit, mutation(schema, *pos.key()), slice, fwd));
+        readers.push_back(make_mutation_reader_from_mutations_v2(schema, permit, mutation(schema, *pos.key()), slice, fwd));
     }
     sstable_histogram.add(num_readers);
     return make_combined_reader(schema, std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
-flat_mutation_reader_v2
+mutation_reader
 time_series_sstable_set::create_single_key_sstable_reader(
         replica::column_family* cf,
         schema_ptr schema,
@@ -1218,7 +1218,7 @@ sstable_set make_compound_sstable_set(schema_ptr schema, std::vector<lw_shared_p
     return sstable_set(std::make_unique<compound_sstable_set>(schema, std::move(sets)));
 }
 
-flat_mutation_reader_v2
+mutation_reader
 compound_sstable_set::create_single_key_sstable_reader(
         replica::column_family* cf,
         schema_ptr schema,
@@ -1243,7 +1243,7 @@ compound_sstable_set::create_single_key_sstable_reader(
         return non_empty_set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate);
     }
 
-    auto readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(
+    auto readers = boost::copy_range<std::vector<mutation_reader>>(
         boost::make_iterator_range(sets.begin(), it)
         | boost::adaptors::transformed([&] (const lw_shared_ptr<sstable_set>& non_empty_set) {
             return non_empty_set->create_single_key_sstable_reader(cf, schema, permit, sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate);
@@ -1252,7 +1252,7 @@ compound_sstable_set::create_single_key_sstable_reader(
     return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
-flat_mutation_reader_v2
+mutation_reader
 sstable_set::create_single_key_sstable_reader(
         replica::column_family* cf,
         schema_ptr schema,
@@ -1269,9 +1269,9 @@ sstable_set::create_single_key_sstable_reader(
             std::move(permit), sstable_histogram, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate);
 }
 
-class auto_closed_sstable_reader final : public flat_mutation_reader_v2::impl {
+class auto_closed_sstable_reader final : public mutation_reader::impl {
     shared_sstable _sst;
-    flat_mutation_reader_v2_opt _reader;
+    mutation_reader_opt _reader;
 private:
     future<> maybe_auto_close_sstable_reader(const dht::partition_range& pr) {
         if (!_sst) {
@@ -1291,7 +1291,7 @@ private:
     }
 public:
     auto_closed_sstable_reader(shared_sstable sst,
-                               flat_mutation_reader_v2 sst_reader,
+                               mutation_reader sst_reader,
                                reader_permit permit)
             : impl(sst_reader.schema(), std::move(permit))
             , _sst(std::move(sst))
@@ -1326,11 +1326,11 @@ public:
     }
 };
 
-flat_mutation_reader_v2 make_auto_closed_sstable_reader(shared_sstable sst, flat_mutation_reader_v2 sst_reader, reader_permit permit) {
-    return make_flat_mutation_reader_v2<auto_closed_sstable_reader>(std::move(sst), std::move(sst_reader), std::move(permit));
+mutation_reader make_auto_closed_sstable_reader(shared_sstable sst, mutation_reader sst_reader, reader_permit permit) {
+    return make_mutation_reader<auto_closed_sstable_reader>(std::move(sst), std::move(sst_reader), std::move(permit));
 }
 
-flat_mutation_reader_v2
+mutation_reader
 sstable_set::make_range_sstable_reader(
         schema_ptr s,
         reader_permit permit,
@@ -1354,7 +1354,7 @@ sstable_set::make_range_sstable_reader(
             fwd_mr);
 }
 
-flat_mutation_reader_v2
+mutation_reader
 sstable_set::make_local_shard_sstable_reader(
         schema_ptr s,
         reader_permit permit,
@@ -1393,12 +1393,12 @@ sstable_set::make_local_shard_sstable_reader(
             fwd_mr);
 }
 
-flat_mutation_reader_v2 sstable_set::make_crawling_reader(
+mutation_reader sstable_set::make_crawling_reader(
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_ptr,
         read_monitor_generator& monitor_generator) const {
-    std::vector<flat_mutation_reader_v2> readers;
+    std::vector<mutation_reader> readers;
     for_each_sstable([&] (const shared_sstable& sst) mutable {
         readers.emplace_back(sst->make_crawling_reader(schema, permit, trace_ptr, monitor_generator(sst)));
     });

@@ -129,7 +129,7 @@ public:
     }
 };
 
-future<> segregate_by_partition(flat_mutation_reader_v2 producer, segregate_config cfg, reader_consumer_v2 consumer) {
+future<> segregate_by_partition(mutation_reader producer, segregate_config cfg, reader_consumer_v2 consumer) {
     auto schema = producer.schema();
     auto permit = producer.permit();
   try {

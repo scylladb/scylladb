@@ -9,8 +9,8 @@
 #pragma once
 #include "schema/schema_fwd.hh"
 
-class flat_mutation_reader_v2;
+class mutation_reader;
 class reader_permit;
 
-flat_mutation_reader_v2 make_empty_flat_reader_v2(schema_ptr s, reader_permit permit);
+mutation_reader make_empty_flat_reader_v2(schema_ptr s, reader_permit permit);
 

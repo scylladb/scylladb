@@ -9,7 +9,7 @@
 #pragma once
 #include <memory>
 
-class flat_mutation_reader_v2;
+class mutation_reader;
 
 namespace query {
     struct max_result_size;
@@ -43,5 +43,5 @@ namespace query {
 ///     store an edited slice somewhere. This is common for reads that work
 ///     with a native-reversed slice and so have to convert the one used in the
 ///     query -- which is in half-reversed format.
-flat_mutation_reader_v2
-make_reversing_reader(flat_mutation_reader_v2 original, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice = {});
+mutation_reader
+make_reversing_reader(mutation_reader original, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice = {});

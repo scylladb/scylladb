@@ -786,7 +786,7 @@ public:
     }
 };
 
-stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& consumer, sstables::sstable* sst, const partition_set& partitions, bool no_skips) {
+stop_iteration consume_reader(mutation_reader rd, sstable_consumer& consumer, sstables::sstable* sst, const partition_set& partitions, bool no_skips) {
     auto close_rd = deferred_close(rd);
     if (consumer.consume_sstable_start(sst).get() == stop_iteration::yes) {
         return consumer.consume_sstable_end().get();
@@ -830,10 +830,10 @@ stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& cons
 }
 
 void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstables::shared_sstable> sstables, bool merge, bool use_crawling_reader,
-        std::function<stop_iteration(flat_mutation_reader_v2&, sstables::sstable*)> reader_consumer) {
+        std::function<stop_iteration(mutation_reader&, sstables::sstable*)> reader_consumer) {
     sst_log.trace("consume_sstables(): {} sstables, merge={}, use_crawling_reader={}", sstables.size(), merge, use_crawling_reader);
     if (merge) {
-        std::vector<flat_mutation_reader_v2> readers;
+        std::vector<mutation_reader> readers;
         readers.reserve(sstables.size());
         for (const auto& sst : sstables) {
             if (use_crawling_reader) {
@@ -2555,7 +2555,7 @@ void script_operation(schema_ptr schema, reader_permit permit, const std::vector
     auto script_params = vm["script-arg"].as<program_options::string_map>();
     auto consumer = make_lua_sstable_consumer(schema, permit, script_file, std::move(script_params)).get();
     consumer->consume_stream_start().get();
-    consume_sstables(schema, permit, sstables, merge, false, [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
+    consume_sstables(schema, permit, sstables, merge, false, [&, &consumer = *consumer] (mutation_reader& rd, sstables::sstable* sst) {
         return consume_reader(std::move(rd), consumer, sst, partitions, false);
     });
     consumer->consume_stream_end().get();
@@ -2573,7 +2573,7 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
     const auto use_crawling_reader = no_skips || partitions.empty();
     auto consumer = std::make_unique<SstableConsumer>(schema, permit, vm);
     consumer->consume_stream_start().get();
-    consume_sstables(schema, permit, sstables, merge, use_crawling_reader, [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
+    consume_sstables(schema, permit, sstables, merge, use_crawling_reader, [&, &consumer = *consumer] (mutation_reader& rd, sstables::sstable* sst) {
         return consume_reader(std::move(rd), consumer, sst, partitions, no_skips);
     });
     consumer->consume_stream_end().get();

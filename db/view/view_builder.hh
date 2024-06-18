@@ -58,7 +58,7 @@ class view_update_generator;
  * This process entails walking over the existing data in a given base table, and using it to
  * calculate and insert the respective entries for one or more views.
  *
- * We employ a flat_mutation_reader for each base table for which we're building views.
+ * We employ a mutation_reader for each base table for which we're building views.
  *
  * We aim to be resource-conscious. On a given shard, at any given moment, we consume at most
  * from one reader. We also strive for fairness, in that each build step inserts entries for
@@ -124,7 +124,7 @@ class view_builder final : public service::migration_listener::only_view_notific
      * the base table for the selected range.
      *
      * We pin the set of sstables that potentially contain data that should be added to a
-     * view (they are pinned by the flat_mutation_reader). Adding a view v' overwrites the
+     * view (they are pinned by the mutation_reader). Adding a view v' overwrites the
      * set of pinned sstables, regardless of there being another view v'' being built. The
      * new set will potentially contain new data already in v'', written as part of the write
      * path. We assume this case is rare and optimize for fewer disk space in detriment of
@@ -136,7 +136,7 @@ class view_builder final : public service::migration_listener::only_view_notific
         lw_shared_ptr<replica::column_family> base;
         query::partition_slice pslice;
         dht::partition_range prange;
-        flat_mutation_reader_v2 reader{nullptr};
+        mutation_reader reader{nullptr};
         dht::decorated_key current_key{dht::minimum_token(), partition_key::make_empty()};
         std::vector<view_build_status> build_status;
 

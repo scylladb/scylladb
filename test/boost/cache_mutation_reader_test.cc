@@ -21,7 +21,7 @@
 #include "row_cache.hh"
 
 #include "test/lib/memtable_snapshot_source.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/test_utils.hh"
 
@@ -198,7 +198,7 @@ public:
 };
 
 static void check_produces_only(const dht::decorated_key& dk,
-                                flat_mutation_reader_v2 r,
+                                mutation_reader r,
                                 std::deque<expected_fragment> expected) {
     auto ra = assert_that(std::move(r));
     ra.produces_partition_start(dk);

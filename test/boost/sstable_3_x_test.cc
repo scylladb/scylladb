@@ -23,7 +23,7 @@
 #include "counters.hh"
 #include "schema/schema_builder.hh"
 #include "test/boost/sstable_test.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/index_reader_assertions.hh"
 #include "test/lib/random_utils.hh"
@@ -89,7 +89,7 @@ public:
         load();
         return sstables::test(_sst).read_indexes(_env.make_reader_permit());
     }
-    flat_mutation_reader_v2 make_reader() {
+    mutation_reader make_reader() {
         return _sst->make_reader(_sst->_schema, _env.make_reader_permit(), query::full_partition_range, _sst->_schema->full_slice());
     }
 
@@ -101,7 +101,7 @@ public:
         return _sst;
     }
 
-    flat_mutation_reader_v2 make_reader(
+    mutation_reader make_reader(
             const dht::partition_range& range,
             const query::partition_slice& slice,
             tracing::trace_state_ptr trace_state = {},
@@ -706,7 +706,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
         return tombstone{api::timestamp_type{ts}, gc_clock::time_point(gc_clock::duration(tp))};
     };
 
-    auto make_assertions = [] (flat_mutation_reader_v2 rd) {
+    auto make_assertions = [] (mutation_reader rd) {
         rd.set_max_buffer_size(1);
         return std::move(assert_that(std::move(rd)).ignore_deletion_time());
     };
@@ -1003,7 +1003,7 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
             query::clustering_range::bound(std::move(end), false));
     };
 
-    auto make_assertions = [] (flat_mutation_reader_v2 rd) {
+    auto make_assertions = [] (mutation_reader rd) {
         rd.set_max_buffer_size(1);
         return std::move(assert_that(std::move(rd)).ignore_deletion_time());
     };
@@ -3009,7 +3009,7 @@ static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema
 }
 
 // Must be called in a seastar thread.
-static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_ptr s,
+static mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
                      sstring table_name, std::vector<sstables::generation_type::int_t> gen_values) {
     env.maybe_start_compaction_manager(false);
     auto cf = env.make_table_for_tests(s);
@@ -3085,8 +3085,8 @@ SEASTAR_TEST_CASE(compact_deleted_row) {
      *   }
      * ]
      */
-    mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (flat_mutation_reader_v2& reader) {
-        return read_mutation_from_flat_mutation_reader(reader);
+    mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (mutation_reader& reader) {
+        return read_mutation_from_mutation_reader(reader);
     }).get();
     BOOST_REQUIRE(m);
     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));
@@ -3157,8 +3157,8 @@ SEASTAR_TEST_CASE(compact_deleted_cell) {
      *]
      *
      */
-    mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (flat_mutation_reader_v2& reader) {
-        return read_mutation_from_flat_mutation_reader(reader);
+    mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (mutation_reader& reader) {
+        return read_mutation_from_mutation_reader(reader);
     }).get();
     BOOST_REQUIRE(m);
     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));

@@ -76,7 +76,7 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
         };
 
         // populate keeps the memtable alive.
-        return make_flat_mutation_reader_v2<chained_delegating_reader>(s, std::move(populate), units->units.permit());
+        return make_mutation_reader<chained_delegating_reader>(s, std::move(populate), units->units.permit());
     });
 }
 

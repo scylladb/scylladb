@@ -44,7 +44,7 @@
 #include "test/lib/random_schema.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "cell_locking.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
@@ -89,7 +89,7 @@ static mutation_partition get_partition(reader_permit permit, replica::memtable&
     auto range = dht::partition_range::make_singular(dk);
     auto reader = mt.make_flat_reader(mt.schema(), std::move(permit), range);
     auto close_reader = deferred_close(reader);
-    auto mo = read_mutation_from_flat_mutation_reader(reader).get();
+    auto mo = read_mutation_from_mutation_reader(reader).get();
     BOOST_REQUIRE(bool(mo));
     return std::move(mo->partition());
 }
@@ -454,7 +454,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
 
         auto rd = mt->make_flat_reader(schema, semaphore.make_permit());
         auto close_rd = deferred_close(rd);
-        auto res_mut_opt = read_mutation_from_flat_mutation_reader(rd).get();
+        auto res_mut_opt = read_mutation_from_mutation_reader(rd).get();
         BOOST_REQUIRE(res_mut_opt);
 
         res_mut_opt->partition().compact_for_query(*schema, res_mut_opt->decorated_key(), gc_clock::now(), {query::full_clustering_range}, true, false,
@@ -2837,7 +2837,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
         mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, tombstone_gc_state(nullptr));
     }
 
-    auto reader = make_flat_mutation_reader_from_mutations_v2(schema.shared_from_this(), std::move(permit), mutations);
+    auto reader = make_mutation_reader_from_mutations_v2(schema.shared_from_this(), std::move(permit), mutations);
     auto close_reader = deferred_close(reader);
     auto get_max_purgeable = [] (const dht::decorated_key&) {
         return api::max_timestamp;
@@ -3392,7 +3392,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
         return frags;
     };
 
-    auto restore_state = [&] (flat_mutation_reader_v2& reader, detached_compaction_state&& state) {
+    auto restore_state = [&] (mutation_reader& reader, detached_compaction_state&& state) {
         if (auto rt_opt = state.current_tombstone) {
             reader.unpop_mutation_fragment(mutation_fragment_v2(*s, permit, std::move(*rt_opt)));
         }
@@ -3408,7 +3408,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
 
     mutation ref_mut(s, pk);
     {
-        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
         auto mut_opt = reader.consume(mutation_rebuilder_v2(s)).get();
         BOOST_REQUIRE(mut_opt);
@@ -3462,7 +3462,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     {
         mutation res_mut(s, pk);
         auto c = compact_for_query_v2<consumer_v2>(*s, query_time, s->full_slice(), max_rows, max_partitions, consumer_v2{permit, res_mut, max_rows});
-        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
         reader.consume(std::move(c)).get();
@@ -3474,7 +3474,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     {
         mutation res_mut(s, pk);
         auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions);
-        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
         while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
@@ -3490,7 +3490,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     {
         mutation res_mut(s, pk);
         auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions);
-        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
         while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
@@ -3505,7 +3505,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     testlog.info("limited pages - detach state v2");
     {
         mutation res_mut(s, pk);
-        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
         std::optional<detached_compaction_state> detached_state;
@@ -3526,7 +3526,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     testlog.info("short pages - detach state v2");
     {
         mutation res_mut(s, pk);
-        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
         std::optional<detached_compaction_state> detached_state;
@@ -3625,7 +3625,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_detach_state) {
     auto check = [&] (uint64_t stop_at, bool final_stop) {
         testlog.debug("stop_at={}, final_stop={}", stop_at, final_stop);
         auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions);
-        auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+        auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
         reader.consume(compact_for_query_v2<consumer_v2>(compaction_state, consumer_v2(stop_at, final_stop))).get();
         const auto has_detached_state = bool(std::move(*compaction_state).detach_state());
@@ -3714,7 +3714,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_validator) {
 
         auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, gc_clock::now(), s->full_slice(),
                 std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), mutation_fragment_stream_validation_level::clustering_key);
-        auto reader = make_flat_mutation_reader_from_fragments(s, permit, std::move(frags));
+        auto reader = make_mutation_reader_from_fragments(s, permit, std::move(frags));
         auto close_reader = deferred_close(reader);
         bool is_valid = true;
         try {

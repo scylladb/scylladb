@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "readers/flat_mutation_reader_fwd.hh"
+#include "readers/mutation_reader_fwd.hh"
 #include "test/lib/simple_schema.hh"
 
 using populate_fn = std::function<mutation_source(schema_ptr s, const std::vector<mutation>&)>;
@@ -82,12 +82,12 @@ bytes make_blob(size_t blob_size);
 void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mutation>&,
                                                schema_ptr, const std::vector<mutation>&)>);
 
-void compare_readers(const schema&, flat_mutation_reader_v2 authority, flat_mutation_reader_v2 tested, bool exact = false);
-void compare_readers(const schema&, flat_mutation_reader_v2 authority, flat_mutation_reader_v2 tested, const std::vector<position_range>& fwd_ranges);
+void compare_readers(const schema&, mutation_reader authority, mutation_reader tested, bool exact = false);
+void compare_readers(const schema&, mutation_reader authority, mutation_reader tested, const std::vector<position_range>& fwd_ranges);
 
 // Forward `r` to each range in `fwd_ranges` and consume all fragments produced by `r` in these ranges.
 // Build a mutation out of these fragments.
 //
 // Assumes that for each subsequent `r1`, `r2` in `fwd_ranges`, `r1.end() <= r2.start()`.
 // Must be run in a seastar::thread.
-mutation forwardable_reader_to_mutation(flat_mutation_reader_v2 r, const std::vector<position_range>& fwd_ranges);
+mutation forwardable_reader_to_mutation(mutation_reader r, const std::vector<position_range>& fwd_ranges);

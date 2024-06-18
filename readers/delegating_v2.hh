@@ -7,16 +7,16 @@
  */
 
 #pragma once
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 
-class delegating_reader_v2 : public flat_mutation_reader_v2::impl {
-    flat_mutation_reader_v2_opt _underlying_holder;
-    flat_mutation_reader_v2* _underlying;
+class delegating_reader_v2 : public mutation_reader::impl {
+    mutation_reader_opt _underlying_holder;
+    mutation_reader* _underlying;
 public:
     // when passed a lvalue reference to the reader
     // we don't own it and the caller is responsible
     // for evenetually closing the reader.
-    delegating_reader_v2(flat_mutation_reader_v2& r)
+    delegating_reader_v2(mutation_reader& r)
         : impl(r.schema(), r.permit())
         , _underlying_holder()
         , _underlying(&r)
@@ -24,7 +24,7 @@ public:
     // when passed a rvalue reference to the reader
     // we assume ownership of it and will close it
     // in close().
-    delegating_reader_v2(flat_mutation_reader_v2&& r)
+    delegating_reader_v2(mutation_reader&& r)
         : impl(r.schema(), r.permit())
         , _underlying_holder(std::move(r))
         , _underlying(&*_underlying_holder)
@@ -62,6 +62,6 @@ public:
         return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
     }
 };
-flat_mutation_reader_v2 make_delegating_reader(flat_mutation_reader_v2&);
+mutation_reader make_delegating_reader(mutation_reader&);
 
 

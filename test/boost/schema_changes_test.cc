@@ -13,7 +13,7 @@
 #include <seastar/core/thread.hh>
 #include "sstables/sstables.hh"
 #include "test/lib/mutation_source_test.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/sstable_utils.hh"
 
 using namespace sstables;

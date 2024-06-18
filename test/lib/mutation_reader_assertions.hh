@@ -10,7 +10,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <seastar/util/backtrace.hh>
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 #include "mutation_assertions.hh"
 #include "schema/schema.hh"
 #include "test/lib/log.hh"
@@ -42,7 +42,7 @@ static inline void match_compacted_mutation(const mutation_opt& mo, const mutati
 
 // Intended to be called in a seastar thread
 class flat_reader_assertions_v2 {
-    flat_mutation_reader_v2 _reader;
+    mutation_reader _reader;
     dht::partition_range _pr;
     bool _ignore_deletion_time = false;
     bool _exact = false; // Don't ignore irrelevant fragments
@@ -111,7 +111,7 @@ private:
         _rt = rtc.tombstone();
     }
 public:
-    flat_reader_assertions_v2(flat_mutation_reader_v2 reader)
+    flat_reader_assertions_v2(mutation_reader reader)
             : _reader(std::move(reader))
     { }
 
@@ -413,7 +413,7 @@ public:
     }
 
     flat_reader_assertions_v2& produces(const mutation& m, const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get();
+        auto mo = read_mutation_from_mutation_reader(_reader).get();
         if (!mo) {
             BOOST_FAIL(format("Expected {}, but got end of stream, at: {}", m, seastar::current_backtrace()));
         }
@@ -438,7 +438,7 @@ public:
 
     flat_reader_assertions_v2& produces_eos_or_empty_mutation() {
         testlog.trace("Expecting eos or empty mutation");
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get();
+        auto mo = read_mutation_from_mutation_reader(_reader).get();
         if (mo) {
             if (!mo->partition().empty()) {
                 BOOST_FAIL(format("Mutation is not empty: {}", *mo));
@@ -514,12 +514,12 @@ public:
 
     flat_reader_assertions_v2& produces_compacted(const mutation& m, gc_clock::time_point query_time,
                                                const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        match_compacted_mutation(read_mutation_from_flat_mutation_reader(_reader).get(), m, query_time, ck_ranges);
+        match_compacted_mutation(read_mutation_from_mutation_reader(_reader).get(), m, query_time, ck_ranges);
         return *this;
     }
 
     mutation_assertion next_mutation() {
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get();
+        auto mo = read_mutation_from_mutation_reader(_reader).get();
         BOOST_REQUIRE(bool(mo));
         return mutation_assertion(std::move(*mo));
     }
@@ -538,6 +538,6 @@ public:
 };
 
 inline
-flat_reader_assertions_v2 assert_that(flat_mutation_reader_v2 r) {
+flat_reader_assertions_v2 assert_that(mutation_reader r) {
     return { std::move(r) };
 }

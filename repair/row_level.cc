@@ -274,7 +274,7 @@ repair_hash repair_hasher::do_hash_for_mf(const decorated_key_with_hash& dk_with
     return repair_hash(h.finalize_uint64());
 }
 
-flat_mutation_reader_v2 repair_reader::make_reader(
+mutation_reader repair_reader::make_reader(
     seastar::sharded<replica::database>& db,
     replica::column_family& cf,
     read_strategy strategy,
@@ -293,7 +293,7 @@ flat_mutation_reader_v2 repair_reader::make_reader(
                 mutation_reader::forwarding fwd_mr) {
                 return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr, compaction_time);
             });
-            flat_mutation_reader_v2 rd(nullptr);
+            mutation_reader rd(nullptr);
             std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader_v2(
                 std::move(ms),
                 _schema,
@@ -420,7 +420,7 @@ class repair_writer_impl : public repair_writer::impl {
     sharded<replica::database>& _db;
     sharded<db::view::view_builder>& _view_builder;
     streaming::stream_reason _reason;
-    flat_mutation_reader_v2 _queue_reader;
+    mutation_reader _queue_reader;
 public:
     repair_writer_impl(
         schema_ptr schema,
@@ -429,7 +429,7 @@ public:
         sharded<db::view::view_builder>& view_builder,
         streaming::stream_reason reason,
         mutation_fragment_queue queue,
-        flat_mutation_reader_v2 queue_reader)
+        mutation_reader queue_reader)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _mq(std::move(queue))
@@ -1173,7 +1173,7 @@ private:
                     // The heuristic here chooses the strategy with minimal such cost.
                     // Note that with multishard_filter we don't read entire partitions which
                     // can be a huge waste. We only fill the buffer inside
-                    // flat_mutation_reader_v2, if a partition is found to belong to the incorrect
+                    // mutation_reader, if a partition is found to belong to the incorrect
                     // master shard, we call next_partition(), which effectively clears
                     // the buffer until the next partition is reached.
 

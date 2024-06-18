@@ -331,7 +331,7 @@ static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_sc
 future<> view_update_generator::populate_views(const replica::table& table,
         std::vector<view_and_base> views,
         dht::token base_token,
-        flat_mutation_reader_v2&& reader,
+        mutation_reader&& reader,
         gc_clock::time_point now) {
     auto schema = reader.schema();
     view_update_builder builder = make_view_update_builder(
@@ -404,7 +404,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
         reader_permit permit,
         std::vector<view_and_base>&& views,
         mutation&& m,
-        flat_mutation_reader_v2_opt existings,
+        mutation_reader_opt existings,
         tracing::trace_state_ptr tr_state,
         gc_clock::time_point now,
         db::timeout_clock::time_point timeout) {
@@ -415,7 +415,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
             table,
             base,
             std::move(views),
-            make_flat_mutation_reader_from_mutations_v2(std::move(m_schema), std::move(permit), std::move(m)),
+            make_mutation_reader_from_mutations_v2(std::move(m_schema), std::move(permit), std::move(m)),
             std::move(existings),
             now);
 

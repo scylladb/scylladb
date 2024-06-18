@@ -23,7 +23,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/data_model.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"
@@ -83,9 +83,9 @@ static future<> test_memtable(void (*run_tests)(populate_fn_ex, bool)) {
     return seastar::async([run_tests] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         lw_shared_ptr<replica::memtable> mt;
-        std::vector<flat_mutation_reader_v2> readers;
+        std::vector<mutation_reader> readers;
         auto clear_readers = [&readers] {
-            parallel_for_each(readers, [] (flat_mutation_reader_v2& rd) {
+            parallel_for_each(readers, [] (mutation_reader& rd) {
                 return rd.close();
             }).finally([&readers] {
                 readers.clear();
@@ -307,7 +307,7 @@ SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
         }
 
         // Create a reader which will cause many partition versions to be created
-        flat_mutation_reader_v2_opt rd1 = mt->make_flat_reader(s, semaphore.make_permit());
+        mutation_reader_opt rd1 = mt->make_flat_reader(s, semaphore.make_permit());
         auto close_rd1 = deferred_close(*rd1);
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer().get();
@@ -675,7 +675,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_mvcc_and_preemption) {
     }
     mt->apply(m0);
 
-    std::optional<flat_mutation_reader_v2> rd0 = mt->make_flat_reader(
+    std::optional<mutation_reader> rd0 = mt->make_flat_reader(
             s, semaphore.make_permit(), pr, s->full_slice(),
             nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd0 = defer([&] { rd0->close().get(); });
@@ -689,7 +689,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_mvcc_and_preemption) {
     ss.delete_range(m1, ss.make_ckey_range(k1, k2));
     mt->apply(m1);
 
-    std::optional<flat_mutation_reader_v2> rd1 = mt->make_flat_reader(
+    std::optional<mutation_reader> rd1 = mt->make_flat_reader(
             s, semaphore.make_permit(), pr, s->full_slice(),
             nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd1 = defer([&] { rd1->close().get(); });
