@@ -1,3 +1,4 @@
 *.cc diff=cpp
 *.hh diff=cpp
 *.svg binary
+docs/_static/api/js/* binary
