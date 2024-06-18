@@ -131,7 +131,7 @@ SEASTAR_TEST_CASE(flush_repair_rows_on_wire_to_sstable) {
         std::list<repair_row> repair_rows = to_repair_rows_list(std::move(input), s, seed, repair_master::yes, permit, repair_hasher(seed, s)).get();
         flush_rows(s, repair_rows, writer);
         writer->wait_for_writer_done().get();
-        compare_readers(*s, m->make_flat_reader(s, permit), make_flat_mutation_reader_from_fragments(s, permit, std::move(fragments)));
+        compare_readers(*s, m->make_flat_reader(s, permit), make_mutation_reader_from_fragments(s, permit, std::move(fragments)));
     });
 }
 

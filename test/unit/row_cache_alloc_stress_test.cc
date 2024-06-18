@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
                 auto range = dht::partition_range::make_singular(key);
                 auto reader = cache.make_reader(s, semaphore.make_permit(), range);
                 auto close_reader = deferred_close(reader);
-                auto mo = read_mutation_from_flat_mutation_reader(reader).get();
+                auto mo = read_mutation_from_mutation_reader(reader).get();
                 assert(mo);
                 assert(mo->partition().live_row_count(*s) ==
                        row_count + 1 /* one row was already in cache before update()*/);

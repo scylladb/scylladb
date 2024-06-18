@@ -764,12 +764,12 @@ public:
 };
 
 static
-uint64_t consume_all(flat_mutation_reader_v2& rd) {
+uint64_t consume_all(mutation_reader& rd) {
     return rd.consume(counting_consumer()).get();
 }
 
 static
-uint64_t consume_all_with_next_partition(flat_mutation_reader_v2& rd) {
+uint64_t consume_all_with_next_partition(mutation_reader& rd) {
     uint64_t fragments = 0;
     do {
         fragments += consume_all(rd);
@@ -779,7 +779,7 @@ uint64_t consume_all_with_next_partition(flat_mutation_reader_v2& rd) {
     return fragments;
 }
 
-static void assert_partition_start(flat_mutation_reader_v2& rd) {
+static void assert_partition_start(mutation_reader& rd) {
     auto mfopt = rd().get();
     assert(mfopt);
     assert(mfopt->is_partition_start());
@@ -893,7 +893,7 @@ static test_result slice_rows(replica::column_family& cf, clustered_ds& ds, int 
     return {before, fragments};
 }
 
-static test_result test_reading_all(flat_mutation_reader_v2& rd) {
+static test_result test_reading_all(mutation_reader& rd) {
     metrics_snapshot before;
     return {before, consume_all(rd)};
 }

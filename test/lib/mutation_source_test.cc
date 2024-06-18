@@ -17,8 +17,8 @@
 #include "counters.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "test/lib/simple_schema.hh"
-#include "readers/flat_mutation_reader_v2.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "readers/mutation_reader.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "mutation_query.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "test/lib/random_utils.hh"
@@ -391,7 +391,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(tests::
         }
         auto fwd_m = forwardable_reader_to_mutation(std::move(fwd_reader), position_ranges);
 
-        mutation_opt sliced_m = read_mutation_from_flat_mutation_reader(sliced_reader).get();
+        mutation_opt sliced_m = read_mutation_from_mutation_reader(sliced_reader).get();
         BOOST_REQUIRE(bool(sliced_m));
         assert_that(*sliced_m).is_equal_to(fwd_m, slice_with_ranges.row_ranges(*m.schema(), m.key()));
     }
@@ -1588,7 +1588,7 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
         {
             auto rd = ms.make_fragment_v1_stream(m.schema(), semaphore.make_permit());
             auto close_rd = deferred_close(rd);
-            match_compacted_mutation(read_mutation_from_flat_mutation_reader(rd).get(), m_compacted, query_time);
+            match_compacted_mutation(read_mutation_from_mutation_reader(rd).get(), m_compacted, query_time);
         }
     });
 }
@@ -2729,7 +2729,7 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     test_mutated_schemas();
 }
 
-static bool compare_readers(const schema& s, flat_mutation_reader_v2& authority, flat_reader_assertions_v2& tested) {
+static bool compare_readers(const schema& s, mutation_reader& authority, flat_reader_assertions_v2& tested) {
     bool empty = true;
     while (auto expected = authority().get()) {
         tested.produces(s, *expected);
@@ -2739,14 +2739,14 @@ static bool compare_readers(const schema& s, flat_mutation_reader_v2& authority,
     return !empty;
 }
 
-void compare_readers(const schema& s, flat_mutation_reader_v2 authority, flat_mutation_reader_v2 tested, bool exact) {
+void compare_readers(const schema& s, mutation_reader authority, mutation_reader tested, bool exact) {
     auto close_authority = deferred_close(authority);
     auto assertions = assert_that(std::move(tested)).exact(exact);
     compare_readers(s, authority, assertions);
 }
 
 // Assumes that the readers return fragments from (at most) a single (and the same) partition.
-void compare_readers(const schema& s, flat_mutation_reader_v2 authority, flat_mutation_reader_v2 tested, const std::vector<position_range>& fwd_ranges) {
+void compare_readers(const schema& s, mutation_reader authority, mutation_reader tested, const std::vector<position_range>& fwd_ranges) {
     auto close_authority = deferred_close(authority);
     auto assertions = assert_that(std::move(tested));
     if (compare_readers(s, authority, assertions)) {
@@ -2758,7 +2758,7 @@ void compare_readers(const schema& s, flat_mutation_reader_v2 authority, flat_mu
     }
 }
 
-mutation forwardable_reader_to_mutation(flat_mutation_reader_v2 r, const std::vector<position_range>& fwd_ranges) {
+mutation forwardable_reader_to_mutation(mutation_reader r, const std::vector<position_range>& fwd_ranges) {
     auto close_reader = deferred_close(r);
 
     struct consumer {

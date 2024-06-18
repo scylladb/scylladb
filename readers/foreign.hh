@@ -10,7 +10,7 @@
 
 #include <seastar/core/sharded.hh>
 
-#include "readers/flat_mutation_reader_fwd.hh"
+#include "readers/mutation_reader_fwd.hh"
 #include "schema/schema_fwd.hh"
 
 class reader_permit;
@@ -28,7 +28,7 @@ class reader_permit;
 /// If the reader resides on this shard (the shard where make_foreign_reader()
 /// is called) there is no need to wrap it in foreign_reader, just return it as
 /// is.
-flat_mutation_reader_v2 make_foreign_reader(schema_ptr schema,
+mutation_reader make_foreign_reader(schema_ptr schema,
         reader_permit permit,
-        foreign_ptr<std::unique_ptr<flat_mutation_reader_v2>> reader,
+        foreign_ptr<std::unique_ptr<mutation_reader>> reader,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);

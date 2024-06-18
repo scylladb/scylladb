@@ -412,7 +412,7 @@ public:
     }
     virtual selector_and_schema_t make_incremental_selector() const override;
 
-    virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
+    virtual mutation_reader create_single_key_sstable_reader(
             replica::column_family*,
             schema_ptr,
             reader_permit,
@@ -632,7 +632,7 @@ private:
     }
 };
 
-flat_mutation_reader_v2
+mutation_reader
 tablet_sstable_set::create_single_key_sstable_reader(
         replica::column_family* cf,
         schema_ptr schema,

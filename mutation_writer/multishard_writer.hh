@@ -9,7 +9,7 @@
 #pragma once
 
 #include "schema/schema_fwd.hh"
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "utils/phased_barrier.hh"
 
@@ -19,7 +19,7 @@ namespace mutation_writer {
 /// The function returns a future that is ready when all shards are done consuming.
 ///
 /// The provided "consumer" function is called on the destination shard to create a consumer
-/// on that shard. It takes a flat_mutation_reader_v2 that will contain only the mutations that
+/// on that shard. It takes a mutation_reader that will contain only the mutations that
 /// should be applied on that shard.
 /// The consumer function should return a future that is ready when the shard is done consuming.
 ///
@@ -32,8 +32,8 @@ namespace mutation_writer {
 /// the topology_guard associated with operation must be used and checked by the consumer.
 future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
     const dht::sharder& sharder,
-    flat_mutation_reader_v2 producer,
-    std::function<future<> (flat_mutation_reader_v2)> consumer,
+    mutation_reader producer,
+    std::function<future<> (mutation_reader)> consumer,
     utils::phased_barrier::operation&& op = {});
 
 } // namespace mutation_writer

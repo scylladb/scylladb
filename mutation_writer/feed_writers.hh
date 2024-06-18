@@ -19,7 +19,7 @@ class bucket_writer_v2 {
     future<> _consume_fut;
 
 private:
-    bucket_writer_v2(schema_ptr schema, std::pair<flat_mutation_reader_v2, queue_reader_handle_v2> queue_reader_v2, reader_consumer_v2& consumer);
+    bucket_writer_v2(schema_ptr schema, std::pair<mutation_reader, queue_reader_handle_v2> queue_reader_v2, reader_consumer_v2& consumer);
 
 public:
     bucket_writer_v2(schema_ptr schema, reader_permit permit, reader_consumer_v2& consumer);
@@ -35,7 +35,7 @@ public:
 
 template <typename Writer>
 requires MutationFragmentConsumerV2<Writer, future<>>
-future<> feed_writer(flat_mutation_reader_v2&& rd_ref, Writer wr) {
+future<> feed_writer(mutation_reader&& rd_ref, Writer wr) {
     // Only move in reader if stack was successfully allocated, so caller can close reader otherwise.
     auto rd = std::move(rd_ref);
     std::exception_ptr ex;

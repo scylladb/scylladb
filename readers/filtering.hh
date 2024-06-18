@@ -8,15 +8,15 @@
 
 #pragma once
 
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 
 template <typename MutationFilter>
 requires std::is_invocable_r_v<bool, MutationFilter, const dht::decorated_key&>
-class filtering_reader : public flat_mutation_reader_v2::impl {
-    flat_mutation_reader_v2 _rd;
+class filtering_reader : public mutation_reader::impl {
+    mutation_reader _rd;
     MutationFilter _filter;
 public:
-    filtering_reader(flat_mutation_reader_v2 rd, MutationFilter&& filter)
+    filtering_reader(mutation_reader rd, MutationFilter&& filter)
         : impl(rd.schema(), rd.permit())
         , _rd(std::move(rd))
         , _filter(std::forward<MutationFilter>(filter)) {
@@ -69,6 +69,6 @@ public:
 // accepts mutation const& and returns a bool. The mutation stays in the
 // stream if and only if the filter returns true.
 template <typename MutationFilter>
-flat_mutation_reader_v2 make_filtering_reader(flat_mutation_reader_v2 rd, MutationFilter&& filter) {
-    return make_flat_mutation_reader_v2<filtering_reader<MutationFilter>>(std::move(rd), std::forward<MutationFilter>(filter));
+mutation_reader make_filtering_reader(mutation_reader rd, MutationFilter&& filter) {
+    return make_mutation_reader<filtering_reader<MutationFilter>>(std::move(rd), std::forward<MutationFilter>(filter));
 }

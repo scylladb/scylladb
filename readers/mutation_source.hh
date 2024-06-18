@@ -10,8 +10,8 @@
 
 #include "query-request.hh"
 #include "tracing/trace_state.hh"
-#include "readers/flat_mutation_reader_fwd.hh"
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader_fwd.hh"
+#include "readers/mutation_reader.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 
 /// A partition_presence_checker quickly returns whether a key is known not to exist
@@ -40,7 +40,7 @@ partition_presence_checker make_default_partition_presence_checker() {
 // Partition-range forwarding is not yet supported in reverse mode.
 class mutation_source {
     using partition_range = const dht::partition_range&;
-    using flat_reader_v2_factory_type = std::function<flat_mutation_reader_v2(schema_ptr,
+    using flat_reader_v2_factory_type = std::function<mutation_reader(schema_ptr,
                                                                         reader_permit,
                                                                         partition_range,
                                                                         const query::partition_slice&,
@@ -62,7 +62,7 @@ public:
         , _presence_checker_factory(make_lw_shared<std::function<partition_presence_checker()>>(std::move(pcf)))
     { }
 
-    mutation_source(std::function<flat_mutation_reader_v2(schema_ptr, reader_permit, partition_range, const query::partition_slice&,
+    mutation_source(std::function<mutation_reader(schema_ptr, reader_permit, partition_range, const query::partition_slice&,
                 tracing::trace_state_ptr, streamed_mutation::forwarding)> fn)
         : mutation_source([fn = std::move(fn)] (schema_ptr s,
                     reader_permit permit,
@@ -73,7 +73,7 @@ public:
                     mutation_reader::forwarding) {
         return fn(std::move(s), std::move(permit), range, slice, std::move(tr), fwd);
     }) {}
-    mutation_source(std::function<flat_mutation_reader_v2(schema_ptr, reader_permit, partition_range, const query::partition_slice&)> fn)
+    mutation_source(std::function<mutation_reader(schema_ptr, reader_permit, partition_range, const query::partition_slice&)> fn)
         : mutation_source([fn = std::move(fn)] (schema_ptr s,
                     reader_permit permit,
                     partition_range range,
@@ -84,7 +84,7 @@ public:
         assert(!fwd);
         return fn(std::move(s), std::move(permit), range, slice);
     }) {}
-    mutation_source(std::function<flat_mutation_reader_v2(schema_ptr, reader_permit, partition_range range)> fn)
+    mutation_source(std::function<mutation_reader(schema_ptr, reader_permit, partition_range range)> fn)
         : mutation_source([fn = std::move(fn)] (schema_ptr s,
                     reader_permit permit,
                     partition_range range,
@@ -129,7 +129,7 @@ public:
     //
     // All parameters captured by reference must remain live as long as returned
     // mutation_reader or streamed_mutation obtained through it are alive.
-    flat_mutation_reader_v2
+    mutation_reader
     make_reader_v2(
             schema_ptr s,
             reader_permit permit,
@@ -142,7 +142,7 @@ public:
         return (*_fn)(std::move(s), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
     }
 
-    flat_mutation_reader_v2
+    mutation_reader
     make_reader_v2(
             schema_ptr s,
             reader_permit permit,

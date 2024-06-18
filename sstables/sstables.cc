@@ -1881,7 +1881,7 @@ void sstable::assert_large_data_handler_is_running() {
 }
 
 future<> sstable::write_components(
-        flat_mutation_reader_v2 mr,
+        mutation_reader mr,
         uint64_t estimated_partitions,
         schema_ptr schema,
         const sstable_writer_config& cfg,
@@ -2160,7 +2160,7 @@ future<> delayed_commit_changes::commit() {
     });
 }
 
-flat_mutation_reader_v2
+mutation_reader
 sstable::make_reader(
         schema_ptr schema,
         reader_permit permit,
@@ -2207,7 +2207,7 @@ sstable::make_reader(
                 range, slice, std::move(trace_state), fwd, fwd_mr, mon);
 }
 
-flat_mutation_reader_v2
+mutation_reader
 sstable::make_crawling_reader(
         schema_ptr schema,
         reader_permit permit,

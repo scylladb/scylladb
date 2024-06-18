@@ -36,7 +36,7 @@ private:
     uint64_t _reads_issued = 0;
     uint64_t _reads_finished = 0;
 
-    flat_mutation_reader_v2 make_reader(
+    mutation_reader make_reader(
         seastar::sharded<replica::database>& db,
         replica::column_family& cf,
         read_strategy strategy,

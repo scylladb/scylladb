@@ -219,13 +219,13 @@ querier_cache::querier_cache(is_user_semaphore_func is_user_semaphore_func, std:
 }
 
 struct querier_utils {
-    static flat_mutation_reader_v2 get_reader(querier_base& q) noexcept {
-        return std::move(std::get<flat_mutation_reader_v2>(q._reader));
+    static mutation_reader get_reader(querier_base& q) noexcept {
+        return std::move(std::get<mutation_reader>(q._reader));
     }
     static reader_concurrency_semaphore::inactive_read_handle get_inactive_read_handle(querier_base& q) noexcept {
         return std::move(std::get<reader_concurrency_semaphore::inactive_read_handle>(q._reader));
     }
-    static void set_reader(querier_base& q, flat_mutation_reader_v2 r) noexcept {
+    static void set_reader(querier_base& q, mutation_reader r) noexcept {
         q._reader = std::move(r);
     }
     static void set_inactive_read_handle(querier_base& q, reader_concurrency_semaphore::inactive_read_handle h) noexcept {
@@ -242,7 +242,7 @@ void querier_cache::insert_querier(
         std::chrono::seconds ttl,
         tracing::trace_state_ptr trace_state) {
     // FIXME: see #3159
-    // In reverse mode flat_mutation_reader drops any remaining rows of the
+    // In reverse mode mutation_reader drops any remaining rows of the
     // current partition when the page ends so it cannot be reused across
     // pages.
     if (q.is_reversed()) {
@@ -432,7 +432,7 @@ std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_queri
 future<> querier_base::close() noexcept {
     struct variant_closer {
         querier_base& q;
-        future<> operator()(flat_mutation_reader_v2& reader) {
+        future<> operator()(mutation_reader& reader) {
             return reader.close();
         }
         future<> operator()(reader_concurrency_semaphore::inactive_read_handle& irh) {

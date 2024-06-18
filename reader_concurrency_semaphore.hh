@@ -21,8 +21,8 @@ namespace bi = boost::intrusive;
 
 using namespace seastar;
 
-class flat_mutation_reader_v2;
-using flat_mutation_reader_v2_opt = optimized_optional<flat_mutation_reader_v2>;
+class mutation_reader;
+using mutation_reader_opt = optimized_optional<mutation_reader>;
 
 /// Specific semaphore for controlling reader concurrency
 ///
@@ -200,7 +200,7 @@ private:
 
 private:
     void do_detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
-    [[nodiscard]] flat_mutation_reader_v2 detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
+    [[nodiscard]] mutation_reader detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
     void evict(reader_permit::impl&, evict_reason reason) noexcept;
 
     bool has_available_units(const resources& r) const;
@@ -254,7 +254,7 @@ private:
     std::runtime_error stopped_exception();
 
     // closes reader in the background.
-    void close_reader(flat_mutation_reader_v2 reader);
+    void close_reader(mutation_reader reader);
 
     future<> execution_loop() noexcept;
 
@@ -341,7 +341,7 @@ public:
     ///
     /// The semaphore takes ownership of the passed in reader for the duration
     /// of its inactivity and it may evict it to free up resources if necessary.
-    inactive_read_handle register_inactive_read(flat_mutation_reader_v2 ir, const dht::partition_range* range = nullptr) noexcept;
+    inactive_read_handle register_inactive_read(mutation_reader ir, const dht::partition_range* range = nullptr) noexcept;
 
     /// Set the inactive read eviction notification handler and optionally eviction ttl.
     ///
@@ -361,7 +361,7 @@ public:
     ///
     /// If the read was not evicted, the inactive read object, passed in to the
     /// register call, will be returned. Otherwise a nullptr is returned.
-    flat_mutation_reader_v2_opt unregister_inactive_read(inactive_read_handle irh);
+    mutation_reader_opt unregister_inactive_read(inactive_read_handle irh);
 
     /// Try to evict an inactive read.
     ///

@@ -13,7 +13,7 @@
 #include "replica/database.hh"
 #include "compaction/compaction_manager.hh"
 #include "test/boost/sstable_test.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"

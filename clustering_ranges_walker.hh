@@ -103,7 +103,7 @@ public:
         // which positions you call advance_to(), provided that you change
         // the current tombstone at the same positions.
         // Redundant changes will not be generated.
-        // This is to support the guarantees of flat_mutation_reader_v2.
+        // This is to support the guarantees of mutation_reader.
         range_tombstones rts;
     };
 

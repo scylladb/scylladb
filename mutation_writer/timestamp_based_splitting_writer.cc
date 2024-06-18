@@ -446,7 +446,7 @@ future<> timestamp_based_splitting_mutation_writer::consume(partition_end&& pe) 
     });
 }
 
-future<> segregate_by_timestamp(flat_mutation_reader_v2 producer, classify_by_timestamp classifier, reader_consumer_v2 consumer) {
+future<> segregate_by_timestamp(mutation_reader producer, classify_by_timestamp classifier, reader_consumer_v2 consumer) {
     //FIXME: make this into a consume() variant?
     auto schema = producer.schema();
     auto permit = producer.permit();

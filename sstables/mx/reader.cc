@@ -19,7 +19,7 @@
 namespace sstables {
 namespace mx {
 
-class mp_row_consumer_reader_mx : public mp_row_consumer_reader_base, public flat_mutation_reader_v2::impl {
+class mp_row_consumer_reader_mx : public mp_row_consumer_reader_base, public mutation_reader::impl {
     friend class sstables::mx::mp_row_consumer_m;
 public:
     mp_row_consumer_reader_mx(schema_ptr s, reader_permit permit, shared_sstable sst)
@@ -1702,13 +1702,13 @@ public:
         }
 
         return when_all_succeed(std::move(close_context), std::move(close_index_reader)).discard_result().handle_exception([] (std::exception_ptr ep) {
-            // close can not fail as it is called either from the destructor or from flat_mutation_reader::close
+            // close can not fail as it is called either from the destructor or from mutation_reader::close
             sstlog.warn("Failed closing of sstable_mutation_reader: {}. Ignored since the reader is already done.", ep);
         });
     }
 };
 
-static flat_mutation_reader_v2 make_reader(
+static mutation_reader make_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
@@ -1724,17 +1724,17 @@ static flat_mutation_reader_v2 make_reader(
     // FIXME: drop this workaround when callers are fixed to provide the slice
     // in 'native-reversed' format (if ever).
     if (slice.get().is_reversed()) {
-        return make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
+        return make_mutation_reader<mx_sstable_mutation_reader>(
             std::move(sstable), schema, std::move(permit), range,
             legacy_reverse_slice_to_native_reverse_slice(*schema, slice.get()), std::move(trace_state), fwd, fwd_mr, monitor);
     }
 
-    return make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
+    return make_mutation_reader<mx_sstable_mutation_reader>(
         std::move(sstable), std::move(schema), std::move(permit), range,
         std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
-flat_mutation_reader_v2 make_reader(
+mutation_reader make_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
@@ -1748,7 +1748,7 @@ flat_mutation_reader_v2 make_reader(
             value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
-flat_mutation_reader_v2 make_reader(
+mutation_reader make_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
@@ -1812,13 +1812,13 @@ public:
     }
 };
 
-flat_mutation_reader_v2 make_crawling_reader(
+mutation_reader make_crawling_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor) {
-    return make_flat_mutation_reader_v2<mx_crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit),
+    return make_mutation_reader<mx_crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit),
             std::move(trace_state), monitor);
 }
 

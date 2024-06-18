@@ -238,7 +238,7 @@ public:
     // The 'range' parameter must be live as long as the reader is being used
     //
     // Mutations returned by the reader will all have given schema.
-    flat_mutation_reader_v2 make_flat_reader(schema_ptr s,
+    mutation_reader make_flat_reader(schema_ptr s,
                                              reader_permit permit,
                                              const dht::partition_range& range,
                                              const query::partition_slice& slice,
@@ -252,7 +252,7 @@ public:
     }
     // Same as make_flat_reader, but returns an empty optional instead of a no-op reader when there is nothing to
     // read. This is an optimization.
-    flat_mutation_reader_v2_opt make_flat_reader_opt(schema_ptr,
+    mutation_reader_opt make_flat_reader_opt(schema_ptr,
                                           reader_permit permit,
                                           const dht::partition_range& range,
                                           const query::partition_slice& slice,
@@ -260,14 +260,14 @@ public:
                                           streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                           mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
-    flat_mutation_reader_v2 make_flat_reader(schema_ptr s,
+    mutation_reader make_flat_reader(schema_ptr s,
                                              reader_permit permit,
                                              const dht::partition_range& range = query::full_partition_range) {
         auto& full_slice = s->full_slice();
         return make_flat_reader(s, std::move(permit), range, full_slice);
     }
 
-    flat_mutation_reader_v2 make_flush_reader(schema_ptr, reader_permit permit);
+    mutation_reader make_flush_reader(schema_ptr, reader_permit permit);
 
     mutation_source as_data_source();
 

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 
 class queue_reader_v2;
 
@@ -17,7 +17,7 @@ class queue_reader_v2;
 /// `push_end_of_stream()` is called, the reader and the handle can be destroyed
 /// in any order. The reader can be destroyed at any time.
 class queue_reader_handle_v2 {
-    friend std::pair<flat_mutation_reader_v2, queue_reader_handle_v2> make_queue_reader_v2(schema_ptr, reader_permit);
+    friend std::pair<mutation_reader, queue_reader_handle_v2> make_queue_reader_v2(schema_ptr, reader_permit);
     friend class queue_reader_v2;
 
 private:
@@ -53,5 +53,5 @@ public:
     std::exception_ptr get_exception() const noexcept;
 };
 
-std::pair<flat_mutation_reader_v2, queue_reader_handle_v2> make_queue_reader_v2(schema_ptr s, reader_permit permit);
+std::pair<mutation_reader, queue_reader_handle_v2> make_queue_reader_v2(schema_ptr s, reader_permit permit);
 

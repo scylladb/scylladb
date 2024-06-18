@@ -9,7 +9,7 @@
 #pragma once
 
 #include "readers/combined.hh"
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 #include "replica/memtable.hh"
 #include "utils/phased_barrier.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -55,7 +55,7 @@ private:
         auto new_mt = make_lw_shared<replica::memtable>(_s);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
-        std::vector<flat_mutation_reader_v2> readers;
+        std::vector<mutation_reader> readers;
         for (auto&& mt : _memtables) {
             readers.push_back(mt->make_flat_reader(new_mt->schema(),
                  permit,

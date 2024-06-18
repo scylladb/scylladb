@@ -26,7 +26,7 @@ static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
     return b;
 }
 
-class mp_row_consumer_reader_k_l : public mp_row_consumer_reader_base, public flat_mutation_reader_v2::impl {
+class mp_row_consumer_reader_k_l : public mp_row_consumer_reader_base, public mutation_reader::impl {
     friend class sstables::kl::mp_row_consumer_k_l;
 private:
     range_tombstone_change_generator _rtc_gen;
@@ -1482,13 +1482,13 @@ public:
         }
 
         return when_all_succeed(std::move(close_context), std::move(close_index_reader)).discard_result().handle_exception([] (std::exception_ptr ep) {
-            // close can not fail as it is called either from the destructor or from flat_mutation_reader::close
+            // close can not fail as it is called either from the destructor or from mutation_reader::close
             sstlog.warn("Failed closing of sstable_mutation_reader: {}. Ignored since the reader is already done.", ep);
         });
     }
 };
 
-flat_mutation_reader_v2 make_reader(
+mutation_reader make_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
@@ -1498,7 +1498,7 @@ flat_mutation_reader_v2 make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor) {
-    return make_flat_mutation_reader_v2<sstable_mutation_reader>(
+    return make_mutation_reader<sstable_mutation_reader>(
         std::move(sstable), std::move(schema), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
@@ -1554,13 +1554,13 @@ public:
     }
 };
 
-flat_mutation_reader_v2 make_crawling_reader(
+mutation_reader make_crawling_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor) {
-    return make_flat_mutation_reader_v2<crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit),
+    return make_mutation_reader<crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit),
             std::move(trace_state), monitor);
 }
 

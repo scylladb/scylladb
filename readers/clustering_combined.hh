@@ -8,16 +8,16 @@
 
 #pragma once
 
-#include "readers/flat_mutation_reader_v2.hh"
-#include "readers/flat_mutation_reader_fwd.hh"
+#include "readers/mutation_reader.hh"
+#include "readers/mutation_reader_fwd.hh"
 
 // A mutation reader together with an upper bound on the set of positions of fragments
 // that the reader will return. The upper bound does not need to be exact.
 struct reader_and_upper_bound {
-    flat_mutation_reader_v2 reader;
+    mutation_reader reader;
     position_in_partition upper_bound;
 
-    reader_and_upper_bound(flat_mutation_reader_v2 r, position_in_partition bound)
+    reader_and_upper_bound(mutation_reader r, position_in_partition bound)
         : reader(std::move(r)), upper_bound(std::move(bound)) {}
 };
 
@@ -71,7 +71,7 @@ public:
     virtual future<> close() noexcept = 0;
 };
 
-flat_mutation_reader_v2 make_clustering_combined_reader(schema_ptr schema,
+mutation_reader make_clustering_combined_reader(schema_ptr schema,
         reader_permit,
         streamed_mutation::forwarding,
         std::unique_ptr<position_reader_queue>);

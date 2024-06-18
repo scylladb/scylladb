@@ -1423,7 +1423,7 @@ public:
         , _compaction_time(compaction_time)
         , _contexts(smp::count) {
     }
-    virtual flat_mutation_reader_v2 create_reader(
+    virtual mutation_reader create_reader(
         schema_ptr schema,
         reader_permit permit,
         const dht::partition_range& range,
@@ -2940,7 +2940,7 @@ void database::unplug_view_update_generator() noexcept {
 
 } // namespace replica
 
-flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db,
+mutation_reader make_multishard_streaming_reader(distributed<replica::database>& db,
         schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator,
         gc_clock::time_point compaction_time) {
@@ -2963,7 +2963,7 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
             std::move(range_generator), std::move(full_slice), {}, mutation_reader::forwarding::no);
 }
 
-flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db,
+mutation_reader make_multishard_streaming_reader(distributed<replica::database>& db,
         schema_ptr schema, reader_permit permit, const dht::partition_range& range, gc_clock::time_point compaction_time)
 {
     const auto table_id = schema->id();

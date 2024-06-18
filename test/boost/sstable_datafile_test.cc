@@ -29,7 +29,7 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/testing/test_case.hh>
 #include "dht/i_partitioner.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "counters.hh"
 #include "test/lib/index_reader_assertions.hh"
@@ -288,12 +288,12 @@ SEASTAR_TEST_CASE(datafile_generation_16_s3, *boost::unit_test::precondition(tes
 }
 
 // mutation_reader for sstable keeping all the required objects alive.
-static flat_mutation_reader_v2 sstable_reader_v2(shared_sstable sst, schema_ptr s, reader_permit permit) {
+static mutation_reader sstable_reader_v2(shared_sstable sst, schema_ptr s, reader_permit permit) {
     return sst->as_mutation_source().make_reader_v2(s, std::move(permit), query::full_partition_range, s->full_slice());
 
 }
 
-static flat_mutation_reader_v2 sstable_reader_v2(shared_sstable sst, schema_ptr s, reader_permit permit, const dht::partition_range& pr) {
+static mutation_reader sstable_reader_v2(shared_sstable sst, schema_ptr s, reader_permit permit, const dht::partition_range& pr) {
     return sst->as_mutation_source().make_reader_v2(s, std::move(permit), pr, s->full_slice());
 }
 
@@ -509,7 +509,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
                 auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
                 auto close_reader = deferred_close(reader);
                 std::invoke([&] {
-                    mutation_opt m = read_mutation_from_flat_mutation_reader(reader).get();
+                    mutation_opt m = read_mutation_from_mutation_reader(reader).get();
                     BOOST_REQUIRE(m);
                     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, 0)));
                     auto rows = m->partition().clustered_rows();
@@ -1676,7 +1676,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         for (auto&& mf : fragments) {
             mut.apply(mf);
         }
-        auto ms = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(table.schema(), std::move(permit), std::move(mut)), cfg, version)->as_mutation_source();
+        auto ms = make_sstable_easy(env, make_mutation_reader_from_mutations_v2(table.schema(), std::move(permit), std::move(mut)), cfg, version)->as_mutation_source();
 
         for (uint32_t i = 3; i < seq; i++) {
             auto ck1 = table.make_ckey(1);
@@ -1724,7 +1724,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
         cfg.promoted_index_auto_scale_threshold = 0; // disable auto-scaling
-        auto ms = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(table.schema(), env.make_reader_permit(), partitions), cfg, version)->as_mutation_source();
+        auto ms = make_sstable_easy(env, make_mutation_reader_from_mutations_v2(table.schema(), env.make_reader_permit(), partitions), cfg, version)->as_mutation_source();
         auto rd = ms.make_reader_v2(table.schema(),
             env.make_reader_permit(),
             query::full_partition_range,
@@ -2413,7 +2413,7 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
 
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.run_identifier = sstables::run_id::create_random_id();
-        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), std::move(mut)), cfg);
+        auto sst = make_sstable_easy(env, make_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), std::move(mut)), cfg);
 
         BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);
     });
@@ -2590,13 +2590,13 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
         for (const auto version : writable_sstable_versions) {
             testlog.info("version={}", version);
 
-            auto mr = make_flat_mutation_reader_from_mutations_v2(ss.schema(), env.make_reader_permit(), mut);
+            auto mr = make_mutation_reader_from_mutations_v2(ss.schema(), env.make_reader_permit(), mut);
             sstable_writer_config cfg = env.manager().configure_writer();
             auto sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);
 
             auto sst_mr = sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
             auto close_mr = deferred_close(sst_mr);
-            auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr).get();
+            auto sst_mut = read_mutation_from_mutation_reader(sst_mr).get();
 
             // The real test here is that we don't assert() in
             // sstables::prepare_summary() with the write_components() call above,
@@ -2661,7 +2661,7 @@ SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
             frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), clustering_row(ss.make_ckey(0))));
             frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), partition_end()));
 
-            auto mr = make_flat_mutation_reader_from_fragments(s, env.make_reader_permit(), std::move(frags));
+            auto mr = make_mutation_reader_from_fragments(s, env.make_reader_permit(), std::move(frags));
             auto close_mr = deferred_close(mr);
 
             auto sst = env.make_sstable(s, version);
@@ -2693,13 +2693,13 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
             }
 
             // Test empty sstable_origin.
-            auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
+            auto mr = make_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
             sstable_writer_config cfg = env.manager().configure_writer("");
             auto sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);
             BOOST_REQUIRE_EQUAL(sst->get_origin(), "");
 
             // Test that a random sstable_origin is stored and retrieved properly.
-            mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
+            mr = make_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
             sstring origin = fmt::format("test-{}", tests::random::get_sstring());
             cfg = env.manager().configure_writer(origin);
             sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);
@@ -2772,7 +2772,7 @@ SEASTAR_TEST_CASE(sstable_reader_with_timeout) {
             auto timeout = db::timeout_clock::now();
             auto rd = sstp->make_reader(s, env.make_reader_permit(timeout), pr, s->full_slice());
             auto close_rd = deferred_close(rd);
-            auto f = read_mutation_from_flat_mutation_reader(rd);
+            auto f = read_mutation_from_mutation_reader(rd);
             BOOST_REQUIRE_THROW(f.get(), timed_out_error);
     });
 }
@@ -2802,7 +2802,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 testlog.info("compression={}", compression_params);
                 auto sst_schema = schema_builder(schema).set_compressor_params(compression_params).build();
 
-                auto mr = make_flat_mutation_reader_from_mutations_v2(schema, permit, muts);
+                auto mr = make_mutation_reader_from_mutations_v2(schema, permit, muts);
                 auto close_mr = deferred_close(mr);
 
                 auto sst = env.make_sstable(sst_schema, version);
@@ -2883,7 +2883,7 @@ SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
 
         auto sst = env.make_sstable(schema, writable_sstable_versions.back());
         {
-            auto mr = make_flat_mutation_reader_from_mutations_v2(schema, permit, muts);
+            auto mr = make_mutation_reader_from_mutations_v2(schema, permit, muts);
             auto close_mr = deferred_close(mr);
 
             sstable_writer_config cfg = env.manager().configure_writer();
@@ -3145,9 +3145,9 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
                                                        pred);
         };
 
-        auto verify_reader_result = [&] (flat_mutation_reader_v2 sst_mr, bool expect_eos) {
+        auto verify_reader_result = [&] (mutation_reader sst_mr, bool expect_eos) {
             auto close_mr = deferred_close(sst_mr);
-            auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr).get();
+            auto sst_mut = read_mutation_from_mutation_reader(sst_mr).get();
 
             if (expect_eos) {
                 BOOST_REQUIRE(sst_mr.is_buffer_empty());

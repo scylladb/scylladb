@@ -18,7 +18,7 @@
 
 #include "reader_concurrency_semaphore.hh"
 #include "query-result.hh"
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 #include "utils/exceptions.hh"
 #include "schema/schema.hh"
 #include "utils/human_readable.hh"
@@ -27,13 +27,13 @@
 logger rcslog("reader_concurrency_semaphore");
 
 struct reader_concurrency_semaphore::inactive_read {
-    flat_mutation_reader_v2 reader;
+    mutation_reader reader;
     const dht::partition_range* range = nullptr;
     eviction_notify_handler notify_handler;
     timer<lowres_clock> ttl_timer;
     inactive_read_handle* handle = nullptr;
 
-    explicit inactive_read(flat_mutation_reader_v2 reader_, const dht::partition_range* range_) noexcept
+    explicit inactive_read(mutation_reader reader_, const dht::partition_range* range_) noexcept
         : reader(std::move(reader_))
         , range(range_)
     { }
@@ -1073,7 +1073,7 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
     }
 }
 
-reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader_v2 reader,
+reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(mutation_reader reader,
         const dht::partition_range* range) noexcept {
     auto& permit = reader.permit();
     if (permit->get_state() == reader_permit::state::waiting_for_memory) {
@@ -1120,7 +1120,7 @@ void reader_concurrency_semaphore::set_notify_handler(inactive_read_handle& irh,
     }
 }
 
-flat_mutation_reader_v2_opt reader_concurrency_semaphore::unregister_inactive_read(inactive_read_handle irh) {
+mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(inactive_read_handle irh) {
     if (!irh) {
         return {};
     }
@@ -1241,7 +1241,7 @@ void reader_concurrency_semaphore::do_detach_inactive_reader(reader_permit::impl
     }
 }
 
-flat_mutation_reader_v2 reader_concurrency_semaphore::detach_inactive_reader(reader_permit::impl& permit, evict_reason reason) noexcept {
+mutation_reader reader_concurrency_semaphore::detach_inactive_reader(reader_permit::impl& permit, evict_reason reason) noexcept {
     do_detach_inactive_reader(permit, reason);
     auto irp = std::move(permit.aux_data().ir);
     return std::move(irp->reader);
@@ -1251,7 +1251,7 @@ void reader_concurrency_semaphore::evict(reader_permit::impl& permit, evict_reas
     close_reader(detach_inactive_reader(permit, reason));
 }
 
-void reader_concurrency_semaphore::close_reader(flat_mutation_reader_v2 reader) {
+void reader_concurrency_semaphore::close_reader(mutation_reader reader) {
     // It is safe to discard the future since it is waited on indirectly
     // by closing the _close_readers_gate in stop().
     (void)with_gate(_close_readers_gate, [reader = std::move(reader)] () mutable {

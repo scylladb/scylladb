@@ -47,7 +47,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
             }
 
             for (auto&& m : partitions) {
-                auto rd = make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_permit(), {m});
+                auto rd = make_mutation_reader_from_mutations_v2(s, semaphore.make_permit(), {m});
                 auto close_rd = deferred_close(rd);
                 auto muts = rd.consume(fragment_scatterer(s, n)).get();
                 for (int i = 0; i < n; ++i) {
@@ -63,7 +63,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                     streamed_mutation::forwarding fwd,
                     mutation_reader::forwarding fwd_mr)
             {
-                std::vector<flat_mutation_reader_v2> readers;
+                std::vector<mutation_reader> readers;
                 for (int i = 0; i < n; ++i) {
                     readers.push_back(memtables[i]->make_flat_reader(s, permit, range, slice, trace_state, fwd, fwd_mr));
                 }
@@ -337,9 +337,9 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
             if (m1.schema()->version() != m2.schema()->version()) {
                 // upgrade m1 to m2's schema
 
-                auto reader = transform(make_flat_mutation_reader_from_mutations_v2(m1.schema(), semaphore.make_permit(), {m1}), schema_upgrader_v2(m2.schema()));
+                auto reader = transform(make_mutation_reader_from_mutations_v2(m1.schema(), semaphore.make_permit(), {m1}), schema_upgrader_v2(m2.schema()));
                 auto close_reader = deferred_close(reader);
-                auto from_upgrader = read_mutation_from_flat_mutation_reader(reader).get();
+                auto from_upgrader = read_mutation_from_mutation_reader(reader).get();
 
                 auto regular = m1;
                 regular.upgrade(m2.schema());

@@ -15,7 +15,7 @@
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include "sstables/version.hh"
-#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/boost/sstable_test.hh"
 #include <seastar/core/reactor.hh>
@@ -85,7 +85,7 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, s
     return sst;
 }
 
-shared_sstable make_sstable_easy(test_env& env, flat_mutation_reader_v2 rd, sstable_writer_config cfg,
+shared_sstable make_sstable_easy(test_env& env, mutation_reader rd, sstable_writer_config cfg,
         sstables::generation_type gen, const sstables::sstable::version_types version, int expected_partition, gc_clock::time_point query_time) {
     auto s = rd.schema();
     auto sst = env.make_sstable(s, gen, version, sstable_format_types::big, default_sstable_buffer_size, query_time);
@@ -158,7 +158,7 @@ shared_sstable verify_mutation(test_env& env, shared_sstable sstp, bytes key, st
     auto pr = dht::partition_range::make_singular(make_dkey(s, key));
     auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
     auto close_rd = deferred_close(rd);
-    auto mopt = read_mutation_from_flat_mutation_reader(rd).get();
+    auto mopt = read_mutation_from_mutation_reader(rd).get();
     verify(mopt);
     return sstp;
 }
@@ -172,7 +172,7 @@ shared_sstable verify_mutation(test_env& env, shared_sstable sstp, dht::partitio
     auto s = sstp->get_schema();
     auto rd = sstp->make_reader(s, env.make_reader_permit(), std::move(pr), s->full_slice());
     auto close_rd = deferred_close(rd);
-    while (auto mopt = read_mutation_from_flat_mutation_reader(rd).get()) {
+    while (auto mopt = read_mutation_from_mutation_reader(rd).get()) {
         if (verify(mopt) == stop_iteration::yes) {
             break;
         }

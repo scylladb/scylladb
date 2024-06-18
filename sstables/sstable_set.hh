@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "readers/flat_mutation_reader_fwd.hh"
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader_fwd.hh"
+#include "readers/mutation_reader.hh"
 #include "sstables/progress_monitor.hh"
 #include "sstables/types_fwd.hh"
 #include "shared_sstable.hh"
@@ -106,7 +106,7 @@ public:
     using selector_and_schema_t = std::tuple<std::unique_ptr<incremental_selector_impl>, const schema&>;
     virtual selector_and_schema_t make_incremental_selector() const = 0;
 
-    virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
+    virtual mutation_reader create_single_key_sstable_reader(
         replica::column_family*,
         schema_ptr,
         reader_permit,
@@ -203,7 +203,7 @@ public:
     };
     incremental_selector make_incremental_selector() const;
 
-    flat_mutation_reader_v2 create_single_key_sstable_reader(
+    mutation_reader create_single_key_sstable_reader(
         replica::column_family*,
         schema_ptr,
         reader_permit,
@@ -219,7 +219,7 @@ public:
     ///
     /// The reader is unrestricted, but will account its resource usage on the
     /// semaphore belonging to the passed-in permit.
-    flat_mutation_reader_v2 make_range_sstable_reader(
+    mutation_reader make_range_sstable_reader(
         schema_ptr,
         reader_permit,
         const dht::partition_range&,
@@ -230,7 +230,7 @@ public:
         read_monitor_generator& rmg = default_read_monitor_generator()) const;
 
     // Filters out mutations that don't belong to the current shard.
-    flat_mutation_reader_v2 make_local_shard_sstable_reader(
+    mutation_reader make_local_shard_sstable_reader(
         schema_ptr,
         reader_permit,
         const dht::partition_range&,
@@ -241,7 +241,7 @@ public:
         read_monitor_generator& rmg = default_read_monitor_generator(),
         const sstable_predicate& p = default_sstable_predicate()) const;
 
-    flat_mutation_reader_v2 make_crawling_reader(
+    mutation_reader make_crawling_reader(
             schema_ptr,
             reader_permit,
             tracing::trace_state_ptr,

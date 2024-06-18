@@ -8,13 +8,13 @@
 
 #include <seastar/util/lazy.hh>
 
-#include "readers/flat_mutation_reader_v2.hh"
+#include "readers/mutation_reader.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "schema_upgrader.hh"
 
 logging::logger mrlog("mutation_reader");
 
-static size_t compute_buffer_size(const schema& s, const flat_mutation_reader_v2::tracked_buffer& buffer)
+static size_t compute_buffer_size(const schema& s, const mutation_reader::tracked_buffer& buffer)
 {
     return boost::accumulate(
         buffer
@@ -24,7 +24,7 @@ static size_t compute_buffer_size(const schema& s, const flat_mutation_reader_v2
     );
 }
 
-flat_mutation_reader_v2& flat_mutation_reader_v2::operator=(flat_mutation_reader_v2&& o) noexcept {
+mutation_reader& mutation_reader::operator=(mutation_reader&& o) noexcept {
     if (_impl && _impl->is_close_required()) {
         impl* ip = _impl.get();
         // Abort to enforce calling close() before readers are closed
@@ -37,7 +37,7 @@ flat_mutation_reader_v2& flat_mutation_reader_v2::operator=(flat_mutation_reader
     return *this;
 }
 
-flat_mutation_reader_v2::~flat_mutation_reader_v2() {
+mutation_reader::~mutation_reader() {
     if (_impl && _impl->is_close_required()) {
         impl* ip = _impl.get();
         // Abort to enforce calling close() before readers are closed
@@ -48,7 +48,7 @@ flat_mutation_reader_v2::~flat_mutation_reader_v2() {
     }
 }
 
-void flat_mutation_reader_v2::impl::clear_buffer_to_next_partition() {
+void mutation_reader::impl::clear_buffer_to_next_partition() {
     auto next_partition_start = std::find_if(_buffer.begin(), _buffer.end(), [] (const mutation_fragment_v2& mf) {
         return mf.is_partition_start();
     });
@@ -58,7 +58,7 @@ void flat_mutation_reader_v2::impl::clear_buffer_to_next_partition() {
 }
 
 template<typename Source>
-future<bool> flat_mutation_reader_v2::impl::fill_buffer_from(Source& source) {
+future<bool> mutation_reader::impl::fill_buffer_from(Source& source) {
     if (source.is_buffer_empty()) {
         if (source.is_end_of_stream()) {
             return make_ready_future<bool>(true);
@@ -74,18 +74,18 @@ future<bool> flat_mutation_reader_v2::impl::fill_buffer_from(Source& source) {
     }
 }
 
-template future<bool> flat_mutation_reader_v2::impl::fill_buffer_from<flat_mutation_reader_v2>(flat_mutation_reader_v2&);
+template future<bool> mutation_reader::impl::fill_buffer_from<mutation_reader>(mutation_reader&);
 
-void flat_mutation_reader_v2::do_upgrade_schema(const schema_ptr& s) {
+void mutation_reader::do_upgrade_schema(const schema_ptr& s) {
     *this = transform(std::move(*this), schema_upgrader_v2(s));
 }
 
-void flat_mutation_reader_v2::on_close_error(std::unique_ptr<impl> i, std::exception_ptr ep) noexcept {
+void mutation_reader::on_close_error(std::unique_ptr<impl> i, std::exception_ptr ep) noexcept {
     impl* ip = i.get();
     on_internal_error_noexcept(mrlog,
             format("Failed to close {} [{}]: permit {}: {}", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description(), ep));
 }
 
-future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2& r) {
+future<mutation_opt> read_mutation_from_mutation_reader(mutation_reader& r) {
     return r.consume(mutation_rebuilder_v2(r.schema()));
 }

@@ -15,7 +15,7 @@
 #include "sstables/shared_sstable.hh"
 #include <seastar/core/future.hh>
 
-class flat_mutation_reader_v2;
+class mutation_reader;
 class reader_permit;
 
 namespace sstables {
@@ -29,7 +29,7 @@ namespace replica {
 class memtable;
 
 seastar::future<>
-write_memtable_to_sstable(flat_mutation_reader_v2 reader,
+write_memtable_to_sstable(mutation_reader reader,
         memtable& mt, sstables::shared_sstable sst,
         size_t estimated_partitions,
         sstables::write_monitor& monitor,

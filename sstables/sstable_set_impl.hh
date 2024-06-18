@@ -100,13 +100,13 @@ public:
     virtual sstable_set_impl::selector_and_schema_t make_incremental_selector() const override;
 
     std::unique_ptr<position_reader_queue> make_position_reader_queue(
-        std::function<flat_mutation_reader_v2(sstable&)> create_reader,
+        std::function<mutation_reader(sstable&)> create_reader,
         std::function<bool(const sstable&)> filter,
         partition_key pk, schema_ptr schema, reader_permit permit,
         streamed_mutation::forwarding fwd_sm,
         bool reversed) const;
 
-    virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
+    virtual mutation_reader create_single_key_sstable_reader(
         replica::column_family*,
         schema_ptr,
         reader_permit,
@@ -141,7 +141,7 @@ public:
     virtual uint64_t bytes_on_disk() const noexcept override;
     virtual sstable_set_impl::selector_and_schema_t make_incremental_selector() const override;
 
-    virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
+    virtual mutation_reader create_single_key_sstable_reader(
             replica::column_family*,
             schema_ptr,
             reader_permit,

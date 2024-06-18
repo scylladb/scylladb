@@ -24,7 +24,7 @@ namespace cache {
 class autoupdating_underlying_reader final {
     row_cache& _cache;
     read_context& _read_context;
-    flat_mutation_reader_v2_opt _reader;
+    mutation_reader_opt _reader;
     utils::phased_barrier::phase_type _reader_creation_phase = 0;
     dht::partition_range _range = { };
     std::optional<dht::decorated_key> _last_key;
@@ -108,7 +108,7 @@ public:
     const dht::partition_range& range() const {
         return _range;
     }
-    flat_mutation_reader_v2& underlying() { return *_reader; }
+    mutation_reader& underlying() { return *_reader; }
     dht::ring_position_view population_range_start() const {
         return _last_key ? dht::ring_position_view::for_after_key(*_last_key)
                          : dht::ring_position_view::for_range_start(_range);
