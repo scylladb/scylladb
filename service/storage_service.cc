@@ -367,6 +367,8 @@ static locator::node::state to_topology_node_state(node_state ns) {
 future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node, std::unordered_set<raft::server_id> prev_normal) {
     nodes_to_notify_after_sync nodes_to_notify;
 
+    rtlogger.trace("Start sync_raft_topology_nodes target_node={}", target_node);
+
     const auto& am = _group0->address_map();
     const auto& t = _topology_state_machine._topology;
 
@@ -617,6 +619,8 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
 
     co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
 
+    rtlogger.trace("End sync_raft_topology_nodes");
+
     co_return nodes_to_notify;
 }
 
@@ -724,6 +728,7 @@ future<> storage_service::topology_state_load() {
 
         co_await replicate_to_all_cores(std::move(tmptr));
         co_await notify_nodes_after_sync(std::move(nodes_to_notify));
+        rtlogger.debug("topology_state_load: token metadata replication to all cores finished");
     }
 
     co_await update_fence_version(_topology_state_machine._topology.fence_version);
@@ -781,6 +786,7 @@ future<> storage_service::topology_state_load() {
     }
 
     for (const auto& gen_id : _topology_state_machine._topology.committed_cdc_generations) {
+        rtlogger.trace("topology_state_load: process committed cdc generation {}", gen_id);
         co_await _cdc_gens.local().handle_cdc_generation(gen_id);
         if (gen_id == _topology_state_machine._topology.committed_cdc_generations.back()) {
             co_await _sys_ks.local().update_cdc_generation_id(gen_id);
