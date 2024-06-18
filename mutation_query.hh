@@ -44,7 +44,7 @@ struct partition {
     uint32_t row_count_high_bits() const {
         return _row_count_high_bits;
     }
-    
+
     uint64_t row_count() const {
         return (static_cast<uint64_t>(_row_count_high_bits) << 32) | _row_count_low_bits;
     }
@@ -153,7 +153,7 @@ private:
     stop_iteration consume(range_tombstone&& rt);
 
 public:
-    // Expects query schema (reversed) and reversed slice when building results for reverse query.
+    // Expects reversed schema and reversed slice when building results for reverse query.
     reconcilable_result_builder(const schema& query_schema, const query::partition_slice& slice,
                                 query::result_memory_accounter&& accounter) noexcept
         : _query_schema(query_schema.shared_from_this()), _slice(slice)
