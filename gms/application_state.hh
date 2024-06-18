@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include <iosfwd>
 #include <fmt/core.h>
 
 namespace gms {
@@ -40,8 +39,6 @@ enum class application_state {
     CDC_GENERATION_ID,
     SNITCH_NAME,
 };
-
-std::ostream& operator<<(std::ostream& os, const application_state& m);
 
 }
 

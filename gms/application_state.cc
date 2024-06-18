@@ -41,11 +41,6 @@ static const std::map<application_state, sstring> application_state_names = {
     {application_state::SNITCH_NAME,            "SNITCH_NAME"},
 };
 
-std::ostream& operator<<(std::ostream& os, const application_state& m) {
-    fmt::print(os, "{}", m);
-    return os;
-}
-
 }
 
 auto fmt::formatter<gms::application_state>::format(gms::application_state m,

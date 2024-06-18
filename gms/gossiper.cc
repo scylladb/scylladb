@@ -2721,11 +2721,6 @@ locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
 }
 
-std::ostream& operator<<(std::ostream& os, const loaded_endpoint_state& st) {
-    fmt::print(os, "{}", st);
-    return os;
-}
-
 } // namespace gms
 
 auto fmt::formatter<gms::loaded_endpoint_state>::format(const gms::loaded_endpoint_state& st, fmt::format_context& ctx) const -> decltype(ctx.out()) {
