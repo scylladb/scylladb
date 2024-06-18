@@ -12,7 +12,11 @@
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 
+#include "db/timeout_clock.hh"
 #include "task_manager.hh"
+#include "utils/error_injection.hh"
+
+using namespace std::chrono_literals;
 
 namespace tasks {
 
@@ -140,14 +144,17 @@ is_internal task_manager::task::impl::is_internal() const noexcept {
 }
 
 static future<> abort_children(task_manager::module_ptr module, task_id parent_id) noexcept {
+    co_await utils::get_local_injector().inject("tasks_abort_children",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+
     auto entered = module->async_gate().try_enter();
     if (!entered) {
-        return make_ready_future();
+        co_return;
     }
     auto leave_gate = defer([&module] () {
         module->async_gate().leave();
     });
-    return module->get_task_manager().container().invoke_on_all([parent_id] (task_manager& tm) {
+    co_await module->get_task_manager().container().invoke_on_all([parent_id] (task_manager& tm) {
         for (auto& task : tm.get_all_tasks()) {
             if (task.second->get_parent_id() == parent_id) {
                 task.second->abort();
