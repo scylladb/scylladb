@@ -163,7 +163,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
             if (_last_pos.has_key()) {
                 next_pos = position_in_partition::after_key(*_query_schema, _last_pos);
             }
-            query::trim_clustering_row_ranges_to(*_query_schema, row_ranges, next_pos, false);
+            query::trim_clustering_row_ranges_to(*_query_schema, row_ranges, next_pos);
 
             _cmd->slice.set_range(*_query_schema, *_last_pkey, row_ranges);
         }

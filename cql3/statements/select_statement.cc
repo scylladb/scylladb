@@ -663,7 +663,7 @@ indexed_table_select_statement::do_execute_base_query(
                     auto base_ck = generate_base_key_from_index_pk<clustering_key>(old_paging_state->get_partition_key(),
                             old_paging_state->get_clustering_key(), *_schema, *_view_schema);
 
-                    query::trim_clustering_row_ranges_to(*_schema, row_ranges, base_ck, false);
+                    query::trim_clustering_row_ranges_to(*_schema, row_ranges, base_ck);
                     command->slice.set_range(*_schema, base_pk, row_ranges);
                 } else {
                     // There is no clustering key in old_paging_state and/or no clustering key in 

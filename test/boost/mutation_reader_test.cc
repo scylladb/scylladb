@@ -1369,12 +1369,12 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
             .with_column("v1", int32_type, column_kind::regular_column)
             .build();
 
-    const auto check = [&schema] (std::vector<range> ranges, key key, std::vector<range> output_ranges, bool reversed = false,
+    const auto check = [](std::vector<range> ranges, key key, std::vector<range> output_ranges, schema_ptr schema,
             seastar::compat::source_location sl = seastar::compat::source_location::current()) {
         auto actual_ranges = ranges::to<query::clustering_row_ranges>(ranges | boost::adaptors::transformed(
                     [&] (const range& r) { return r.to_clustering_range(*schema); }));
 
-        query::trim_clustering_row_ranges_to(*schema, actual_ranges, key.to_clustering_key(*schema), reversed);
+        query::trim_clustering_row_ranges_to(*schema, actual_ranges, key.to_clustering_key(*schema));
 
         const auto expected_ranges = ranges::to<query::clustering_row_ranges>(output_ranges | boost::adaptors::transformed(
                     [&] (const range& r) { return r.to_clustering_range(*schema); }));
@@ -1386,9 +1386,15 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
             BOOST_FAIL(fmt::format("Unexpected result\nexpected {}\ngot {}\ncalled from {}:{}", expected_ranges, actual_ranges, sl.file_name(), sl.line()));
         }
     };
-    const auto check_reversed = [&check] (std::vector<range> ranges, key key, std::vector<range> output_ranges, bool reversed = false,
+
+    auto check_forward = [schema, &check] (std::vector<range> ranges, key key, std::vector<range> output_ranges,
             seastar::compat::source_location sl = seastar::compat::source_location::current()) {
-        return check(std::move(ranges), std::move(key), std::move(output_ranges), true, sl);
+        return check(std::move(ranges), std::move(key), std::move(output_ranges), std::move(schema), sl);
+    };
+
+    auto check_reversed = [schema = schema->make_reversed(), &check] (std::vector<range> ranges, key key, std::vector<range> output_ranges,
+            seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+        return check(std::move(ranges), std::move(key), std::move(output_ranges), std::move(schema), sl);
     };
 
     // We want to check the following cases:
@@ -1408,109 +1414,109 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
     // 14) Prefix key is after range
 
     // (1)
-    check(
+    check_forward(
             { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
             {1, 0},
             { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
 
     // (2)
-    check(
+    check_forward(
             { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
             {1, 6},
             { {excl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
 
     // (2) - prefix
-    check(
+    check_forward(
             { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
             {3, 6},
             { {excl{3, 6}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
 
     // (3)
-    check(
+    check_forward(
             { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, incl{2, 4}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
             {2, 3},
             { {excl{2, 3}, incl{2, 4}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
 
     // (3) - prefix
-    check(
+    check_forward(
             { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, incl{2, 4}}, {excl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
             {3, 7},
             { {excl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
 
     // (4)
-    check(
+    check_forward(
             { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
             {2, 0},
             { {excl{2, 0}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
 
     // (5)
-    check(
+    check_forward(
             { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
             {90, 90},
             { {excl{90, 90}, incl{999, 0}} });
 
     // (6)
-    check(
+    check_forward(
             { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, inf{}} },
             {90, 90},
             { {excl{90, 90}, inf{}} });
 
     // (7)
-    check(
+    check_forward(
             { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
             {2, 3},
             { {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} });
 
     // (7) - prefix
-    check(
+    check_forward(
             { {incl{1, 6}, incl{2, 3}}, {incl{3}, incl{4}}, {incl{7, 9}, excl{999, 0}} },
             {4, 39},
             { {excl{4, 39}, incl{4}}, {incl{7, 9}, excl{999, 0}} });
 
     // (8)
-    check(
+    check_forward(
             { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
             {2, 3},
             { {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} });
 
     // (8) - prefix
-    check(
+    check_forward(
             { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
             {4, 11},
             { {incl{7, 9}, excl{999, 0}} });
 
     // (9)
-    check(
+    check_forward(
             { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
             {2, 4},
             { {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} });
 
     // (10)
-    check(
+    check_forward(
             { {inf{}, inf{}} },
             {7, 9},
             { {excl{7, 9}, inf{}} });
 
     // (11)
-    check(
+    check_forward(
             { {incl{10, 10}, excl{10, 30}} },
             {10},
             { {incl{10, 10}, excl{10, 30}} });
 
     // (12)
-    check(
+    check_forward(
             { {incl{10}, excl{10, 30}} },
             {10},
             { {incl{10, null{}}, excl{10, 30}} });
 
     // (13)
-    check(
+    check_forward(
             { {incl{9, 10}, excl{10, 30}} },
             {10},
             { {incl{10, null{}}, excl{10, 30}} });
 
     // (14)
-    check(
+    check_forward(
             { {incl{9, 10}, excl{10, 30}} },
             {11},
             { });
@@ -1519,79 +1525,79 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
 
     // (1)
     check_reversed(
-            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            { {incl{999, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {excl{2, 3}, incl{1, 6}} },
             {999, 1},
-            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} });
+            { {incl{999, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {excl{2, 3}, incl{1, 6}} });
 
     // (2)
     check_reversed(
-            { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, incl{2, 4}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            { {incl{999, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {incl{2, 4}, excl{2, 3}}, {excl{2, 3}, incl{1, 6}} },
             {2, 4},
-            { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, excl{2, 4}} });
+            { {excl{2, 4}, excl{2, 3}}, {excl{2, 3}, incl{1, 6}} });
 
     // (2) - prefix
     check_reversed(
-            { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, incl{2, 4}}, {incl{3}, incl{4}}, {incl{7, 9}, incl{999, 0}} },
+            { {incl{999, 0}, incl{7, 9}}, {incl{4}, incl{3}} , {incl{2, 4}, excl{2, 3}}, {excl{2, 3}, incl{1, 6}} },
             {4, 43453},
-            { {incl{1, 6}, excl{2, 3}}, {excl{2, 3}, incl{2, 4}}, {incl{3}, excl{4, 43453}} });
+            { {excl{4, 43453}, incl{3}}, {incl{2, 4}, excl{2, 3}}, {excl{2, 3}, incl{1, 6}} });
 
     // (3)
     check_reversed(
-            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            { { incl{999, 0}, incl{7, 9} }, { excl{4}, incl{3} }, { excl{2, 3}, incl{1, 6} } },
             {2, 3},
-            { {incl{1, 6}, excl{2, 3}} });
+            { {excl{2, 3}, incl{1, 6}} });
 
     // (3) - prefix
     check_reversed(
-            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            { {incl{999, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {excl{2, 3}, incl{1, 6}} },
             {4, 3},
-            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}} });
+            { {excl{4}, incl{3}}, {excl{2, 3}, incl{1, 6}} });
 
     // (4)
     check_reversed(
-            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            { {excl{999, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {excl{2, 3}, incl{1, 6}} },
             {8, 0},
-            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{8, 0}} });
+            { {excl{8, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {excl{2, 3}, incl{1, 6}} });
 
     // (5)
     check_reversed(
-            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, incl{999, 0}} },
+            { {incl{999, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {excl{2, 3}, incl{1, 6}} },
             {90, 90},
-            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{90, 90}} });
+            { {excl{90, 90}, incl{7, 9}}, {excl{4}, incl{3}}, {excl{2, 3}, incl{1, 6}} });
 
     // (6)
     check_reversed(
-            { {inf{}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, inf{}} },
+            { {inf{}, incl{7, 9}}, {excl{4}, incl{3}}, {excl{2, 3}, inf{}} },
             {1, 90},
-            { {inf{}, excl{1, 90}} });
+            { {excl{1, 90}, inf{}} });
 
     // (7)
     check_reversed(
-            { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            { {excl{999, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {incl{2, 3}, incl{1, 6}} },
             {7, 9},
-            { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{4}} });
+            { {excl{4}, incl{3}}, {incl{2, 3}, incl{1, 6}} });
 
     // (7) - prefix
     check_reversed(
-            { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            { {excl{999, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {incl{2, 3}, incl{1, 6}} },
             {3, 673},
-            { {incl{1, 6}, incl{2, 3}}, {incl{3}, excl{3, 673}} });
+            { {excl{3, 673}, incl{3}}, {incl{2, 3}, incl{1, 6}} });
 
     // (8)
     check_reversed(
-            { {excl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            { {excl{999, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {excl{2, 3}, excl{1, 6}} },
             {1, 6},
             { });
 
     // (8) - prefix
     check_reversed(
-            { {incl{1, 6}, incl{2, 3}}, {excl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            { {excl{999, 0}, incl{7, 9} }, {excl{4}, excl{3} }, {incl{2, 3}, incl{1, 6} } },
             {3, 673},
-            { {incl{1, 6}, incl{2, 3}} });
+            { {incl{2, 3}, incl{1, 6}} });
 
     // (9)
     check_reversed(
-            { {incl{1, 6}, excl{2, 3}}, {incl{3}, excl{4}}, {incl{7, 9}, excl{999, 0}} },
+            { {excl{999, 0}, incl{7, 9}}, {excl{4}, incl{3}}, {excl{2, 3}, incl{1, 6}} },
             {0, 4},
             {});
 
@@ -1599,29 +1605,29 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
     check_reversed(
             { {inf{}, inf{}} },
             {7, 9},
-            { {inf{}, excl{7, 9}} });
+            { {excl{7, 9}, inf{}} });
 
     // (11)
     check_reversed(
-            { {incl{10, 10}, excl{10, 30}} },
+            { {excl{10, 30}, incl{10, 10}} },
             {11},
-            { {incl{10, 10}, excl{10, 30}} });
+            { {excl{10, 30}, incl{10, 10}} });
 
     // (12)
     check_reversed(
-            { {excl{9, 39}, incl{10}} },
+            { {incl{10}, excl{9, 39}} },
             {10},
-            { {excl{9, 39}, excl{10}} });
+            { {incl{10, null{}}, excl{9, 39}} });
 
     // (13)
     check_reversed(
-            { {incl{9, 10}, incl{10, 30}} },
+            { {incl{10, 30}, incl{9, 10}} },
             {10},
-            { {incl{9, 10}, excl{10}} });
+            { {incl{10, null{}}, incl{9, 10}} });
 
     // (14)
     check_reversed(
-            { {incl{9, 10}, excl{10, 30}} },
+            { {excl{10, 30}, incl{9, 10}} },
             {9},
             { });
 
