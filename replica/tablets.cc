@@ -214,6 +214,8 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
     };
     std::optional<active_tablet_map> current;
 
+    tablet_logger.trace("Start reading tablet metadata");
+
     auto process_row = [&] (const cql3::untyped_result_set_row& row) {
         auto table = table_id(row.get_as<utils::UUID>("table_id"));
 
