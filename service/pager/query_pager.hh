@@ -73,7 +73,7 @@ protected:
     std::optional<query_id> _query_uuid;
 
     shared_ptr<service::storage_proxy> _proxy;
-    schema_ptr _schema;
+    schema_ptr _query_schema;
     shared_ptr<const cql3::selection::selection> _selection;
     service::query_state& _state;
     const cql3::query_options& _options;
