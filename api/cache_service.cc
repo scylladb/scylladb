@@ -196,9 +196,9 @@ void set_cache_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cs::get_row_capacity.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return ctx.db.map_reduce0([](replica::database& db) -> uint64_t {
-            return memory::stats().total_memory();
+    cs::get_row_capacity.set(r, [] (std::unique_ptr<http::request> req) {
+        return seastar::map_reduce(smp::all_cpus(), [] (int cpu) {
+            return make_ready_future<uint64_t>(memory::stats().total_memory());
         }, uint64_t(0), std::plus<uint64_t>()).then([](const int64_t& res) {
             return make_ready_future<json::json_return_type>(res);
         });
