@@ -52,11 +52,11 @@ query_pager::query_pager(service::storage_proxy& p, schema_ptr query_schema,
                 , _per_partition_limit(cmd->slice.partition_row_limit())
                 , _last_pos(position_in_partition::for_partition_start())
                 , _proxy(p.shared_from_this())
-                , _schema(cmd->slice.is_reversed() ? query_schema->get_reversed() : std::move(query_schema))
+                , _schema(std::move(query_schema))
                 , _selection(selection)
                 , _state(state)
                 , _options(options)
-                , _cmd(cmd->slice.is_reversed() ? reversed(::make_lw_shared(*cmd)) : std::move(cmd))
+                , _cmd(std::move(cmd))
                 , _ranges(std::move(ranges))
 {
     if (query_function_override) {
@@ -64,14 +64,11 @@ query_pager::query_pager(service::storage_proxy& p, schema_ptr query_schema,
     } else {
         _query_function = [] (
                 service::storage_proxy& sp,
-                schema_ptr table_schema,
+                schema_ptr query_schema,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector&& partition_ranges,
                 db::consistency_level cl,
                 service::storage_proxy_coordinator_query_options optional_params) {
-
-            auto query_schema = cmd->slice.is_reversed() ? table_schema->get_reversed() : table_schema;
-            cmd = cmd->slice.is_reversed() ? reversed(::make_lw_shared(*cmd)) : cmd;
             return sp.query_result(std::move(query_schema), std::move(cmd), std::move(partition_ranges), cl, std::move(optional_params));
         };
     }
@@ -109,9 +106,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
         auto dpk = dht::decorate_key(*_schema, *_last_pkey);
         dht::ring_position lo(dpk);
 
-        auto reversed = _cmd->slice.is_reversed();
-
-        qlogger.trace("PKey={}, Pos={}, reversed={}", dpk, _last_pos, reversed);
+        qlogger.trace("PKey={}, Pos={}, reversed={}", dpk, _last_pos, _cmd->slice.is_reversed());
 
         // Note: we're assuming both that the ranges are checked
         // and "cql-compliant", and that storage_proxy will process
@@ -120,7 +115,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
         // If the original query has singular restrictions like "col in (x, y, z)",
         // we will eventually generate an empty range. This is ok, because empty range == nothing,
         // which is what we thus mean.
-        auto modify_ranges = [reversed](auto& ranges, auto& lo, bool inclusive, const auto& cmp) {
+        auto modify_ranges = [](auto& ranges, auto& lo, bool inclusive, const auto& cmp) {
             typedef typename std::remove_reference_t<decltype(ranges)>::value_type range_type;
             typedef typename range_type::bound bound_type;
             bool found = false;
@@ -135,8 +130,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
 
                 bool remove = !found
                         || (contains && !inclusive && (i->is_singular()
-                            || (reversed && i->start() && cmp(i->start()->value(), lo) == 0)
-                            || (!reversed && i->end() && cmp(i->end()->value(), lo) == 0)))
+                            || (i->end() && cmp(i->end()->value(), lo) == 0)))
                         ;
 
                 if (remove) {
@@ -145,10 +139,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
                     continue;
                 }
                 if (contains) {
-                    auto r = reversed && !i->is_singular()
-                            ? range_type(i->start(), bound_type{ lo, inclusive })
-                            : range_type( bound_type{ lo, inclusive }, i->end(), i->is_singular())
-                            ;
+                    auto r = range_type( bound_type{ lo, inclusive }, i->end(), i->is_singular());
                     qlogger.trace("Modify range {} -> {}", *i, r);
                     *i = std::move(r);
                 }
@@ -170,10 +161,9 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
             query::clustering_row_ranges row_ranges = _cmd->slice.default_row_ranges();
             position_in_partition next_pos = _last_pos;
             if (_last_pos.has_key()) {
-                next_pos = reversed ? position_in_partition::before_key(_last_pos)
-                                    : position_in_partition::after_key(*_schema, _last_pos);
+                next_pos = position_in_partition::after_key(*_schema, _last_pos);
             }
-            query::trim_clustering_row_ranges_to(*_schema, row_ranges, next_pos, reversed);
+            query::trim_clustering_row_ranges_to(*_schema, row_ranges, next_pos, false);
 
             _cmd->slice.set_range(*_schema, *_last_pkey, row_ranges);
         }
