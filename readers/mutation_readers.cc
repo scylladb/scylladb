@@ -284,7 +284,7 @@ mutation_reader make_slicing_filtering_reader(mutation_reader rd, const dht::par
 }
 
 static mutation slice_mutation(schema_ptr schema, mutation&& m, const query::partition_slice& slice) {
-    auto ck_ranges = query::clustering_key_filter_ranges::get_native_ranges(*schema, slice, m.key());
+    auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*schema, slice, m.key());
     auto&& mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
     return mutation(schema, m.decorated_key(), std::move(mp));
 }

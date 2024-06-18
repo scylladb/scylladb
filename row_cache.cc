@@ -1397,7 +1397,7 @@ mutation_reader cache_entry::read(row_cache& rc, std::unique_ptr<read_context> u
 // Assumes reader is in the corresponding partition
 mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader) {
     auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), &rc._tracker, reader.phase());
-    auto ckr = query::clustering_key_filter_ranges::get_native_ranges(*schema(), reader.native_slice(), _key.key());
+    auto ckr = query::clustering_key_filter_ranges::get_ranges(*schema(), reader.native_slice(), _key.key());
     schema_ptr entry_schema = to_query_domain(reader.slice(), schema());
     auto r = make_cache_mutation_reader(entry_schema, _key, std::move(ckr), rc, reader, std::move(snp));
     r.upgrade_schema(to_query_domain(reader.slice(), rc.schema()));
@@ -1407,7 +1407,7 @@ mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader) {
 
 mutation_reader cache_entry::do_read(row_cache& rc, std::unique_ptr<read_context> unique_ctx) {
     auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), &rc._tracker, unique_ctx->phase());
-    auto ckr = query::clustering_key_filter_ranges::get_native_ranges(*schema(), unique_ctx->native_slice(), _key.key());
+    auto ckr = query::clustering_key_filter_ranges::get_ranges(*schema(), unique_ctx->native_slice(), _key.key());
     schema_ptr reader_schema = unique_ctx->schema();
     schema_ptr entry_schema = to_query_domain(unique_ctx->slice(), schema());
     auto rc_schema = to_query_domain(unique_ctx->slice(), rc.schema());
