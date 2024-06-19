@@ -9,8 +9,7 @@
 import pytest
 from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import InvalidRequest
-from util import unique_name, new_cql
-import requests
+from util import unique_name, new_cql, ScyllaMetrics
 from contextlib import contextmanager
 
 
@@ -33,40 +32,6 @@ def disable_compression():
         yield
     finally:
         cassandra.connection.locally_supported_compressions = saved
-
-
-class ScyllaMetrics:
-    def __init__(self, lines):
-        self._lines = lines
-    @staticmethod
-    def query(cql):
-        url = f'http://{cql.cluster.contact_points[0]}:9180/metrics'
-        return ScyllaMetrics(requests.get(url).text.split('\n'))
-    def get(self, name, labels = None, shard='total'):
-        result = None
-        for l in self._lines:
-            if not l.startswith(name):
-                continue
-            labels_start = l.find('{')
-            labels_finish = l.find('}')
-            if labels_start == -1 or labels_finish == -1:
-                raise ValueError(f'invalid metric format [{l}]')
-            def match_kv(kv):
-                key, val = kv.split('=')
-                val = val.strip('"')
-                return shard == 'total' or val == shard if key == 'shard' \
-                    else labels is None or labels.get(key, None) == val
-            match = all(match_kv(kv) for kv in l[labels_start + 1:labels_finish].split(','))
-            if match:
-                value = float(l[labels_finish + 2:])
-                if result is None:
-                    result = value
-                else:
-                    result += value
-                if shard != 'total':
-                    break
-        return result
-
 
 # When a too large request comes, it should be rejected in full.
 # That means that first of all a client receives an error after sending
