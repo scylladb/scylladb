@@ -28,6 +28,25 @@ if __name__ == '__main__':
                         help='enable compress on systemd-coredump')
     args = parser.parse_args()
 
+    # Seems like CentOS9 on GCE does not have correct SELinux configuration
+    # to capture coredump on systemd-coredump for some reason.
+    # "systemd-container-coredump" module provides such configuration, but
+    # not enabled by default, need to load it from the file.
+    # (#19325)
+    if is_redhat_variant() and distro.version() == '9':
+        enforce = out('getenforce')
+        if enforce != "Disabled":
+            modules = out('semodule -l')
+            match = re.match(r'^systemd-container-coredump$', modules, re.MULTILINE)
+            if not match:
+                if not os.path.exists('/usr/share/selinux/packages/targeted/systemd-container-coredump.pp.bz2'):
+                    run('dnf up -y systemd', shell=True, check=True)
+                if os.path.exists('/usr/share/selinux/packages/targeted/systemd-container-coredump.pp.bz2'):
+                    run('semodule -i /usr/share/selinux/packages/targeted/systemd-container-coredump.pp.bz2', shell=True, check=True)
+                    run('semodule -e systemd-container-coredump', shell=True, check=True)
+                else:
+                    print('Failed to find systemd-container-coredump.pp.bz2')
+
     # abrt-ccpp.service needs to stop before enabling systemd-coredump,
     # since both will try to install kernel coredump handler
     # (This will only requires for abrt < 2.14)
