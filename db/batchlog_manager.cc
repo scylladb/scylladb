@@ -134,7 +134,7 @@ future<> db::batchlog_manager::stop() {
 }
 
 future<size_t> db::batchlog_manager::count_all_batches() const {
-    sstring query = format("SELECT count(*) FROM {}.{}", system_keyspace::NAME, system_keyspace::BATCHLOG);
+    sstring query = format("SELECT count(*) FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG);
     return _qp.execute_internal(query, cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> rs) {
        return size_t(rs->one().get_as<int64_t>("count"));
     });
@@ -260,7 +260,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
     return seastar::with_gate(_gate, [this, batch = std::move(batch)] () mutable {
         blogger.debug("Started replayAllFailedBatches (cpu {})", this_shard_id());
         return _qp.query_internal(
-                format("SELECT id, data, written_at, version FROM {}.{})", system_keyspace::NAME, system_keyspace::BATCHLOG),
+                format("SELECT id, data, written_at, version FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
                 db::consistency_level::ONE,
                 {},
                 page_size,
