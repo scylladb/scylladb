@@ -1132,16 +1132,14 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_v2_is_mutation_source) {
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) mutable {
             mutation_reader rd(nullptr);
-            std::unique_ptr<query::partition_slice> reversed_slice;
             std::vector<mutation>* selected_muts;
+            auto reversed_slice = std::make_unique<query::partition_slice>(query::reverse_slice(*schema, slice));
 
             schema = schema->make_reversed();
             const auto reversed = slice.is_reversed();
             if (reversed) {
-                reversed_slice = std::make_unique<query::partition_slice>(query::half_reverse_slice(*schema, slice));
                 selected_muts = &muts;
             } else {
-                reversed_slice = std::make_unique<query::partition_slice>(query::reverse_slice(*schema, slice));
                 // We don't want the memtable reader to read in reverse.
                 reversed_slice->options.remove(query::partition_slice::option::reversed);
                 selected_muts = &reverse_muts;

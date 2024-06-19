@@ -70,15 +70,6 @@ lw_shared_ptr<query::read_command> reversed(lw_shared_ptr<query::read_command>&&
     return std::move(cmd);
 }
 
-query::read_command reversed(query::read_command&& cmd)
-{
-    auto schema = local_schema_registry().get(cmd.schema_version)->get_reversed();
-    cmd.schema_version = schema->version();
-    cmd.slice = query::legacy_reverse_slice_to_native_reverse_slice(*schema, cmd.slice);
-
-    return std::move(cmd);
-}
-
 std::ostream& operator<<(std::ostream& out, const mapreduce_request::reduction_type& r) {
     out << "reduction_type{";
     switch (r) {

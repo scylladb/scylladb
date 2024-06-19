@@ -320,7 +320,7 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
 
         if (res_builder.last_ckey()) {
             auto ckranges = cmd.slice.default_row_ranges();
-            query::trim_clustering_row_ranges_to(*s, ckranges, *res_builder.last_ckey(), slice.is_reversed());
+            query::trim_clustering_row_ranges_to(*s, ckranges, *res_builder.last_ckey(), false);
             cmd.slice.clear_range(*s, res_builder.last_pkey().key());
             cmd.slice.clear_ranges();
             cmd.slice.set_range(*s, res_builder.last_pkey().key(), std::move(ckranges));
@@ -358,7 +358,6 @@ public:
 
 private:
     schema_ptr _s;
-    const query::partition_slice& _slice;
     uint64_t _page_size = 0;
     std::vector<mutation> _results;
     std::optional<dht::decorated_key> _last_pkey;
@@ -370,11 +369,8 @@ private:
         if (mut.partition().clustered_rows().empty()) {
             return std::nullopt;
         }
-        if (_slice.is_reversed()) {
-            return mut.partition().clustered_rows().begin()->key();
-        } else {
-            return mut.partition().clustered_rows().rbegin()->key();
-        }
+
+        return mut.partition().clustered_rows().rbegin()->key();
     }
 
 public:
@@ -388,7 +384,7 @@ public:
         return std::get<0>(query_mutations_on_all_shards(db, std::move(s), cmd, ranges, std::move(trace_state), timeout).get());
     }
 
-    explicit mutation_result_builder(schema_ptr s, const query::partition_slice& slice, uint64_t page_size) : _s(std::move(s)), _slice(slice), _page_size(page_size) { }
+    explicit mutation_result_builder(schema_ptr s, const query::partition_slice&, uint64_t page_size) : _s(std::move(s)), _page_size(page_size) { }
 
     bool add(const reconcilable_result& res) {
         auto it = res.partitions().begin();
@@ -765,6 +761,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
         auto& db = env.db();
 
         auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name(), 4, 8);
+        s = s->make_reversed();
 
         unsigned i = 0;
 
@@ -793,8 +790,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
             std::vector<query::result_set_row> expected_rows;
             for (const auto& mut : expected_results) {
                 auto rs = query::result_set(mut);
-                // mut re-sorts rows into forward order, so we have to reverse them again here
-                std::copy(rs.rows().rbegin(), rs.rows().rend(), std::back_inserter(expected_rows));
+                std::copy(rs.rows().begin(), rs.rows().end(), std::back_inserter(expected_rows));
             }
             auto expected_data_results = query::result_set(s, std::move(expected_rows));
 

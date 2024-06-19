@@ -284,7 +284,7 @@ mutation_reader make_slicing_filtering_reader(mutation_reader rd, const dht::par
 }
 
 static mutation slice_mutation(schema_ptr schema, mutation&& m, const query::partition_slice& slice) {
-    auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*schema, slice, m.key());
+    auto ck_ranges = query::clustering_key_filter_ranges::get_native_ranges(*schema, slice, m.key());
     auto&& mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
     return mutation(schema, m.decorated_key(), std::move(mp));
 }
@@ -910,7 +910,7 @@ make_mutation_reader_from_mutations_v2(
         streamed_mutation::forwarding fwd) {
     const auto reversed = slice.is_reversed();
     auto sliced_mutation = reversed
-        ? slice_mutation(s->make_reversed(), std::move(m), query::half_reverse_slice(*s, slice))
+        ? slice_mutation(s->make_reversed(), std::move(m), query::reverse_slice(*s, slice))
         : slice_mutation(s, std::move(m), slice);
     return make_mutation_reader_from_mutations_v2(std::move(s), std::move(permit), std::move(sliced_mutation), fwd, reversed);
 }
@@ -986,7 +986,7 @@ make_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::
     const auto reversed = query_slice.is_reversed();
     std::vector<mutation> sliced_mutations;
     if (reversed) {
-        sliced_mutations = slice_mutations(s->make_reversed(), std::move(mutations), query::half_reverse_slice(*s, query_slice));
+        sliced_mutations = slice_mutations(s->make_reversed(), std::move(mutations), query::reverse_slice(*s, query_slice));
     } else {
         sliced_mutations = slice_mutations(s, std::move(mutations), query_slice);
     }
@@ -1120,12 +1120,11 @@ std::deque<mutation_fragment_v2> reverse_fragments(const schema& schema, reader_
 
 mutation_reader
 make_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit, std::deque<mutation_fragment_v2> fragments,
-        const dht::partition_range& pr, const query::partition_slice& query_slice) {
-    const auto reversed = query_slice.is_reversed();
+        const dht::partition_range& pr, const query::partition_slice& slice) {
+    const auto reversed = slice.is_reversed();
     if (reversed) {
         fragments = reverse_fragments(*schema, permit, std::move(fragments));
     }
-    auto slice = reversed ? query::legacy_reverse_slice_to_native_reverse_slice(*schema, query_slice) : query_slice;
 
     std::deque<mutation_fragment_v2> filtered;
     for (auto it = fragments.begin(); it != fragments.end(); ) {

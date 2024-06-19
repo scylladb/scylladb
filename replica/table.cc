@@ -219,7 +219,7 @@ table::make_reader_v2(schema_ptr s,
         return (*_virtual_reader).make_reader_v2(s, std::move(permit), range, slice, trace_state, fwd, fwd_mr);
     }
 
-    std::vector<flat_mutation_reader> readers;
+    std::vector<mutation_reader> readers;
 
     // We're assuming that cache and memtables are both read atomically
     // for single-key queries, so we don't need to special case memtable
@@ -3112,16 +3112,13 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
 future<lw_shared_ptr<query::result>>
 table::query(schema_ptr query_schema,
         reader_permit permit,
-        const query::read_command& cmd1,
+        const query::read_command& cmd,
         query::result_options opts,
         const dht::partition_range_vector& partition_ranges,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
         db::timeout_clock::time_point timeout,
         std::optional<query::querier>* saved_querier) {
-    const bool is_reversed = cmd1.slice.is_reversed();
-    auto cmd = is_reversed ? reversed(query::read_command(cmd1)) : cmd1;
-
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return make_lw_shared<query::result>();
     }
@@ -3190,16 +3187,12 @@ table::query(schema_ptr query_schema,
 future<reconcilable_result>
 table::mutation_query(schema_ptr query_schema,
         reader_permit permit,
-        const query::read_command& cmd1,
+        const query::read_command& cmd,
         const dht::partition_range& range,
         tracing::trace_state_ptr trace_state,
         query::result_memory_accounter accounter,
         db::timeout_clock::time_point timeout,
         std::optional<query::querier>* saved_querier) {
-
-    const bool is_reversed = cmd1.slice.is_reversed();
-    auto cmd = is_reversed ? reversed(query::read_command(cmd1)) : cmd1;
-
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return reconcilable_result();
     }
@@ -3216,10 +3209,7 @@ table::mutation_query(schema_ptr query_schema,
 
     std::exception_ptr ex;
   try {
-    // Un-reverse the schema sent to the coordinator, it expects the
-    // legacy format.
-    auto table_schema = cmd.slice.is_reversed() ? query_schema->make_reversed() : query_schema;
-    auto rrb = reconcilable_result_builder(*table_schema, cmd.slice, std::move(accounter));
+    auto rrb = reconcilable_result_builder(*query_schema, cmd.slice, std::move(accounter));
     auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state);
 
     if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {
@@ -3228,10 +3218,6 @@ table::mutation_query(schema_ptr query_schema,
     }
     if (saved_querier) {
         *saved_querier = std::move(querier_opt);
-    }
-
-    if (is_reversed) {
-        r = co_await reversed(std::move(r));
     }
 
     co_return r;

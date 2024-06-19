@@ -90,8 +90,7 @@ static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, co
 
     auto querier = query::querier(source, s, std::move(permit), range, slice, {});
     auto close_querier = deferred_close(querier);
-    auto table_schema = slice.is_reversed() ? s->make_reversed() : s;
-    auto rrb = reconcilable_result_builder(*table_schema, slice, make_accounter());
+    auto rrb = reconcilable_result_builder(*s, slice, make_accounter());
     return querier.consume_page(std::move(rrb), row_limit, partition_limit, query_time).get();
 }
 
@@ -218,7 +217,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
             reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, 3, query::max_partitions, now);
 
-            assert_that(to_result_set(result, table_schema, slice))
+            assert_that(to_result_set(result, query_schema, slice))
                 .has_size(3)
                 .has(a_row()
                     .with_column("pk", data_value(bytes("key1")))
@@ -247,7 +246,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
             reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, 3, query::max_partitions, now);
 
-            assert_that(to_result_set(result, table_schema, slice))
+            assert_that(to_result_set(result, query_schema, slice))
                 .has_size(3)
                 .has(a_row()
                     .with_column("pk", data_value(bytes("key1")))
@@ -266,15 +265,16 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
         {
             auto slice = partition_slice_builder(*query_schema)
                 .with_range(query::clustering_range(
-                    {clustering_key_prefix::from_single_value(*query_schema, bytes("C"))},
-                    {clustering_key_prefix::from_single_value(*query_schema, bytes("E"))}))
+                    {clustering_key_prefix::from_single_value(*query_schema, bytes("E"))},
+                    {clustering_key_prefix::from_single_value(*query_schema, bytes("C"))}
+                    ))
                 .reversed()
                 .build();
 
             {
                 reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, 10, query::max_partitions, now);
 
-                assert_that(to_result_set(result, table_schema, slice))
+                assert_that(to_result_set(result, query_schema, slice))
                     .has_size(3)
                     .has(a_row()
                         .with_column("pk", data_value(bytes("key1")))
@@ -293,7 +293,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
             {
                 reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, 1, query::max_partitions, now);
 
-                assert_that(to_result_set(result, table_schema, slice))
+                assert_that(to_result_set(result, query_schema, slice))
                     .has_size(1)
                     .has(a_row()
                         .with_column("pk", data_value(bytes("key1")))
@@ -304,7 +304,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
             {
                 reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, 2, query::max_partitions, now);
 
-                assert_that(to_result_set(result, table_schema, slice))
+                assert_that(to_result_set(result, query_schema, slice))
                     .has_size(2)
                     .has(a_row()
                         .with_column("pk", data_value(bytes("key1")))
@@ -330,7 +330,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
             reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, 2, query::max_partitions, now);
 
-            assert_that(to_result_set(result, table_schema, slice))
+            assert_that(to_result_set(result, query_schema, slice))
                 .has_size(2)
                 .has(a_row()
                     .with_column("pk", data_value(bytes("key1")))
@@ -353,7 +353,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
             reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, 3, query::max_partitions, now);
 
-            assert_that(to_result_set(result, table_schema, slice))
+            assert_that(to_result_set(result, query_schema, slice))
                 .has_size(2)
                 .has(a_row()
                     .with_column("pk", data_value(bytes("key1")))
@@ -374,7 +374,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
             reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, 3, query::max_partitions, now);
 
-            assert_that(to_result_set(result, table_schema, slice))
+            assert_that(to_result_set(result, query_schema, slice))
                 .has_only(a_row()
                     .with_column("pk", data_value(bytes("key1")))
                     .with_column("ck", data_value(bytes("B")))
@@ -604,5 +604,5 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_range_tombstones) {
     auto src = make_source({m});
     auto slice = partition_slice_builder(*query_schema).reversed().build();
     reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, query::max_rows, query::max_partitions, now);
-    assert_that(result.partitions().at(0).mut().unfreeze(table_schema)).is_equal_to(m);
+    assert_that(result.partitions().at(0).mut().unfreeze(query_schema)).is_equal_to(reverse(m));
 }

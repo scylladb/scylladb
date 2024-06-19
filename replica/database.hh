@@ -900,7 +900,7 @@ public:
     // completion it contains the to-be saved querier for the next page (if
     // there is one). Pass nullptr when queriers are not saved.
     future<reconcilable_result>
-    mutation_query(schema_ptr s,
+    mutation_query(schema_ptr query_schema,
             reader_permit permit,
             const query::read_command& cmd,
             const dht::partition_range& range,

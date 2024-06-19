@@ -2162,10 +2162,10 @@ void reconcilable_result_builder::consume_new_partition(const dht::decorated_key
     _rt_assembler.reset();
     _return_static_content_on_partition_with_no_rows =
         _slice.options.contains(query::partition_slice::option::always_return_static_content) ||
-        !has_ck_selector(_slice.row_ranges(_schema, dk.key()));
+        !has_ck_selector(_slice.row_ranges(*_query_schema, dk.key()));
     _static_row_is_alive = false;
     _live_rows = 0;
-    _mutation_consumer.emplace(streamed_mutation_freezer(_schema, dk.key(), _reversed));
+    _mutation_consumer.emplace(streamed_mutation_freezer(*_query_schema, dk.key(), false));
     _used_at_entry = _memory_accounter.used_memory();
 }
 
@@ -2175,18 +2175,18 @@ void reconcilable_result_builder::consume(tombstone t) {
 
 stop_iteration reconcilable_result_builder::consume(static_row&& sr, tombstone, bool is_alive) {
     _static_row_is_alive = is_alive;
-    _memory_accounter.update(sr.memory_usage(_schema));
+    _memory_accounter.update(sr.memory_usage(*_query_schema));
     return _mutation_consumer->consume(std::move(sr));
 }
 
 stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tombstone, bool is_alive) {
     if (_rt_assembler.needs_flush()) {
-        if (auto rt_opt = _rt_assembler.flush(*_query_schema, position_in_partition::after_key(_schema, cr.key()))) {
+        if (auto rt_opt = _rt_assembler.flush(*_query_schema, position_in_partition::after_key(*_query_schema, cr.key()))) {
             consume(std::move(*rt_opt));
         }
     }
     _live_rows += is_alive;
-    auto stop = _memory_accounter.update_and_check(cr.memory_usage(_schema));
+    auto stop = _memory_accounter.update_and_check(cr.memory_usage(*_query_schema));
     if (is_alive || _slice.options.contains<query::partition_slice::option::allow_mutation_read_page_without_live_row>()) {
         // We are considering finishing current read only after consuming a
         // live clustering row. While sending a single live row is enough to
@@ -2199,11 +2199,7 @@ stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tom
 }
 
 stop_iteration reconcilable_result_builder::consume(range_tombstone&& rt) {
-    _memory_accounter.update(rt.memory_usage(_schema));
-    if (_reversed) {
-        // undo reversing done for the native reversed format, coordinator still uses old reversing format
-        rt.reverse();
-    }
+    _memory_accounter.update(rt.memory_usage(*_query_schema));
     return _mutation_consumer->consume(std::move(rt));
 }
 
@@ -2256,24 +2252,11 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     auto consumer = compact_for_query_v2<query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
             max_partitions, query_result_builder(*s, builder));
     auto compaction_state = consumer.get_state();
-    const auto reverse = slice.is_reversed() ? consume_in_reverse::yes : consume_in_reverse::no;
-
-    // FIXME: frozen_mutation::consume supports only forward consumers
-    if (reverse == consume_in_reverse::no) {
-        frozen_mutation_consumer_adaptor adaptor(s, consumer);
-        for (const partition& p : r.partitions()) {
-            const auto res = co_await p.mut().consume_gently(s, adaptor);
-            if (res.stop == stop_iteration::yes) {
-                break;
-            }
-        }
-    } else {
-        for (const partition& p : r.partitions()) {
-            auto m = co_await unfreeze_gently(p.mut(), s);
-            const auto res = co_await std::move(m).consume_gently(consumer, reverse);
-            if (res.stop == stop_iteration::yes) {
-                break;
-            }
+    frozen_mutation_consumer_adaptor adaptor(s, consumer);
+    for (const partition& p : r.partitions()) {
+        const auto res = co_await p.mut().consume_gently(s, adaptor);
+        if (res.stop == stop_iteration::yes) {
+            break;
         }
     }
     if (r.is_short_read()) {
@@ -2288,8 +2271,7 @@ query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_l
     auto consumer = compact_for_query_v2<query_result_builder>(*m.schema(), now, slice, row_limit,
             query::max_partitions, query_result_builder(*m.schema(), builder));
     auto compaction_state = consumer.get_state();
-    const auto reverse = slice.is_reversed() ? consume_in_reverse::yes : consume_in_reverse::no;
-    std::move(m).consume(consumer, reverse);
+    std::move(m).consume(consumer, consume_in_reverse::no);
     return builder.build(compaction_state->current_full_position());
 }
 
