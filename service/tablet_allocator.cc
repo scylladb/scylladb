@@ -18,6 +18,7 @@
 #include "locator/load_sketch.hh"
 #include <utility>
 #include <fmt/ranges.h>
+#include <absl/container/flat_hash_map.h>
 
 using namespace locator;
 using namespace replica;
@@ -211,6 +212,8 @@ class load_balancer {
 
     struct shard_load {
         size_t tablet_count = 0;
+
+        absl::flat_hash_map<table_id, size_t> tablet_count_per_table;
 
         // Number of tablets which are streamed from this shard.
         size_t streaming_read_load = 0;
@@ -839,6 +842,8 @@ public:
 
             dst_info.tablet_count++;
             src_info.tablet_count--;
+            dst_info.tablet_count_per_table[tablet.table]++;
+            src_info.tablet_count_per_table[tablet.table]--;
         }
 
         co_return plan;
@@ -1147,10 +1152,12 @@ public:
             }
 
             target_info.shards[dst.shard].tablet_count++;
+            target_info.shards[dst.shard].tablet_count_per_table[source_tablet.table]++;
             target_info.tablet_count += 1;
             target_info.update();
 
             src_shard_info.tablet_count -= 1;
+            src_shard_info.tablet_count_per_table[source_tablet.table]--;
             if (src_shard_info.tablet_count == 0) {
                 push_back_shard_candidate.cancel();
                 src_node_info.shards_by_load.pop_back();
@@ -1363,6 +1370,7 @@ public:
                         node_load_info.shards_by_load.push_back(replica.shard);
                     }
                     shard_load_info.tablet_count += 1;
+                    shard_load_info.tablet_count_per_table[table]++;
                     if (!trinfo) { // migrating tablets are not candidates
                         add_candidate(shard_load_info, global_tablet_id {table, tid});
                     }
