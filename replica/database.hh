@@ -1698,10 +1698,10 @@ public:
             db::per_partition_rate_limit::account_and_enforce account_and_enforce_info,
             db::operation_type op_type);
 
-    future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
+    future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> query(schema_ptr query_schema, const query::read_command& cmd, query::result_options opts,
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
                                                                   db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info = std::monostate{});
-    future<std::tuple<reconcilable_result, cache_temperature>> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
+    future<std::tuple<reconcilable_result, cache_temperature>> query_mutations(schema_ptr query_schema, const query::read_command& cmd, const dht::partition_range& range,
                                                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.

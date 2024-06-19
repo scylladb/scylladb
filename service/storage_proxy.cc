@@ -5648,17 +5648,13 @@ storage_proxy::query_result_local_digest(locator::effective_replication_map_ptr 
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
-storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd1, const dht::partition_range& pr, query::result_options opts,
+storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_options opts,
                                   tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
-    const bool is_reversed = cmd1->slice.is_reversed();
-    auto table_schema = is_reversed ? query_schema->get_reversed() : query_schema;
-    auto cmd = is_reversed ? reversed(::make_lw_shared(*cmd1)) : cmd1;
-
     cmd->slice.options.set_if<query::partition_slice::option::with_digest>(opts.request != query::result_request::only_result);
-    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*table_schema), *table_schema, pr)) {
+    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*query_schema), *query_schema, pr)) {
         auto shard = *shard_opt;
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(table_schema), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), rate_limit_info] (replica::database& db) mutable {
+        return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(query_schema), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), rate_limit_info] (replica::database& db) mutable {
             auto trace_state = gt.get();
             tracing::trace(trace_state, "Start querying singular range {}", prv.front());
             return db.query(gs, *cmd, opts, prv, trace_state, timeout, rate_limit_info).then([trace_state](std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& f_ht) {
@@ -5668,6 +5664,10 @@ storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, sc
             });
         });
     } else {
+        const bool is_reversed = cmd->slice.is_reversed();
+        auto table_schema = is_reversed ? query_schema->get_reversed() : query_schema;
+        auto cmd1 = is_reversed ? reversed(::make_lw_shared(*cmd)) : cmd;
+
         // FIXME: adjust multishard_mutation_query to accept an smp_service_group and propagate it there
         tracing::trace(trace_state, "Start querying token range {}", pr);
         return query_nonsingular_data_locally(table_schema, cmd, {pr}, opts, trace_state, timeout).then(
@@ -6569,31 +6569,24 @@ future<> storage_proxy::stop_remote() {
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
-storage_proxy::query_mutations_locally(schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd1, const dht::partition_range& pr,
+storage_proxy::query_mutations_locally(schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                        storage_proxy::clock_type::time_point timeout,
                                        tracing::trace_state_ptr trace_state) {
-    const bool is_reversed = cmd1->slice.is_reversed();
-    auto table_schema = is_reversed ? query_schema->get_reversed() : query_schema;
-    auto cmd = is_reversed ? reversed(::make_lw_shared(*cmd1)) : cmd1;
-
-    auto& table = table_schema->table();
+    auto& table = query_schema->table();
     auto erm = table.get_effective_replication_map();
-    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*table_schema), *table_schema, pr)) {
+    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*query_schema), *query_schema, pr)) {
         auto shard = *shard_opt;
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return _db.invoke_on(shard, _read_smp_service_group, [cmd, &pr, gs=global_schema_ptr(table_schema), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (replica::database& db) mutable {
-            return db.query_mutations(gs, *cmd, pr, gt, timeout).then([is_reversed=cmd->slice.is_reversed()] (std::tuple<reconcilable_result, cache_temperature> result_ht) {
+        return _db.invoke_on(shard, _read_smp_service_group, [cmd, &pr, gs=global_schema_ptr(query_schema), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (replica::database& db) mutable {
+            return db.query_mutations(gs, *cmd, pr, gt, timeout).then([] (std::tuple<reconcilable_result, cache_temperature> result_ht) {
                 auto&& [result, ht] = result_ht;
-                if (is_reversed) {
-                    return reversed(std::move(result)).then([ht=std::move(ht)] (auto result) mutable {
-                        return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(make_lw_shared<reconcilable_result>(std::move(result))), std::move(ht)));
-                    });
-                }
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(make_lw_shared<reconcilable_result>(std::move(result))), std::move(ht)));
             });
         });
     } else {
-        bool is_reversed = cmd->slice.is_reversed();
+        const bool is_reversed = cmd->slice.is_reversed();
+        auto table_schema = is_reversed ? query_schema->get_reversed() : query_schema;
+        auto cmd1 = is_reversed ? reversed(::make_lw_shared(*cmd)) : cmd;
         return query_nonsingular_mutations_locally(std::move(table_schema), std::move(cmd), {pr}, std::move(trace_state), timeout).then([is_reversed] (auto result_ht) {
             auto&& [result, ht] = result_ht;
             if (is_reversed) {
