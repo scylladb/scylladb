@@ -155,6 +155,10 @@ public:
     ///
     /// Here, `do_until()` takes care of yielding between iterations when
     /// necessary.
+    ///
+    /// The recommended way to use this method is by calling utils::reserve_gently() from stall_free.hh
+    /// instead of looping with this method directly. utils::reserve_gently() will repeatedly call this
+    /// method to reserve the required quantity, yielding between calls when necessary.
     void reserve_partial(size_t n) {
         if (n > _capacity) {
             return make_room(n, true);
