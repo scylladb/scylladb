@@ -123,7 +123,6 @@ public:
 
 // Reverse reconcilable_result by reversing mutations for all partitions.
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> reversed(foreign_ptr<lw_shared_ptr<reconcilable_result>> result);
-future<reconcilable_result> reversed(reconcilable_result result);
 
 template <>
 struct fmt::formatter<reconcilable_result::printer> {
@@ -134,10 +133,8 @@ struct fmt::formatter<reconcilable_result::printer> {
 
 
 class reconcilable_result_builder {
-    const schema& _schema;
-    const query::partition_slice& _slice;
-    bool _reversed;
     schema_ptr _query_schema;
+    const query::partition_slice& _slice;
 
     bool _return_static_content_on_partition_with_no_rows{};
     bool _static_row_is_alive{};
@@ -156,11 +153,10 @@ private:
     stop_iteration consume(range_tombstone&& rt);
 
 public:
-    // Expects table schema (non-reversed) and half-reversed (legacy) slice when building results for reverse query.
-    reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
+    // Expects query schema (reversed) and reversed slice when building results for reverse query.
+    reconcilable_result_builder(const schema& query_schema, const query::partition_slice& slice,
                                 query::result_memory_accounter&& accounter) noexcept
-        : _schema(s), _slice(slice), _reversed(_slice.is_reversed())
-        , _query_schema(_reversed ? _schema.make_reversed() : _schema.shared_from_this())
+        : _query_schema(query_schema.shared_from_this()), _slice(slice)
         , _memory_accounter(std::move(accounter))
     { }
 

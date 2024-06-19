@@ -479,7 +479,6 @@ public:
 // the legacy reversed format to native reversed format. Shall be called with reversed
 // queries only.
 lw_shared_ptr<query::read_command> reversed(lw_shared_ptr<query::read_command>&& cmd);
-query::read_command reversed(query::read_command&& cmd);
 
 struct mapreduce_request {
     enum class reduction_type {

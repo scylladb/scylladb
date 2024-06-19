@@ -92,16 +92,3 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> reversed(foreign_ptr<lw_
 
     co_return std::move(result);
 }
-
-future<reconcilable_result> reversed(reconcilable_result result)
-{
-    for (auto& partition : result.partitions())
-    {
-        auto& m = partition.mut();
-        auto schema = local_schema_registry().get(m.schema_version());
-        m = frozen_mutation(reverse(m.unfreeze(schema)));
-        co_await coroutine::maybe_yield();
-    }
-
-    co_return std::move(result);
-}
