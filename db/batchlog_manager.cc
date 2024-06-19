@@ -284,19 +284,10 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
                     });
                 });
             });
-        }).then([] {
-        // TODO FIXME : cleanup()
-#if 0
-            ColumnFamilyStore cfs = Keyspace.open(SystemKeyspace.NAME).getColumnFamilyStore(SystemKeyspace.BATCHLOG);
-            cfs.forceBlockingFlush();
-            Collection<Descriptor> descriptors = new ArrayList<>();
-            for (SSTableReader sstr : cfs.getSSTables())
-            descriptors.add(sstr.descriptor);
-            if (!descriptors.isEmpty()) // don't pollute the logs if there is nothing to compact.
-            CompactionManager.instance.submitUserDefined(cfs, descriptors, Integer.MAX_VALUE).get();
-
-#endif
-
+        }).then([this] {
+            // Replaying batches could have generated tombstones, flush to disk,
+            // where they can be compacted away.
+            return replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
         }).then([] {
             blogger.debug("Finished replayAllFailedBatches");
         });
