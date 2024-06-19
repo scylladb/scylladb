@@ -1703,18 +1703,6 @@ static flat_mutation_reader_v2 make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor) {
-    // If we're provided a reversed slice we must fix it since currently callers
-    // provide them in a 'half-reversed' format: the order of ranges in the slice is reversed,
-    // but the ranges themselves are not.
-    // FIXME: drop this workaround when callers are fixed to provide the slice
-    // in 'native-reversed' format (if ever).
-    if (slice.get().is_reversed()) {
-        return make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
-            std::move(sstable), schema, std::move(permit), range,
-            value_or_reference(legacy_reverse_slice_to_native_reverse_slice(*schema, slice.get())),
-            std::move(trace_state), fwd, fwd_mr, monitor);
-    }
-
     return make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
         std::move(sstable), std::move(schema), std::move(permit), range,
         std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor);

@@ -5221,16 +5221,8 @@ protected:
                     tracing::trace(_trace_state, "Read stage is done for read-repair");
                     mlogger.trace("reconciled: {}", rr_opt->pretty_printer(_schema));
 
-                    const bool is_reversed = _cmd->slice.is_reversed();
-                    auto schema = is_reversed ? _schema->get_reversed() : _schema;
-                    auto cmd = is_reversed ? reversed(::make_lw_shared(*_cmd)) : _cmd;
-                    auto&& rr = std::move(*rr_opt);
-                    if (is_reversed) {
-                        rr = co_await reversed(std::move(rr));
-                    }
-
                     auto result = ::make_foreign(::make_lw_shared<query::result>(
-                            co_await to_data_query_result(std::move(rr), schema, cmd->slice, cmd->get_row_limit(), cmd->partition_limit)));
+                            co_await to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), _cmd->partition_limit)));
                     qlogger.trace("reconciled: {}", result->pretty_printer(_schema, _cmd->slice));
                     // wait for write to complete before returning result to prevent multiple concurrent read requests to
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
@@ -5612,13 +5604,9 @@ storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, sc
             });
         });
     } else {
-        const bool is_reversed = cmd->slice.is_reversed();
-        auto table_schema = is_reversed ? query_schema->get_reversed() : query_schema;
-        auto cmd1 = is_reversed ? reversed(::make_lw_shared(*cmd)) : cmd;
-
         // FIXME: adjust multishard_mutation_query to accept an smp_service_group and propagate it there
         tracing::trace(trace_state, "Start querying token range {}", pr);
-        return query_nonsingular_data_locally(table_schema, cmd, {pr}, opts, trace_state, timeout).then(
+        return query_nonsingular_data_locally(query_schema, cmd, {pr}, opts, trace_state, timeout).then(
                 [trace_state = std::move(trace_state)] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>&& r_ht) {
             auto&& [r, ht] = r_ht;
             tracing::trace(trace_state, "Querying is done");
@@ -6529,18 +6517,7 @@ storage_proxy::query_mutations_locally(schema_ptr query_schema, lw_shared_ptr<qu
             });
         });
     } else {
-        const bool is_reversed = cmd->slice.is_reversed();
-        auto table_schema = is_reversed ? query_schema->get_reversed() : query_schema;
-        auto cmd1 = is_reversed ? reversed(::make_lw_shared(*cmd)) : cmd;
-        return query_nonsingular_mutations_locally(std::move(table_schema), std::move(cmd), {pr}, std::move(trace_state), timeout).then([is_reversed] (auto result_ht) {
-            auto&& [result, ht] = result_ht;
-            if (is_reversed) {
-                return reversed(result.release()).then([&ht](auto result) {
-                    return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(std::move(result), std::move(ht)));
-                });
-            }
-            return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(std::move(result), std::move(ht)));
-        });
+        return query_nonsingular_mutations_locally(std::move(query_schema), std::move(cmd), {pr}, std::move(trace_state), timeout);
     }
 }
 
@@ -6551,18 +6528,7 @@ storage_proxy::query_mutations_locally(schema_ptr query_schema, lw_shared_ptr<qu
     if (!pr.second) {
         return query_mutations_locally(std::move(query_schema), std::move(cmd), pr.first, timeout, std::move(trace_state));
     } else {
-        const bool is_reversed = cmd->slice.is_reversed();
-        auto table_schema = is_reversed ? query_schema->get_reversed() : query_schema;
-        auto cmd1 = is_reversed ? reversed(std::move(cmd)) : cmd;
-        return query_nonsingular_mutations_locally(std::move(table_schema), std::move(cmd1), pr, std::move(trace_state), timeout).then([is_reversed] (auto result_ht) {
-            auto&& [result, ht] = result_ht;
-            if (is_reversed) {
-                return reversed(result.release()).then([&ht](auto result) {
-                    return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(std::move(result), std::move(ht)));
-                });
-            }
-            return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(std::move(result), std::move(ht)));
-        });
+        return query_nonsingular_mutations_locally(std::move(query_schema), std::move(cmd), pr, std::move(trace_state), timeout);
     }
 }
 

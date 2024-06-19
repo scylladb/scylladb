@@ -271,7 +271,7 @@ public:
     // Reversed slices must be provided in the 'half-reversed' format (the order of ranges
     // being reversed, but the ranges themselves are not).
     flat_mutation_reader_v2 make_reader(
-            schema_ptr schema,
+            schema_ptr query_schema,
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,

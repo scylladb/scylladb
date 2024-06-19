@@ -479,7 +479,6 @@ public:
 // the legacy reversed format to native reversed format. Shall be called with reversed
 // queries only.
 lw_shared_ptr<query::read_command> reversed(lw_shared_ptr<query::read_command>&& cmd);
-query::read_command reversed(query::read_command&& cmd);
 
 struct forward_request {
     enum class reduction_type {
@@ -490,7 +489,7 @@ struct forward_request {
         db::functions::function_name name;
         std::vector<sstring> column_names;
     };
-    struct reductions_info { 
+    struct reductions_info {
         // Used by selector_factries to prepare reductions information
         std::vector<reduction_type> types;
         std::vector<aggregation_info> infos;
