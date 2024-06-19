@@ -33,6 +33,9 @@ std::ostream& operator<<(std::ostream& out, const replay_position& p) {
 
 template <>
 struct fmt::formatter<db::hints::sync_point::host_id_or_addr> {
+    constexpr static auto parse(format_parse_context& ctx) {
+        return ctx.begin();
+    }
     constexpr static auto format(const db::hints::sync_point::host_id_or_addr& value, fmt::format_context& ctx) {
         return std::visit([&ctx](const auto& v) {
             return fmt::format_to(ctx.out(), "{}", v);
