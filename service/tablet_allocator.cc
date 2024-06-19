@@ -1023,7 +1023,6 @@ public:
 
             target = nodes_by_load_dst.back();
             auto& target_info = nodes[target];
-            auto& src_info = nodes[src.host];
             auto push_back_target_node = seastar::defer([&] {
                 std::push_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
             });
@@ -1076,7 +1075,7 @@ public:
             std::unordered_map<sstring, int> rack_load; // Will be built if check_rack_load
 
             if (nodes_to_drain.empty()) {
-                check_rack_load = target_info.rack() != src_info.rack();
+                check_rack_load = target_info.rack() != src_node_info.rack();
                 for (auto&& r: tmap.get_tablet_info(source_tablet.tablet).replicas) {
                     if (r.host == target) {
                         has_replica_on_target = true;
@@ -1113,8 +1112,8 @@ public:
             auto& target_load_sketch = co_await target_info.get_load_sketch(_tm);
             auto dst = global_shard_id {target, target_load_sketch.next_shard(target)};
 
-            tablet_transition_kind kind = (src_info.state() == locator::node::state::being_removed
-                                           || src_info.state() == locator::node::state::left)
+            tablet_transition_kind kind = (src_node_info.state() == locator::node::state::being_removed
+                                           || src_node_info.state() == locator::node::state::left)
                        ? tablet_transition_kind::rebuild : tablet_transition_kind::migration;
             auto mig = tablet_migration_info {kind, source_tablet, src, dst};
             auto& src_tinfo = tmap.get_tablet_info(source_tablet.tablet);
