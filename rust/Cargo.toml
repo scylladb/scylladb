@@ -34,6 +34,7 @@ incremental = false
 [profile.rust-release]
 inherits = "release"
 debug = true
+incremental = false
 
 [profile.rust-coverage]
 inherits = "dev"
