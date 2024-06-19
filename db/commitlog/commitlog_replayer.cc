@@ -326,60 +326,64 @@ future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::
 }
 
 future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fname_prefix) {
-    typedef std::unordered_multimap<unsigned, sstring> shard_file_map;
+    using shard_file_map = std::unordered_multimap<unsigned, sstring>;
 
     rlogger.info("Replaying {}", fmt::join(files, ", "));
 
     // pre-compute work per shard already.
-    auto map = ::make_lw_shared<shard_file_map>();
+    shard_file_map map;
     for (auto& f : files) {
         commitlog::descriptor d(f, fname_prefix);
         replay_position p = d;
-        map->emplace(p.shard_id() % smp::count, std::move(f));
+        map.emplace(p.shard_id() % smp::count, std::move(f));
     }
 
-    return do_with(std::move(fname_prefix), [this, map] (sstring& fname_prefix) {
-        return _impl->start().then([this, map, &fname_prefix] {
-            return map_reduce(smp::all_cpus(), [this, map, &fname_prefix] (unsigned id) {
-                return smp::submit_to(id, [this, id, map, &fname_prefix] () {
-                    auto total = ::make_lw_shared<impl::stats>();
-                    // TODO: or something. For now, we do this serialized per shard,
-                    // to reduce mutation congestion. We could probably (says avi)
-                    // do 2 segments in parallel or something, but lets use this first.
-                    auto range = map->equal_range(id);
-                    return do_for_each(range.first, range.second, [this, total, &fname_prefix] (const std::pair<unsigned, sstring>& p) {
-                        auto&f = p.second;
-                        rlogger.debug("Replaying {}", f);
-                        return _impl->recover(f, fname_prefix).then([f, total](impl::stats stats) {
-                            if (stats.corrupt_bytes != 0) {
-                                rlogger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
-                            }
-                            if (stats.truncated_at != 0) {
-                                rlogger.warn("Truncated file: {} at position {}.", f, stats.truncated_at);
-                            }
-                            rlogger.debug("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
-                                            , f
-                                            , stats.applied_mutations
-                                            , stats.invalid_mutations
-                                            , stats.skipped_mutations
-                            );
-                            *total += stats;
-                        });
-                    }).then([total] {
-                        return make_ready_future<impl::stats>(*total);
-                    });
-                });
-            }, impl::stats(), std::plus<impl::stats>()).then([](impl::stats totals) {
-                rlogger.info("Log replay complete, {} replayed mutations ({} invalid, {} skipped)"
-                                , totals.applied_mutations
-                                , totals.invalid_mutations
-                                , totals.skipped_mutations
-                );
+    co_await _impl->start();
+    std::exception_ptr e;
+    try {
+        auto totals = co_await map_reduce(smp::all_cpus(), [&](unsigned id) -> future<impl::stats> {
+            co_return co_await smp::submit_to(id, [&] () -> future<impl::stats> {
+                impl::stats total;
+                // TODO: or something. For now, we do this serialized per shard,
+                // to reduce mutation congestion. We could probably (says avi)
+                // do 2 segments in parallel or something, but lets use this first.
+                auto range = map.equal_range(id);
+                for (auto& [id, f] : std::ranges::subrange(range.first, range.second)) {
+                    rlogger.debug("Replaying {}", f);
+                    auto stats = co_await _impl->recover(f, fname_prefix);
+                    if (stats.corrupt_bytes != 0) {
+                        rlogger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
+                    }
+                    if (stats.truncated_at != 0) {
+                        rlogger.warn("Truncated file: {} at position {}.", f, stats.truncated_at);
+                    }
+                    rlogger.debug("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
+                                    , f
+                                    , stats.applied_mutations
+                                    , stats.invalid_mutations
+                                    , stats.skipped_mutations
+                    );
+                    total += stats;
+                }
+                co_return total;
             });
-        }).finally([this] {
-            return _impl->stop();
-        });
-    });
+        }, impl::stats(), std::plus<impl::stats>());
+            
+        rlogger.info("Log replay complete, {} replayed mutations ({} invalid, {} skipped)"
+                        , totals.applied_mutations
+                        , totals.invalid_mutations
+                        , totals.skipped_mutations
+        );
+
+    } catch (...) {
+        e = std::current_exception();
+    }
+
+    co_await _impl->stop();
+
+    if (e) {
+        std::rethrow_exception(e);
+    }
 }
 
 future<> db::commitlog_replayer::recover(sstring f, sstring fname_prefix) {
