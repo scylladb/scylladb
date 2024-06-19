@@ -28,6 +28,25 @@ if __name__ == '__main__':
                         help='enable compress on systemd-coredump')
     args = parser.parse_args()
 
+    # Seems like specific version of systemd pacakge on RHEL9 has a bug on
+    # SELinux configuration, it introduced "systemd-container-coredump" module
+    # to provide rule for systemd-coredump but not enabled by default.
+    # We have to manually load it, otherwise it causes permission errror.
+    # (#19325)
+    if is_redhat_variant() and distro.major_version() == '9':
+        if not shutil.which('getenforce'):
+            pkg_install('libselinux-utils')
+        if not shutil.which('semodule'):
+            pkg_install('policycoreutils')
+        enforce = out('getenforce')
+        if enforce != "Disabled":
+            if os.path.exists('/usr/share/selinux/packages/targeted/systemd-container-coredump.pp.bz2'):
+                modules = out('semodule -l')
+                match = re.match(r'^systemd-container-coredump$', modules, re.MULTILINE)
+                if not match:
+                    run('semodule -v -i /usr/share/selinux/packages/targeted/systemd-container-coredump.pp.bz2', shell=True, check=True)
+                    run('semodule -v -e systemd-container-coredump', shell=True, check=True)
+
     # abrt-ccpp.service needs to stop before enabling systemd-coredump,
     # since both will try to install kernel coredump handler
     # (This will only requires for abrt < 2.14)
