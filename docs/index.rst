@@ -40,7 +40,6 @@ Join the ScyllaDB Open Source community:
 * Contribute to the ScyllaDB Open Source `project <https://github.com/scylladb/scylladb>`_.
 * Join the `ScyllaDB Community Forum <https://forum.scylladb.com/>`_.
 * Join our `Slack Channel <https://slack.scylladb.com/>`_.
-* Sign up for the `scylladb-users <https://groups.google.com/d/forum/scylladb-users>`_ Google group.
 
 Learn How to Use ScyllaDB
 ---------------------------
