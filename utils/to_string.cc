@@ -7,6 +7,7 @@
  */
 
 #include "utils/to_string.hh"
+#include "utils/user_provided_param.hh"
 
 auto fmt::formatter<std::strong_ordering>::format(std::strong_ordering order, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
@@ -41,4 +42,10 @@ auto fmt::formatter<std::partial_ordering>::format(std::partial_ordering order, 
     } else {
         return fmt::format_to(ctx.out(), "eq");
     }
+}
+
+auto fmt::formatter<utils::optional_param_flags_set>::format(const utils::optional_param_flags_set& flags, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto ret = fmt::format_to(ctx.out(), "{}", flags.contains(utils::optional_param_flag::user_provided) ? "user-provided" : "implicit");
+    return ret;
 }
