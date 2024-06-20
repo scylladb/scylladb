@@ -1559,7 +1559,7 @@ public:
             ++stats().throttled_base_writes;
             ++stats().total_throttled_base_writes;
             tracing::trace(trace, "Delaying user write due to view update backlog {}/{} by {}us",
-                          backlog.current, backlog.max, delay.count());
+                          backlog.get_current_bytes(), backlog.get_max_bytes(), delay.count());
             // Waited on indirectly.
             (void)sleep_abortable<seastar::steady_clock_type>(delay).finally([self = shared_from_this(), on_resume = std::forward<Func>(on_resume)] {
                 --self->stats().throttled_base_writes;
@@ -2446,7 +2446,7 @@ void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms
 void storage_proxy::maybe_update_view_backlog_of(gms::inet_address replica, std::optional<db::view::update_backlog> backlog) {
     if (backlog) {
         auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        _view_update_backlogs[replica] = {std::move(*backlog), now};
+        _view_update_backlogs.insert_or_assign(replica, view_update_backlog_timestamped{*backlog, now});
     }
 }
 

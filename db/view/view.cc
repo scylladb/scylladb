@@ -2658,7 +2658,7 @@ future<std::optional<update_backlog>> node_update_backlog::fetch_if_changed() {
                     return std::make_pair(std::exchange(_backlogs[shard].need_publishing, need_publishing::no), fetch_shard(shard));
                 });
             },
-            std::make_pair(need_publishing::no, db::view::update_backlog()),
+            std::make_pair(need_publishing::no, db::view::update_backlog::no_backlog()),
             [] (std::pair<need_publishing, db::view::update_backlog> a, std::pair<need_publishing, db::view::update_backlog> b) {
                 return std::make_pair(a.first || b.first, std::max(a.second, b.second));
             });

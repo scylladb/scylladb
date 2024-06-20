@@ -9,8 +9,8 @@
 namespace db {
 namespace view {
 class update_backlog {
-    size_t current;
-    size_t max;
+    size_t get_current_bytes();
+    size_t get_max_bytes();
 };
 }
 }

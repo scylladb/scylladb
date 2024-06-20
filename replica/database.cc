@@ -551,7 +551,7 @@ database::setup_metrics() {
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
-        sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().current; },
+        sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().get_current_bytes(); },
                        sm::description("Holds the current size in bytes of the pending view updates for all tables")),
 
         sm::make_counter("querier_cache_lookups", _querier_cache.get_stats().lookups,
