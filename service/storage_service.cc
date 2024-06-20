@@ -57,6 +57,7 @@
 #include <seastar/core/thread.hh>
 #include <algorithm>
 #include "locator/local_strategy.hh"
+#include "utils/user_provided_param.hh"
 #include "version.hh"
 #include "dht/range_streamer.hh"
 #include <boost/range/adaptors.hpp>
@@ -4566,7 +4567,7 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
-future<> storage_service::raft_rebuild(sstring source_dc) {
+future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
     auto& raft_server = _group0->group0_server();
     utils::UUID request_id;
 
@@ -4588,9 +4589,10 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
             throw std::runtime_error("Cannot rebuild a single node");
         }
 
-        rtlogger.info("request rebuild for: {}", raft_server.id());
+        rtlogger.info("request rebuild for: {} source_dc={}", raft_server.id(), sdc_param);
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_session(session_id(guard.new_group0_state_id()));
+        auto source_dc = sdc_param.value_or("");
         builder.with_node(raft_server.id())
                .set("topology_request", topology_request::rebuild)
                .set("rebuild_option", source_dc)
@@ -4667,13 +4669,13 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
     });
 }
 
-future<> storage_service::rebuild(sstring source_dc) {
+future<> storage_service::rebuild(utils::optional_param source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) -> future<> {
         ss.check_ability_to_perform_topology_operation("rebuild");
         if (ss.raft_topology_change_enabled()) {
             co_await ss.raft_rebuild(source_dc);
         } else {
-            slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
+            slogger.info("rebuild from dc: {}", source_dc);
             auto tmptr = ss.get_token_metadata_ptr();
             if (ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
                 co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
@@ -4681,8 +4683,8 @@ future<> storage_service::rebuild(sstring source_dc) {
                 auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
                         tmptr->get_my_id(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, null_topology_guard);
                 streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
-                if (source_dc != "") {
-                    streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
+                if (source_dc) {
+                    streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(*source_dc));
                 }
                 auto ks_erms = ss._db.local().get_non_local_strategy_keyspaces_erms();
                 for (const auto& [keyspace_name, erm] : ks_erms) {
@@ -5560,7 +5562,11 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         co_await retrier(_rebuild_result, [&] () -> future<> {
                             auto tmptr = get_token_metadata_ptr();
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
-                                co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
+                                utils::optional_param sdc_param;
+                                if (!source_dc.empty()) {
+                                    sdc_param.emplace(source_dc).set_user_provided();
+                                }
+                                co_await _repair.local().rebuild_with_repair(tmptr, std::move(sdc_param));
                             } else {
                                 auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
                                         tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);

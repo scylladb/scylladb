@@ -47,6 +47,7 @@
 #include <atomic>
 
 #include "idl/partition_checksum.dist.hh"
+#include "utils/user_provided_param.hh"
 
 using namespace std::chrono_literals;
 
@@ -1954,7 +1955,7 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
     });
 }
 
-future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::unordered_set<gms::inet_address> ignore_nodes) {
+future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, utils::optional_param source_dc, streaming::stream_reason reason, std::unordered_set<gms::inet_address> ignore_nodes) {
     assert(this_shard_id() == 0);
     return seastar::async([this, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes)] () mutable {
         auto& db = get_db().local();
@@ -2009,7 +2010,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                         if (ignore_nodes.contains(node)) {
                             return false;
                         }
-                        return source_dc.empty() ? true : topology.get_datacenter(node) == source_dc;
+                        return !source_dc || topology.get_datacenter(node) == *source_dc;
                     })
                 );
                 rlogger.debug("{}: keyspace={}, range={}, neighbors={}", op, keyspace_name, r, neighbors);
@@ -2039,14 +2040,15 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
     });
 }
 
-future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc) {
+future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, utils::optional_param source_dc) {
     assert(this_shard_id() == 0);
     auto op = sstring("rebuild_with_repair");
-    if (source_dc.empty()) {
-        auto& topology = tmptr->get_topology();
-        source_dc = topology.get_datacenter();
+    const auto& topology = tmptr->get_topology();
+    if (!source_dc) {
+        source_dc = utils::optional_param(topology.get_datacenter());
     }
     auto reason = streaming::stream_reason::rebuild;
+    rlogger.info("{}: this-node={} source_dc={}", op, *topology.this_node(), source_dc);
     co_await do_rebuild_replace_with_repair(std::move(tmptr), std::move(op), std::move(source_dc), reason, {});
     co_await get_db().invoke_on_all([](replica::database& db) {
         for (auto& t : db.get_non_system_column_families()) {
@@ -2067,7 +2069,9 @@ future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, 
     auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
     cloned_tmptr->update_topology(tmptr->get_my_id(), myloc, locator::node::state::replacing);
     co_await cloned_tmptr->update_normal_tokens(replacing_tokens, tmptr->get_my_id());
-    co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), myloc.dc, reason, std::move(ignore_nodes));
+    auto source_dc = utils::optional_param(myloc.dc);
+    rlogger.info("{}: this-node={} ignore_nodes={} source_dc={}", op, *topology.this_node(), ignore_nodes, source_dc);
+    co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason, std::move(ignore_nodes));
 }
 
 static std::unordered_set<gms::inet_address> get_nodes_in_dcs(std::vector<sstring> data_centers, locator::effective_replication_map_ptr erm) {

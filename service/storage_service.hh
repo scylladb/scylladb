@@ -45,6 +45,7 @@
 #include "service/raft/raft_address_map.hh"
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"
+#include "utils/user_provided_param.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
@@ -395,7 +396,7 @@ private:
     future<> start_sys_dist_ks();
 public:
 
-    future<> rebuild(sstring source_dc);
+    future<> rebuild(utils::optional_param source_dc);
 
 private:
     void set_mode(mode m);
@@ -854,7 +855,7 @@ private:
     future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> raft_decommission();
     future<> raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params);
-    future<> raft_rebuild(sstring source_dc);
+    future<> raft_rebuild(utils::optional_param source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
     void set_topology_change_kind(topology_change_kind kind);

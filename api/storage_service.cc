@@ -55,6 +55,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "sstables_loader.hh"
 #include "db/view/view_builder.hh"
+#include "utils/user_provided_param.hh"
 
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
@@ -1137,7 +1138,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::rebuild.set(r, [&ss](std::unique_ptr<http::request> req) {
-        auto source_dc = req->get_query_param("source_dc");
+        utils::optional_param source_dc;
+        if (auto source_dc_str = req->get_query_param("source_dc"); !source_dc_str.empty()) {
+            source_dc.emplace(std::move(source_dc_str)).set_user_provided();
+        }
         apilog.info("rebuild: source_dc={}", source_dc);
         return ss.local().rebuild(std::move(source_dc)).then([] {
             return make_ready_future<json::json_return_type>(json_void());
