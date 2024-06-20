@@ -56,7 +56,7 @@ def test_alter_cannot_change_vnodes_to_tablets(cql, skip_without_tablets):
 
 
 # Converting vnodes-based keyspace to tablets-based in not implemented yet
-def test_alter_doesnt_enable_tablets(cql, skip_without_tablets):
+def test_alter_vnodes_ks_doesnt_enable_tablets(cql, skip_without_tablets):
     ksdef = "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};"
     with new_test_keyspace(cql, ksdef) as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy'}};")
@@ -66,6 +66,24 @@ def test_alter_doesnt_enable_tablets(cql, skip_without_tablets):
 
         res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
         assert len(list(res)) == 0, "tablets replication strategy turned on"
+
+
+# Converting tablets-based keyspace to vnodes-based in not implemented yet
+def test_alter_cannot_change_tablets_to_vnodes(cql, this_dc, skip_without_tablets):
+    ksdef = f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND TABLETS = {{ 'enabled' : true }}"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        with pytest.raises(InvalidRequest, match="Cannot alter replication strategy vnode/tablets flavor"):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'enabled': false}};")
+
+
+# Converting tablets-based keyspace to vnodes-based in not implemented yet
+def test_alter_tablets_ks_doesnt_disable_tablets(cql, this_dc, skip_without_tablets):
+    ksdef = f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND TABLETS = {{ 'enabled' : true }}"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}};")
+
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
+        assert len(list(res)) == 1, "tablets replication strategy turned off"
 
 
 def test_tablet_default_initialization(cql, skip_without_tablets):
@@ -95,9 +113,35 @@ def test_tablets_can_be_explicitly_disabled(cql, skip_without_tablets):
 def test_alter_changes_initial_tablets(cql, this_dc, skip_without_tablets):
     ksdef = f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 1}};"
     with new_test_keyspace(cql, ksdef) as keyspace:
+        # 1 -> 2, i.e. can change to a different positive integer from some positive integer
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 2}};")
         res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
         assert res.initial_tablets == 2
+
+        # 2 -> 0, i.e. can change from a positive int to zero
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 0}};")
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert res.initial_tablets == 0
+
+        # 0 -> 2, i.e. can change from zero to a positive int
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 2}};")
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert res.initial_tablets == 2
+
+        # 2 -> 0, i.e. providing only {'enable': true} zeroes init_tablets
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'enabled': true}};")
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert res.initial_tablets == 0
+
+        # 0 -> 2, i.e. providing 'enabled' & 'initial' combined sets init_tablets to 'initial'
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'enabled': true, 'initial': 2}};")
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert res.initial_tablets == 2
+
+        # 2 -> 0, i.e. providing 'enabled' & 'initial' = 0 zeroes init_tablets
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'enabled': true, 'initial': 0}};")
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert res.initial_tablets == 0
 
 
 def test_alter_changes_initial_tablets_short(cql, skip_without_tablets):
@@ -112,6 +156,23 @@ def test_alter_changes_initial_tablets_short(cql, skip_without_tablets):
         # Test that replication parameters didn't change
         rep = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name = '{keyspace}'").one()
         assert rep.replication == orig_rep.replication
+
+
+def test_alter_preserves_tablets_if_initial_tablets_skipped(cql, this_dc, skip_without_tablets):
+    ksdef = f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 1}};"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        # preserving works when init_tablets is a positive int
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}}")
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert res.initial_tablets == 1
+
+        # setting init_tablets to 0
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 0}};")
+
+        # preserving works when init_tablets is equal to 0
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}}")
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert res.initial_tablets == 0
 
 
 # Test that initial number of tablets is preserved in describe
