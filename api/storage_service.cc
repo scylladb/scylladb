@@ -1640,8 +1640,8 @@ void unset_storage_service(http_context& ctx, routes& r) {
 }
 
 void set_load_meter(http_context& ctx, routes& r, service::load_meter& lm) {
-    ss::get_load_map.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return ctx.lmeter.get_load_map().then([] (auto&& load_map) {
+    ss::get_load_map.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto load_map = co_await ctx.lmeter.get_load_map();
             std::vector<ss::map_string_double> res;
             for (auto i : load_map) {
                 ss::map_string_double val;
@@ -1649,8 +1649,7 @@ void set_load_meter(http_context& ctx, routes& r, service::load_meter& lm) {
                 val.value = i.second;
                 res.push_back(val);
             }
-            return make_ready_future<json::json_return_type>(res);
-        });
+            co_return res;
     });
 }
 
