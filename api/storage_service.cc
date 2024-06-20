@@ -1653,6 +1653,12 @@ void unset_storage_service(http_context& ctx, routes& r) {
     sp::get_schema_versions.unset(r);
 }
 
+void set_load_meter(http_context& ctx, routes& r, service::load_meter& lm) {
+}
+
+void unset_load_meter(http_context& ctx, routes& r) {
+}
+
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto result = co_await snap_ctl.local().get_snapshot_details();

@@ -1969,6 +1969,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 load_meter.exit().get();
             });
 
+            api::set_load_meter(ctx, load_meter).get();
+            auto stop_load_meter_api = defer_verbose_shutdown("load meter API", [&ctx] {
+                api::unset_load_meter(ctx).get();
+            });
+
             supervisor::notify("starting cf cache hit rate calculator");
             cf_cache_hitrate_calculator.start(std::ref(db), std::ref(gossiper)).get();
             auto stop_cache_hitrate_calculator = defer_verbose_shutdown("cf cache hit rate calculator",

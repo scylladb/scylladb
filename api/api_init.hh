@@ -130,5 +130,7 @@ future<> set_server_tasks_compaction_module(http_context& ctx, sharded<service::
 future<> unset_server_tasks_compaction_module(http_context& ctx);
 future<> set_server_raft(http_context&, sharded<service::raft_group_registry>&);
 future<> unset_server_raft(http_context&);
+future<> set_load_meter(http_context& ctx, service::load_meter& lm);
+future<> unset_load_meter(http_context& ctx);
 
 }
