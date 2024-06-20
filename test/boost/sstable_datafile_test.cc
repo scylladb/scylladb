@@ -3068,6 +3068,10 @@ future<> test_sstable_bytes_correctness(sstring tname, test_env_config cfg) {
 
         auto sst = make_sstable_containing(env.make_sstable(schema), muts);
 
+        auto free_space = sst->get_storage().free_space().get();
+        BOOST_REQUIRE(free_space > 0);
+        testlog.info("prefix: {}, free space: {}", sst->get_storage().prefix(), free_space);
+
         auto get_bytes_on_disk_from_storage = [&] (const sstables::shared_sstable& sst) {
             uint64_t bytes_on_disk = 0;
             auto& underlying_storage = const_cast<sstables::storage&>(sst->get_storage());

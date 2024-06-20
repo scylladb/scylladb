@@ -76,6 +76,7 @@ public:
     // To prevent an explosion in the number of sstables we cap it.
     // Better co-locate some windows into the same sstables than OOM.
     static constexpr uint64_t max_data_segregation_window_count = 100;
+    static constexpr float reshape_target_space_overhead = 0.1f;
 
     using bucket_t = std::vector<shared_sstable>;
     enum class bucket_compaction_mode { none, size_tiered, major };
@@ -168,7 +169,7 @@ public:
         return true;
     }
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const override;
+    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const override;
 };
 
 }

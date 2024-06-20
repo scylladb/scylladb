@@ -77,6 +77,9 @@ public:
     virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
     virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
+    virtual future<uint64_t> free_space() const override {
+        return seastar::fs_avail(prefix());
+    }
 
     virtual sstring prefix() const override { return _dir.native(); }
 };
@@ -533,6 +536,10 @@ public:
     virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
     virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
+    virtual future<uint64_t> free_space() const override {
+        // assumes infinite space on s3 (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
+        return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
+    }
 
     virtual sstring prefix() const override { return _location; }
 };
