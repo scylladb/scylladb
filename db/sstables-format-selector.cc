@@ -85,6 +85,10 @@ future<> sstables_format_listener::start() {
     assert(this_shard_id() == 0);
     // The listener may fire immediately, create a thread for that case.
     co_await seastar::async([this] {
+        // NOTE: when introducing a new format, please
+        // 1. plant a sstable_format_listener in main()
+        // 2. so it checks for the corresponding cluster feature
+        // 3. and bumping up the sstable format if this feature is set
         _me_feature_listener.on_enabled();
     });
 }

@@ -1540,13 +1540,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // engine().at_exit([&qp] { return qp.stop(); });
             sstables::init_metrics().get();
 
-            db::sstables_format_listener sst_format_listener(gossiper.local(), feature_service, sst_format_selector);
-
-            sst_format_listener.start().get();
-            auto stop_format_listener = defer_verbose_shutdown("sstables format listener", [&sst_format_listener] {
-                sst_format_listener.stop().get();
-            });
-
             supervisor::notify("starting Raft Group Registry service");
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
