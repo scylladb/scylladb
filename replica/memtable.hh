@@ -252,7 +252,7 @@ public:
     }
     // Same as make_flat_reader, but returns an empty optional instead of a no-op reader when there is nothing to
     // read. This is an optimization.
-    flat_mutation_reader_v2_opt make_flat_reader_opt(schema_ptr,
+    flat_mutation_reader_v2_opt make_flat_reader_opt(schema_ptr query_schema,
                                           reader_permit permit,
                                           const dht::partition_range& range,
                                           const query::partition_slice& slice,

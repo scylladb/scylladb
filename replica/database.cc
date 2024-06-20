@@ -1244,8 +1244,6 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.statement_scheduling_group = _config.statement_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.enable_node_aggregated_table_metrics = db_config.enable_node_aggregated_table_metrics();
-    cfg.reversed_reads_auto_bypass_cache = db_config.reversed_reads_auto_bypass_cache;
-    cfg.enable_optimized_reversed_reads = db_config.enable_optimized_reversed_reads;
     cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
@@ -1524,13 +1522,8 @@ static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
 }
 
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
-database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
+database::query(schema_ptr query_schema, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
-    const auto reversed = cmd.slice.is_reversed();
-    if (reversed) {
-        s = s->make_reversed();
-    }
-
     column_family& cf = find_column_family(cmd.cf_id);
 
     if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
@@ -1546,13 +1539,13 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     std::exception_ptr ex;
 
     if (cmd.query_uuid && !cmd.is_first_page) {
-        querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *s, ranges.front(), cmd.slice, semaphore, trace_state, timeout);
+        querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *query_schema, ranges.front(), cmd.slice, semaphore, trace_state, timeout);
     }
 
     auto read_func = [&, this] (reader_permit permit) {
         reader_permit::need_cpu_guard ncpu_guard{permit};
         permit.set_max_result_size(max_result_size);
-        return cf.query(std::move(s), std::move(permit), cmd, opts, ranges, trace_state, get_result_memory_limiter(),
+        return cf.query(std::move(query_schema), std::move(permit), cmd, opts, ranges, trace_state, get_result_memory_limiter(),
                 timeout, &querier_opt).then([&result, ncpu_guard = std::move(ncpu_guard)] (lw_shared_ptr<query::result> res) {
             result = std::move(res);
         });
@@ -1566,7 +1559,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
             querier_opt->permit().set_trace_state(trace_state);
             f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
         } else {
-            f = co_await coroutine::as_future(semaphore.with_permit(s, "data-query", cf.estimate_read_memory_cost(), timeout, trace_state, read_func));
+            f = co_await coroutine::as_future(semaphore.with_permit(query_schema, "data-query", cf.estimate_read_memory_cost(), timeout, trace_state, read_func));
         }
 
         if (!f.failed()) {
@@ -1595,13 +1588,8 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
 }
 
 future<std::tuple<reconcilable_result, cache_temperature>>
-database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
+database::query_mutations(schema_ptr query_schema, const query::read_command& cmd, const dht::partition_range& range,
                           tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
-    const auto reversed = cmd.slice.is_reversed();
-    if (reversed) {
-        s = s->make_reversed();
-    }
-
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_query_max_result_size();
@@ -1613,13 +1601,13 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     std::exception_ptr ex;
 
     if (cmd.query_uuid && !cmd.is_first_page) {
-        querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *s, range, cmd.slice, semaphore, trace_state, timeout);
+        querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *query_schema, range, cmd.slice, semaphore, trace_state, timeout);
     }
 
     auto read_func = [&] (reader_permit permit) {
         reader_permit::need_cpu_guard ncpu_guard{permit};
         permit.set_max_result_size(max_result_size);
-        return cf.mutation_query(std::move(s), std::move(permit), cmd, range,
+        return cf.mutation_query(std::move(query_schema), std::move(permit), cmd, range,
                 std::move(trace_state), std::move(accounter), timeout, &querier_opt).then([&result, ncpu_guard = std::move(ncpu_guard)] (reconcilable_result res) {
             result = std::move(res);
         });
@@ -1633,7 +1621,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             querier_opt->permit().set_trace_state(trace_state);
             f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
         } else {
-            f = co_await coroutine::as_future(semaphore.with_permit(s, "mutation-query", cf.estimate_read_memory_cost(), timeout, trace_state, read_func));
+            f = co_await coroutine::as_future(semaphore.with_permit(query_schema, "mutation-query", cf.estimate_read_memory_cost(), timeout, trace_state, read_func));
         }
 
         if (!f.failed()) {
@@ -1838,19 +1826,19 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
     return cf.apply(m, std::move(h), timeout);
 }
 
-future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+future<mutation> database::apply_counter_update(schema_ptr query_schema, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<mutation>(timed_out_error{});
     }
   return update_write_metrics(seastar::futurize_invoke([&] {
-    if (!s->is_synced()) {
-        throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
-                                        s->ks_name(), s->cf_name(), s->version()));
+    if (auto table_schema = find_schema(query_schema->id()); !table_schema->is_synced()) {
+        throw std::runtime_error(format("attempted to mutate using not synced table schema of {}.{}, version={}",
+                                        table_schema->ks_name(), table_schema->cf_name(), table_schema->version()));
     }
     try {
         auto& cf = find_column_family(m.column_family_id());
-        return do_apply_counter_update(cf, m, s, timeout, std::move(trace_state));
+        return do_apply_counter_update(cf, m, query_schema, timeout, std::move(trace_state));
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         throw;
@@ -2085,28 +2073,30 @@ void database::update_write_metrics_for_timed_out_write() {
     ++_stats->total_writes_timedout;
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+future<> database::apply(schema_ptr query_schema, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     if (dblog.is_enabled(logging::log_level::trace)) {
-        dblog.trace("apply {}", m.pretty_printer(s));
+        dblog.trace("apply {}", m.pretty_printer(query_schema));
     }
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<>(timed_out_error{});
     }
-    if (!s->is_synced()) {
-        on_internal_error(dblog, format("attempted to apply mutation using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
+    if (auto table_schema = find_schema(query_schema->id()); !table_schema->is_synced()) {
+        on_internal_error(dblog, format("attempted to apply mutation using not synced tableschema of {}.{}, version={}",
+                                        table_schema->ks_name(), table_schema->cf_name(), table_schema->version()));
     }
-    return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, sync, rate_limit_info);
+    return _apply_stage(this, std::move(query_schema), seastar::cref(m), std::move(tr_state), timeout, sync, rate_limit_info);
 }
 
-future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
+future<> database::apply_hint(schema_ptr query_schema, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
-        dblog.trace("apply hint {}", m.pretty_printer(s));
+        dblog.trace("apply hint {}", m.pretty_printer(query_schema));
     }
-    if (!s->is_synced()) {
-        on_internal_error(dblog, format("attempted to apply hint using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
+    if (auto table_schema = find_schema(query_schema->id()); !table_schema->is_synced()) {
+        on_internal_error(dblog, format("attempted to apply hint using not synced table schema of {}.{}, version={}",
+                                        table_schema->ks_name(), table_schema->cf_name(), table_schema->version()));
     }
-    return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, s = std::move(s), &m, tr_state = std::move(tr_state), timeout] () mutable {
+    return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, s = std::move(query_schema), &m, tr_state = std::move(tr_state), timeout] () mutable {
         return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no, std::monostate{});
     });
 }

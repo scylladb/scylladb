@@ -725,6 +725,57 @@ private:
         auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
         auto src_ip = src_addr.addr;
         auto timeout = t ? *t : db::no_timeout;
+
+        // Verify whether read_command is provided in legacy or native reversed format by comparing
+        // schema version with table schema version. There are three options:
+        // 1. Versions are the same -> legacy format
+        // 2. schema version is equal to reversed table schema -> native format
+        // 3. table schema is outdated
+        static auto is_read_command_in_reversed_legacy_format = [](const query::read_command& cmd, schema_ptr table_schema) -> std::optional<bool> {
+            if (cmd.schema_version == table_schema->version()) {
+                return true;
+            }
+
+            if (cmd.schema_version == reversed(table_schema->version())) {
+                return false;
+            }
+
+            return std::nullopt;
+        };
+
+        // Detect whether a transformation from legacy reverse format into native reverse
+        // format is necessary before executing the read_command. That happens when the
+        // native_reverse_queries feature is turned off. A custer has mixed nodes.
+        bool format_reverse_required = false;
+
+        // Check if we have a reversed query
+        if (cmd->slice.is_reversed()) {
+            // Compare the schema version provided by read_command with the table schema replica holds.
+            auto table_schema = p->local_db().find_schema(cmd->cf_id);
+            if (auto status = is_read_command_in_reversed_legacy_format(*cmd, table_schema); status) {
+                table_schema->get_reversed();
+                format_reverse_required = *status;
+            }
+            else {
+                // The table schema is outdated. Still do not know the format of the read_command.
+                // Pull a schema to verify the format. There are two cases:
+                // 1. a mixed nodes cluster, cmd->schema_version is a table schema, a table schema is pulled
+                // 2. all new nodes cluster, cmd->schema_version is a reversed table schema, a reversed table schema is pulled
+                auto f_schema = co_await coroutine::as_future(get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout));
+                if (f_schema.failed()) {
+                    co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), f_schema.get_exception());
+                }
+                auto schema = f_schema.get();
+                // Call get reversed to ensure a newest table schema is in db in case schema is a reversed table schema
+                schema->get_reversed();
+                auto table_schema = p->local_db().find_schema(schema->id());
+                format_reverse_required = *is_read_command_in_reversed_legacy_format(*cmd, table_schema);
+            }
+        }
+        if (format_reverse_required) {
+            cmd = reversed(std::move(cmd));
+        }
+
         auto f_s = co_await coroutine::as_future(get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout));
         if (f_s.failed()) {
             co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), f_s.get_exception());
@@ -761,7 +812,16 @@ private:
                 return p->query_result_local(erm, std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, rate_limit_info);
             } else if constexpr (verb == read_verb::read_mutation_data) {
                 p->get_stats().replica_mutation_data_reads++;
-                return p->query_mutations_locally(std::move(s), std::move(cmd), pr2, timeout, trace_state_ptr);
+                auto f = p->query_mutations_locally(std::move(s), std::move(cmd), pr2, timeout, trace_state_ptr);
+                if (format_reverse_required) {
+                    f = f.then([](auto result_ht) {
+                        auto&& [result, hit_rate] = result_ht;
+                        return reversed(result.release()).then([&hit_rate](auto result) {
+                            return rpc::tuple{make_foreign(result), std::move(hit_rate)};
+                        });
+                    });
+                }
+                return f;
             } else if constexpr (verb == read_verb::read_digest) {
                 if (pr2.second) {
                     // this function assumes singular queries but doesn't validate
@@ -4573,7 +4633,7 @@ private:
         auto mp = mutation_partition(s, m.partition());
         auto&& ranges = cmd.slice.row_ranges(s, m.key());
         bool always_return_static_content = cmd.slice.options.contains<query::partition_slice::option::always_return_static_content>();
-        mp.compact_for_query(s, m.decorated_key(), cmd.timestamp, ranges, always_return_static_content, is_reversed, limit);
+        mp.compact_for_query(s, m.decorated_key(), cmd.timestamp, ranges, always_return_static_content, limit);
         return primary_key{m.decorated_key(), get_last_reconciled_row(s, mp, is_reversed)};
     }
 
@@ -4649,7 +4709,7 @@ private:
                     ranges.emplace_back(is_reversed ? query::clustering_range::make_starting_with(std::move(*shortest_read->clustering))
                                                     : query::clustering_range::make_ending_with(std::move(*shortest_read->clustering)));
                     it->live_row_count = it->mut.partition().compact_for_query(s, it->mut.decorated_key(), cmd.timestamp, ranges, always_return_static_content,
-                            is_reversed, query::partition_max_rows);
+                            query::partition_max_rows);
                 }
             }
 
@@ -4949,6 +5009,8 @@ protected:
     db::per_partition_rate_limit::info _rate_limit_info;
 
 private:
+    const bool _native_reversed_queries_enabled;
+
     void on_read_resolved() noexcept {
         // We could have !_foreground if this is called on behalf of background reconciliation.
         _proxy->get_stats().foreground_reads -= int(_foreground);
@@ -4967,7 +5029,8 @@ public:
                            _schema(std::move(s)), _proxy(std::move(proxy))
                          , _effective_replication_map_ptr(std::move(ermp))
                          , _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
-                           _cf(std::move(cf)), _permit(std::move(permit)), _rate_limit_info(rate_limit_info) {
+                           _cf(std::move(cf)), _permit(std::move(permit)), _rate_limit_info(rate_limit_info),
+                           _native_reversed_queries_enabled(_proxy->features().native_reverse_queries) {
         _proxy->get_stats().reads++;
         _proxy->get_stats().foreground_reads++;
     }
@@ -4992,9 +5055,20 @@ protected:
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->apply_fence(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), fence, _proxy->my_address());
         } else {
-            return _proxy->remote().send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout,
-                _trace_state, *cmd, _partition_range,
-                fence);
+            const bool format_reverse_required = cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
+            cmd = format_reverse_required ? reversed(::make_lw_shared(*cmd)) : cmd;
+
+            auto f = _proxy->remote().send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout,
+                _trace_state, *cmd, _partition_range, fence);
+            if (format_reverse_required) {
+                f = f.then([](auto r) {
+                    auto&& [result, hit_rate] = r;
+                    return reversed(result.release()).then([&hit_rate](auto result) {
+                        return rpc::tuple{make_foreign(std::move(result)), std::move(hit_rate)};
+                    });
+                });
+            }
+            return f;
         }
     }
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
@@ -5007,8 +5081,10 @@ protected:
             tracing::trace(_trace_state, "read_data: querying locally");
             return _proxy->apply_fence(_proxy->query_result_local(_effective_replication_map_ptr, _schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_address());
         } else {
+            const bool format_reverse_required = _cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
+            auto cmd = format_reverse_required ? reversed(::make_lw_shared(*_cmd)) : _cmd;
             return _proxy->remote().send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout,
-                _trace_state, *_cmd, _partition_range, opts.digest_algo, _rate_limit_info,
+                _trace_state, *cmd, _partition_range, opts.digest_algo, _rate_limit_info,
                 fence);
         }
     }
@@ -5021,8 +5097,10 @@ protected:
                         timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_address());
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
+            const bool format_reverse_required = _cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
+            auto cmd = format_reverse_required ? reversed(::make_lw_shared(*_cmd)) : _cmd;
             return _proxy->remote().send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout,
-                _trace_state, *_cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info,
+                _trace_state, *cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info,
                 fence);
         }
     }
@@ -5164,8 +5242,9 @@ protected:
                         && !data_resolver->any_partition_short_read()) {
                     tracing::trace(_trace_state, "Read stage is done for read-repair");
                     mlogger.trace("reconciled: {}", rr_opt->pretty_printer(_schema));
+
                     auto result = ::make_foreign(::make_lw_shared<query::result>(
-                            co_await to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), cmd->partition_limit)));
+                            co_await to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), _cmd->partition_limit)));
                     qlogger.trace("reconciled: {}", result->pretty_printer(_schema, _cmd->slice));
                     // wait for write to complete before returning result to prevent multiple concurrent read requests to
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
@@ -5523,21 +5602,21 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
 }
 
 future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>>
-storage_proxy::query_result_local_digest(locator::effective_replication_map_ptr erm, schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, query::digest_algorithm da, db::per_partition_rate_limit::info rate_limit_info) {
-    return query_result_local(std::move(erm), std::move(s), std::move(cmd), pr, query::result_options::only_digest(da), std::move(trace_state), timeout, rate_limit_info).then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> result_and_hit_rate) {
+storage_proxy::query_result_local_digest(locator::effective_replication_map_ptr erm, schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, query::digest_algorithm da, db::per_partition_rate_limit::info rate_limit_info) {
+    return query_result_local(std::move(erm), std::move(query_schema), std::move(cmd), pr, query::result_options::only_digest(da), std::move(trace_state), timeout, rate_limit_info).then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> result_and_hit_rate) {
         auto&& [result, hit_rate] = result_and_hit_rate;
         return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>>(rpc::tuple(*result->digest(), result->last_modified(), hit_rate, result->last_position()));
     });
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
-storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_options opts,
+storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_options opts,
                                   tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     cmd->slice.options.set_if<query::partition_slice::option::with_digest>(opts.request != query::result_request::only_result);
-    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
+    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*query_schema), *query_schema, pr)) {
         auto shard = *shard_opt;
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), rate_limit_info] (replica::database& db) mutable {
+        return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(query_schema), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), rate_limit_info] (replica::database& db) mutable {
             auto trace_state = gt.get();
             tracing::trace(trace_state, "Start querying singular range {}", prv.front());
             return db.query(gs, *cmd, opts, prv, trace_state, timeout, rate_limit_info).then([trace_state](std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& f_ht) {
@@ -5549,7 +5628,7 @@ storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, sc
     } else {
         // FIXME: adjust multishard_mutation_query to accept an smp_service_group and propagate it there
         tracing::trace(trace_state, "Start querying token range {}", pr);
-        return query_nonsingular_data_locally(s, cmd, {pr}, opts, trace_state, timeout).then(
+        return query_nonsingular_data_locally(query_schema, cmd, {pr}, opts, trace_state, timeout).then(
                 [trace_state = std::move(trace_state)] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>&& r_ht) {
             auto&& [r, ht] = r_ht;
             tracing::trace(trace_state, "Querying is done");
@@ -6001,7 +6080,7 @@ storage_proxy::query(schema_ptr s,
 }
 
 future<result<storage_proxy::coordinator_query_result>>
-storage_proxy::query_result(schema_ptr s,
+storage_proxy::query_result(schema_ptr query_schema,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
@@ -6011,8 +6090,8 @@ storage_proxy::query_result(schema_ptr s,
         static thread_local int next_id = 0;
         auto query_id = next_id++;
 
-        slogger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, partition_ranges, query_id);
-        return do_query(s, cmd, std::move(partition_ranges), cl, std::move(query_options)).then_wrapped([query_id, cmd, s] (future<result<coordinator_query_result>> f) -> result<coordinator_query_result> {
+        slogger.trace("query {}.{} cmd={}, ranges={}, id={}", query_schema->ks_name(), query_schema->cf_name(), *cmd, partition_ranges, query_id);
+        return do_query(query_schema, cmd, std::move(partition_ranges), cl, std::move(query_options)).then_wrapped([query_id, cmd, query_schema] (future<result<coordinator_query_result>> f) -> result<coordinator_query_result> {
             auto rres = utils::result_try([&] {
                 return f.get();
             },  utils::result_catch_dots([&] (auto&& handle) {
@@ -6030,12 +6109,12 @@ storage_proxy::query_result(schema_ptr s,
             } else {
                 slogger.trace("query_result id={}, size={}", query_id, res->buf().size());
             }
-            qlogger.trace("id={}, {}", query_id, res->pretty_printer(s, cmd->slice));
+            qlogger.trace("id={}, {}", query_id, res->pretty_printer(query_schema, cmd->slice));
             return qr;
         });
     }
 
-    return do_query(s, cmd, std::move(partition_ranges), cl, std::move(query_options));
+    return do_query(query_schema, cmd, std::move(partition_ranges), cl, std::move(query_options));
 }
 
 future<result<storage_proxy::coordinator_query_result>>
@@ -6445,33 +6524,33 @@ future<> storage_proxy::stop_remote() {
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
-storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
+storage_proxy::query_mutations_locally(schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                        storage_proxy::clock_type::time_point timeout,
                                        tracing::trace_state_ptr trace_state) {
-    auto& table = s->table();
+    auto& table = query_schema->table();
     auto erm = table.get_effective_replication_map();
-    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
+    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*query_schema), *query_schema, pr)) {
         auto shard = *shard_opt;
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return _db.invoke_on(shard, _read_smp_service_group, [cmd, &pr, gs=global_schema_ptr(s), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (replica::database& db) mutable {
+        return _db.invoke_on(shard, _read_smp_service_group, [cmd, &pr, gs=global_schema_ptr(query_schema), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (replica::database& db) mutable {
             return db.query_mutations(gs, *cmd, pr, gt, timeout).then([] (std::tuple<reconcilable_result, cache_temperature> result_ht) {
                 auto&& [result, ht] = result_ht;
-                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(make_lw_shared<reconcilable_result>(std::move(result))), ht));
+                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(make_lw_shared<reconcilable_result>(std::move(result))), std::move(ht)));
             });
         });
     } else {
-        return query_nonsingular_mutations_locally(std::move(s), std::move(cmd), {pr}, std::move(trace_state), timeout);
+        return query_nonsingular_mutations_locally(std::move(query_schema), std::move(cmd), {pr}, std::move(trace_state), timeout);
     }
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
-storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const ::compat::one_or_two_partition_ranges& pr,
+storage_proxy::query_mutations_locally(schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd, const ::compat::one_or_two_partition_ranges& pr,
                                        storage_proxy::clock_type::time_point timeout,
                                        tracing::trace_state_ptr trace_state) {
     if (!pr.second) {
-        return query_mutations_locally(std::move(s), std::move(cmd), pr.first, timeout, std::move(trace_state));
+        return query_mutations_locally(std::move(query_schema), std::move(cmd), pr.first, timeout, std::move(trace_state));
     } else {
-        return query_nonsingular_mutations_locally(std::move(s), std::move(cmd), pr, std::move(trace_state), timeout);
+        return query_nonsingular_mutations_locally(std::move(query_schema), std::move(cmd), pr, std::move(trace_state), timeout);
     }
 }
 
