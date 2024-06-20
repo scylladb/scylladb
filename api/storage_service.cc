@@ -680,19 +680,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return get_cf_stats(ctx, &replica::column_family_stats::live_disk_space_used);
     });
 
-    ss::get_load_map.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return ctx.lmeter.get_load_map().then([] (auto&& load_map) {
-            std::vector<ss::map_string_double> res;
-            for (auto i : load_map) {
-                ss::map_string_double val;
-                val.key = i.first;
-                val.value = i.second;
-                res.push_back(val);
-            }
-            return make_ready_future<json::json_return_type>(res);
-        });
-    });
-
     ss::get_current_generation_number.set(r, [&ss](std::unique_ptr<http::request> req) {
         auto ep = ss.local().get_token_metadata().get_topology().my_address();
         return ss.local().gossiper().get_current_generation_number(ep).then([](gms::generation_type res) {
@@ -1577,7 +1564,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_pending_range_to_endpoint_map.unset(r);
     ss::describe_ring.unset(r);
     ss::get_load.unset(r);
-    ss::get_load_map.unset(r);
     ss::get_current_generation_number.unset(r);
     ss::get_natural_endpoints.unset(r);
     ss::cdc_streams_check_and_repair.unset(r);
@@ -1651,6 +1637,24 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::tablet_balancing_enable.unset(r);
     ss::quiesce_topology.unset(r);
     sp::get_schema_versions.unset(r);
+}
+
+void set_load_meter(http_context& ctx, routes& r, service::load_meter& lm) {
+    ss::get_load_map.set(r, [&lm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto load_map = co_await lm.get_load_map();
+        std::vector<ss::map_string_double> res;
+        for (auto i : load_map) {
+            ss::map_string_double val;
+            val.key = i.first;
+            val.value = i.second;
+            res.push_back(val);
+        }
+        co_return res;
+    });
+}
+
+void unset_load_meter(http_context& ctx, routes& r) {
+    ss::get_load_map.unset(r);
 }
 
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {

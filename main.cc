@@ -677,7 +677,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
     sharded<tasks::task_manager> task_manager;
-    api::http_context ctx(db, load_meter);
+    api::http_context ctx(db);
     httpd::http_server_control prometheus_server;
     std::optional<utils::directories> dirs = {};
     sharded<gms::feature_service> feature_service;
@@ -1967,6 +1967,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             load_meter.init(db, gossiper.local()).get();
             auto stop_load_meter = defer_verbose_shutdown("load meter", [&load_meter] {
                 load_meter.exit().get();
+            });
+
+            api::set_load_meter(ctx, load_meter).get();
+            auto stop_load_meter_api = defer_verbose_shutdown("load meter API", [&ctx] {
+                api::unset_load_meter(ctx).get();
             });
 
             supervisor::notify("starting cf cache hit rate calculator");
