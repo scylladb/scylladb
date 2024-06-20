@@ -2638,7 +2638,7 @@ void node_update_backlog::add(update_backlog backlog) {
 
 update_backlog node_update_backlog::fetch() {
     auto now = clock::now();
-    if (now >= _last_update.load(std::memory_order_relaxed) + _interval) {
+    if (utils::get_local_injector().enter("update_backlog_immediately") || now >= _last_update.load(std::memory_order_relaxed) + _interval) {
         _last_update.store(now, std::memory_order_relaxed);
         auto new_max = boost::accumulate(
                 _backlogs,
