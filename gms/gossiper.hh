@@ -82,8 +82,6 @@ struct loaded_endpoint_state {
     std::optional<gms::versioned_value> opt_status;
 };
 
-std::ostream& operator<<(std::ostream& os, const loaded_endpoint_state& st);
-
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
  * maintains the list of live and dead endpoints. Periodically i.e. every 1 second this module

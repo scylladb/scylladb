@@ -73,8 +73,6 @@ public:
     static future<inet_address> lookup(sstring, opt_family family = {}, opt_family preferred = {});
 };
 
-std::ostream& operator<<(std::ostream& os, const inet_address& x);
-
 }
 
 namespace std {

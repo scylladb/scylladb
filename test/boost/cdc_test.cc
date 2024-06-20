@@ -474,7 +474,7 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
         auto actual_i = results.begin();
         auto actual_end = results.end();
         auto assert_row = [&] (int pk, int pk2, int ck = -1, int ck2 = -1, std::optional<int64_t> ttl = {}) {
-            std::cerr << "check " << pk << " " << pk2 << " " << ck << " " << ck2 << " " << ttl << std::endl;
+            fmt::print(std::cerr, "check {} {} {} {} {}\n", pk, pk2, ck, ck2, ttl);
             BOOST_REQUIRE(actual_i != actual_end);
             auto& actual_row = *actual_i;
             BOOST_REQUIRE_EQUAL(int32_type->decompose(pk), actual_row[1]);

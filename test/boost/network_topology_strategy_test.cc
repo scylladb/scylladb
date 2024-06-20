@@ -52,7 +52,7 @@ void print_natural_endpoints(double point, const inet_address_vector_replica_set
     std::ostringstream strm(str);
 
     for (auto& addr : v) {
-        strm<<addr<<" ";
+        fmt::print(strm, "{} ", addr);
     }
 
     testlog.debug("{}", strm.str());

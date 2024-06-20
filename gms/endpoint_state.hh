@@ -162,8 +162,6 @@ public:
     friend fmt::formatter<endpoint_state>;
 };
 
-std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
-
 using endpoint_state_ptr = lw_shared_ptr<const endpoint_state>;
 
 inline endpoint_state_ptr make_endpoint_state_ptr(const endpoint_state& eps) {

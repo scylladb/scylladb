@@ -24,6 +24,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "test/lib/exception_utils.hh"
+#include "test/lib/test_utils.hh"
 
 using namespace std::literals::chrono_literals;
 using namespace std::literals::string_view_literals;

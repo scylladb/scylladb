@@ -201,11 +201,4 @@ template <> struct fmt::formatter<gms::versioned_value> : fmt::formatter<string_
     auto format(const gms::versioned_value& v, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "Value({},{})", v.value(), v.version());
     }
- };
-
-namespace gms {
-inline std::ostream& operator<<(std::ostream& os, const versioned_value& v) {
-    fmt::print(os, "{}", v);
-    return os;
-}
-}
+};

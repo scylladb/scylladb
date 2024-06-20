@@ -78,11 +78,6 @@ static_sharder::next_shard_for_reads(const token& t) const {
     return next_shard(t);
 }
 
-std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
-    fmt::print(out, "{}", dk);
-    return out;
-}
-
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name) {
     try {
         return create_object<i_partitioner>(partitioner_name);

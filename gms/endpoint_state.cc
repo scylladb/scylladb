@@ -36,11 +36,6 @@ const versioned_value* endpoint_state::get_application_state_ptr(application_sta
     }
 }
 
-std::ostream& operator<<(std::ostream& os, const endpoint_state& x) {
-    fmt::print(os, "{}", x);
-    return os;
-}
-
 bool endpoint_state::is_cql_ready() const noexcept {
     auto* app_state = get_application_state_ptr(application_state::RPC_READY);
     if (!app_state) {

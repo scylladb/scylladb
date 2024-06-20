@@ -31,8 +31,3 @@ future<gms::inet_address> gms::inet_address::lookup(sstring name, opt_family fam
         return gms::inet_address(h.addr_list.front());
     });
 }
-
-std::ostream& gms::operator<<(std::ostream& os, const inet_address& x) {
-    fmt::print(os, "{}", x);
-    return os;
-}
