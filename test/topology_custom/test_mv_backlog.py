@@ -110,3 +110,33 @@ async def test_view_backlog_increased_after_write(manager: ManagerClient) -> Non
         await disable_on_servers(manager, servers, "never_finish_remote_view_updates")
 
     await cql.run_async(f"DROP KEYSPACE ks")
+
+# This test reproduces issues #18461 and #18783
+# In the test, we create a table and perform a write to it that fills the view update backlog.
+# After a gossip round is performed, the following write should succeed.
+@pytest.mark.asyncio
+@skip_mode('release', "error injections aren't enabled in release mode")
+async def test_gossip_same_backlog(manager: ManagerClient) -> None:
+    node_count = 2
+    # Use a higher smp to make it more likely that the writes go to a different shard than the coordinator.
+    servers = await manager.servers_add(node_count, cmdline=['--smp', '5'], config={'error_injections_at_startup': ['view_update_limit', 'update_backlog_immediately']})
+    cql, hosts = await manager.get_ready_cql(servers)
+    await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+    await cql.run_async(f"CREATE TABLE ks.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+    await cql.run_async(f"CREATE MATERIALIZED VIEW ks.mv_cf_view AS SELECT * FROM ks.tab "
+                    "WHERE c IS NOT NULL and key IS NOT NULL PRIMARY KEY (c, key) ")
+    await wait_for_view(cql, 'mv_cf_view', node_count)
+
+    key = int(time.time())
+    logger.info(f"Base table key: {key}")
+    # Only remote updates hold on to memory, so make the update remote
+    remote_key = get_remote_key(cql, local_node = get_replicas(cql, key)[0])
+    stmt = cql.prepare(f"INSERT INTO ks.tab (key, c, v) VALUES (?, ?, ?)")
+
+    await enable_on_servers(manager, servers, "never_finish_remote_view_updates")
+    await cql.run_async(stmt, [key, remote_key, 240000*'a'], host=hosts[0])
+    await disable_on_servers(manager, servers, "never_finish_remote_view_updates")
+    time.sleep(1)
+    await cql.run_async(stmt, [key, remote_key, 'a'], host=hosts[0])
+
+    await cql.run_async(f"DROP KEYSPACE ks")
