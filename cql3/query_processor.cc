@@ -1000,9 +1000,6 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
         on_internal_error(log, "DDL must be executed on shard 0");
     }
 
-    // TODO: remove this field, it should be injected directly as prepare_schema_mutations argument
-    stmt.global_req_id = mc.new_group0_state_id();
-
     auto [ce, warnings] = co_await stmt.prepare_schema_mutations(*this, state, options, mc);
     // We are creating something.
     if (!mc.empty()) {
