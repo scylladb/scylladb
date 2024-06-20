@@ -137,6 +137,17 @@ public:
         std::make_heap(n._shards.begin(), n._shards.end(), shard_load_cmp());
     }
 
+    void pick(host_id node, shard_id shard) {
+        auto& n = _nodes.at(node);
+        for (auto& shard_load : n._shards) {
+            if (shard_load.id == shard) {
+                ++shard_load.load;
+                break;
+            }
+        }
+        std::make_heap(n._shards.begin(), n._shards.end(), shard_load_cmp());
+    }
+
     uint64_t get_load(host_id node) const {
         if (!_nodes.contains(node)) {
             return 0;
@@ -166,6 +177,13 @@ public:
         }
         auto& n = _nodes.at(node);
         return double(n.load()) / n._shards.size();
+    }
+
+    shard_id get_shard_count(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        return _nodes.at(node)._shards.size();
     }
 
     // Returns the difference in tablet count between highest-loaded shard and lowest-loaded shard.
