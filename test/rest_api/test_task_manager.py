@@ -1,9 +1,13 @@
 from enum import Enum
 import requests
+import sys
 import time
 
-from test.rest_api.rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper
-from test.rest_api.task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task
+# Use the util.py library from ../cql-pytest:
+sys.path.insert(1, sys.path[0] + '/test/cql-pytest')
+from util import new_test_table, new_test_keyspace
+from test.rest_api.rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper, scylla_inject_error
+from test.rest_api.task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task, drain_module_tasks, abort_task
 
 long_time = 1000000000
 
@@ -359,3 +363,39 @@ def test_task_folding(rest_api):
             task_folding4(rest_api)
             task_folding5(rest_api)
             task_folding6(rest_api)
+
+def test_abort_on_unregistered_task(cql, this_dc, rest_api):
+    module_name = "compaction"
+    drain_module_tasks(rest_api, module_name)
+    with set_tmp_task_ttl(rest_api, long_time):
+        with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+            schema = 'p int, v text, primary key (p)'
+            with new_test_table(cql, keyspace, schema) as t0:
+                stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+                cql.execute(stmt, [0, 'hello'])
+                cql.execute(stmt, [1, 'world'])
+
+                compaction_injection = "compaction_major_keyspace_compaction_task_impl_run"
+                abort_injection = "tasks_abort_children"
+                with scylla_inject_error(rest_api, compaction_injection, True): # Stops running compaction.
+                    with scylla_inject_error(rest_api, abort_injection, True):  # Stops task abort.
+                        # Start compaction.
+                        resp = rest_api.send("POST", f"tasks/compaction/keyspace_compaction/{keyspace}")
+                        resp.raise_for_status()
+                        task_id = resp.json()
+
+                        # Abort compaction.
+                        abort_task(rest_api, task_id)
+
+                        # Resume compaction.
+                        resp = rest_api.send("POST", f"v2/error_injection/injection/{compaction_injection}/message")
+                        resp.raise_for_status()
+
+                        # Wait until compaction is done and unregister the task.
+                        wait_for_task(rest_api, task_id)
+                        get_task_status(rest_api, task_id)
+
+                        # Resume abort.
+                        resp = rest_api.send("POST", f"v2/error_injection/injection/{abort_injection}/message")
+                        resp.raise_for_status()
+    drain_module_tasks(rest_api, module_name)
