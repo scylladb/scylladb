@@ -14,7 +14,7 @@ function(wasm2wat input)
   set(${parsed_args_WAT} ${output} PARENT_SCOPE)
 endfunction()
 
-add_custom_target(wasm)
+add_custom_target(wasm ALL)
 add_dependencies(tests wasm)
 add_subdirectory(c)
 add_subdirectory(rust)
