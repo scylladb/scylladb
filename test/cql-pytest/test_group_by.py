@@ -81,6 +81,22 @@ def test_group_by_clustering_prefix_with_limit(cql, table1):
     for i in range(1,4):
         assert results[:i] == list(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p,c1 LIMIT {i}'))
 
+# Same as the above test, but also add paging, and check that the LIMIT
+# is handled correctly (limits the total number of returned results)
+@pytest.mark.xfail(reason="issue #5362")
+def test_group_by_clustering_prefix_with_limit_and_paging(cql, table1):
+    results = list(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p,c1'))
+    assert len(results) == 4
+    stmt = cql.prepare(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p,c1 LIMIT ?')
+    page_size = 1
+    stmt.fetch_size = page_size
+    for i in range(1,4):
+        r = cql.execute(stmt, [i])
+        # First page should only have page_size rows. Then finish reading all
+        # the pages, and expect the LIMIT to have worked.
+        assert len(r.current_rows) == page_size
+        assert results[:i] == list(r)
+
 # Adding a PER PARTITION LIMIT should be honored
 # Reproduces #5363 - fewer results than the limit were generated
 @pytest.mark.xfail(reason="issue #5363")
