@@ -103,5 +103,9 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
     });
 }
 
+void unset_config(http_context& ctx, routes& r) {
+    cs::find_config_id.unset(r);
+}
+
 }
 

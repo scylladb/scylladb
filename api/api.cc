@@ -81,6 +81,10 @@ future<> set_server_config(http_context& ctx, const db::config& cfg) {
     });
 }
 
+future<> unset_server_config(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_config(ctx, r); });
+}
+
 static future<> register_api(http_context& ctx, const sstring& api_name,
         const sstring api_desc,
         std::function<void(http_context& ctx, routes& r)> f) {
