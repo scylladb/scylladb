@@ -6,7 +6,6 @@ target_sources(repair
     table_check.cc)
 target_include_directories(repair
   PUBLIC
-    absl::headers
     ${CMAKE_SOURCE_DIR})
 target_link_libraries(repair
   PUBLIC
