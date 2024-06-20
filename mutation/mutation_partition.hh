@@ -31,6 +31,7 @@
 #include "utils/compact-radix-tree.hh"
 #include "utils/immutable-collection.hh"
 #include "tombstone_gc.hh"
+#include "mutation/compact_and_expire_result.hh"
 
 class mutation_fragment;
 class mutation_partition_view;
@@ -190,7 +191,7 @@ public:
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
     // Returns true iff there are any live cells left.
-    bool compact_and_expire(
+    compact_and_expire_result compact_and_expire(
             const schema& s,
             column_kind kind,
             row_tombstone tomb,
@@ -200,7 +201,7 @@ public:
             const row_marker& marker,
             compaction_garbage_collector* collector = nullptr);
 
-    bool compact_and_expire(
+    compact_and_expire_result compact_and_expire(
             const schema& s,
             column_kind kind,
             row_tombstone tomb,
