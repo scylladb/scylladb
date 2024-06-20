@@ -76,11 +76,9 @@ struct http_context {
     sstring api_doc;
     httpd::http_server_control http_server;
     distributed<replica::database>& db;
-    service::load_meter& lmeter;
 
-    http_context(distributed<replica::database>& _db,
-            service::load_meter& _lm)
-            : db(_db), lmeter(_lm)
+    http_context(distributed<replica::database>& _db)
+            : db(_db)
     {
     }
 };
