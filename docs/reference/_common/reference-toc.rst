@@ -7,5 +7,6 @@
    GCP Images </reference/gcp-images>
    Configuration Parameters </reference/configuration-parameters>
    Glossary </reference/glossary>
+   Limits </reference/limits>
    API Reference (BETA) </reference/api-reference>
    Metrics (BETA) </reference/metrics>
