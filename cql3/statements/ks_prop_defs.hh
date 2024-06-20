@@ -49,13 +49,18 @@ public:
 private:
     std::optional<sstring> _strategy_class;
 public:
+    struct init_tablets_options {
+        bool enabled;
+        std::optional<unsigned> specified_count;
+    };
+
     ks_prop_defs() = default;
     explicit ks_prop_defs(std::map<sstring, sstring> options);
 
     void validate();
     std::map<sstring, sstring> get_replication_options() const;
     std::optional<sstring> get_replication_strategy_class() const;
-    std::optional<unsigned> get_initial_tablets(const sstring& strategy_class, bool enabled_by_default) const;
+    init_tablets_options get_initial_tablets(const sstring& strategy_class, bool enabled_by_default) const;
     data_dictionary::storage_options get_storage_options() const;
     bool get_durable_writes() const;
     std::map<sstring, sstring> get_all_options_flattened(const gms::feature_service& feat) const;
