@@ -69,7 +69,7 @@ packages=(
     "build/dist/$config/debian/$product-conf_$version-$release-1_$arch.deb"
     "build/dist/$config/debian/$product-kernel-conf_$version-$release-1_$arch.deb"
     "build/dist/$config/debian/$product-node-exporter_$version-$release-1_$arch.deb"
-    "tools/cqlsh/build/debian/$product-cqlsh_$version-$release-1_all.deb"
+    "tools/cqlsh/build/debian/$product-cqlsh_$version-$release-1_$arch.deb"
     "tools/python3/build/debian/$product-python3_$version-$release-1_$arch.deb"
 )
 
