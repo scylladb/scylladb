@@ -294,7 +294,7 @@ static future<> update_item_rmw(const test_config& _, http::experimental::client
                     "S": "{}"
                 }}
             }},)", seq, seq);
-    // making condtional write is one way of making sure scylla will do read before write (rmw)
+    // making conditional write is one way of making sure scylla will do read before write (rmw)
     // for our static data this condition is always true to simplify things
     auto condition_exp = R"(
          "ConditionExpression": "((NOT attribute_exists(C2)) OR size(C6) <= :val1) AND (C8 <> :val2 OR C6 IN (:val1)) ",
@@ -440,7 +440,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
             ("flush", bpo::value<bool>()->default_value(true), "flush memtables before test")
             ("remote-host", bpo::value<std::string>()->default_value(""), "address of remote alternator service, use localhost by default")
-            ("scan-total-segments", bpo::value<unsigned>()->default_value(10), "single scan operation will retreive 1/scan-total-segments portion of a table")
+            ("scan-total-segments", bpo::value<unsigned>()->default_value(10), "single scan operation will retrieve 1/scan-total-segments portion of a table")
             ("continue-after-error", bpo::value<bool>()->default_value(false), "continue test after failed request")
         ;
         bpo::variables_map opts;

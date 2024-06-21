@@ -31,7 +31,7 @@ async def test_global_ignored_nodes_list(manager: ManagerClient, random_tables) 
     s3_id = await manager.get_host_id(servers[3].server_id)
     await manager.remove_node(servers[1].server_id, servers[4].server_id, [s3_id])
     # down one more node and try to replace it without providing server 3 as ignored
-    # this has to succeed since it was ignored previously and is non voter now so teh quorum
+    # this has to succeed since it was ignored previously and is non voter now so the quorum
     # is 2
     await manager.server_stop_gracefully(servers[2].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[2].server_id, reuse_ip_addr = False, use_host_id = True)

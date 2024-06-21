@@ -77,7 +77,7 @@ class ManagerClient():
         """Close driver"""
         self.driver_close()
         # TODO: good candidate for safe_gather  https://github.com/scylladb/scylladb/pull/17781
-        #  to make sure tha all connections is closed
+        #  to make sure that all connections is closed
         await asyncio.gather(*[client.shutdown() for client in self.client_for_asyncio_loop.values()])
 
     async def driver_connect(self, server: Optional[ServerInfo] = None, auth_provider: Optional[AuthProvider] = None) -> None:

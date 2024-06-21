@@ -926,7 +926,7 @@ def test_many_range_tombstone_base_update_2(cql, test_keyspace):
             print("Only in view: ", sorted(list(set(list_view)-set(list_base))))
             assert list_base == list_view
 
-# Test that deleting a base partion works fine, even if it produces a
+# Test that deleting a base partition works fine, even if it produces a
 # large batch of individual view updates. After issue #8852 was fixed,
 # this large batch is no longer done together, but rather split to smaller
 # batches, and this split can be done wrongly (e.g., see issue #17117)

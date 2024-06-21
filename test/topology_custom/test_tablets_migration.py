@@ -212,7 +212,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
 
         async def stop(self, via=0):
             if self.stage == "cleanup_target":
-                await self.cleanup_fail.stop(via=3) # removenode of source is happending via node0 already
+                await self.cleanup_fail.stop(via=3) # removenode of source is happening via node0 already
                 await self.stream_stop_task
                 return
             if self.stage == "revert_migration":

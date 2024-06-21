@@ -30,13 +30,13 @@ def format_status(host, info):
 
 def format_output(keyspace, view, view_status):
     table = format_status("Host", "Info")
-    succceed = True
+    succeed = True
     for host, status in view_status.items():
         if status != 'SUCCESS':
-            succceed = False
+            succeed = False
         table += format_status(host, status)
     output = ''
-    if succceed:
+    if succeed:
         output += f"{keyspace}.{view} has finished building\n"
     else:
         output += f"{keyspace}.{view} has not finished building; node status is below.\n"

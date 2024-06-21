@@ -264,7 +264,7 @@ PATH=$JAVA_HOME:$JRE_HOME/bin:$PATH CASSANDRA_USE_JDK11=true \
 ant -Duse.jdk11=true
 ```
 This will take a few minutes, and may begin by downloading dozens of JAR
-dependecies into your maven cache (`$HOME/.m2`), if this hasn't happened
+dependencies into your maven cache (`$HOME/.m2`), if this hasn't happened
 last time you built Cassandra.
 
 That's it! In the Cassandra source directory, you now have bin/cassandra,
