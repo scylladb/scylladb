@@ -106,8 +106,8 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         throw bad_param_exception(sstring("No such config entry: ") + id);
     });
 
-    sp::get_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().request_timeout_in_ms()/1000.0;
+    sp::get_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.request_timeout_in_ms()/1000.0;
     });
 
     sp::set_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
@@ -117,8 +117,8 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         return make_ready_future<json::json_return_type>(seastar::json::json_void());
     });
 
-    sp::get_read_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().read_request_timeout_in_ms()/1000.0;
+    sp::get_read_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.read_request_timeout_in_ms()/1000.0;
     });
 
     sp::set_read_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
@@ -128,8 +128,8 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         return make_ready_future<json::json_return_type>(seastar::json::json_void());
     });
 
-    sp::get_write_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().write_request_timeout_in_ms()/1000.0;
+    sp::get_write_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.write_request_timeout_in_ms()/1000.0;
     });
 
     sp::set_write_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
@@ -139,8 +139,8 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         return make_ready_future<json::json_return_type>(seastar::json::json_void());
     });
 
-    sp::get_counter_write_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().counter_write_request_timeout_in_ms()/1000.0;
+    sp::get_counter_write_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.counter_write_request_timeout_in_ms()/1000.0;
     });
 
     sp::set_counter_write_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
@@ -150,8 +150,8 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         return make_ready_future<json::json_return_type>(seastar::json::json_void());
     });
 
-    sp::get_cas_contention_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().cas_contention_timeout_in_ms()/1000.0;
+    sp::get_cas_contention_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.cas_contention_timeout_in_ms()/1000.0;
     });
 
     sp::set_cas_contention_timeout.set(r, [](std::unique_ptr<http::request> req)  {
@@ -161,8 +161,8 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         return make_ready_future<json::json_return_type>(seastar::json::json_void());
     });
 
-    sp::get_range_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().range_request_timeout_in_ms()/1000.0;
+    sp::get_range_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.range_request_timeout_in_ms()/1000.0;
     });
 
     sp::set_range_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
@@ -172,8 +172,8 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         return make_ready_future<json::json_return_type>(seastar::json::json_void());
     });
 
-    sp::get_truncate_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().truncate_request_timeout_in_ms()/1000.0;
+    sp::get_truncate_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.truncate_request_timeout_in_ms()/1000.0;
     });
 
     sp::set_truncate_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
