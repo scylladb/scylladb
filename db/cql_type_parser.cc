@@ -9,12 +9,12 @@
 #include <unordered_map>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/sliced.hpp>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include "replica/database.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/util.hh"
 #include "cql_type_parser.hh"
-#include "seastar/coroutine/maybe_yield.hh"
 #include "types/types.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "utils/sorting.hh"

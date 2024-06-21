@@ -14,12 +14,12 @@
 #include <boost/range/join.hpp>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/rwlock.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db_clock.hh"
 #include "log.hh"
-#include "seastar/core/rwlock.hh"
 #include "tasks/types.hh"
 #include "utils/serialized_action.hh"
 #include "utils/updateable_value.hh"

@@ -10,7 +10,7 @@
 #include <vector>
 #include <map>
 #include <seastar/core/future.hh>
-#include "seastar/coroutine/maybe_yield.hh"
+#include <seastar/coroutine/maybe_yield.hh>
 #include "utils/stall_free.hh"
 
 namespace utils {

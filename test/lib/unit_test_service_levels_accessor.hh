@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "seastar/core/future.hh"
+#include <seastar/core/future.hh>
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/qos_common.hh"
 #include "db/system_distributed_keyspace.hh"

@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <signal.h>
+#include <seastar/core/future.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/http/client.hh>
@@ -20,7 +21,6 @@
 #include <boost/program_options.hpp>
 
 #include "db/config.hh"
-#include "seastar/core/future.hh"
 #include "test/perf/perf.hh"
 #include "test/lib/random_utils.hh"
 

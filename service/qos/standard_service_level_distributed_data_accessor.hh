@@ -9,7 +9,7 @@
 #pragma once
 
 #include <seastar/core/abort_source.hh>
-#include "seastar/core/future.hh"
+#include <seastar/core/future.hh>
 #include "seastarx.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service_level_controller.hh"
