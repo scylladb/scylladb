@@ -20,7 +20,6 @@ def auth_data():
         {
             "statement": "INSERT INTO system_auth.roles (role, can_login, is_superuser, member_of, salted_hash) VALUES (?, ?, ?, ?, ?)",
             "rows": [
-                ("cassandra", False, True, None, None),
                 ("user 1", True, False, frozenset({'users'}), "salt1?"),
                 ("user 2", True, False, frozenset({'users'}), "salt2#"),
                 ("users", False, False, None, None),
@@ -91,6 +90,13 @@ async def check_auth_v2_data_migration(manager: ManagerClient, hosts):
 
     roles = set()
     for row in await cql.run_async("SELECT * FROM system.roles"):
+        if row.role == "cassandra":
+            # Skip default role, its creation in auth-v1
+            # is asynchronous and all nodes race to create it
+            # so we'd need to delay the test and wait.
+            # Checking this particular role doesn't bring much value
+            # to the test as we check other roles to demonstrate correctness
+            continue
         member_of = frozenset(row.member_of) if row.member_of else None
         roles.add((row.role, row.can_login, row.is_superuser, member_of, row.salted_hash))
     assert roles == set(data[0]["rows"])
