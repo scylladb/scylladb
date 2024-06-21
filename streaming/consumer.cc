@@ -65,6 +65,12 @@ std::function<future<> (mutation_reader)> make_streaming_consumer(sstring origin
                         cf->enable_off_strategy_trigger();
                     }
                     return cf->add_sstable_and_update_cache(sst, offstrategy);
+                }).then([cf, sst] {
+                    // Streaming writer waits on split of newly added sstable if underlying table is in split mode.
+                    // FIXME: it's not safe to split after sstable was added, as a failure to split means split execute can happen later if
+                    //  the process that originated it give up due to the error. I think we need to wire the mutation splitter (consumer) instead,
+                    //  such that incoming data is split on the fly, and split sstables are added if in split mode.
+                    return cf->maybe_split_compaction_group_of(sst);
                 }).then([cf, s, sst, use_view_update_path, &vb]() mutable -> future<> {
                     if (!use_view_update_path) {
                         return make_ready_future<>();

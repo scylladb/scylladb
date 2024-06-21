@@ -803,7 +803,13 @@ future<> storage_group::split(compaction_group_list& list, sstables::compaction_
         co_return;
     }
 
+    if (_main_cg->empty()) {
+        co_return;
+    }
+    auto holder = _main_cg->async_gate().hold();
     co_await _main_cg->flush();
+    // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
+    co_await _main_cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), std::nullopt);
     co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt));
 }
 
@@ -883,6 +889,11 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
 future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
     auto holder = async_gate().hold();
     co_await _sg_manager->maybe_split_compaction_group_of(tablet_id.value());
+}
+
+future<> table::maybe_split_compaction_group_of(const sstables::shared_sstable& sst) {
+    auto& cg = compaction_group_for_sstable(sst);
+    return maybe_split_compaction_group_of(locator::tablet_id(cg.group_id()));
 }
 
 std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
