@@ -196,6 +196,7 @@ struct test_env::impl {
     sstables::sstable_generation_generator gen{0};
     sstables::uuid_identifiers use_uuid;
     data_dictionary::storage_options storage;
+    abort_source abort;
 
     impl(test_env_config cfg, sstables::storage_manager* sstm);
     impl(impl&&) = delete;
@@ -213,7 +214,7 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     , feature_service(gms::feature_config_from_db_config(*db_config))
     , mgr("test_env", cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config,
         feature_service, cache_tracker, cfg.available_memory, dir_sem,
-        [host_id = locator::host_id::create_random_id()]{ return host_id; }, current_scheduling_group(), sstm)
+        [host_id = locator::host_id::create_random_id()]{ return host_id; }, abort, current_scheduling_group(), sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)
     , use_uuid(cfg.use_uuid)
     , storage(std::move(cfg.storage))
