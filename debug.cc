@@ -10,6 +10,6 @@
 
 namespace debug {
 
-seastar::sharded<replica::database>* the_database = nullptr;
+seastar::sharded<replica::database>* volatile the_database = nullptr;
 
 }
