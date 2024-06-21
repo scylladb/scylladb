@@ -16,7 +16,6 @@
 #include <vector>
 
 #include <seastar/core/future.hh>
-#include <seastar/core/shared_ptr.hh>
 
 #include "auth/permission.hh"
 #include "auth/resource.hh"

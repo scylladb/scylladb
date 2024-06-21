@@ -9,7 +9,6 @@
 
 #pragma once
 
-#include <boost/regex.hpp>
 #include "auth/authenticator.hh"
 
 namespace cql3 {

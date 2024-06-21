@@ -16,10 +16,8 @@
 #include <optional>
 #include <functional>
 
-#include <seastar/core/enum.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
-#include <seastar/core/shared_ptr.hh>
 
 #include "auth/authentication_options.hh"
 #include "auth/resource.hh"

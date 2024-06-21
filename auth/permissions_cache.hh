@@ -13,8 +13,6 @@
 
 #include <fmt/core.h>
 #include <seastar/core/future.hh>
-#include <seastar/core/shared_ptr.hh>
-#include <seastar/core/sstring.hh>
 
 #include "auth/permission.hh"
 #include "auth/resource.hh"
