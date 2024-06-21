@@ -106,6 +106,7 @@ future<> unset_server_snapshot(http_context& ctx);
 future<> set_server_token_metadata(http_context& ctx, sharded<locator::shared_token_metadata>& tm);
 future<> unset_server_token_metadata(http_context& ctx);
 future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g);
+future<> unset_server_gossip(http_context& ctx);
 future<> set_server_column_family(http_context& ctx, sharded<db::system_keyspace>& sys_ks);
 future<> unset_server_column_family(http_context& ctx);
 future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging_service>& ms);

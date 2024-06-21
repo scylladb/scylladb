@@ -194,6 +194,12 @@ future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g) {
                 });
 }
 
+future<> unset_server_gossip(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) {
+        unset_gossiper(ctx, r);
+    });
+}
+
 future<> set_server_column_family(http_context& ctx, sharded<db::system_keyspace>& sys_ks) {
     return register_api(ctx, "column_family",
                 "The column family API", [&sys_ks] (http_context& ctx, routes& r) {
