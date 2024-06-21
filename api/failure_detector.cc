@@ -99,5 +99,16 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     });
 }
 
+void unset_failure_detector(http_context& ctx, routes& r) {
+    fd::get_all_endpoint_states.unset(r);
+    fd::get_up_endpoint_count.unset(r);
+    fd::get_down_endpoint_count.unset(r);
+    fd::get_phi_convict_threshold.unset(r);
+    fd::get_simple_states.unset(r);
+    fd::set_phi_convict_threshold.unset(r);
+    fd::get_endpoint_state.unset(r);
+    fd::get_endpoint_phi_values.unset(r);
+}
+
 }
 
