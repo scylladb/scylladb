@@ -188,7 +188,7 @@ future<> unset_server_snitch(http_context& ctx) {
 }
 
 future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g) {
-    return register_api(ctx, "gossiper",
+    co_await register_api(ctx, "gossiper",
                 "The gossiper API", [&g] (http_context& ctx, routes& r) {
                     set_gossiper(ctx, r, g.local());
                 });
