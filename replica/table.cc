@@ -676,6 +676,9 @@ public:
     bool all_storage_groups_split() override { return true; }
     future<> split_all_storage_groups() override { return make_ready_future(); }
     future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
+    future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) override {
+        return make_ready_future<std::vector<sstables::shared_sstable>>(std::vector<sstables::shared_sstable>{sst});
+    }
 
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
         return get_compaction_group().make_sstable_set();
@@ -776,6 +779,7 @@ public:
     bool all_storage_groups_split() override;
     future<> split_all_storage_groups() override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
+    future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) override;
 
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
         // FIXME: avoid recreation of compound_set for groups which had no change. usually, only one group will be changed at a time.
@@ -858,8 +862,18 @@ future<> storage_group::split(sstables::compaction_type_options::split opt) {
         co_return;
     }
 
+    if (_main_cg->empty()) {
+        co_return;
+    }
+    auto holder = _main_cg->async_gate().hold();
     co_await _main_cg->flush();
+<<<<<<< HEAD
     co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt));
+=======
+    // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
+    co_await _main_cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), tasks::task_info{});
+    co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt), tasks::task_info{});
+>>>>>>> 74612ad358 (tablets: Fix race between repair and split)
 }
 
 lw_shared_ptr<const sstables::sstable_set> storage_group::make_sstable_set() const {
@@ -935,9 +949,25 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
     return sg->split(split_compaction_options());
 }
 
+future<std::vector<sstables::shared_sstable>>
+tablet_storage_group_manager::maybe_split_sstable(const sstables::shared_sstable& sst) {
+    if (!tablet_map().needs_split()) {
+        co_return std::vector<sstables::shared_sstable>{sst};
+    }
+
+    auto& cg = compaction_group_for_sstable(sst);
+    auto holder = cg.async_gate().hold();
+    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, cg.as_table_state(), split_compaction_options());
+}
+
 future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
     auto holder = async_gate().hold();
     co_await _sg_manager->maybe_split_compaction_group_of(tablet_id.value());
+}
+
+future<std::vector<sstables::shared_sstable>> table::maybe_split_new_sstable(const sstables::shared_sstable& sst) {
+    auto holder = async_gate().hold();
+    co_return co_await _sg_manager->maybe_split_sstable(sst);
 }
 
 std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
@@ -1122,11 +1152,8 @@ void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) no
 }
 
 future<>
-table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy, bool trigger_compaction) {
-    compaction_group& cg = compaction_group_for_sstable(sst);
-    // Hold gate to make share compaction group is alive.
-    auto holder = cg.async_gate().hold();
-
+table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable sst, sstables::offstrategy offstrategy,
+                                       bool trigger_compaction) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
     co_return co_await get_row_cache().invalidate(row_cache::external_updater([&] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
@@ -1141,6 +1168,16 @@ table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::o
             try_trigger_compaction(cg);
         }
     }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
+}
+
+future<>
+table::do_add_sstable_and_update_cache(sstables::shared_sstable new_sst, sstables::offstrategy offstrategy, bool trigger_compaction) {
+    for (auto sst : co_await maybe_split_new_sstable(new_sst)) {
+        auto& cg = compaction_group_for_sstable(sst);
+        // Hold gate to make share compaction group is alive.
+        auto holder = cg.async_gate().hold();
+        co_await do_add_sstable_and_update_cache(cg, std::move(sst), offstrategy, trigger_compaction);
+    }
 }
 
 future<>
