@@ -688,6 +688,11 @@ all_artifacts = apps | tests | other | wasms
 arg_parser = argparse.ArgumentParser('Configure scylla')
 arg_parser.add_argument('--out', dest='buildfile', action='store', default='build.ninja',
                         help='Output build-file name (by default build.ninja)')
+arg_parser.add_argument('--out-final-name', dest="buildfile_final_name", action='store',
+                        help='If set, rules will be generated as if this were the actual name of the file instead of the name passed by the --out option. \
+                              This option is rather not useful for developers, it is intended to be used by Ninja when it decides to regenerate the makefile \
+                              (a makefile with the same name but with a ".new" suffix is generated, then it is renamed to overwrite the old file; \
+                              the new file\'s regeneration rule itself needs to refer to the correct filename).')
 arg_parser.add_argument('--mode', action='append', choices=list(modes.keys()), dest='selected_modes',
                         help="Build modes to generate ninja files for. The available build modes are:\n{}".format("; ".join(["{} - {}".format(m, cfg['description']) for m, cfg in modes.items()])))
 arg_parser.add_argument('--with', dest='artifacts', action='append', default=[],
@@ -1571,6 +1576,8 @@ selected_modes = args.selected_modes or modes.keys()
 default_modes = args.selected_modes or [mode for mode, mode_cfg in modes.items() if mode_cfg["default"]]
 build_modes =  {m: modes[m] for m in selected_modes}
 
+buildfile_final_name = args.buildfile_final_name or args.buildfile
+
 if args.artifacts:
     build_artifacts = set()
     for artifact in args.artifacts:
@@ -2391,10 +2398,10 @@ def write_build_file(f,
 
     f.write(textwrap.dedent('''\
         rule configure
-          command = {python} configure.py --out={buildfile}.new $configure_args && mv {buildfile}.new {buildfile}
+          command = {python} configure.py --out={buildfile_final_name}.new --out-final-name={buildfile_final_name} $configure_args && mv {buildfile_final_name}.new {buildfile_final_name}
           generator = 1
           description = CONFIGURE $configure_args
-        build {buildfile} {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {args.seastar_path}/CMakeLists.txt
+        build {buildfile_final_name} {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {args.seastar_path}/CMakeLists.txt
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
