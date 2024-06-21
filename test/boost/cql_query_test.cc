@@ -28,6 +28,7 @@
 #include <seastar/core/sleep.hh>
 #include "transport/messages/result_message.hh"
 #include "transport/messages/result_message_base.hh"
+#include "types/types.hh"
 #include "utils/big_decimal.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -5345,6 +5346,72 @@ SEASTAR_TEST_CASE(test_parallelized_select_counter_type) {
         });
 
         BOOST_CHECK_EQUAL(stat_parallelized + 4, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_single_partition_aggregation_is_not_parallelized) {
+    // It's pointless from performance pov to parallelize 
+    // aggregation queries which reads only single partition.
+    
+    return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        const auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (pk int, ck int, col int, PRIMARY KEY (pk, ck));").get();
+        const int value_count = 10;
+        for (int pk = 0; pk < 2; pk++) {
+            for (int c = 0; c < value_count; c++) {
+                e.execute_cql(format("INSERT INTO tbl (pk, ck, col) VALUES ({:d}, {:d}, {:d});", pk, c, c)).get();
+            }
+        }
+        
+        const auto result1 = e.execute_cql("SELECT COUNT(*) FROM tbl WHERE pk = 1;").get();
+        assert_that(result1).is_rows().with_rows({
+            {long_type->decompose(int64_t(value_count))}
+        });
+        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
+
+        const auto result2 = e.execute_cql("SELECT COUNT(*) FROM tbl WHERE pk = 1 AND ck = 1;").get();
+        assert_that(result2).is_rows().with_rows({
+            {long_type->decompose(int64_t(1))}
+        });
+        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
+
+        const auto result3 = e.execute_cql("SELECT COUNT(*) FROM tbl WHERE token(pk) = 1;").get();
+        // We don't check value of count(*) here but only if it wasn't parallelized
+        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
+        
+        const auto result4 = e.execute_cql("SELECT COUNT(*) FROM tbl WHERE pk = 1 AND pk = 2;").get();
+        assert_that(result4).is_rows().with_rows({
+            {long_type->decompose(int64_t(0))}
+        });
+        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
+
+
+        e.execute_cql("CREATE TABLE tbl2 (pk1 int, pk2 int, ck int, col int, PRIMARY KEY((pk1, pk2), ck));").get();
+        for (int pk1 = 0; pk1 < 2; pk1++) {
+            for (int pk2 = 0; pk2 < 2; pk2++) {
+                for (int c = 0; c < value_count; c++) {
+                    e.execute_cql(format("INSERT INTO tbl2 (pk1, pk2, ck, col) VALUES ({:d}, {:d}, {:d}, {:d});", pk1, pk2, c, c)).get();
+                }
+            }
+        }
+        
+        const auto result_pk12 = e.execute_cql("SELECT COUNT(*) FROM tbl2 WHERE pk1 = 1 AND pk2 = 0;").get();
+        assert_that(result_pk12).is_rows().with_rows({
+            {long_type->decompose(int64_t(value_count))}
+        });
+        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
+
+        // Query with only partly restricted partition key requires `ALLOW FILTERING` clause
+        // and we doesn't parallelize queries which need filtering.
+        // See issue #19369.
+        const auto result_pk1 = e.execute_cql("SELECT COUNT(*) FROM tbl2 WHERE pk1 = 1 ALLOW FILTERING;").get();
+        // This query contains also column for pk1
+        assert_that(result_pk1).is_rows().with_rows({
+            {long_type->decompose(int64_t(value_count * 2)), int32_type->decompose(int32_t(1))}
+        });
+        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
     });
 }
 
