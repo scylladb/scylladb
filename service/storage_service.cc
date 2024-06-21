@@ -1676,10 +1676,8 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // NORMAL doesn't necessarily mean UP (#14042). Wait for these nodes to be UP as well
         // to reduce flakiness (we need them to be UP to perform CDC generation write and for repair/streaming).
         //
-        // This could be done in Raft topology mode as well, but the calculation of nodes to sync with
-        // has to be done based on topology state machine instead of gossiper as it is here;
-        // furthermore, the place in the code where we do this has to be different (it has to be coordinated
-        // by the topology coordinator after it joins the node to the cluster).
+        // We do it in Raft topology mode as well in join_node_response_handler. The calculation of nodes to
+        // sync with is done based on topology state machine instead of gossiper as it is here.
         //
         // We calculate nodes to wait for based on token_metadata. Previously we would use gossiper
         // directly for this, but gossiper may still contain obsolete entries from 1. replaced nodes
@@ -1687,20 +1685,26 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // but here they may still be present if we're performing topology changes in quick succession.
         // `token_metadata` has all host ID / token collisions resolved so in particular it doesn't contain
         // these obsolete IPs. Refs: #14487, #14468
-        auto& tm = get_token_metadata();
+        //
+        // We recalculate nodes in every step of the loop in wait_alive. For example, if we booted a new node
+        // just after removing a different node, other nodes could still see the removed node as NORMAL. Then,
+        // the joining node would wait for it to be UP, and wait_alive would time out. Recalculation fixes
+        // this problem. Ref: #17526
+        auto get_sync_nodes = [&] {
+            std::vector<gms::inet_address> sync_nodes;
+            get_token_metadata().get_topology().for_each_node([&] (const locator::node* np) {
+                auto ep = np->endpoint();
+                const auto& host_id = np->host_id();
+                if (!ri || (host_id != ri->host_id && !ri->ignore_nodes.contains(host_id))) {
+                    sync_nodes.push_back(ep);
+                }
+            });
+            return sync_nodes;
+        };
 
-        std::vector<gms::inet_address> sync_nodes;
-        tm.get_topology().for_each_node([&] (const locator::node* np) {
-            auto ep = np->endpoint();
-            const auto& host_id = np->host_id();
-            if (!ri || (host_id != ri->host_id && !ri->ignore_nodes.contains(host_id))) {
-                sync_nodes.push_back(ep);
-            }
-        });
-
-        slogger.info("Waiting for nodes {} to be alive", sync_nodes);
-        co_await _gossiper.wait_alive(sync_nodes, wait_for_live_nodes_timeout);
-        slogger.info("Nodes {} are alive", sync_nodes);
+        slogger.info("Waiting for other nodes to be alive. Current nodes: {}", get_sync_nodes());
+        co_await _gossiper.wait_alive(get_sync_nodes, wait_for_live_nodes_timeout);
+        slogger.info("Nodes {} are alive", get_sync_nodes());
     }
 
     assert(_group0);
