@@ -595,28 +595,35 @@ future<> table_reshaping_compaction_task_impl::run() {
 
 future<> shard_reshaping_compaction_task_impl::run() {
     auto& table = _db.local().find_column_family(_status.keyspace, _status.table);
+    auto holder = table.async_gate().hold();
     tasks::task_info info{_status.id, _status.shard};
 
-    std::unordered_map<size_t, std::unordered_set<sstables::shared_sstable>> sstables_grouped_by_compaction_group;
+    std::unordered_map<compaction::table_state*, std::unordered_set<sstables::shared_sstable>> sstables_grouped_by_compaction_group;
     for (auto& sstable : _dir.get_unshared_local_sstables()) {
-        auto compaction_group_id = table.get_compaction_group_id_for_sstable(sstable);
-        sstables_grouped_by_compaction_group[compaction_group_id].insert(sstable);
+        auto& t = table.table_state_for_sstable(sstable);
+        sstables_grouped_by_compaction_group[&t].insert(sstable);
     }
 
     // reshape sstables individually within the compaction groups
     for (auto& sstables_in_cg : sstables_grouped_by_compaction_group) {
-        co_await reshape_compaction_group(sstables_in_cg.first, sstables_in_cg.second, table, info);
+        co_await reshape_compaction_group(*sstables_in_cg.first, sstables_in_cg.second, table, info);
     }
 }
 
-future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(size_t compaction_group_id, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info) {
+future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compaction::table_state& t, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info) {
 
     while (true) {
         auto reshape_candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(sstables_in_cg
                 | boost::adaptors::filtered([&filter = _filter] (const auto& sst) {
             return filter(sst);
         }));
-        auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), _mode);
+        if (reshape_candidates.empty()) {
+            break;
+        }
+        // all sstables were found in the same sstable_directory instance, so they share the same underlying storage.
+        auto& storage = reshape_candidates.front()->get_storage();
+        auto cfg = co_await sstables::make_reshape_config(storage, _mode);
+        auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), cfg);
         if (desc.sstables.empty()) {
             break;
         }
@@ -635,7 +642,6 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(size_t c
         desc.creator = _creator;
 
         try {
-            auto& t = table.get_compaction_group(compaction_group_id)->as_table_state();
             co_await table.get_compaction_manager().run_custom_job(t, sstables::compaction_type::Reshape, "Reshape compaction", [&dir = _dir, sstlist = std::move(sstlist), desc = std::move(desc), &sstables_in_cg, &t] (sstables::compaction_data& info, sstables::compaction_progress_monitor& progress_monitor) mutable -> future<> {
                 sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, t, progress_monitor);
                 // update the sstables_in_cg set with new sstables and remove the reshaped ones

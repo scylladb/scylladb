@@ -83,7 +83,7 @@ reader_consumer_v2 compaction_strategy_impl::make_interposer_consumer(const muta
 }
 
 compaction_descriptor
-compaction_strategy_impl::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const {
+compaction_strategy_impl::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
     return compaction_descriptor();
 }
 
@@ -728,8 +728,8 @@ compaction_backlog_tracker compaction_strategy::make_backlog_tracker() const {
 }
 
 sstables::compaction_descriptor
-compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const {
-    return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, mode);
+compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
+    return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, cfg);
 }
 
 uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate, schema_ptr schema) const {
@@ -765,6 +765,13 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
     }
 
     return compaction_strategy(std::move(impl));
+}
+
+future<reshape_config> make_reshape_config(const sstables::storage& storage, reshape_mode mode) {
+    co_return sstables::reshape_config{
+        .mode = mode,
+        .free_storage_space = co_await storage.free_space() / smp::count,
+    };
 }
 
 }

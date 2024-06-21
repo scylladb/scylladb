@@ -1379,13 +1379,20 @@ private:
                 }));
         };
 
-        auto get_next_job = [&] () -> std::optional<sstables::compaction_descriptor> {
-            auto desc = t.get_compaction_strategy().get_reshaping_job(get_reshape_candidates(), t.schema(), sstables::reshape_mode::strict);
-            return desc.sstables.size() ? std::make_optional(std::move(desc)) : std::nullopt;
+        auto get_next_job = [&] () -> future<std::optional<sstables::compaction_descriptor>> {
+            auto candidates = get_reshape_candidates();
+            if (candidates.empty()) {
+                co_return std::nullopt;
+            }
+            // all sstables added to maintenance set share the same underlying storage.
+            auto& storage = candidates.front()->get_storage();
+            sstables::reshape_config cfg = co_await sstables::make_reshape_config(storage, sstables::reshape_mode::strict);
+            auto desc = t.get_compaction_strategy().get_reshaping_job(get_reshape_candidates(), t.schema(), cfg);
+            co_return desc.sstables.size() ? std::make_optional(std::move(desc)) : std::nullopt;
         };
 
         std::exception_ptr err;
-        while (auto desc = get_next_job()) {
+        while (auto desc = co_await get_next_job()) {
             auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(&t), desc->sstables);
             auto on_replace = compacting.update_on_sstable_replacement();
 
