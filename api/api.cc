@@ -192,11 +192,16 @@ future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g) {
                 "The gossiper API", [&g] (http_context& ctx, routes& r) {
                     set_gossiper(ctx, r, g.local());
                 });
+    co_await register_api(ctx, "failure_detector",
+                "The failure detector API", [&g] (http_context& ctx, routes& r) {
+                    set_failure_detector(ctx, r, g.local());
+                });
 }
 
 future<> unset_server_gossip(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) {
         unset_gossiper(ctx, r);
+        unset_failure_detector(ctx, r);
     });
 }
 
@@ -260,13 +265,7 @@ future<> unset_hinted_handoff(http_context& ctx) {
 }
 
 future<> set_server_gossip_settle(http_context& ctx, sharded<gms::gossiper>& g) {
-    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
-
-    return ctx.http_server.set_routes([rb, &ctx, &g](routes& r) {
-        rb->register_function(r, "failure_detector",
-                "The failure detector API");
-        set_failure_detector(ctx, r, g.local());
-    });
+    return make_ready_future<>();
 }
 
 future<> set_server_compaction_manager(http_context& ctx) {
