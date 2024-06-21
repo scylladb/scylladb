@@ -14,6 +14,7 @@
 
 #include <boost/algorithm/string/join.hpp>
 #include <seastar/core/future-util.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/sstring.hh>
@@ -26,7 +27,6 @@
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
-#include "seastar/core/on_internal_error.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "utils/class_registrator.hh"
 #include "service/migration_manager.hh"

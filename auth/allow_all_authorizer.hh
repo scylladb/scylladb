@@ -9,7 +9,7 @@
 #pragma once
 
 #include "auth/authorizer.hh"
-#include "seastar/core/future.hh"
+#include <seastar/core/future.hh>
 
 namespace cql3 {
 class query_processor;

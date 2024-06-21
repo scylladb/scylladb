@@ -14,11 +14,11 @@
 #include <stdint.h>
 #include <fmt/ranges.h>
 
+#include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
 
-#include "seastar/core/future.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"

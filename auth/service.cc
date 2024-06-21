@@ -32,7 +32,7 @@
 #include "log.hh"
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
-#include "seastar/coroutine/parallel_for_each.hh"
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "timestamp.hh"

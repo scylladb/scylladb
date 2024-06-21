@@ -11,9 +11,9 @@
 #include "cql3/query_processor.hh"
 
 #include <seastar/core/metrics.hh>
+#include <seastar/core/shared_ptr.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
-#include "seastar/core/shared_ptr.hh"
 #include "service/storage_proxy.hh"
 #include "service/topology_mutation.hh"
 #include "service/migration_manager.hh"
