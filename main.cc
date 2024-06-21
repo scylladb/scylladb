@@ -1999,7 +1999,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 startlog.info("Waiting for gossip to settle before accepting client requests...");
                 gossiper.local().wait_for_gossip_to_settle().get();
             }
-            api::set_server_gossip_settle(ctx, gossiper).get();
 
             supervisor::notify("allow replaying hints");
             proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();

@@ -117,7 +117,6 @@ future<> set_server_stream_manager(http_context& ctx, sharded<streaming::stream_
 future<> unset_server_stream_manager(http_context& ctx);
 future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& p);
 future<> unset_hinted_handoff(http_context& ctx);
-future<> set_server_gossip_settle(http_context& ctx, sharded<gms::gossiper>& g);
 future<> set_server_cache(http_context& ctx);
 future<> set_server_compaction_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);

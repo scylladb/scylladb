@@ -264,10 +264,6 @@ future<> unset_hinted_handoff(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_hinted_handoff(ctx, r); });
 }
 
-future<> set_server_gossip_settle(http_context& ctx, sharded<gms::gossiper>& g) {
-    return make_ready_future<>();
-}
-
 future<> set_server_compaction_manager(http_context& ctx) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
