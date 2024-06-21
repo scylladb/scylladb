@@ -71,6 +71,8 @@ future<> set_server_init(http_context& ctx) {
         rb->register_function(r, "error_injection",
             "The error injection API");
         set_error_injection(ctx, r);
+        rb->register_function(r, "storage_proxy",
+                "The storage proxy API");
     });
 }
 
@@ -220,10 +222,7 @@ future<> unset_server_messaging_service(http_context& ctx) {
 }
 
 future<> set_server_storage_proxy(http_context& ctx, sharded<service::storage_proxy>& proxy) {
-    return register_api(ctx, "storage_proxy",
-                "The storage proxy API", [&proxy] (http_context& ctx, routes& r) {
-                    set_storage_proxy(ctx, r, proxy);
-                });
+    return ctx.http_server.set_routes([&ctx, &proxy] (routes& r) { set_storage_proxy(ctx, r, proxy); });
 }
 
 future<> unset_server_storage_proxy(http_context& ctx) {
