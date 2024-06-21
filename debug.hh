@@ -16,7 +16,7 @@ class database;
 
 namespace debug {
 
-extern seastar::sharded<replica::database>* the_database;
+extern seastar::sharded<replica::database>* volatile the_database;
 
 
 }
