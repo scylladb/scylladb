@@ -296,6 +296,10 @@ void tablet_map::clear_transitions() {
     _transitions.clear();
 }
 
+void tablet_map::set_balancing_enabled(bool enabled) {
+    _balancing_enabled = enabled;
+}
+
 bool tablet_map::has_replica(tablet_id tid, tablet_replica r) const {
     auto& tinfo = get_tablet_info(tid);
     if (contains(tinfo.replicas, r)) {

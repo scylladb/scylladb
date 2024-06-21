@@ -2709,6 +2709,22 @@
                ],
                "parameters":[
                   {
+                     "name":"ks",
+                     "description":"The keyspace",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"Table name",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
                      "name":"enabled",
                      "description":"When set to false, tablet load balancing is disabled",
                      "required":true,

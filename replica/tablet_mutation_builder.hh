@@ -40,6 +40,7 @@ public:
     tablet_mutation_builder& del_session(dht::token last_token);
     tablet_mutation_builder& del_transition(dht::token last_token);
     tablet_mutation_builder& set_resize_decision(locator::resize_decision);
+    tablet_mutation_builder& set_balancing_enabled(bool enabled);
 
     mutation build() {
         return std::move(_m);

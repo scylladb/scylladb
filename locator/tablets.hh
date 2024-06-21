@@ -326,6 +326,7 @@ private:
     size_t _log2_tablets; // log_2(_tablets.size())
     std::unordered_map<tablet_id, tablet_transition_info> _transitions;
     resize_decision _resize_decision;
+    bool _balancing_enabled = true;
 public:
     /// Constructs a tablet map.
     ///
@@ -415,6 +416,10 @@ public:
         return _tablets.size();
     }
 
+    bool balancing_enabled() const {
+        return _balancing_enabled;
+    }
+
     /// Returns tablet_info associated with the tablet which owns a given token.
     const tablet_info& get_tablet_info(token t) const {
         return get_tablet_info(get_tablet_id(t));
@@ -432,6 +437,7 @@ public:
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void clear_transitions();
+    void set_balancing_enabled(bool);
 
     // Destroys gently.
     // The tablet map is not usable after this call and should be destroyed.
@@ -466,6 +472,10 @@ private:
     // When false, tablet load balancer will not try to rebalance tablets.
     bool _balancing_enabled = true;
 public:
+    // we also have a per-table setting in tablet_map with the same name.
+    // balancing of a given table is enabled only if both settings are enabled:
+    // - tablet_metadata::balancing_enabled()
+    // - tablet_map::balancing_enabled()
     bool balancing_enabled() const { return _balancing_enabled; }
     const tablet_map& get_tablet_map(table_id id) const;
     const table_to_tablet_map& all_tables() const { return _tablets; }

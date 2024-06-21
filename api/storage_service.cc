@@ -1527,9 +1527,30 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
-    ss::tablet_balancing_enable.set(r, [&ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+    ss::tablet_balancing_enable.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+        auto ks = req->get_query_param("ks");
+        if (!ks.empty() && !ctx.db.local().find_keyspace(ks).uses_tablets()) {
+            throw bad_param_exception(format("{} does not use tablets", ks));
+        }
+
+        auto table = req->get_query_param("table");
+        if (ks.empty() && !table.empty()) {
+            throw httpd::bad_param_exception("ks not specified");
+        }
+
         auto enabled = validate_bool(req->get_query_param("enabled"));
-        co_await ss.local().set_tablet_balancing_enabled(enabled);
+        if (ks.empty()) {
+            co_await ss.local().set_tablet_balancing_enabled(enabled);
+        } else if (table.empty()) {
+            for (auto schema : ctx.db.local().find_keyspace(ks).metadata()->tables()) {
+                co_await ss.local().set_tablet_balancing_enabled(schema->id(), enabled);
+            }
+        } else {
+            assert(!ks.empty() && !table.empty());
+            validate_table(ctx, ks, table);
+            auto table_id = ctx.db.local().find_column_family(ks, table).schema()->id();
+            co_await ss.local().set_tablet_balancing_enabled(table_id, enabled);
+        }
         co_return json_void();
     });
 

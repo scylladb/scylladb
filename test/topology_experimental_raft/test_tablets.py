@@ -431,13 +431,13 @@ async def test_tablet_repair(manager: ManagerClient):
         # Disable in the background so that repair is started with migrations in progress.
         # We need to disable balancing so that repair which blocks on migrations eventually gets unblocked.
         # Otherwise, shuffling would keep the topology busy forever.
-        disable_balancing_future = asyncio.create_task(manager.api.disable_tablet_balancing(servers[0].ip_addr))
+        disable_balancing_future = asyncio.create_task(manager.api.disable_tablet_balancing(servers[0].ip_addr, "test", "test"))
 
         await repair_on_node(manager, servers[0], servers)
 
         await inserts_future
         await disable_balancing_future
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr, "test", "test")
 
     key_count = len(keys)
     stmt = cql.prepare("SELECT * FROM test.test;")
