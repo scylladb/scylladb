@@ -125,8 +125,11 @@ private:
 
     scheduling_group _maintenance_sg;
 
+    const abort_source& _abort;
+
 public:
-    explicit sstables_manager(sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, noncopyable_function<locator::host_id()>&& resolve_host_id, scheduling_group maintenance_sg = current_scheduling_group(), storage_manager* shared = nullptr);
+    explicit sstables_manager(sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem,
+                              noncopyable_function<locator::host_id()>&& resolve_host_id, const abort_source& abort, scheduling_group maintenance_sg = current_scheduling_group(), storage_manager* shared = nullptr);
     virtual ~sstables_manager();
 
     shared_sstable make_sstable(schema_ptr schema, sstring table_dir,
@@ -187,6 +190,8 @@ public:
     future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir);
 
     void validate_new_keyspace_storage_options(const data_dictionary::storage_options&);
+
+    const abort_source& get_abort_source() const noexcept { return _abort; }
 
 private:
     void add(sstable* sst);
