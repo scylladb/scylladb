@@ -13,7 +13,6 @@
 #include "api/api-doc/utils.json.hh"
 #include "db/config.hh"
 #include "utils/histogram.hh"
-#include "replica/database.hh"
 #include <seastar/core/scheduling_specific.hh>
 
 namespace api {
@@ -259,83 +258,6 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_pr
         return make_ready_future<json::json_return_type>(0);
     });
 
-    sp::get_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().request_timeout_in_ms()/1000.0;
-    });
-
-    sp::set_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
-        //TBD
-        unimplemented();
-        auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-
-    sp::get_read_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().read_request_timeout_in_ms()/1000.0;
-    });
-
-    sp::set_read_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
-        //TBD
-        unimplemented();
-        auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-
-    sp::get_write_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().write_request_timeout_in_ms()/1000.0;
-    });
-
-    sp::set_write_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
-        //TBD
-        unimplemented();
-        auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-
-    sp::get_counter_write_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().counter_write_request_timeout_in_ms()/1000.0;
-    });
-
-    sp::set_counter_write_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
-        //TBD
-        unimplemented();
-        auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-
-    sp::get_cas_contention_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().cas_contention_timeout_in_ms()/1000.0;
-    });
-
-    sp::set_cas_contention_timeout.set(r, [](std::unique_ptr<http::request> req)  {
-        //TBD
-        unimplemented();
-        auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-
-    sp::get_range_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().range_request_timeout_in_ms()/1000.0;
-    });
-
-    sp::set_range_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
-        //TBD
-        unimplemented();
-        auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-
-    sp::get_truncate_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().truncate_request_timeout_in_ms()/1000.0;
-    });
-
-    sp::set_truncate_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
-        //TBD
-        unimplemented();
-        auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-
     sp::reload_trigger_classes.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
@@ -516,20 +438,6 @@ void unset_storage_proxy(http_context& ctx, routes& r) {
     sp::get_max_hints_in_progress.unset(r);
     sp::set_max_hints_in_progress.unset(r);
     sp::get_hints_in_progress.unset(r);
-    sp::get_rpc_timeout.unset(r);
-    sp::set_rpc_timeout.unset(r);
-    sp::get_read_rpc_timeout.unset(r);
-    sp::set_read_rpc_timeout.unset(r);
-    sp::get_write_rpc_timeout.unset(r);
-    sp::set_write_rpc_timeout.unset(r);
-    sp::get_counter_write_rpc_timeout.unset(r);
-    sp::set_counter_write_rpc_timeout.unset(r);
-    sp::get_cas_contention_timeout.unset(r);
-    sp::set_cas_contention_timeout.unset(r);
-    sp::get_range_rpc_timeout.unset(r);
-    sp::set_range_rpc_timeout.unset(r);
-    sp::get_truncate_rpc_timeout.unset(r);
-    sp::set_truncate_rpc_timeout.unset(r);
     sp::reload_trigger_classes.unset(r);
     sp::get_read_repair_attempted.unset(r);
     sp::get_read_repair_repaired_blocking.unset(r);
