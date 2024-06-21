@@ -10,11 +10,8 @@
 
 #include <array>
 #include <cstdint>
-#include <string>
 #include <seastar/core/metrics_registration.hh>
 #include "enum_set.hh"
-#include "utils/histogram.hh"
-#include "utils/estimated_histogram.hh"
 
 namespace cdc {
 
