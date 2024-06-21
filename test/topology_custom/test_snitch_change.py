@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 async def test_snitch_change(manager: ManagerClient) -> None:
     """ The test changes snitch from simple to GossipingPropertyFileSnitch one and checks
-        that DC adn rack names change accordingly"""
+        that DC and rack names change accordingly"""
     s1 = await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'})
     s2 = await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'})
     cql = manager.get_cql()

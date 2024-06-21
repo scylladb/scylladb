@@ -84,7 +84,7 @@ unique_table_name.last_ms = 0
 async def test_alternator_ttl_scheduling_group(alternator3):
     """A reproducer for issue #18719: The expiration scans and deletions
        initiated by the Alternator TTL feature are supposed to run entirely in
-       the "streaming" scheduling group. But because of a bug in inheritence
+       the "streaming" scheduling group. But because of a bug in inheritance
        of scheduling groups through RPC, some of the work ended up being done
        on the "statement" scheduling group.
        This test verifies that Alternator TTL work is done on the right

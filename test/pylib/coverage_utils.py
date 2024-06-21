@@ -478,7 +478,7 @@ async def get_profiled_binary_ids(
 
 # The best way to merge profiles is by the file build id that they map, somewhen in the future,
 # it might also be desirable to merge profiles from different binaries, but lcov format does it better
-# as it is source dependant so for now we will stick to it.
+# as it is source dependent so for now we will stick to it.
 # if more than one id is contained in one of the files, it is going to be merged only with files that contains
 # the same composition of ids.
 MergeProfilesResult = namedtuple(
@@ -686,7 +686,7 @@ async def lcov_combine_traces(
     Args:
         lcovs (Iterable[PathLike]): A list of source lcov trace files to merge
         output_lcov (PathLike): the final output lcov file
-        branch_coverage (bool, optional): Wether to include branch coverage data or not (if exists). Defaults to True.
+        branch_coverage (bool, optional): Whether to include branch coverage data or not (if exists). Defaults to True.
         files_per_chunk (Union[int, None], optional): How many files to combine per parallel task. Defaults to None.
         concurrency (ConcurrencyParam, optional): A concurrency limiting parameter for the execution. Defaults to None.
         logger (LoggerType, optional): A logger to which log information. Defaults to COVERAGE_TOOLS_LOGGER.
@@ -1159,7 +1159,7 @@ async def main():
         "--clear-on-success",
         action = "store_true",
         default = False,
-        help = "Wether to clear the raw profiles on success",
+        help = "Whether to clear the raw profiles on success",
     )
     raw_to_indexed_parser.set_defaults(func = merge_profiles_cmd)
 
@@ -1182,7 +1182,7 @@ async def main():
         "--clear-on-success",
         action = "store_true",
         default = False,
-        help = "Wether to clear the indexed profiles on success",
+        help = "Whether to clear the indexed profiles on success",
     )
     prof_to_lcov_parser.add_argument(
         "--exclude",
@@ -1439,7 +1439,7 @@ async def main():
     patch_coverage_parser.add_argument(
         "--dirty",
         action = "store_true",
-        help = "Wether to include a final meta patch which is the uncommitted changes to the environment,"
+        help = "Whether to include a final meta patch which is the uncommitted changes to the environment,"
         "if this parameter is not given and there are uncommitted changes in the repo, the command will fail. (not including untracked files)",
     )
     patch_coverage_parser.add_argument(

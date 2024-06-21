@@ -254,7 +254,7 @@ def test_sum_in_partition(cql, table1):
     assert [(15,)] == list(cql.execute(f"select sum(v) from {table1} where p = {p}"))
 
 # Check that you *can't* do "sum(*)" expecting (perhaps) sums of all the
-# columns. It's a synax error: The grammar allows "count(*)" because it has
+# columns. It's a syntax error: The grammar allows "count(*)" because it has
 # a separate rule for # "count", but other functions and aggregators (like
 # "sum") don't allow "*" and expect a real column name as a parameter.
 def test_sum_star(cql, table1):
