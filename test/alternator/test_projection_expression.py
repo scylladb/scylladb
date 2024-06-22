@@ -47,9 +47,9 @@ def test_projection_expression_toplevel_syntax(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression=' a  ,   b  ')['Item'] == {'a': 'hello', 'b': 'hi'}
     # Missing or unused names in ExpressionAttributeNames are errors:
     with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#name', ExpressionAttributeNames={'#wrong': 'a'})['Item'] == {'a': 'hello'}
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#name', ExpressionAttributeNames={'#wrong': 'a'})['Item']
     with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#name', ExpressionAttributeNames={'#name': 'a', '#unused': 'b'})['Item'] == {'a': 'hello'}
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#name', ExpressionAttributeNames={'#name': 'a', '#unused': 'b'})['Item']
     # It is not allowed to fetch the same top-level attribute twice (or in
     # general, list two overlapping attributes). We get an error like
     # "Invalid ProjectionExpression: Two document paths overlap with each
