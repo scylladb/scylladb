@@ -158,14 +158,3 @@ template <> struct fmt::formatter<cql3::expr::test_utils::mutation_column_value>
 
     }
 };
-
-namespace cql3::expr::test_utils {
-
-inline
-std::ostream&
-operator<<(std::ostream& os, const mutation_column_value& mcv) {
-    fmt::print(os, "{}", mcv);
-    return os;
-}
-
-}
