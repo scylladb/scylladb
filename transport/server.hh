@@ -155,6 +155,7 @@ private:
     cql_server_config _config;
     size_t _max_request_size;
     utils::updateable_value<uint32_t> _max_concurrent_requests;
+    utils::updateable_value<bool> _cql_duplicate_bind_variable_names_refer_to_same_variable;
     semaphore& _memory_available;
     seastar::metrics::metric_groups _metrics;
     std::unique_ptr<event_notifier> _notifier;

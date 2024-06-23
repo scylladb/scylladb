@@ -1072,6 +1072,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Make the system.config table UPDATEable.")
     , enable_parallelized_aggregation(this, "enable_parallelized_aggregation", liveness::LiveUpdate, value_status::Used, true,
             "Use on a new, parallel algorithm for performing aggregate queries.")
+    , cql_duplicate_bind_variable_names_refer_to_same_variable(this, "cql_duplicate_bind_variable_names_refer_to_same_variable", liveness::LiveUpdate, value_status::Used, true,
+            "A bind variable that appears twice in a CQL query refers to a single variable (if false, no name matching is performed).")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port.")
     , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port.")
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address.")
