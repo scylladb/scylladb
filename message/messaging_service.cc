@@ -350,6 +350,7 @@ void messaging_service::do_start_listen() {
             switch (_cfg.encrypt) {
                 default:
                 case encrypt_what::none:
+                case encrypt_what::transitional:
                     break;
                 case encrypt_what::dc:
                     so.filter_connection = [this](const seastar::socket_address& caddr) {
@@ -380,7 +381,7 @@ void messaging_service::do_start_listen() {
             so.streaming_domain = sdomain;
             return std::unique_ptr<rpc_protocol_server_wrapper>(
                     [this, &so, &a, limits] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
-                if (_cfg.encrypt == encrypt_what::none) {
+                if (_cfg.encrypt == encrypt_what::none && !_credentials) {
                     return nullptr;
                 }
                 if (!_credentials) {
@@ -832,7 +833,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         }
 
         // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
-        if (_cfg.encrypt == encrypt_what::all || idx == TOPOLOGY_INDEPENDENT_IDX) {
+        if (_cfg.encrypt == encrypt_what::all || _cfg.encrypt == encrypt_what::transitional || idx == TOPOLOGY_INDEPENDENT_IDX) {
             return true;
         }
 
