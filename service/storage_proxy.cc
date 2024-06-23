@@ -5829,7 +5829,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         locator::effective_replication_map_ptr erm,
         lw_shared_ptr<query::read_command> cmd,
         db::consistency_level cl,
-        query_ranges_to_vnodes_generator ranges_to_vnodes,
+        query_ranges_to_vnodes_generator<dht::partition_range_vector> ranges_to_vnodes,
         int concurrency_factor,
         tracing::trace_state_ptr trace_state,
         uint64_t remaining_row_count,

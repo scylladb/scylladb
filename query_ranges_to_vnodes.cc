@@ -20,10 +20,14 @@ const dht::token& end_token(const dht::partition_range& r) {
     return r.end() ? r.end()->value().token() : max_token;
 }
 
-query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(std::unique_ptr<locator::token_range_splitter> splitter, schema_ptr s, dht::partition_range_vector ranges, bool local) :
+template <std::ranges::range Range>
+requires std::same_as<std::ranges::range_value_t<Range>, dht::partition_range>
+query_ranges_to_vnodes_generator<Range>::query_ranges_to_vnodes_generator(std::unique_ptr<locator::token_range_splitter> splitter, schema_ptr s, Range ranges, bool local) :
         _s(s), _ranges(std::move(ranges)), _i(0), _local(local), _splitter(std::move(splitter)) {}
 
-dht::partition_range_vector query_ranges_to_vnodes_generator::operator()(size_t n) {
+template <std::ranges::range Range>
+requires std::same_as<std::ranges::range_value_t<Range>, dht::partition_range>
+dht::partition_range_vector query_ranges_to_vnodes_generator<Range>::operator()(size_t n) {
     n = std::min(n, size_t(1024));
     n = std::min(n, _ranges.size() - _i);
 
@@ -39,7 +43,9 @@ dht::partition_range_vector query_ranges_to_vnodes_generator::operator()(size_t 
  * Compute all ranges we're going to query, in sorted order. Nodes can be replica destinations for many ranges,
  * so we need to restrict each scan to the specific range we want, or else we'd get duplicate results.
  */
-void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partition_range_vector& ranges) {
+template <std::ranges::range Range>
+requires std::same_as<std::ranges::range_value_t<Range>, dht::partition_range>
+void query_ranges_to_vnodes_generator<Range>::process_one_range(size_t n, dht::partition_range_vector& ranges) {
     dht::ring_position_comparator cmp(*_s);
     dht::partition_range& cr = *(_ranges.begin() + _i);
 
@@ -107,3 +113,6 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
         add_range(get_remainder());
     }
 }
+
+template class query_ranges_to_vnodes_generator<dht::partition_range_vector>;
+template class query_ranges_to_vnodes_generator<dht::chunked_partition_range_vector>;

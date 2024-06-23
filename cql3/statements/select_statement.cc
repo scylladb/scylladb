@@ -642,10 +642,10 @@ indexed_table_select_statement::do_execute_base_query(
 
     struct base_query_state {
         query::result_merger merger;
-        query_ranges_to_vnodes_generator ranges_to_vnodes;
+        query_ranges_to_vnodes_generator<dht::partition_range_vector> ranges_to_vnodes;
         size_t concurrency = 1;
         size_t previous_result_size = 0;
-        base_query_state(uint64_t row_limit, query_ranges_to_vnodes_generator&& ranges_to_vnodes_)
+        base_query_state(uint64_t row_limit, query_ranges_to_vnodes_generator<dht::partition_range_vector>&& ranges_to_vnodes_)
                 : merger(row_limit, query::max_partitions)
                 , ranges_to_vnodes(std::move(ranges_to_vnodes_))
                 {}
