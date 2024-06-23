@@ -225,7 +225,7 @@ private:
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
             const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const;
 
-    future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>> find_index_partition_ranges(query_processor& qp,
+    future<coordinator_result<std::tuple<dht::chunked_partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>> find_index_partition_ranges(query_processor& qp,
                                                                     service::query_state& state,
                                                                     const query_options& options) const;
 
@@ -249,7 +249,7 @@ private:
     future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>>
     do_execute_base_query(
             query_processor& qp,
-            dht::partition_range_vector&& partition_ranges,
+            dht::chunked_partition_range_vector&& partition_ranges,
             service::query_state& state,
             const query_options& options,
             gc_clock::time_point now,
@@ -257,7 +257,7 @@ private:
     future<shared_ptr<cql_transport::messages::result_message>>
     execute_base_query(
             query_processor& qp,
-            dht::partition_range_vector&& partition_ranges,
+            dht::chunked_partition_range_vector&& partition_ranges,
             service::query_state& state,
             const query_options& options,
             gc_clock::time_point now,

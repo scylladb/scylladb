@@ -1985,3 +1985,28 @@ SEASTAR_TEST_CASE(test_returning_failure_from_ghost_rows_deletion) {
         }
     });
 }
+
+// Ref https://github.com/scylladb/scylladb/issues/18536
+SEASTAR_TEST_CASE(test_large_select_from_index) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE test_index (a int, b int, PRIMARY KEY (a, b));");
+        cquery_nofail(e, "CREATE INDEX ON test_index(b);");
+
+        auto insert_id = e.prepare("INSERT INTO test_index (a, b) VALUES (?, ?)").get();
+        int num_keys = 10000;
+        int num_rows = 10;
+        for (int a = 0; a < num_keys; ++a) {
+            for (int b = 0; b < num_rows; ++b) {
+                e.execute_prepared(insert_id, {
+                    cql3::raw_value::make_value(int32_type->decompose(a)), cql3::raw_value::make_value(int32_type->decompose(b))
+                }).get();
+            }
+        }
+
+        auto select_id = e.prepare("SELECT a FROM test_index WHERE b = ?").get();
+        eventually([&] {
+            auto res = e.execute_prepared(select_id, { cql3::raw_value::make_value(int32_type->decompose(1)) }).get();
+            assert_that(res).is_rows().with_size(num_keys);
+        });
+    });
+}
