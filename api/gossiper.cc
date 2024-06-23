@@ -71,4 +71,14 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
     });
 }
 
+void unset_gossiper(http_context& ctx, routes& r) {
+    httpd::gossiper_json::get_down_endpoint.unset(r);
+    httpd::gossiper_json::get_live_endpoint.unset(r);
+    httpd::gossiper_json::get_endpoint_downtime.unset(r);
+    httpd::gossiper_json::get_current_generation_number.unset(r);
+    httpd::gossiper_json::get_current_heart_beat_version.unset(r);
+    httpd::gossiper_json::assassinate_endpoint.unset(r);
+    httpd::gossiper_json::force_remove_endpoint.unset(r);
+}
+
 }

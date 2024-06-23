@@ -1424,6 +1424,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
+            api::set_server_gossip(ctx, gossiper).get();
+            auto stop_gossip_api = defer_verbose_shutdown("gossiper API", [&ctx] {
+                api::unset_server_gossip(ctx).get();
+            });
+
             static sharded<service::raft_address_map> raft_address_map;
             supervisor::notify("starting Raft address map");
             raft_address_map.start().get();
@@ -1649,7 +1654,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             }).get();
 
-            api::set_server_gossip(ctx, gossiper).get();
             api::set_server_snitch(ctx, snitch).get();
             auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
                 api::unset_server_snitch(ctx).get();
@@ -1995,7 +1999,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 startlog.info("Waiting for gossip to settle before accepting client requests...");
                 gossiper.local().wait_for_gossip_to_settle().get();
             }
-            api::set_server_gossip_settle(ctx, gossiper).get();
 
             supervisor::notify("allow replaying hints");
             proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();
