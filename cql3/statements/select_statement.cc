@@ -1626,7 +1626,7 @@ parallelized_select_statement::do_execute(
     auto timeout = lowres_system_clock::now() + timeout_duration;
     auto reductions = _selection->get_reductions();
 
-    query::forward_request req = {
+    query::mapreduce_request req = {
         .reduction_types = reductions.types,
         .cmd = *command,
         .pr = std::move(key_ranges),
@@ -1636,7 +1636,7 @@ parallelized_select_statement::do_execute(
     };
 
     // dispatch execution of this statement to other nodes
-    return qp.forward(req, state.get_trace_state()).then([this] (query::forward_result res) {
+    return qp.mapreduce(req, state.get_trace_state()).then([this] (query::mapreduce_result res) {
         auto meta = _selection->get_result_metadata();
         auto rs = std::make_unique<result_set>(std::move(meta));
         rs->add_row(res.query_results);
@@ -2021,11 +2021,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     };
 
     // Used to determine if an execution of this statement can be parallelized
-    // using `forward_service`.
-    auto can_be_forwarded = [&] {
+    // using `mapreduce_service`.
+    auto can_be_mapreduced = [&] {
         return all_aggregates(prepared_selectors)   // Note: before we levellized aggregation depth
             && ( // SUPPORTED PARALLELIZATION
-                 // All potential intermediate coordinators must support forwarding
+                 // All potential intermediate coordinators must support mapreduceing
                 (db.features().parallelized_aggregation && selection->is_count())
                 || (db.features().uda_native_parallelized_aggregation && selection->is_reducible())
             )
@@ -2082,7 +2082,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 prepare_limit(db, ctx, _per_partition_limit),
                 stats,
                 std::move(prepared_attrs));
-    } else if (can_be_forwarded()) {
+    } else if (can_be_mapreduced()) {
         stmt = parallelized_select_statement::prepare(
             schema,
             ctx.bound_variables_size(),

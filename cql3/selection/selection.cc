@@ -278,9 +278,9 @@ public:
         );
     }
 
-    virtual query::forward_request::reductions_info get_reductions() const override {
-        std::vector<query::forward_request::reduction_type> types;
-        std::vector<query::forward_request::aggregation_info> infos;
+    virtual query::mapreduce_request::reductions_info get_reductions() const override {
+        std::vector<query::mapreduce_request::reduction_type> types;
+        std::vector<query::mapreduce_request::aggregation_info> infos;
         auto bad = [] {
             throw std::runtime_error("Selection doesn't have a reduction");
         };
@@ -295,7 +295,7 @@ public:
             }
             auto agg_func = dynamic_pointer_cast<functions::aggregate_function>(std::move(func));
 
-            auto type = (agg_func->name().name == "countRows") ? query::forward_request::reduction_type::count : query::forward_request::reduction_type::aggregate;
+            auto type = (agg_func->name().name == "countRows") ? query::mapreduce_request::reduction_type::count : query::mapreduce_request::reduction_type::aggregate;
 
             std::vector<sstring> column_names;
             for (auto& arg : fc->args) {
@@ -306,7 +306,7 @@ public:
                 column_names.push_back(col->col->name_as_text());
             }
 
-            auto info = query::forward_request::aggregation_info {
+            auto info = query::mapreduce_request::aggregation_info {
                 .name = agg_func->name(),
                 .column_names = std::move(column_names),
             };

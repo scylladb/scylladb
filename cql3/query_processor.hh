@@ -36,7 +36,7 @@ namespace lang { class manager; }
 namespace service {
 class migration_manager;
 class query_state;
-class forward_service;
+class mapreduce_service;
 class raft_group0_client;
 
 namespace broadcast_tables {
@@ -146,7 +146,7 @@ public:
 
     ~query_processor();
 
-    void start_remote(service::migration_manager&, service::forward_service&,
+    void start_remote(service::migration_manager&, service::mapreduce_service&,
                       service::storage_service& ss, service::raft_group0_client&);
     future<> stop_remote();
 
@@ -431,9 +431,9 @@ public:
     future<service::broadcast_tables::query_result>
     execute_broadcast_table_query(const service::broadcast_tables::query&);
 
-    // Splits given `forward_request` and distributes execution of resulting subrequests across a cluster.
-    future<query::forward_result>
-    forward(query::forward_request, tracing::trace_state_ptr);
+    // Splits given `mapreduce_request` and distributes execution of resulting subrequests across a cluster.
+    future<query::mapreduce_result>
+    mapreduce(query::mapreduce_request, tracing::trace_state_ptr);
 
     struct retry_statement_execution_error : public std::exception {};
 

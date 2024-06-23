@@ -60,28 +60,28 @@ std::ostream& operator<<(std::ostream& out, const read_command& r) {
     return out;
 }
 
-std::ostream& operator<<(std::ostream& out, const forward_request::reduction_type& r) {
+std::ostream& operator<<(std::ostream& out, const mapreduce_request::reduction_type& r) {
     out << "reduction_type{";
     switch (r) {
-        case forward_request::reduction_type::count:
+        case mapreduce_request::reduction_type::count:
             out << "count";
             break;
-        case forward_request::reduction_type::aggregate:
+        case mapreduce_request::reduction_type::aggregate:
             out << "aggregate";
             break;
     }
     return out << "}";
 }
 
-std::ostream& operator<<(std::ostream& out, const forward_request::aggregation_info& a) {
+std::ostream& operator<<(std::ostream& out, const mapreduce_request::aggregation_info& a) {
     fmt::print(out, "aggregation_info{{, name={}, column_names=[{}]}}",
                a.name, fmt::join(a.column_names, ","));;
     return out;
 }
 
-std::ostream& operator<<(std::ostream& out, const forward_request& r) {
+std::ostream& operator<<(std::ostream& out, const mapreduce_request& r) {
     auto ms = std::chrono::time_point_cast<std::chrono::milliseconds>(r.timeout).time_since_epoch().count();
-    fmt::print(out, "forward_request{{reductions=[{}]",
+    fmt::print(out, "mapreduce_request{{reductions=[{}]",
                fmt::join(r.reduction_types, ","));
     if (r.aggregation_infos) {
         fmt::print(out, ", aggregation_infos=[{}]",
@@ -405,9 +405,9 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count, std::move(last_position)));
 }
 
-std::ostream& operator<<(std::ostream& out, const query::forward_result::printer& p) {
+std::ostream& operator<<(std::ostream& out, const query::mapreduce_result::printer& p) {
     if (p.functions.size() != p.res.query_results.size()) {
-        return out << "[malformed forward_result (" << p.res.query_results.size()
+        return out << "[malformed mapreduce_result (" << p.res.query_results.size()
             << " results, " << p.functions.size() << " aggregates)]";
     }
 

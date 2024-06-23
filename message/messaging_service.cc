@@ -114,8 +114,8 @@
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "idl/partition_checksum.dist.impl.hh"
-#include "idl/forward_request.dist.hh"
-#include "idl/forward_request.dist.impl.hh"
+#include "idl/mapreduce_request.dist.hh"
+#include "idl/mapreduce_request.dist.impl.hh"
 #include "idl/storage_service.dist.impl.hh"
 #include "idl/join_node.dist.impl.hh"
 
@@ -648,7 +648,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
         return 3;
-    case messaging_verb::FORWARD_REQUEST:
+    case messaging_verb::MAPREDUCE_REQUEST:
         return 4;
     case messaging_verb::LAST:
         return -1; // should never happen

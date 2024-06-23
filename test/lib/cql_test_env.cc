@@ -35,7 +35,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
-#include "service/forward_service.hh"
+#include "service/mapreduce_service.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "auth/service.hh"
 #include "auth/common.hh"
@@ -159,7 +159,7 @@ private:
     sharded<cdc::generation_service> _cdc_generation_service;
     sharded<repair_service> _repair;
     sharded<streaming::stream_manager> _stream_manager;
-    sharded<service::forward_service> _forward_service;
+    sharded<service::mapreduce_service> _mapreduce_service;
     sharded<direct_failure_detector::failure_detector> _fd;
     sharded<service::raft_address_map> _raft_address_map;
     sharded<service::direct_fd_pinger> _fd_pinger;
@@ -750,8 +750,8 @@ private:
                 return fs.enable(fs.supported_feature_set());
             }).get();
 
-            _forward_service.start(std::ref(_ms), std::ref(_proxy), std::ref(_db), std::ref(_token_metadata), std::ref(abort_sources)).get();
-            auto stop_forward_service =  defer([this] { _forward_service.stop().get(); });
+            _mapreduce_service.start(std::ref(_ms), std::ref(_proxy), std::ref(_db), std::ref(_token_metadata), std::ref(abort_sources)).get();
+            auto stop_mapreduce_service =  defer([this] { _mapreduce_service.stop().get(); });
 
             // gropu0 client exists only on shard 0
             service::raft_group0_client group0_client(_group0_registry.local(), _sys_ks.local(), maintenance_mode_enabled::no);
@@ -802,7 +802,7 @@ private:
             }).get();
 
             _qp.invoke_on_all([this, &group0_client] (cql3::query_processor& qp) {
-                qp.start_remote(_mm.local(), _forward_service.local(), _ss.local(), group0_client);
+                qp.start_remote(_mm.local(), _mapreduce_service.local(), _ss.local(), group0_client);
             }).get();
             auto stop_qp_remote = defer([this] {
                 _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();

@@ -475,7 +475,7 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const read_command& r);
 };
 
-struct forward_request {
+struct mapreduce_request {
     enum class reduction_type {
         count,
         aggregate
@@ -500,28 +500,28 @@ struct forward_request {
     std::optional<std::vector<aggregation_info>> aggregation_infos;
 };
 
-std::ostream& operator<<(std::ostream& out, const forward_request& r);
-std::ostream& operator<<(std::ostream& out, const forward_request::reduction_type& r);
-std::ostream& operator<<(std::ostream& out, const forward_request::aggregation_info& a);
+std::ostream& operator<<(std::ostream& out, const mapreduce_request& r);
+std::ostream& operator<<(std::ostream& out, const mapreduce_request::reduction_type& r);
+std::ostream& operator<<(std::ostream& out, const mapreduce_request::aggregation_info& a);
 
-struct forward_result {
+struct mapreduce_result {
     // vector storing query result for each selected column
     std::vector<bytes_opt> query_results;
 
     struct printer {
         const std::vector<::shared_ptr<db::functions::aggregate_function>> functions;
-        const query::forward_result& res;
+        const query::mapreduce_result& res;
     };
 };
 
-std::ostream& operator<<(std::ostream& out, const query::forward_result::printer&);
+std::ostream& operator<<(std::ostream& out, const query::mapreduce_result::printer&);
 }
 
 
 template <> struct fmt::formatter<query::specific_ranges> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<query::partition_slice> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<query::read_command> : fmt::ostream_formatter {};
-template <> struct fmt::formatter<query::forward_request> : fmt::ostream_formatter {};
-template <> struct fmt::formatter<query::forward_request::reduction_type> : fmt::ostream_formatter {};
-template <> struct fmt::formatter<query::forward_request::aggregation_info> : fmt::ostream_formatter {};
-template <> struct fmt::formatter<query::forward_result::printer> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::mapreduce_request> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::mapreduce_request::reduction_type> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::mapreduce_request::aggregation_info> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<query::mapreduce_result::printer> : fmt::ostream_formatter {};
