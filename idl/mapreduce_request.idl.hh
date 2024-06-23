@@ -33,7 +33,7 @@ struct mapreduce_request {
     std::vector<query::mapreduce_request::reduction_type> reduction_types;
 
     query::read_command cmd;
-    dht::partition_range_vector pr;
+    dht::chunked_partition_range_vector pr;
 
     db::consistency_level cl;
     lowres_system_clock::time_point timeout;

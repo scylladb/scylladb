@@ -18,6 +18,7 @@
 #include "cql3/statements/prune_materialized_view_statement.hh"
 #include "cql3/statements/strongly_consistent_select_statement.hh"
 
+#include "dht/i_partitioner_fwd.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
@@ -1642,7 +1643,7 @@ parallelized_select_statement::do_execute(
         query::is_first_page::no,
         options.get_timestamp(state)
     );
-    auto key_ranges = _restrictions->get_partition_key_ranges(options);
+    auto key_ranges = _restrictions->get_partition_key_ranges<dht::chunked_partition_range_vector>(options);
 
     if (db::is_serial_consistency(options.get_consistency())) {
         throw exceptions::invalid_request_exception(

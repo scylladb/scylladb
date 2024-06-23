@@ -992,7 +992,9 @@ namespace {
 using namespace expr;
 
 /// Computes partition-key ranges from token atoms in ex.
-dht::partition_range_vector partition_ranges_from_token(const expr::expression& ex,
+template <std::ranges::range Range>
+requires std::same_as<std::ranges::range_value_t<Range>, dht::partition_range>
+Range partition_ranges_from_token(const expr::expression& ex,
                                                         const query_options& options,
                                                         const schema& table_schema) {
     auto values = possible_partition_token_values(ex, options, table_schema);
@@ -1014,7 +1016,7 @@ dht::partition_range_vector partition_ranges_from_token(const expr::expression& 
                                            ? dht::ring_position::ending_at(end_token)
                                            : dht::ring_position::starting_at(end_token));
 
-    return {{std::move(start), std::move(end)}};
+    return {dht::partition_range{std::move(start), std::move(end)}};
 }
 
 /// Turns a partition-key value into a partition_range. \p pk must have elements for all partition columns.
@@ -1040,7 +1042,9 @@ void error_if_exceeds_clustering_key_limit(size_t size, size_t clustering_limit)
 }
 
 /// Computes partition-key ranges from expressions, which contains EQ/IN for every partition column.
-dht::partition_range_vector partition_ranges_from_singles(
+template <std::ranges::range Range>
+requires std::same_as<std::ranges::range_value_t<Range>, dht::partition_range>
+Range partition_ranges_from_singles(
         const std::vector<expr::expression>& expressions, const query_options& options, const schema& schema) {
     const size_t size_limit =
             options.get_cql_config().restrictions.partition_key_restrictions_max_cartesian_product_size;
@@ -1067,7 +1071,7 @@ dht::partition_range_vector partition_ranges_from_singles(
         }
     }
     cartesian_product cp(column_values);
-    dht::partition_range_vector ranges;
+    Range ranges;
     ranges.reserve(product_size);
     std::transform(cp.begin(), cp.end(), std::back_inserter(ranges), std::bind_front(range_from_bytes, std::ref(schema)));
     return ranges;
@@ -1075,7 +1079,9 @@ dht::partition_range_vector partition_ranges_from_singles(
 
 /// Computes partition-key ranges from EQ restrictions on each partition column.  Returns a single singleton range if
 /// the EQ restrictions are not mutually conflicting.  Otherwise, returns an empty vector.
-dht::partition_range_vector partition_ranges_from_EQs(
+template <std::ranges::range Range>
+requires std::same_as<std::ranges::range_value_t<Range>, dht::partition_range>
+Range partition_ranges_from_EQs(
         const std::vector<expr::expression>& eq_expressions, const query_options& options, const schema& schema) {
     std::vector<managed_bytes> pk_value(schema.partition_key_size());
     for (const auto& e : eq_expressions) {
@@ -1091,9 +1097,11 @@ dht::partition_range_vector partition_ranges_from_EQs(
 
 } // anonymous namespace
 
-dht::partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const {
+template <std::ranges::range Range>
+requires std::same_as<std::ranges::range_value_t<Range>, dht::partition_range>
+Range statement_restrictions::get_partition_key_ranges(const query_options& options) const {
     if (_partition_range_restrictions.empty()) {
-        return {dht::partition_range::make_open_ended_both_sides()};
+        return Range({dht::partition_range::make_open_ended_both_sides()});
     }
     if (has_partition_token(_partition_range_restrictions[0], *_schema)) {
         if (_partition_range_restrictions.size() != 1) {
@@ -1101,13 +1109,16 @@ dht::partition_range_vector statement_restrictions::get_partition_key_ranges(con
                     rlogger,
                     format("Unexpected size of token restrictions: {}", _partition_range_restrictions.size()));
         }
-        return partition_ranges_from_token(_partition_range_restrictions[0], options, *_schema);
+        return partition_ranges_from_token<Range>(_partition_range_restrictions[0], options, *_schema);
     } else if (_partition_range_is_simple) {
         // Special case to avoid extra allocations required for a Cartesian product.
-        return partition_ranges_from_EQs(_partition_range_restrictions, options, *_schema);
+        return partition_ranges_from_EQs<Range>(_partition_range_restrictions, options, *_schema);
     }
-    return partition_ranges_from_singles(_partition_range_restrictions, options, *_schema);
+    return partition_ranges_from_singles<Range>(_partition_range_restrictions, options, *_schema);
 }
+
+template dht::partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const;
+template dht::chunked_partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const;
 
 namespace {
 

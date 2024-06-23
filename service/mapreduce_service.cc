@@ -207,14 +207,14 @@ class partition_ranges_owned_by_this_shard {
     // _partition_ranges will contain a list of partition ranges that are known
     // to be owned by this node. We'll further need to split each such range to
     // the pieces owned by the current shard, using _intersecter.
-    const dht::partition_range_vector _partition_ranges;
+    const dht::chunked_partition_range_vector _partition_ranges;
     size_t _range_idx;
     std::optional<dht::ring_position_range_sharder> _intersecter;
     locator::effective_replication_map_ptr _erm;
 public:
-    partition_ranges_owned_by_this_shard(schema_ptr s, dht::partition_range_vector v)
+    partition_ranges_owned_by_this_shard(schema_ptr s, dht::chunked_partition_range_vector v)
         :  _s(s)
-        , _partition_ranges(v)
+        , _partition_ranges(std::move(v))
         , _range_idx(0)
         , _erm(_s->table().get_effective_replication_map())
     {}
@@ -549,7 +549,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     };
 
     // Group vnodes by assigned endpoint.
-    std::map<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_per_addr;
+    std::map<netw::messaging_service::msg_addr, dht::chunked_partition_range_vector> vnodes_per_addr;
     const auto& topo = get_token_metadata_ptr()->get_topology();
     while (std::optional<dht::partition_range> vnode = next_vnode()) {
         inet_address_vector_replica_set live_endpoints = _proxy.get_live_endpoints(*erm, end_token(*vnode));
@@ -575,7 +575,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     query::mapreduce_result result;
 
     co_await coroutine::parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
-            [&] (std::pair<const netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
+            [&] (std::pair<const netw::messaging_service::msg_addr, dht::chunked_partition_range_vector>& vnodes_with_addr) -> future<> {
         netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
         query::mapreduce_result& result_ = result;
         tracing::trace_state_ptr& tr_state_ = tr_state;
