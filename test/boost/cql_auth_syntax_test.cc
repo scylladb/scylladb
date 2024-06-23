@@ -132,7 +132,7 @@ using modifier_rule_ptr = void (cql3_parser::CqlParser::*)(T&);
 template <typename T>
 static T test_valid(std::string_view cql_fragment, producer_rule_ptr<T> rule) {
     T v;
-    BOOST_REQUIRE_NO_THROW(v = cql3::util::do_with_parser(cql_fragment, std::mem_fn(rule)));
+    BOOST_REQUIRE_NO_THROW(v = cql3::util::do_with_parser(cql_fragment, cql3::dialect{}, std::mem_fn(rule)));
     return v;
 }
 
@@ -143,7 +143,7 @@ static T test_valid(std::string_view cql_fragment, producer_rule_ptr<T> rule) {
 template <typename T>
 void test_valid(std::string_view cql_fragment, modifier_rule_ptr<T> rule, T& v) {
     BOOST_REQUIRE_NO_THROW(
-            cql3::util::do_with_parser(cql_fragment, [rule, &v](cql3_parser::CqlParser& parser) {
+            cql3::util::do_with_parser(cql_fragment, cql3::dialect{}, [rule, &v](cql3_parser::CqlParser& parser) {
                 (parser.*rule)(v);
                  // Any non-`void` value will do.
                  return 0;
@@ -179,7 +179,7 @@ BOOST_AUTO_TEST_CASE(user_name) {
 
     // Not worth generalizing `test_valid`.
     BOOST_REQUIRE_THROW(
-            (cql3::util::do_with_parser("\"Ring-bearer\"", std::mem_fn(&cql3_parser::CqlParser::username))),
+            (cql3::util::do_with_parser("\"Ring-bearer\"", cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::username))),
             exceptions::syntax_exception);
 }
 
