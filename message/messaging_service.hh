@@ -181,7 +181,7 @@ enum class messaging_verb : int32_t {
     GROUP0_MODIFY_CONFIG = 58,
     REPAIR_UPDATE_SYSTEM_TABLE = 59,
     REPAIR_FLUSH_HINTS_BATCHLOG = 60,
-    FORWARD_REQUEST = 61,
+    MAPREDUCE_REQUEST = 61,
     GET_GROUP0_UPGRADE_STATE = 62,
     DIRECT_FD_PING = 63,
     RAFT_TOPOLOGY_CMD = 64,
@@ -562,7 +562,7 @@ public:
     scheduling_group scheduling_group_for_isolation_cookie(const sstring& isolation_cookie) const;
     std::vector<messaging_service::scheduling_info_for_connection_index> initial_scheduling_info() const;
     unsigned get_rpc_client_idx(messaging_verb verb) const;
-    static constexpr std::array<std::string_view, 3> _connection_types_prefix = {"statement:", "statement-ack:", "forward:"};
+    static constexpr std::array<std::string_view, 3> _connection_types_prefix = {"statement:", "statement-ack:", "forward:"}; // "forward" is the old name for "mapreduce"
 };
 
 } // namespace netw

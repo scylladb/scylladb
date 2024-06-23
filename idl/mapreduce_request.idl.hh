@@ -20,7 +20,7 @@ class function_name {
 }
 }
 namespace query {
-struct forward_request {
+struct mapreduce_request {
     struct aggregation_info {
         db::functions::function_name name;
         std::vector<sstring> column_names;
@@ -30,7 +30,7 @@ struct forward_request {
         aggregate
     };
 
-    std::vector<query::forward_request::reduction_type> reduction_types;
+    std::vector<query::mapreduce_request::reduction_type> reduction_types;
 
     query::read_command cmd;
     dht::partition_range_vector pr;
@@ -38,12 +38,12 @@ struct forward_request {
     db::consistency_level cl;
     lowres_system_clock::time_point timeout;
 
-    std::optional<std::vector<query::forward_request::aggregation_info>> aggregation_infos [[version 5.1]];
+    std::optional<std::vector<query::mapreduce_request::aggregation_info>> aggregation_infos [[version 5.1]];
 };
 
-struct forward_result {
+struct mapreduce_result {
     std::vector<bytes_opt> query_results;
 };
 
-verb forward_request(query::forward_request req [[ref]], std::optional<tracing::trace_info> trace_info [[ref]]) -> query::forward_result;
+verb mapreduce_request(query::mapreduce_request req [[ref]], std::optional<tracing::trace_info> trace_info [[ref]]) -> query::mapreduce_result;
 }

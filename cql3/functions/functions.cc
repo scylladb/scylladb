@@ -481,7 +481,7 @@ functions::find(const function_name& name, const std::vector<data_type>& arg_typ
     return {};
 }
 
-// This function is created only for forward_service use, thus it only checks for
+// This function is created only for mapreduce_service use, thus it only checks for
 // aggregate functions if no declared function was found.
 //
 // The reason for this function is, there is no serialization of `cql3::selection::selection`,
