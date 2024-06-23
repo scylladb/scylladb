@@ -1709,7 +1709,7 @@ populate_statistics_offsets(sstable_version_types v, statistics& s) {
 
 static
 sharding_metadata
-create_sharding_metadata(utils::chunked_vector<dht::partition_range> ranges) {
+create_sharding_metadata(dht::chunked_partition_range_vector ranges) {
     auto sm = sharding_metadata();
     sm.token_ranges.elements.reserve(ranges.size());
     for (auto&& range : std::move(ranges)) {
@@ -1749,7 +1749,7 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
     if (sharder_opt) {
         return create_sharding_metadata(std::move(schema), *sharder_opt, first_key, last_key, shard);
     }
-    utils::chunked_vector<dht::partition_range> r;
+    dht::chunked_partition_range_vector r;
     r.push_back(dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key)));
     return create_sharding_metadata(std::move(r));
 }

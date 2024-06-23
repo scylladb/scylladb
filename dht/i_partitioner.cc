@@ -227,7 +227,7 @@ ring_position_range_vector_sharder::next(const schema& s) {
     return ret;
 }
 
-future<utils::chunked_vector<partition_range>>
+future<chunked_partition_range_vector>
 split_range_to_single_shard(const schema& s, const static_sharder& sharder, const partition_range& pr, shard_id shard) {
     auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
     auto start_shard = sharder.shard_of(start_token);
@@ -236,7 +236,7 @@ split_range_to_single_shard(const schema& s, const static_sharder& sharder, cons
     return repeat_until_value([&sharder,
             &pr,
             cmp = ring_position_comparator(s),
-            ret = utils::chunked_vector<partition_range>(),
+            ret = chunked_partition_range_vector(),
             start_token,
             start_boundary,
             shard] () mutable {
@@ -253,7 +253,7 @@ split_range_to_single_shard(const schema& s, const static_sharder& sharder, cons
                 ret.push_back(std::move(*intersection));
             }
             if (!s_a_t) {
-                return make_ready_future<std::optional<utils::chunked_vector<partition_range>>>(std::move(ret));
+                return make_ready_future<std::optional<chunked_partition_range_vector>>(std::move(ret));
             }
             if (s_a_t->shard == shard) {
                 start_token = end_token;
@@ -261,9 +261,9 @@ split_range_to_single_shard(const schema& s, const static_sharder& sharder, cons
                 start_token = sharder.token_for_next_shard(end_token, shard);
             }
             start_boundary = interval_bound<ring_position>(ring_position::starting_at(start_token));
-            return make_ready_future<std::optional<utils::chunked_vector<partition_range>>>();
+            return make_ready_future<std::optional<chunked_partition_range_vector>>();
         }
-        return make_ready_future<std::optional<utils::chunked_vector<partition_range>>>(std::move(ret));
+        return make_ready_future<std::optional<chunked_partition_range_vector>>(std::move(ret));
     });
 }
 
