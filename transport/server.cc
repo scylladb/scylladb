@@ -242,6 +242,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
     , _config(std::move(config))
     , _max_request_size(_config.max_request_size)
     , _max_concurrent_requests(db_cfg.max_concurrent_requests_per_shard)
+    , _cql_duplicate_bind_variable_names_refer_to_same_variable(db_cfg.cql_duplicate_bind_variable_names_refer_to_same_variable)
     , _memory_available(ml.get_semaphore())
     , _notifier(std::make_unique<event_notifier>(*this))
     , _auth_service(auth_service)
@@ -1272,6 +1273,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
 cql3::dialect
 cql_server::connection::get_dialect() const {
     return cql3::dialect{
+        .duplicate_bind_variable_names_refer_to_same_variable = _server._cql_duplicate_bind_variable_names_refer_to_same_variable,
     };
 }
 
