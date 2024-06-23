@@ -21,21 +21,18 @@ const dht::token& end_token(const dht::partition_range& r) {
 }
 
 query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(std::unique_ptr<locator::token_range_splitter> splitter, schema_ptr s, dht::partition_range_vector ranges, bool local) :
-        _s(s), _ranges(std::move(ranges)), _i(_ranges.begin()), _local(local), _splitter(std::move(splitter)) {}
+        _s(s), _ranges(std::move(ranges)), _i(0), _local(local), _splitter(std::move(splitter)) {}
 
 dht::partition_range_vector query_ranges_to_vnodes_generator::operator()(size_t n) {
     n = std::min(n, size_t(1024));
+    n = std::min(n, _ranges.size() - _i);
 
     dht::partition_range_vector result;
     result.reserve(n);
-    while (_i != _ranges.end() && result.size() != n) {
+    while (result.size() != n) {
         process_one_range(n, result);
     }
     return result;
-}
-
-bool query_ranges_to_vnodes_generator::empty() const {
-    return _ranges.end() == _i;
 }
 
 /**
@@ -44,7 +41,7 @@ bool query_ranges_to_vnodes_generator::empty() const {
  */
 void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partition_range_vector& ranges) {
     dht::ring_position_comparator cmp(*_s);
-    dht::partition_range& cr = *_i;
+    dht::partition_range& cr = *(_ranges.begin() + _i);
 
     auto get_remainder = [this, &cr] {
         _i++;
