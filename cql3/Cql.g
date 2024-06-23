@@ -180,7 +180,8 @@ using uexpression = uninitialized<expression>;
 
     bind_variable new_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
-        if (name && _named_bind_variables_indexes.contains(*name)) {
+        if (_dialect.duplicate_bind_variable_names_refer_to_same_variable
+                && name && _named_bind_variables_indexes.contains(*name)) {
             return bind_variable{_named_bind_variables_indexes[*name]};
         }
         auto marker = bind_variable{_bind_variable_names.size()};
