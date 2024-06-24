@@ -61,24 +61,51 @@ auto fmt::formatter<perf_result>::format(const perf_result& result, fmt::format_
 }
 
 aggregated_perf_results::aggregated_perf_results(std::vector<perf_result>& results) {
-    auto compare_throughput = [] (perf_result a, perf_result b) { return a.throughput < b.throughput; };
-    std::sort(results.begin(), results.end(), compare_throughput);
+    stats["throughput"] = calculate_stats(results, std::mem_fn(&perf_result::throughput));
     median_by_throughput = results[results.size() / 2];
-    throughput.median = median_by_throughput.throughput;
-    throughput.min = results[0].throughput;
-    throughput.max = results[results.size() - 1].throughput;
-    auto absolute_deviations = boost::copy_range<std::vector<double>>(
-            results
-            | boost::adaptors::transformed(std::mem_fn(&perf_result::throughput))
-            | boost::adaptors::transformed([&] (double r) { return abs(r - throughput.median); }));
-    std::sort(absolute_deviations.begin(), absolute_deviations.end());
-    throughput.median_absolute_deviation = absolute_deviations[results.size() / 2];
+    stats["instructions_per_op"] = calculate_stats(results, std::mem_fn(&perf_result::instructions_per_op));
+    stats["cpu_cycles_per_op"] = calculate_stats(results, std::mem_fn(&perf_result::cpu_cycles_per_op));
+}
+
+aggregated_perf_results::stats_t aggregated_perf_results::calculate_stats(std::vector<perf_result>& results, std::function<double(const perf_result&)> get_stat) const {
+    stats_t ret;
+    std::sort(results.begin(), results.end(), [&] (const perf_result& a, const perf_result& b) {
+        return get_stat(a) < get_stat(b);
+    });
+    ret.min = get_stat(results[0]);
+    ret.median = get_stat(results[results.size() / 2]);
+    ret.max = get_stat(results[results.size() - 1]);
+
+    ret.mean = 0;
+    for (const auto& pr : results) {
+        ret.mean += get_stat(pr);
+    }
+    ret.mean /= results.size();
+    double var = 0;
+    std::vector<double> abs_deviations;
+    abs_deviations.reserve(results.size());
+    for (const auto& pr : results) {
+        auto dev = get_stat(pr) - ret.mean;
+        abs_deviations.emplace_back(std::abs(dev));
+        var += dev * dev;
+    }
+    // Since the results are samples of the total population
+    // devide the sum of squared deviations by (n - 1) rather than by n
+    ret.stdev = std::sqrt(results.size() > 1 ? var / (results.size() - 1) : var);
+
+    std::sort(abs_deviations.begin(), abs_deviations.end());
+    ret.median_absolute_deviation = abs_deviations[abs_deviations.size() / 2];
+
+    return ret;
 }
 
 std::ostream&
 operator<<(std::ostream& os, const aggregated_perf_results& result) {
-    auto& t = result.throughput;
-    fmt::print(os, "\nmedian {}\nmedian absolute deviation: {:.2f}\nmaximum: {:.2f}\nminimum: {:.2f}", t.median, t.median_absolute_deviation, t.max, t.min);
+    for (const auto& s : {"throughput", "instructions_per_op", "cpu_cycles_per_op"}) {
+        auto& t = result.stats.at(s);
+        fmt::print(os, "\n{:>19}: mean={:.2f} standard-deviation={:.2f} median={:.2f} median-absolute-deviation={:.2f} maximum={:.2f} minimum={:.2f}",
+                s, t.mean, t.stdev, t.median, t.median_absolute_deviation, t.max, t.min);
+    }
     return os;
 }
 

@@ -477,9 +477,10 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     stats["tasks_per_op"] = med.tasks_per_op;
     stats["instructions_per_op"] = med.instructions_per_op;
     stats["cpu_cycles_per_op"] = med.cpu_cycles_per_op;
-    stats["mad tps"] = agg.throughput.median_absolute_deviation;
-    stats["max tps"] = agg.throughput.max;
-    stats["min tps"] = agg.throughput.min;
+    const auto& tps = agg.stats.at("throughput");
+    stats["mad tps"] = tps.median_absolute_deviation;
+    stats["max tps"] = tps.max;
+    stats["min tps"] = tps.min;
     results["stats"] = std::move(stats);
 
     std::string test_type;
