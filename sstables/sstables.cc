@@ -1483,7 +1483,7 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring o
             make_file_input_stream(index_file, 0, index_file_size, {.buffer_size = sstable_buffer_size}), 0, index_file_size,
             (_version >= sstable_version_types::mc
                 ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
-                : std::optional<column_values_fixed_lengths>{}));
+                : std::optional<column_values_fixed_lengths>{}), _manager._abort);
     auto consumer_ctx_closer = deferred_close(consumer_ctx);
     try {
         consumer_ctx.consume_input().get();
@@ -2040,7 +2040,7 @@ future<> sstable::generate_summary() {
                     make_file_input_stream(index_file, 0, index_size, std::move(options)), 0, index_size,
                     (_version >= sstable_version_types::mc
                         ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
-                        : std::optional<column_values_fixed_lengths>{}));
+                        : std::optional<column_values_fixed_lengths>{}), _manager._abort);
 
         try {
             co_await ctx->consume_input();
