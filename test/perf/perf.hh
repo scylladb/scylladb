@@ -174,16 +174,21 @@ struct perf_result {
 
 
 struct aggregated_perf_results {
-    struct throughput_t {
+    struct stats_t {
         double median;
         double median_absolute_deviation;
         double min;
         double max;
+        double mean;
+        double stdev;
     };
-    throughput_t throughput;
+    std::unordered_map<std::string, stats_t> stats;
     perf_result median_by_throughput; // Simplification, median element is considered based on throughput value
 
     aggregated_perf_results(std::vector<perf_result>& results);
+
+private:
+    stats_t calculate_stats(std::vector<perf_result>&, std::function<double(const perf_result&)> get_stat) const;
 };
 
 std::ostream& operator<<(std::ostream& os, const aggregated_perf_results& result);
