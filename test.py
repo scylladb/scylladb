@@ -1279,8 +1279,9 @@ def parse_cmd_line() -> argparse.Namespace:
                 suites. Each name is used as a substring to look for in the
                 path to test file, e.g. "mem" will run all tests that have
                 "mem" in their name in all suites, "boost/mem" will only enable
-                tests starting with "mem" in "boost" suite. Default: run all
-                tests in all suites.""",
+                tests starting with "mem" in "boost" suite, and
+                "boost/memtable_test::test_hash_is_cached" to narrow down to
+                a certain test case. Default: run all tests in all suites.""",
     )
     parser.add_argument(
         "--tmpdir",
