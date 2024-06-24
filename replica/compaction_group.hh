@@ -188,6 +188,7 @@ using compaction_group_list = compaction_group::list_t;
 class storage_group {
     compaction_group_ptr _main_cg;
     std::vector<compaction_group_ptr> _split_ready_groups;
+    seastar::gate _async_gate;
 private:
     bool splitting_mode() const {
         return !_split_ready_groups.empty();
@@ -195,6 +196,10 @@ private:
     size_t to_idx(locator::tablet_range_side) const;
 public:
     storage_group(compaction_group_ptr cg, compaction_group_list* list);
+
+    seastar::gate& async_gate() {
+        return _async_gate;
+    }
 
     const dht::token_range& token_range() const noexcept;
 
@@ -227,9 +232,12 @@ public:
 
     // Flush all memtables.
     future<> flush() noexcept;
+
+    future<> stop();
 };
 
-using storage_group_map = absl::flat_hash_map<size_t, std::unique_ptr<storage_group>, absl::Hash<size_t>>;
+using storage_group_ptr = lw_shared_ptr<storage_group>;
+using storage_group_map = absl::flat_hash_map<size_t, storage_group_ptr, absl::Hash<size_t>>;
 
 class storage_group_manager {
 protected:
@@ -237,15 +245,8 @@ protected:
     // The list entries are unlinked automatically when the storage group, they belong to, is removed.
     compaction_group_list _compaction_groups;
     storage_group_map _storage_groups;
-    // Prevents _storage_groups from having its elements inserted or deleted while other layer iterates
-    // over them (or over _compaction_groups).
-    seastar::rwlock _lock;
 public:
     virtual ~storage_group_manager();
-
-    seastar::rwlock& get_rwlock() noexcept {
-        return _lock;
-    }
 
     const compaction_group_list& compaction_groups() const noexcept {
         return _compaction_groups;
@@ -254,6 +255,7 @@ public:
         return _compaction_groups;
     }
 
+    future<> parallel_foreach_storage_group(std::function<future<>(storage_group&)> f);
     future<> for_each_storage_group_gently(std::function<future<>(size_t, storage_group&)> f);
     void for_each_storage_group(std::function<void(size_t, storage_group&)> f) const;
     void remove_storage_group(size_t id);
