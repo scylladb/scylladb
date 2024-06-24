@@ -134,7 +134,7 @@ future<semaphore_units<>> client::claim_memory(size_t size) {
 }
 
 client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn)
-        : http(std::move(f), max_conn)
+        : http(std::move(f), max_conn, http::experimental::client::retry_requests::yes)
 {
 }
 
