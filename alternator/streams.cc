@@ -779,7 +779,7 @@ struct event_id {
     cdc::stream_id stream;
     utils::UUID timestamp;
 
-    static const auto marker = 'E';
+    static constexpr auto marker = 'E';
 
     event_id(cdc::stream_id s, utils::UUID ts)
         : stream(s)
