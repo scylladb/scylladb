@@ -427,3 +427,22 @@ BOOST_AUTO_TEST_CASE(test_initializer_list_ctor) {
     }
     BOOST_REQUIRE(vit == vec.end());
 }
+
+BOOST_AUTO_TEST_CASE(test_value_default_init_ctor) {
+    int n = 17;
+    auto vec = utils::chunked_vector<std::string, 8>(n);
+    BOOST_REQUIRE_EQUAL(vec.size(), n);
+    for (auto it = vec.begin(); it != vec.end(); ++it) {
+        BOOST_REQUIRE(it->empty());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_value_init_ctor) {
+    double v = 3.14;
+    int n = 17;
+    auto vec = utils::chunked_vector<double, 8>(n, v);
+    BOOST_REQUIRE_EQUAL(vec.size(), n);
+    for (auto it = vec.begin(); it != vec.end(); ++it) {
+        BOOST_REQUIRE_EQUAL(*it, v);
+    }
+}
