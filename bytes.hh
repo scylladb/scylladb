@@ -42,15 +42,10 @@ struct fmt_hex {
     fmt_hex(const bytes_view& v) noexcept : v(v) {}
 };
 
-std::ostream& operator<<(std::ostream& os, const fmt_hex& hex);
-
 bytes from_hex(sstring_view s);
 sstring to_hex(bytes_view b);
 sstring to_hex(const bytes& b);
 sstring to_hex(const bytes_opt& b);
-
-std::ostream& operator<<(std::ostream& os, const bytes& b);
-std::ostream& operator<<(std::ostream& os, const bytes_opt& b);
 
 template <>
 struct fmt::formatter<fmt_hex> {

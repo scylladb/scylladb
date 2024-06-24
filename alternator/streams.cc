@@ -233,11 +233,8 @@ struct shard_id {
 
     // dynamo specifies shardid as max 65 chars. 
     friend std::ostream& operator<<(std::ostream& os, const shard_id& id) {
-        boost::io::ios_flags_saver fs(os);
-        return os << marker << std::hex  
-            << id.time.time_since_epoch().count()
-            << ':' << id.id.to_bytes()
-            ;
+        fmt::print(os, "{} {:x}:{}", marker, id.time.time_since_epoch().count(), id.id.to_bytes());
+        return os;
     }
 };
 
@@ -787,10 +784,8 @@ struct event_id {
     {}
     
     friend std::ostream& operator<<(std::ostream& os, const event_id& id) {
-        boost::io::ios_flags_saver fs(os);
-        return os << marker << std::hex << id.stream.to_bytes()
-            << ':' << id.timestamp
-            ;
+        fmt::print(os, "{}{}:{}", marker, id.stream.to_bytes(), id.timestamp);
+        return os;
     }
 };
 }
