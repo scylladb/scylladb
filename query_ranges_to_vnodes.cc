@@ -24,11 +24,11 @@ query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(std::unique_p
         _s(s), _ranges(std::move(ranges)), _i(_ranges.begin()), _local(local), _splitter(std::move(splitter)) {}
 
 dht::partition_range_vector query_ranges_to_vnodes_generator::operator()(size_t n) {
-    n = std::min(n, size_t(1024));
+    n = std::min({n, size_t(1024), size_t(_ranges.end() - _i)});
 
     dht::partition_range_vector result;
     result.reserve(n);
-    while (_i != _ranges.end() && result.size() != n) {
+    while (result.size() != n) {
         process_one_range(n, result);
     }
     return result;
