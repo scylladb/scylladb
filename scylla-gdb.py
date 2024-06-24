@@ -618,7 +618,10 @@ class absl_container:
                 break
             if ctrl_t >= 0:
                 # NOTE: this only works for flat_hash_map
-                yield slots[i]['key'], slots[i]['value']
+                if slots[i]['value'].type.name.find("::map_slot_type") != -1:
+                    yield slots[i]['key'], slots[i]['value']['second']
+                else:
+                    yield slots[i]['key'], slots[i]['value']
 
     def __nonzero__(self):
         return self.size > 0
@@ -4504,6 +4507,17 @@ class scylla_memtables(gdb.Command):
     def invoke(self, arg, from_tty):
         for table in for_each_table():
             gdb.write('table %s:\n' % schema_ptr(table['_schema']).table_name())
+            try:
+                sg_manager = std_unique_ptr(table["_sg_manager"]).get().dereference()
+                for (sg_id, sg_ptr) in absl_container(sg_manager["_storage_groups"]):
+                    sg = seastar_lw_shared_ptr(sg_ptr).get()
+                    scylla_memtables.dump_compaction_group_memtables(seastar_lw_shared_ptr(sg["_main_cg"]).get())
+                    for cg_ptr in std_vector(sg["_split_ready_groups"]):
+                        scylla_memtables.dump_compaction_group_memtables(seastar_lw_shared_ptr(cg_ptr).get())
+                return
+            except gdb.error:
+                pass
+
             try:
                 sg_manager = std_unique_ptr(table["_sg_manager"]).get().dereference()
                 for cg in intrusive_list(sg_manager["_compaction_groups"], link='_list_hook'):
