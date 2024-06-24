@@ -102,7 +102,7 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
         cr = std::move(splits.second);
         if (ranges.size() == n) {
             // we have enough ranges
-            break;
+            return;
         }
     }
 
