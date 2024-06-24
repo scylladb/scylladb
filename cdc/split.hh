@@ -8,10 +8,9 @@
 
 #pragma once
 
-#include <boost/dynamic_bitset.hpp>
+#include <boost/dynamic_bitset.hpp>  // IWYU pragma: keep
 #include "replica/database_fwd.hh"
 #include "timestamp.hh"
-#include <seastar/util/noncopyable_function.hh>
 
 class mutation;
 
