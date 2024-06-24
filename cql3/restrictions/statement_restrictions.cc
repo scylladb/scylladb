@@ -1067,8 +1067,9 @@ dht::partition_range_vector partition_ranges_from_singles(
         }
     }
     cartesian_product cp(column_values);
-    dht::partition_range_vector ranges(product_size);
-    std::transform(cp.begin(), cp.end(), ranges.begin(), std::bind_front(range_from_bytes, std::ref(schema)));
+    dht::partition_range_vector ranges;
+    ranges.reserve(product_size);
+    std::transform(cp.begin(), cp.end(), std::back_inserter(ranges), std::bind_front(range_from_bytes, std::ref(schema)));
     return ranges;
 }
 
