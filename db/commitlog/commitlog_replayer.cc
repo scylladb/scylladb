@@ -79,7 +79,7 @@ public:
     }
 
     future<> process(stats*, commitlog::buffer_and_replay_position buf_rp) const;
-    future<stats> recover(sstring file, const sstring& fname_prefix) const;
+    future<stats> recover(const commitlog::descriptor&, const commitlog::replay_state&) const;
 
     typedef std::unordered_map<table_id, replay_position> rp_map;
     typedef std::unordered_map<unsigned, rp_map> shard_rpm_map;
@@ -164,14 +164,15 @@ future<> db::commitlog_replayer::impl::init() {
 }
 
 future<db::commitlog_replayer::impl::stats>
-db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix) const {
+db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const commitlog::replay_state& rpstate) const {
     SCYLLA_ASSERT(_column_mappings.local_is_initialized());
 
-    replay_position rp{commitlog::descriptor(file, fname_prefix)};
+    replay_position rp{d};
     auto gp = min_pos(rp.shard_id());
+    auto f = d.filename();
 
     if (rp.id < gp.id) {
-        rlogger.debug("skipping replay of fully-flushed {}", file);
+        rlogger.debug("skipping replay of fully-flushed {}", f);
         return make_ready_future<stats>();
     }
     position_type p = 0;
@@ -182,7 +183,7 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
     auto s = make_lw_shared<stats>();
     auto& exts = _db.local().extensions();
 
-    return db::commitlog::read_log_file(file, fname_prefix,
+    return db::commitlog::read_log_file(rpstate, f, d.filename_prefix,
             std::bind(&impl::process, this, s.get(), std::placeholders::_1),
             p, &exts).then_wrapped([s](future<> f) {
         try {
@@ -326,7 +327,7 @@ future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::
 }
 
 future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fname_prefix) {
-    using shard_file_map = std::unordered_multimap<unsigned, sstring>;
+    using shard_file_map = std::unordered_multimap<unsigned, commitlog::descriptor>;
 
     rlogger.info("Replaying {}", fmt::join(files, ", "));
 
@@ -335,7 +336,7 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
     for (auto& f : files) {
         commitlog::descriptor d(f, fname_prefix);
         replay_position p = d;
-        map.emplace(p.shard_id() % smp::count, std::move(f));
+        map.emplace(p.shard_id() % smp::count, std::move(d));
     }
 
     co_await _impl->start();
@@ -344,13 +345,15 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
         auto totals = co_await map_reduce(smp::all_cpus(), [&](unsigned id) -> future<impl::stats> {
             co_return co_await smp::submit_to(id, [&] () -> future<impl::stats> {
                 impl::stats total;
+                std::unordered_map<unsigned, commitlog::replay_state> states;
                 // TODO: or something. For now, we do this serialized per shard,
                 // to reduce mutation congestion. We could probably (says avi)
                 // do 2 segments in parallel or something, but lets use this first.
                 auto range = map.equal_range(id);
-                for (auto& [id, f] : std::ranges::subrange(range.first, range.second)) {
+                for (auto& [id, d] : std::ranges::subrange(range.first, range.second)) {
+                    auto f = d.filename();
                     rlogger.debug("Replaying {}", f);
-                    auto stats = co_await _impl->recover(f, fname_prefix);
+                    auto stats = co_await _impl->recover(d, states[replay_position(d).shard_id()]);
                     if (stats.corrupt_bytes != 0) {
                         rlogger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
                     }
