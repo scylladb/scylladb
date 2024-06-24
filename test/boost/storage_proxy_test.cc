@@ -15,6 +15,7 @@
 #include "service/storage_proxy.hh"
 #include "query_ranges_to_vnodes.hh"
 #include "schema/schema_builder.hh"
+#include "dht/i_partitioner_fwd.hh"
 
 // Returns random keys sorted in ring order.
 // The schema must have a single bytes_type partition key column.
@@ -39,7 +40,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
         auto check = [&s](locator::token_metadata_ptr tmptr, dht::partition_range input,
                           dht::partition_range_vector expected) {
-            query_ranges_to_vnodes_generator ranges_to_vnodes(locator::make_splitter(tmptr), s, {input});
+            query_ranges_to_vnodes_generator ranges_to_vnodes(locator::make_splitter(tmptr), s, dht::partition_range_vector({input}));
             auto actual = ranges_to_vnodes(1000);
             if (!std::equal(actual.begin(), actual.end(), expected.begin(), [&s](auto&& r1, auto&& r2) {
                 return r1.equal(r2, dht::ring_position_comparator(*s));

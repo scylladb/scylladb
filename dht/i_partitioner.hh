@@ -101,7 +101,7 @@ std::map<unsigned, dht::partition_range_vector>
 split_range_to_shards(dht::partition_range pr, const schema& s, const sharder& sharder);
 
 // Intersect a partition_range with a shard and return the resulting sub-ranges, in sorted order
-future<utils::chunked_vector<partition_range>> split_range_to_single_shard(const schema& s,
+future<chunked_partition_range_vector> split_range_to_single_shard(const schema& s,
     const static_sharder& sharder, const dht::partition_range& pr, shard_id shard);
 
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name);

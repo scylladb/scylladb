@@ -18,6 +18,7 @@
 #include "cql3/statements/prune_materialized_view_statement.hh"
 #include "cql3/statements/strongly_consistent_select_statement.hh"
 
+#include "dht/i_partitioner_fwd.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
@@ -600,7 +601,7 @@ indexed_table_select_statement::prepare_command_for_base_query(query_processor& 
 future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>>
 indexed_table_select_statement::do_execute_base_query(
         query_processor& qp,
-        dht::partition_range_vector&& partition_ranges,
+        dht::chunked_partition_range_vector&& partition_ranges,
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
@@ -615,10 +616,10 @@ indexed_table_select_statement::do_execute_base_query(
 
     struct base_query_state {
         query::result_merger merger;
-        query_ranges_to_vnodes_generator ranges_to_vnodes;
+        query_ranges_to_vnodes_generator<dht::chunked_partition_range_vector> ranges_to_vnodes;
         size_t concurrency = 1;
         size_t previous_result_size = 0;
-        base_query_state(uint64_t row_limit, query_ranges_to_vnodes_generator&& ranges_to_vnodes_)
+        base_query_state(uint64_t row_limit, query_ranges_to_vnodes_generator<dht::chunked_partition_range_vector>&& ranges_to_vnodes_)
                 : merger(row_limit, query::max_partitions)
                 , ranges_to_vnodes(std::move(ranges_to_vnodes_))
                 {}
@@ -695,7 +696,7 @@ indexed_table_select_statement::do_execute_base_query(
 future<shared_ptr<cql_transport::messages::result_message>>
 indexed_table_select_statement::execute_base_query(
         query_processor& qp,
-        dht::partition_range_vector&& partition_ranges,
+        dht::chunked_partition_range_vector&& partition_ranges,
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
@@ -1222,7 +1223,7 @@ indexed_table_select_statement::do_execute(query_processor& qp,
         tracing::trace(state.get_trace_state(), "Consulting index {} for a single slice of keys", _index.metadata().name());
         // In this case, can use our normal query machinery, which retrieves
         // entire partitions or the same slice for many partitions.
-        coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>> result = co_await find_index_partition_ranges(qp, state, options);
+        auto result = co_await find_index_partition_ranges(qp, state, options);
         if (result.has_error()) {
             co_return failed_result_to_result_message(std::move(result));
         }
@@ -1360,18 +1361,18 @@ indexed_table_select_statement::read_posting_list(query_processor& qp,
 
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
-future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>>
+future<coordinator_result<std::tuple<dht::chunked_partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>>
 indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
                                              service::query_state& state,
                                              const query_options& options) const
 {
-    using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
+    using value_type = std::tuple<dht::chunked_partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     return read_posting_list(qp, options, get_limit(options), state, now, timeout, false).then(utils::result_wrap(
             [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
-        dht::partition_range_vector partition_ranges;
+        dht::chunked_partition_range_vector partition_ranges;
         partition_ranges.reserve(rs.size());
         // We are reading the list of primary keys as rows of a single
         // partition (in the index view), so they are sorted in
@@ -1613,7 +1614,7 @@ parallelized_select_statement::do_execute(
         query::is_first_page::no,
         options.get_timestamp(state)
     );
-    auto key_ranges = _restrictions->get_partition_key_ranges(options);
+    auto key_ranges = _restrictions->get_partition_key_ranges<dht::chunked_partition_range_vector>(options);
 
     if (db::is_serial_consistency(options.get_consistency())) {
         throw exceptions::invalid_request_exception(

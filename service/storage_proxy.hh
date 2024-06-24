@@ -37,12 +37,12 @@
 #include "replica/exceptions.hh"
 #include "locator/host_id.hh"
 #include "dht/token_range_endpoints.hh"
+#include "query_ranges_to_vnodes.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
 class frozen_mutation;
 class cache_temperature;
-class query_ranges_to_vnodes_generator;
 
 namespace seastar::rpc {
 
@@ -393,7 +393,7 @@ private:
             locator::effective_replication_map_ptr erm,
             lw_shared_ptr<query::read_command> cmd,
             db::consistency_level cl,
-            query_ranges_to_vnodes_generator ranges_to_vnodes,
+            query_ranges_to_vnodes_generator<dht::partition_range_vector> ranges_to_vnodes,
             int concurrency_factor,
             tracing::trace_state_ptr trace_state,
             uint64_t remaining_row_count,

@@ -10,10 +10,12 @@
 
 #pragma once
 
+#include <ranges>
 #include <vector>
 #include "bounds_slice.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/restrictions.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "cql3/prepare_context.hh"
 #include "cql3/statements/statement_type.hh"
@@ -291,12 +293,13 @@ public:
     /**
      * Returns the specified range of the partition key.
      *
-     * @param b the boundary type
+     * @param ranges the partition_range vector output param
      * @param options the query options
-     * @return the specified bound of the partition key
      * @throws InvalidRequestException if the boundary cannot be retrieved
      */
-    dht::partition_range_vector get_partition_key_ranges(const query_options& options) const;
+    template <std::ranges::range Range = dht::partition_range_vector>
+    requires std::same_as<std::ranges::range_value_t<Range>, dht::partition_range>
+    Range get_partition_key_ranges(const query_options& options) const;
 
 
 public:
@@ -378,6 +381,9 @@ public:
     /// Checks that the primary key restrictions don't contain null values, throws invalid_request_exception otherwise.
     void validate_primary_key(const query_options& options) const;
 };
+
+extern template dht::partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const;
+extern template dht::chunked_partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const;
 
 }
 
