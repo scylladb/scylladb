@@ -111,7 +111,6 @@ fedora_packages=(
     wabt
     binaryen
     lcov
-    llvm-bolt
 )
 
 # lld is not available on s390x, see
