@@ -926,7 +926,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         auto& cl = *table.commitlog();
         auto s = table.schema();
         auto& sharder = table.get_effective_replication_map()->get_sharder(*table.schema());
-        auto memtables = table.active_memtables();
+        auto memtables = active_memtables(table);
 
         auto add_entry = [&cl, s, &sharder] (const partition_key& key) mutable {
             auto md = tests::data_model::mutation_description(key.explode());
