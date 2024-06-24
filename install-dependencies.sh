@@ -299,6 +299,8 @@ if $PRINT_NODE_EXPORTER; then
     exit 0
 fi
 
+umask 0022
+
 ./seastar/install-dependencies.sh
 ./tools/jmx/install-dependencies.sh
 ./tools/java/install-dependencies.sh
