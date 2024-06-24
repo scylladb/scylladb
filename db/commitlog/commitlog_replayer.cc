@@ -12,6 +12,7 @@
 #include <vector>
 #include <algorithm>
 #include <unordered_map>
+#include <ranges>
 #include <boost/range/adaptor/map.hpp>
 
 #include <seastar/core/future.hh>
@@ -333,10 +334,20 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
 
     // pre-compute work per shard already.
     shard_file_map map;
-    for (auto& f : files) {
-        commitlog::descriptor d(f, fname_prefix);
-        replay_position p = d;
-        map.emplace(p.shard_id() % smp::count, std::move(d));
+    {
+        // sort files in descriptor ID order to make 
+        // replaying fragmented entries faster/cheaper
+        // (reduces risk of hogging large buffers a long time)
+        auto tmp = files | std::views::transform([&](auto& f) {
+            return commitlog::descriptor(f, fname_prefix);
+        });
+        auto cmp = [](auto& d1, auto& d2) { return d1.id < d2.id; };
+        std::set<commitlog::descriptor, decltype(cmp)> descs(tmp.begin(), tmp.end());
+ 
+        for (auto& d : descs) {
+            replay_position p = d;
+            map.emplace(p.shard_id() % smp::count, std::move(d));
+        }
     }
 
     co_await _impl->start();
