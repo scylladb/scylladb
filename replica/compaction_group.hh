@@ -22,6 +22,8 @@
 
 #pragma once
 
+class compaction_manager;
+
 namespace locator {
 class effective_replication_map;
 }

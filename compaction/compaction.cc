@@ -47,6 +47,7 @@
 #include "mutation/mutation_source_metadata.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "utils/error_injection.hh"
+#include "utils/pretty_printers.hh"
 #include "readers/multi_range.hh"
 #include "readers/compacting.hh"
 #include "tombstone_gc.hh"
