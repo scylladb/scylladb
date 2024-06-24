@@ -46,11 +46,6 @@ uint64_t read_block(InputIterator& in) {
 }
 
 static inline
-uint64_t rotl64(uint64_t v, uint32_t n) {
-    return ((v << n) | ((uint64_t)v >> (64 - n)));
-}
-
-static inline
 uint64_t fmix(uint64_t k) {
     k ^= (uint64_t)k >> 33;
     k *= 0xff51afd7ed558ccdL;
@@ -79,13 +74,13 @@ void hash3_x64_128(InputIterator in, uint32_t length, uint64_t seed, std::array<
         uint64_t k1 = read_block(in);
         uint64_t k2 = read_block(in);
 
-        k1 *= c1; k1 = rotl64(k1,31); k1 *= c2; h1 ^= k1;
+        k1 *= c1; k1 = std::rotl(k1,31); k1 *= c2; h1 ^= k1;
 
-        h1 = rotl64(h1,27); h1 += h2; h1 = h1*5+0x52dce729;
+        h1 = std::rotl(h1,27); h1 += h2; h1 = h1*5+0x52dce729;
 
-        k2 *= c2; k2  = rotl64(k2,33); k2 *= c1; h2 ^= k2;
+        k2 *= c2; k2  = std::rotl(k2,33); k2 *= c1; h2 ^= k2;
 
-        h2 = rotl64(h2,31); h2 += h1; h2 = h2*5+0x38495ab5;
+        h2 = std::rotl(h2,31); h2 += h1; h2 = h2*5+0x38495ab5;
     }
 
     //----------
@@ -112,7 +107,7 @@ void hash3_x64_128(InputIterator in, uint32_t length, uint64_t seed, std::array<
         case 10: k2 ^= ((uint64_t) tmp[9]) << 8;
             [[fallthrough]];
         case  9: k2 ^= ((uint64_t) tmp[8]) << 0;
-            k2 *= c2; k2  = rotl64(k2,33); k2 *= c1; h2 ^= k2;
+            k2 *= c2; k2  = std::rotl(k2,33); k2 *= c1; h2 ^= k2;
             [[fallthrough]];
         case  8: k1 ^= ((uint64_t) tmp[7]) << 56;
             [[fallthrough]];
@@ -129,7 +124,7 @@ void hash3_x64_128(InputIterator in, uint32_t length, uint64_t seed, std::array<
         case  2: k1 ^= ((uint64_t) tmp[1]) << 8;
             [[fallthrough]];
         case  1: k1 ^= ((uint64_t) tmp[0]);
-            k1 *= c1; k1  = rotl64(k1,31); k1 *= c2; h1 ^= k1;
+            k1 *= c1; k1  = std::rotl(k1,31); k1 *= c2; h1 ^= k1;
     };
 
     //----------
