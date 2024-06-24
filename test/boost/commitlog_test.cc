@@ -1924,12 +1924,11 @@ SEASTAR_TEST_CASE(test_oversized_entry_large) {
     co_await do_test_oversized_entry(32*3); // bigger segments
 }
 
-SEASTAR_TEST_CASE(test_oversized_single_entry) {
+static future<> test_oversized(size_t n_entries, size_t max_size_mb) {
     commitlog::config cfg;
 
-    constexpr auto max_size_mb = 1;
     cfg.commitlog_segment_size_in_mb = max_size_mb;
-    cfg.commitlog_total_space_in_mb = 8 * max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 8 * n_entries * max_size_mb * smp::count;
     cfg.allow_going_over_size_limit = false;
     cfg.allow_fragmented_entries = true;
     cfg.use_o_dsync = false; 
@@ -1939,30 +1938,33 @@ SEASTAR_TEST_CASE(test_oversized_single_entry) {
     tmpdir tmp;
     cfg.commit_log_location = tmp.path().string();
 
-    fragmented_temporary_buffer buf;
     auto uuid = make_table_id();
-    replay_position rp;
+    std::unordered_map<replay_position, fragmented_temporary_buffer> rp2buf;
     {
-        auto log = co_await commitlog::create_commitlog(cfg);
-        auto size = log.max_record_size() * 2;
-
-        buf = fragmented_temporary_buffer::allocate_to_fit(size);
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::uniform_int_distribution<char> dist;
+        std::uniform_int_distribution<unsigned> dist(0u, 255u);
 
-        auto out = buf.get_ostream();
-        for (size_t i = 0; i < size; ++i) {
-            auto c = dist(gen);
-            out.write(&c, 1);
-        }
+        auto log = co_await commitlog::create_commitlog(cfg);
+        auto size = log.max_record_size() * 2 + dist(gen) * 1024 + dist(gen) * 64;
 
-        auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
-            for (auto& tmp : buf) {
-                dst.write(tmp.get(), tmp.size());
+        // TODO: we can't create multi-entries using current API.
+        for (size_t i = 0; i < n_entries; ++i) {
+            auto buf = fragmented_temporary_buffer::allocate_to_fit(size);
+
+            auto out = buf.get_ostream();
+            for (size_t i = 0; i < size; ++i) {
+                auto c = static_cast<char>(dist(gen));
+                out.write(&c, 1);
             }
-        });
-        rp = h.release(); // no freeing for you
+
+            auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                for (auto& tmp : buf) {
+                    dst.write(tmp.get(), tmp.size());
+                }
+            });
+            rp2buf.emplace(h.release(), std::move(buf)); // no freeing for you
+        }
 
         co_await log.sync_all_segments();
         // as if we crashed -> segment left on disk
@@ -1973,7 +1975,7 @@ SEASTAR_TEST_CASE(test_oversized_single_entry) {
     // new log, for replay.
     auto log = co_await commitlog::create_commitlog(cfg);
     auto replay_set = co_await log.get_segments_to_replay();
-    bool found = false;
+    size_t n_found = 0;
     std::exception_ptr e;
     commitlog::replay_state state;
 
@@ -1984,12 +1986,12 @@ SEASTAR_TEST_CASE(test_oversized_single_entry) {
                 auto&& buf_in = buf_rp.buffer;
                 auto&& rp_in = buf_rp.position;
 
-                BOOST_CHECK_EQUAL(rp, rp_in);
+                auto& buf = rp2buf.at(rp_in);
                 BOOST_CHECK_EQUAL(buf.size_bytes(), buf_in.size_bytes());
                 fragmented_temporary_buffer::view v1(buf); 
                 fragmented_temporary_buffer::view v2(buf_in); 
-                BOOST_CHECK_EQUAL(v1.size_bytes(), v2.size_bytes());
-                found = true;
+                BOOST_CHECK_EQUAL(v1, v2);
+                ++n_found;
                 co_return;
             });
         } catch (commitlog::segment_truncation&) {
@@ -1997,12 +1999,28 @@ SEASTAR_TEST_CASE(test_oversized_single_entry) {
         }
     }
 
-    BOOST_CHECK(found);
+    BOOST_CHECK_EQUAL(n_found, rp2buf.size());
 
     co_await log.shutdown();
     co_await log.clear();
 
-    if (!found && e) {
+    if (n_found != rp2buf.size() && e) {
         std::rethrow_exception(e);
     }
+}
+
+SEASTAR_TEST_CASE(test_oversized_single_entry) {
+    co_await test_oversized(1, 1);
+}
+
+SEASTAR_TEST_CASE(test_oversized_several_small) {
+    co_await test_oversized(8, 1);
+}
+
+SEASTAR_TEST_CASE(test_oversized_several_medium) {
+    co_await test_oversized(8, 8);
+}
+
+SEASTAR_TEST_CASE(test_oversized_several_large) {
+    co_await test_oversized(8, 32);
 }
