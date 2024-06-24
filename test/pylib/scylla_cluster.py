@@ -330,7 +330,7 @@ class ScyllaServer:
         size = 0
 
         if self.cmd is not None:
-            deleted_sstable_re = f"^.*/{keyspace}/{table}-[0-9a-f]{{32}}/.* \(deleted\)$"
+            deleted_sstable_re = rf"^.*/{keyspace}/{table}-[0-9a-f]{{32}}/.* \(deleted\)$"
             deleted_sstable_re = re.compile(deleted_sstable_re)
             for f in pathlib.Path(f"/proc/{self.cmd.pid}/fd/").iterdir():
                 try:
