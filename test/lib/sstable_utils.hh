@@ -270,3 +270,4 @@ inline shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::me
 }
 
 lw_shared_ptr<replica::memtable> make_memtable(schema_ptr s, const std::vector<mutation>& muts);
+std::vector<replica::memtable*> active_memtables(replica::table& t);

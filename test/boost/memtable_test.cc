@@ -1053,7 +1053,7 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s, ts).get(), std::move(group0_guard), "").get();
 
         replica::table& t = db.find_column_family("ks", "cf");
-        auto memtables = t.active_memtables();
+        auto memtables = active_memtables(t);
 
         // Insert something so that we have data in memtable to flush
         // it has to be somewhat large, as automatic flushing picks the
