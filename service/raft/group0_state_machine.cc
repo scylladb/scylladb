@@ -140,6 +140,24 @@ static future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_addr
     }
 }
 
+group0_state_machine::modules_to_reload group0_state_machine::get_modules_to_reload(const std::vector<canonical_mutation>& mutations) {
+    modules_to_reload modules;
+
+    for (auto& mut: mutations) {
+        if (mut.column_family_id() == db::system_keyspace::service_levels_v2()->id()) {
+            modules.service_levels_cache = true;
+        }
+    }
+
+    return modules;
+}
+
+future<> group0_state_machine::reload_modules(modules_to_reload modules) {
+    if (modules.service_levels_cache) {
+        co_await _ss.update_service_levels_cache();
+    }
+}
+
 future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merger) {
     auto [_cmd, history] = merger.merge();
     auto cmd = std::move(_cmd);
@@ -174,7 +192,9 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         co_return;
     },
     [&] (write_mutations& muts) -> future<> {
-        return write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
+        auto modules_to_reload = get_modules_to_reload(muts.mutations);
+        co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
+        co_await reload_modules(std::move(modules_to_reload));
     }
     ), cmd.change);
 
