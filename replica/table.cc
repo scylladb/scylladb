@@ -1037,6 +1037,7 @@ void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) no
     _stats.live_disk_space_used += sst->bytes_on_disk();
     _stats.total_disk_space_used += sst->bytes_on_disk();
     _stats.live_sstable_count++;
+    _stats.estimated_row_count += sst->get_stats_metadata().rows_count;
 }
 
 future<>
@@ -1522,6 +1523,11 @@ void table::set_metrics() {
             }
         }
     }
+    if (_config.enable_estimated_row_count_reporting) {
+        _metrics.add_group("column_family", {
+                ms::make_gauge("estimated_row_count", ms::description("Estimated row count"), _stats.estimated_row_count)(cf)(ks),
+        });
+    }
     if (uses_tablets()) {
         _metrics.add_group("tablets", {
             ms::make_gauge("count", ms::description("Tablet count"), _stats.tablet_count)(cf)(ks).aggregate({column_family_label, keyspace_label})
@@ -1542,6 +1548,10 @@ uint64_t compaction_group::live_disk_space_used() const noexcept {
     return _main_sstables->bytes_on_disk() + _maintenance_sstables->bytes_on_disk();
 }
 
+uint64_t compaction_group::estimated_row_count() const noexcept {
+    return _main_sstables->get_stats_metadata().rows_count + _maintenance_sstables->get_stats_metadata().rows_count;
+}
+
 uint64_t storage_group::live_disk_space_used() const noexcept {
     auto cgs = const_cast<storage_group&>(*this).compaction_groups();
     return boost::accumulate(cgs | boost::adaptors::transformed(std::mem_fn(&compaction_group::live_disk_space_used)), uint64_t(0));
@@ -1555,11 +1565,13 @@ void table::rebuild_statistics() {
     _stats.live_disk_space_used = 0;
     _stats.live_sstable_count = 0;
     _stats.total_disk_space_used = 0;
+    _stats.estimated_row_count = 0;
 
     for (const compaction_group& cg : compaction_groups()) {
         _stats.live_disk_space_used += cg.live_disk_space_used();
         _stats.total_disk_space_used += cg.total_disk_space_used();
         _stats.live_sstable_count += cg.live_sstable_count();
+        _stats.estimated_row_count +=  cg.estimated_row_count()
     }
 }
 
@@ -1567,6 +1579,7 @@ void table::subtract_compaction_group_from_stats(const compaction_group& cg) noe
     _stats.live_disk_space_used -= cg.live_disk_space_used();
     _stats.total_disk_space_used -= cg.total_disk_space_used();
     _stats.live_sstable_count -= cg.live_sstable_count();
+    _stats.estimated_row_count -=  cg.estimated_row_count()
 }
 
 future<lw_shared_ptr<sstables::sstable_set>>

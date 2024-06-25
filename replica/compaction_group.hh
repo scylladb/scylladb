@@ -160,6 +160,7 @@ public:
     size_t live_sstable_count() const noexcept;
     uint64_t live_disk_space_used() const noexcept;
     uint64_t total_disk_space_used() const noexcept;
+    uint64_t estimated_row_count() const noexcept;
 
     compaction::table_state& as_table_state() const noexcept;
 
