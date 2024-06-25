@@ -308,7 +308,23 @@ modification_statement::execute_without_condition(query_processor& qp, service::
         if (mutations.empty()) {
             return make_ready_future<coordinator_result<>>(bo::success());
         }
-        
+
+        if (_is_local_replica) {
+            //FIXME: check ownership
+            auto& tbl = qp.proxy().get_db().local().find_column_family(keyspace(), column_family());
+            std::unordered_map<shard_id, std::vector<frozen_mutation>> muts_by_shards;
+            for (auto&& mut : mutations) {
+                muts_by_shards[tbl.shard_of(mut)].push_back(freeze(mut));
+            }
+            return parallel_for_each(std::move(muts_by_shards), [&qp, timeout] (auto&& shard_and_mut) {
+                return qp.proxy().get_db().invoke_on(shard_and_mut.first, [muts = std::move(shard_and_mut.second), timeout] (replica::database& db) mutable {
+                    return db.apply(std::move(muts), timeout);
+                });
+            }).then([] () -> service::storage_proxy::result<> {
+                // TODO: handle exceptions (write timeout)
+                return bo::success();
+            });
+        }
         return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write());
     });
 }
@@ -537,6 +553,7 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
         ctx.clear_pk_function_calls_cache();
     }
     prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
+    prepared_stmt->_is_local_replica = _is_local_replica;
     return prepared_stmt;
 }
 
@@ -598,6 +615,9 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
         }
         if (_attrs->timestamp) {
             throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
+        }
+        if (_is_local_replica) {
+            throw exceptions::invalid_request_exception("Cannot execute conditional updates on local-replica only");
         }
 
         if (_if_not_exists) {
@@ -764,12 +784,14 @@ const statement_type statement_type::SELECT = statement_type(statement_type::typ
 
 namespace raw {
 
-modification_statement::modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, std::optional<expr::expression> conditions, bool if_not_exists, bool if_exists)
+modification_statement::modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, std::optional<expr::expression> conditions,
+        bool if_not_exists, bool if_exists, bool is_local_replica)
     : cf_statement{std::move(name)}
     , _attrs{std::move(attrs)}
     , _conditions{std::move(conditions)}
     , _if_not_exists{if_not_exists}
     , _if_exists{if_exists}
+    , _is_local_replica{is_local_replica}
 { }
 
 }

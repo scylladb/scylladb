@@ -363,8 +363,9 @@ insert_statement::insert_statement(cf_name name,
                                    std::unique_ptr<attributes::raw> attrs,
                                    std::vector<::shared_ptr<column_identifier::raw>> column_names,
                                    std::vector<expr::expression> column_values,
-                                   bool if_not_exists)
-    : raw::modification_statement{std::move(name), std::move(attrs), std::nullopt /* condition */, if_not_exists, false}
+                                   bool if_not_exists,
+                                   bool is_local_replica)
+    : raw::modification_statement{std::move(name), std::move(attrs), std::nullopt /* condition */, if_not_exists, false, is_local_replica}
     , _column_names{std::move(column_names)}
     , _column_values{std::move(column_values)}
 { }
@@ -421,8 +422,9 @@ insert_json_statement::insert_json_statement(cf_name name,
                                              std::unique_ptr<attributes::raw> attrs,
                                              expr::expression json_value,
                                              bool if_not_exists,
-                                             bool default_unset)
-    : raw::modification_statement{name, std::move(attrs), std::nullopt /* condition */, if_not_exists, false}
+                                             bool default_unset,
+                                             bool is_local_replica)
+    : raw::modification_statement{name, std::move(attrs), std::nullopt /* condition */, if_not_exists, false, is_local_replica}
     , _name(name)
     , _json_value(std::move(json_value))
     , _if_not_exists(if_not_exists)
@@ -448,8 +450,10 @@ update_statement::update_statement(cf_name name,
                                    std::unique_ptr<attributes::raw> attrs,
                                    std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> updates,
                                    expr::expression where_clause,
-                                   std::optional<expr::expression> conditions, bool if_exists)
-    : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
+                                   std::optional<expr::expression> conditions,
+                                   bool if_exists,
+                                   bool is_local_replica)
+    : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists, is_local_replica)
     , _updates(std::move(updates))
     , _where_clause(std::move(where_clause))
 { }
