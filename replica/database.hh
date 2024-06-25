@@ -320,6 +320,9 @@ struct cf_stats {
     uint64_t total_view_updates_pushed_remote = 0;
     uint64_t total_view_updates_failed_local = 0;
     uint64_t total_view_updates_failed_remote = 0;
+
+    // How many times we build view updates only to realize it's the wrong node and drop the update
+    uint64_t total_view_updates_on_wrong_node = 0;
 };
 
 class table;
