@@ -505,7 +505,8 @@ private:
 
     log_legacy_value<seastar::log_level> default_log_level;
     log_legacy_value<std::unordered_map<sstring, seastar::log_level>> logger_log_level;
-    log_legacy_value<bool> log_to_stdout, log_to_syslog;
+    log_legacy_value<bool> log_to_stdout;
+    log_legacy_value<bool> log_to_syslog;
 
     void maybe_in_workdir(named_value<sstring>&, const char*);
     void maybe_in_workdir(named_value<string_list>&, const char*);
