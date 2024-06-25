@@ -624,6 +624,9 @@ database::setup_metrics() {
 
         sm::make_total_operations("total_view_updates_failed_remote", _cf_stats.total_view_updates_failed_remote,
                 sm::description("Total number of view updates generated for tables and failed to be sent to remote replicas.")),
+
+        sm::make_total_operations("total_view_updates_on_wrong_node", _cf_stats.total_view_updates_on_wrong_node,
+                sm::description("Total number of view updates which are computed on the wrong node.")).set_skip_when_empty(),
     });
     if (this_shard_id() == 0) {
         _metrics.add_group("database", {

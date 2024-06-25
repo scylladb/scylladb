@@ -3351,6 +3351,15 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     utils::get_local_injector().inject("table_push_view_replica_updates_stale_time_point", [&now] {
         now -= 10s;
     });
+
+    if (!db::view::should_generate_view_updates_on_this_shard(base, get_effective_replication_map(), m.token())) {
+        // This could happen if we are a pending replica.
+        // A pending replica may have incomplete data, and building view updates could result
+        // in wrong updates. Therefore we don't send updates from a pending replica. Instead, the
+        // base replicas send the updates to the view replicas, including pending replicas.
+        co_return row_locker::lock_holder();
+    }
+
     auto views = db::view::with_base_info_snapshot(affected_views(gen, base, m));
     if (views.empty()) {
         co_return row_locker::lock_holder();

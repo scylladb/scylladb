@@ -1576,6 +1576,18 @@ bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_b
     return mp.partition_tombstone() || !mp.static_row().empty();
 }
 
+bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const locator::effective_replication_map_ptr& ermp, dht::token token) {
+    // Based on the computation in get_view_natural_endpoint, this is used
+    // to detect beforehand the case that we're a "normal" replica which is
+    // paired with a view replica and sends view updates to.
+    // For a pending replica, for example, this will return false.
+    // Also, for the case of intra-node migration, we check that this shard is ready for reads.
+    const auto my_host_id = ermp->get_token_metadata_ptr()->get_topology().my_host_id();
+    const auto replicas = ermp->get_replicas(token);
+    return std::find(replicas.begin(), replicas.end(), my_host_id) != replicas.end()
+        && ermp->shard_for_reads(*base, token) == this_shard_id();
+}
+
 // Calculate the node ("natural endpoint") to which this node should send
 // a view update.
 //
@@ -1611,7 +1623,8 @@ get_view_natural_endpoint(
         bool network_topology,
         const dht::token& base_token,
         const dht::token& view_token,
-        bool use_legacy_self_pairing) {
+        bool use_legacy_self_pairing,
+        replica::cf_stats& cf_stats) {
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
     auto me = topology.my_host_id();
     auto my_datacenter = topology.get_datacenter();
@@ -1655,7 +1668,8 @@ get_view_natural_endpoint(
     if (base_it == base_endpoints.end()) {
         // This node is not a base replica of this key, so we return empty
         // FIXME: This case shouldn't happen, and if it happens, a view update
-        // would be lost. We should reported or count this case.
+        // would be lost.
+        ++cf_stats.total_view_updates_on_wrong_node;
         return {};
     }
     auto replica = view_endpoints[base_it - base_endpoints.begin()];
@@ -1744,7 +1758,7 @@ future<> view_update_generator::mutate_MV(
         // TODO: Maybe allow users to set use_legacy_self_pairing explicitly
         // on a view, like we have the synchronous_updates_flag.
         bool use_legacy_self_pairing = !ks.uses_tablets();
-        auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing);
+        auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing, cf_stats);
         auto remote_endpoints = view_ermp->get_pending_endpoints(view_token);
         auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
 
