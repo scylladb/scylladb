@@ -1693,7 +1693,7 @@ public:
     }
 
     bool use_interposer_consumer() const override {
-        return true;
+        return false;
     }
 
     std::string_view report_start_desc() const override {
