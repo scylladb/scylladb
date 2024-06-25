@@ -46,7 +46,7 @@ class DBConfigParser:
     """
     Regex pattern for parsing named values in the configuration header file:
     """
-    CONFIG_H_REGEX_PATTERN = r"\s*named_value<([\w:<>,\s]+)> (\w+);"
+    CONFIG_H_REGEX_PATTERN = r"\s*(?:named_value|log_legacy_value)<([\w:<>,\s]+)> (\w+);"
 
     """
     Regex pattern for parsing comments.
