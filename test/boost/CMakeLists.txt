@@ -19,6 +19,8 @@ add_scylla_test(batchlog_manager_test
 add_scylla_test(big_decimal_test
   KIND BOOST
   LIBRARIES utils)
+add_scylla_test(bloom_filter_test
+  KIND SEASTAR)
 add_scylla_test(bptree_test
   KIND BOOST
   LIBRARIES utils)
