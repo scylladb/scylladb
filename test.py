@@ -90,8 +90,14 @@ def path_to(mode, *components):
     build_dir = 'build'
     if os.path.exists(os.path.join(build_dir, 'build.ninja')):
         *dir_components, basename = components
-        return os.path.join(build_dir, *dir_components, all_modes[mode], basename)
-    return os.path.join(build_dir, mode, *components)
+        exe_path = os.path.join(build_dir, *dir_components, all_modes[mode], basename)
+    else:
+        exe_path = os.path.join(build_dir, mode, *components)
+    if not os.access(exe_path, os.F_OK):
+        raise FileNotFoundError(f"{exe_path} does not exist.")
+    elif not os.access(exe_path, os.X_OK):
+        raise PermissionError(f"{exe_path} is not executable.")
+    return exe_path
 
 
 def ninja(target):
