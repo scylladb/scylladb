@@ -157,6 +157,21 @@ def task(gdb, scylla_gdb):
 def test_fiber(gdb, task):
     scylla(gdb, f'fiber {task}')
 
+# Similar to task(), but looks for a coroutine frame.
+@pytest.fixture(scope="module")
+def coro_task(gdb, scylla_gdb):
+    for obj_addr, vtable_addr in scylla_gdb.find_vptrs():
+        name = scylla_gdb.resolve(vtable_addr)
+        if name and name.strip() == 'service::topology_coordinator::run() [clone .resume]':
+            return obj_addr.cast(gdb.lookup_type('uintptr_t'))
+    raise gdb.error("No coroutine frames found with expected name")
+
+def test_coro_frame(gdb, coro_task):
+    # Note the offset by two words.
+    # This moves the pointer from the outer coroutine frame to the inner seastar::task.
+    # $coro_frame expects a seastar::task*.
+    gdb.execute(f'p *$coro_frame({coro_task} + 16)')
+
 def test_sstable_summary(gdb, sstable):
     scylla(gdb, f'sstable-summary {sstable}')
 

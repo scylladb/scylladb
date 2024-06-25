@@ -5921,6 +5921,79 @@ class scylla_gdb_func_variant_member(gdb.Function):
     def invoke(self, obj):
         return std_variant(obj).get()
 
+class scylla_gdb_func_coro_frame(gdb.Function):
+    """Given a seastar::task* pointing to a coroutine task, convert it to a pointer to the coroutine frame.
+
+    Usage:
+    $coro_frame($ptr)
+
+    Where:
+    $ptr - any expression that evaluates to an integer. It will be interpreted as seastar::task*.
+
+    Returns:
+    The (typed) pointer to the coroutine frame.
+
+    Example:
+
+    1. Print the task chain:
+
+    (gdb) scylla fiber seastar::local_engine->_current_task
+    [shard  1] #0  (task*) 0x0000601008e8e970 0x000000000047aae0 vtable for seastar::internal::coroutine_traits_base<void>::promise_type + 16  (sstables::parse<unsigned int, std::pair<sstables::metadata_type, unsigned int> >(schema const&, sstables::sstable_version_types, sstables::random_access_reader&, sstables::disk_array<unsigned int, std::pair<sstables::metadata_type, unsigned int> >&) at sstables/sstables.cc:352)
+    [shard  1] #1  (task*) 0x00006010092acf10 0x000000000047aae0 vtable for seastar::internal::coroutine_traits_base<void>::promise_type + 16  (sstables::parse(schema const&, sstables::sstable_version_types, sstables::random_access_reader&, sstables::statistics&) at sstables/sstables.cc:570)
+    ...
+
+    2. Examine the coroutine frame of task #1:
+
+    (gdb) p *$coro_frame(0x00006010092acf10)
+    $1 = {
+      __resume_fn = 0x2485f80 <sstables::parse(schema const&, sstables::sstable_version_types, sstables::random_access_reader&, sstables::statistics&)>,
+      ...
+      PointerType_7 = 0x601008e67880,
+      PointerType_8 = 0x601008e64900,
+      ...
+      __int_32_23 = 4,
+      ...
+      __coro_index = 0 '\000'
+      ...
+
+    3. Examine coroutine arguments.
+    (Needs some know-how. They should be at lowest-indexed PointerType* or __int* entries, depending on their type. Not so easy to automate):
+
+    (gdb) p $downcast_vptr($coro_frame(0x00006010092acf10)->PointerType_7)
+    $2 = (schema *) 0x601008e67880
+    (gdb) p (sstables::sstable_version_types)($coro_frame(0x00006010092acf10)->__int_32_23)
+    $3 = sstables::sstable_version_types::me
+    (gdb) p $downcast_vptr($coro_frame(0x00006010092acf10)->PointerType_8)
+    $4 = (sstables::file_random_access_reader *) 0x601008e64900
+    """
+
+    def __init__(self):
+        super(scylla_gdb_func_coro_frame, self).__init__('coro_frame')
+
+    def invoke(self, ptr_raw):
+        vptr_type = gdb.lookup_type('uintptr_t').pointer()
+        ptr = gdb.Value(ptr_raw).reinterpret_cast(vptr_type)
+        maybe_vptr = int(ptr.dereference())
+
+        # Validate that the task is a coroutine.
+        with gdb.with_parameter("print demangle", "on"):
+            symname = gdb.execute(f"info symbol {maybe_vptr}", False, True)
+        if not symname.startswith('vtable for seastar::internal::coroutine_traits_base'):
+            gdb.write(f"0x{maybe_vptr:x} does not seem to point to a coroutine task.")
+            return None
+
+        # The promise object starts on the third `uintptr_t` in the frame.
+        # The resume_fn pointer is the first `uintptr_t`.
+        # So if the task is a coroutine, we should be able to find the resume function via offsetting by -2.
+        # AFAIK both major compilers respect this convention.
+        block = gdb.block_for_pc((ptr - 2).dereference())
+
+        # Look up the coroutine frame type.
+        # I don't understand why, but gdb has problems looking up the coro_frame_ty type if demangling is enabled.
+        with gdb.with_parameter("demangle-style", "none"):
+            coro_ty = gdb.lookup_type(f"{block.function.linkage_name}.coro_frame_ty").pointer()
+
+        return (ptr - 2).cast(coro_ty)
 
 # Commands
 scylla()
@@ -5980,6 +6053,7 @@ scylla_range_tombstones()
 #   (gdb) help function $function_name
 scylla_gdb_func_dereference_smart_ptr()
 scylla_gdb_func_downcast_vptr()
+scylla_gdb_func_coro_frame()
 scylla_gdb_func_collection_element()
 scylla_gdb_func_sharded_local()
 scylla_gdb_func_variant_member()

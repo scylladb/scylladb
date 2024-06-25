@@ -90,6 +90,8 @@ if(target_arch)
   add_compile_options("-march=${target_arch}")
 endif()
 
+add_compile_options("SHELL:-Xclang -fexperimental-assignment-tracking=disabled")
+
 function(maybe_limit_stack_usage_in_KB stack_usage_threshold_in_KB config)
   math(EXPR _stack_usage_threshold_in_bytes "${stack_usage_threshold_in_KB} * 1024")
   set(_stack_usage_threshold_flag "-Wstack-usage=${_stack_usage_threshold_in_bytes}")
