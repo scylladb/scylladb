@@ -6,8 +6,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "api/api.hh"
 #include "api/config.hh"
 #include "api/api-doc/config.json.hh"
+#include "api/api-doc/storage_proxy.json.hh"
+#include "replica/database.hh"
 #include "db/config.hh"
 #include <sstream>
 #include <boost/algorithm/string/replace.hpp>
@@ -15,6 +18,7 @@
 
 namespace api {
 using namespace seastar::httpd;
+namespace sp = httpd::storage_proxy_json;
 
 template<class T>
 json::json_return_type get_json_return_type(const T& val) {
@@ -101,6 +105,102 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         }
         throw bad_param_exception(sstring("No such config entry: ") + id);
     });
+
+    sp::get_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.request_timeout_in_ms()/1000.0;
+    });
+
+    sp::set_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
+        //TBD
+        unimplemented();
+        auto enable = req->get_query_param("timeout");
+        return make_ready_future<json::json_return_type>(seastar::json::json_void());
+    });
+
+    sp::get_read_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.read_request_timeout_in_ms()/1000.0;
+    });
+
+    sp::set_read_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
+        //TBD
+        unimplemented();
+        auto enable = req->get_query_param("timeout");
+        return make_ready_future<json::json_return_type>(seastar::json::json_void());
+    });
+
+    sp::get_write_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.write_request_timeout_in_ms()/1000.0;
+    });
+
+    sp::set_write_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
+        //TBD
+        unimplemented();
+        auto enable = req->get_query_param("timeout");
+        return make_ready_future<json::json_return_type>(seastar::json::json_void());
+    });
+
+    sp::get_counter_write_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.counter_write_request_timeout_in_ms()/1000.0;
+    });
+
+    sp::set_counter_write_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
+        //TBD
+        unimplemented();
+        auto enable = req->get_query_param("timeout");
+        return make_ready_future<json::json_return_type>(seastar::json::json_void());
+    });
+
+    sp::get_cas_contention_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.cas_contention_timeout_in_ms()/1000.0;
+    });
+
+    sp::set_cas_contention_timeout.set(r, [](std::unique_ptr<http::request> req)  {
+        //TBD
+        unimplemented();
+        auto enable = req->get_query_param("timeout");
+        return make_ready_future<json::json_return_type>(seastar::json::json_void());
+    });
+
+    sp::get_range_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.range_request_timeout_in_ms()/1000.0;
+    });
+
+    sp::set_range_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
+        //TBD
+        unimplemented();
+        auto enable = req->get_query_param("timeout");
+        return make_ready_future<json::json_return_type>(seastar::json::json_void());
+    });
+
+    sp::get_truncate_rpc_timeout.set(r, [&cfg](const_req req)  {
+        return cfg.truncate_request_timeout_in_ms()/1000.0;
+    });
+
+    sp::set_truncate_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
+        //TBD
+        unimplemented();
+        auto enable = req->get_query_param("timeout");
+        return make_ready_future<json::json_return_type>(seastar::json::json_void());
+    });
+
+}
+
+void unset_config(http_context& ctx, routes& r) {
+    cs::find_config_id.unset(r);
+    sp::get_rpc_timeout.unset(r);
+    sp::set_rpc_timeout.unset(r);
+    sp::get_read_rpc_timeout.unset(r);
+    sp::set_read_rpc_timeout.unset(r);
+    sp::get_write_rpc_timeout.unset(r);
+    sp::set_write_rpc_timeout.unset(r);
+    sp::get_counter_write_rpc_timeout.unset(r);
+    sp::set_counter_write_rpc_timeout.unset(r);
+    sp::get_cas_contention_timeout.unset(r);
+    sp::set_cas_contention_timeout.unset(r);
+    sp::get_range_rpc_timeout.unset(r);
+    sp::set_range_rpc_timeout.unset(r);
+    sp::get_truncate_rpc_timeout.unset(r);
+    sp::set_truncate_rpc_timeout.unset(r);
 }
 
 }
