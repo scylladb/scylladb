@@ -136,7 +136,8 @@ class BaseVersionsTemplateDirective(Directive):
         if current_version.startswith(prefix):
             version = current_version
         elif not stable_version.startswith(prefix):
-            LOGGER.error("Invalid stable_version format in conf.py. It should start with 'branch-'")
+            LOGGER.error("Invalid stable_version format '%s' in conf.py. It should start with 'branch-'",
+                         stable_version)
         else:
             version = stable_version
 
