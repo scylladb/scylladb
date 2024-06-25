@@ -1303,6 +1303,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/storage_service.idl.hh',
         'idl/join_node.idl.hh',
         'idl/utils.idl.hh',
+        'idl/gossip.idl.hh',
         ]
 
 scylla_tests_generic_dependencies = [

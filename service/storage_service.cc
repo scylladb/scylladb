@@ -1834,6 +1834,17 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // Initializes monitor only after updating local topology.
         start_tablet_split_monitor();
 
+        std::unordered_set<inet_address> ips;
+        const auto& am = _group0->address_map();
+        for (auto id : _topology_state_machine._topology.normal_nodes | boost::adaptors::map_keys) {
+            auto ip = am.find(id);
+            if (ip) {
+                ips.insert(*ip);
+            }
+        }
+
+        co_await _gossiper.notify_nodes_on_up(std::move(ips));
+
         co_return;
     }
 
@@ -2006,6 +2017,15 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         }
         // Other errors are handled internally by track_upgrade_progress_to_topology_coordinator
     })(*this, sys_dist_ks, proxy);
+
+    std::unordered_set<inet_address> ips;
+    _gossiper.for_each_endpoint_state([this, &ips] (const inet_address& addr, const gms::endpoint_state&) {
+        if (_gossiper.is_normal(addr)) {
+            ips.insert(addr);
+        }
+    });
+
+    co_await _gossiper.notify_nodes_on_up(std::move(ips));
 }
 
 future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {

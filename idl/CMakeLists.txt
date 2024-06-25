@@ -61,6 +61,7 @@ set(idl_headers
   experimental/broadcast_tables_lang.idl.hh
   join_node.idl.hh
   utils.idl.hh
+  gossip.idl.hh
   )
 
 foreach(idl_header ${idl_headers})
