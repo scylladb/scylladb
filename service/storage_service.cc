@@ -5840,6 +5840,15 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                                                      tablet, leaving_replica));
             }
             tm = nullptr;
+
+            co_await utils::get_local_injector().inject("intranode_migration_streaming_wait", [this] (auto& handler) -> future<> {
+                rtlogger.info("intranode_migration_streaming: waiting");
+                while (!handler.poll_for_message() && !_async_gate.is_closed()) {
+                    co_await sleep(std::chrono::milliseconds(5));
+                }
+                rtlogger.info("intranode_migration_streaming: released");
+            });
+
             rtlogger.info("Starting intra-node streaming of tablet {} from shard {} to {}", tablet, leaving_replica->shard, pending_replica->shard);
             co_await clone_locally_tablet_storage(tablet, *leaving_replica, *pending_replica);
             rtlogger.info("Finished intra-node streaming of tablet {} from shard {} to {}", tablet, leaving_replica->shard, pending_replica->shard);

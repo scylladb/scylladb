@@ -14,6 +14,7 @@
 #include "readers/flat_mutation_reader_v2.hh"
 #include "mutation/frozen_mutation.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 class frozen_mutation_and_schema;
 
@@ -314,6 +315,10 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(
         const std::vector<view_and_base>& views);
 
 bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views);
+
+// Whether this node and shard should generate and send view updates for the given token.
+// Checks that the node is one of the replicas (not a pending replicas), and is ready for reads.
+bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const locator::effective_replication_map_ptr& ermp, dht::token token);
 
 size_t memory_usage_of(const frozen_mutation_and_schema& mut);
 
