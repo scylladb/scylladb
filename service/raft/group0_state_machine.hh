@@ -53,7 +53,8 @@ struct mixed_change {
 };
 
 // This command is used to write data to tables other than topology or
-// schema tables and it doesn't update any in-memory data structures.
+// schema tables. and it updates any in-memory data structures based on
+// mutations' table_id.
 struct write_mutations {
     std::vector<canonical_mutation> mutations;
 };
@@ -94,6 +95,10 @@ struct group0_command {
 // Raft state machine implementation for managing group 0 changes (e.g. schema changes).
 // NOTE: group 0 raft server is always instantiated on shard 0.
 class group0_state_machine : public raft_state_machine {
+    struct modules_to_reload {
+        bool service_levels_cache = false;
+    };
+
     raft_group0_client& _client;
     migration_manager& _mm;
     storage_proxy& _sp;
@@ -104,6 +109,8 @@ class group0_state_machine : public raft_state_machine {
     bool _topology_change_enabled;
     gms::feature::listener_registration _topology_on_raft_support_listener;
 
+    modules_to_reload get_modules_to_reload(const std::vector<canonical_mutation>& mutations);
+    future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, raft_address_map& address_map, gms::feature_service& feat, bool topology_change_enabled);
