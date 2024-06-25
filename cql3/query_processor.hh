@@ -315,7 +315,7 @@ public:
             db::consistency_level cl,
             const data_value_list& values,
             int32_t page_size,
-            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f);
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
     /*
      * \brief iterate over all cql results using paging
@@ -330,7 +330,7 @@ public:
      */
     future<> query_internal(
             const sstring& query_string,
-            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f);
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
     class cache_internal_tag;
     using cache_internal = bool_class<cache_internal_tag>;
@@ -501,7 +501,7 @@ private:
      */
     future<> for_each_cql_result(
             cql3::internal_query_state& state,
-             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f);
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
     /*!
      * \brief check, based on the state if there are additional results
