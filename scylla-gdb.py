@@ -3867,11 +3867,11 @@ class scylla_fiber(gdb.Command):
         # So if the task is a coroutine, we should be able to find the resume function via offsetting by -2.
         # AFAIK both major compilers respect this convention.
         if resolved_symbol.startswith('vtable for seastar::internal::coroutine_traits_base'):
-            coroutine_resume_fn = resolve((gdb.Value(ptr).cast(self._vptr_type) - 2).dereference())
-            if coroutine_resume_fn:
-                resolved_symbol += f" (.resume is {coroutine_resume_fn})"
+            if block := gdb.block_for_pc((gdb.Value(ptr).cast(self._vptr_type) - 2).dereference()):
+                resume = block.function
+                resolved_symbol += f" ({resume.print_name} at {resume.symtab.filename}:{resume.line})"
             else:
-                resolved_symbol += f" (.resume is unknown)"
+                resolved_symbol += f" (unknown coroutine)"
 
         if using_seastar_allocator:
             if ptr_meta is None:
