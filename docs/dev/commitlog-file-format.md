@@ -114,3 +114,33 @@ the file is not fully written/prematurely ended. Both cases can mean data loss, 
 how writing is done as well as OS and hardware.
 
 ```
+
+Version 4
+---------
+
+Modified from v3 to allow fragmented data entries, i.e. writing a single data entry
+as a stream across several segments.
+A fragmented entry is written by splitting data into sub-parts that will fit into
+the normal restrictions of a write (i.e. smaller than max mutation size, but also
+trying to fit into existing buffers as best we can to avoid wasting alignment slack).
+
+```
+        Fragmented entry
+
+        magic           : fragmented marker - 0xfffffffe (MAX_UINT32-1)
+        size            : size of this fragmented entry part + headers
+        id              : the stream id
+        offset          : offset of this entry in the data stream
+        remaining       : stream data remaining to write after this entry 
+        crc             : CRC32 of magic, size, id, offset and remaining
+
+```
+
+Each stream has a unique id (monotonic counter). We must handle reading and 
+assembling streams out of order and interleaved because we can't always 
+guarantee order replaying will be performed in.
+
+The replayer needs to be called with a state storage (replay_state) to handle
+fragmented entries. When encountering one, we store the data into the state
+buffer for the id, and once we have all fragments (as defined by id, offset and
+remaining), we can report the full entry back to caller.
