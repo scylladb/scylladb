@@ -100,8 +100,9 @@ public:
     {}
 
     void set_with_schema(bool value) {
-        _with_schema = value;
-        compute_size();
+        if (std::exchange(_with_schema, value) != value || _size == std::numeric_limits<size_t>::max()) {
+            compute_size();
+        }
     }
     bool with_schema() const {
         return _with_schema;
