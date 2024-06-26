@@ -201,6 +201,7 @@ docker_common_args+=(
        --security-opt label=disable \
        --network host \
        --cap-add SYS_PTRACE \
+       --privileged \
        --ulimit nofile=$(ulimit -Sn):$hard_limit \
        -v "$PWD:$PWD" \
        -v "$tmpdir:/tmp" \
