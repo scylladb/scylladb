@@ -37,8 +37,3 @@ template <> struct fmt::formatter<repair_sync_boundary> {
         return fmt::format_to(ctx.out(), "{{ {}, {} }}", boundary.pk, boundary.position);
     }
 };
-
-inline std::ostream& operator<<(std::ostream& os, const repair_sync_boundary& x) {
-    fmt::print(os, "{}", x);
-    return os;
-}

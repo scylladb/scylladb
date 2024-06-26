@@ -120,10 +120,6 @@ static std::ostream& operator<<(std::ostream& os, const std::unordered_map<T1, T
     return os;
 }
 
-std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo) {
-    return out << format_as(algo);
-}
-
 std::string_view format_as(row_level_diff_detect_algorithm algo) {
     using enum row_level_diff_detect_algorithm;
     switch (algo) {
