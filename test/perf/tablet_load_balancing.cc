@@ -272,23 +272,26 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
                 load_sketch load(stm.get());
                 load.populate(std::nullopt, s->id()).get();
 
-                min_max_tracker<double> shard_overcommit_minmax;
+                min_max_tracker<uint64_t> shard_load_minmax;
                 min_max_tracker<uint64_t> node_load_minmax;
                 uint64_t sum_node_load = 0;
+                uint64_t shard_count = 0;
                 for (auto h: hosts) {
                     auto minmax = load.get_shard_minmax(h);
                     auto node_load = load.get_load(h);
                     auto avg_shard_load = load.get_real_avg_shard_load(h);
                     auto overcommit = double(minmax.max()) / avg_shard_load;
-                    shard_overcommit_minmax.update(overcommit);
+                    shard_load_minmax.update(minmax.max());
+                    shard_count += load.get_shard_count(h);
                     testlog.info("Load on host {} for table {}: total={}, min={}, max={}, spread={}, avg={:.2f}, overcommit={:.2f}",
                                  h, s->cf_name(), node_load, minmax.min(), minmax.max(), minmax.max() - minmax.min(), avg_shard_load, overcommit);
                     node_load_minmax.update(node_load);
                     sum_node_load += node_load;
                 }
 
-                auto shard_overcommit = shard_overcommit_minmax.max();
-                testlog.info("Shard overcommit: min={:.2f}, max={:.2f}", shard_overcommit_minmax.min(), shard_overcommit_minmax.max());
+                auto avg_shard_load = double(sum_node_load) / shard_count;
+                auto shard_overcommit = shard_load_minmax.max() / avg_shard_load;
+                testlog.info("Shard overcommit: {:.2f}", shard_overcommit);
 
                 auto node_imbalance = node_load_minmax.max() - node_load_minmax.min();
                 auto avg_node_load = double(sum_node_load) / hosts.size();
