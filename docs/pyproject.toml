@@ -3,6 +3,7 @@ name = "scylla"
 description = "Scylla Documentation"
 version = "4.3.0"
 authors = ["ScyllaDB Contributors"]
+package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -19,5 +20,5 @@ sphinx-scylladb-markdown = "^0.1.2"
 sphinx_collapse ="^0.1.3"
 
 [build-system]
-requires = ["poetry>=0.12"]
+requires = ["poetry>=1.8"]
 build-backend = "poetry.masonry.api"
