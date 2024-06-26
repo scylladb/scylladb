@@ -236,7 +236,6 @@ enum class row_level_diff_detect_algorithm : uint8_t {
     send_full_set_rpc_stream,
 };
 
-std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo);
 std::string_view format_as(row_level_diff_detect_algorithm);
 
 struct repair_update_system_table_request {
