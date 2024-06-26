@@ -151,7 +151,7 @@ public:
                            The interval is time to check the distributed data.
      * @return a future that is resolved when the update loop stops.
      */
-    void update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f);
+    void start_legacy_update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f);
 
     /**
      * Updates the service level data from the distributed data store.
