@@ -342,6 +342,18 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
     co_return global_res;
 }
 
+future<> run_simulation(const params& p, const sstring& name = "") {
+    auto res = co_await test_load_balancing_with_many_tables(p, true);
+    testlog.info("[run {}] Overcommit       : init : {}", name, res.init);
+    testlog.info("[run {}] Overcommit       : worst: {}", name, res.worst);
+    testlog.info("[run {}] Overcommit       : last : {}", name, res.last);
+
+    res = co_await test_load_balancing_with_many_tables(p, false);
+    testlog.info("[run {}] Overcommit (old) : init : {}", name, res.init);
+    testlog.info("[run {}] Overcommit (old) : worst: {}", name, res.worst);
+    testlog.info("[run {}] Overcommit (old) : last : {}", name, res.last);
+}
+
 future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
     for (auto i = 0; i < app_cfg["runs"].as<int>(); i++) {
         auto shards = 1 << tests::random::get_int(0, 6);
@@ -362,17 +374,9 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
             .scale2 = scale2,
         };
 
-        testlog.info("[run] Run #{}, params: {}", i, p);
-
-        auto res = co_await test_load_balancing_with_many_tables(p, true);
-        testlog.info("[run] Overcommit       : init : {}", res.init);
-        testlog.info("[run] Overcommit       : worst: {}", res.worst);
-        testlog.info("[run] Overcommit       : last : {}", res.last);
-
-        res = co_await test_load_balancing_with_many_tables(p, false);
-        testlog.info("[run] Overcommit (old) : init : {}", res.init);
-        testlog.info("[run] Overcommit (old) : worst: {}", res.worst);
-        testlog.info("[run] Overcommit (old) : last : {}", res.last);
+        auto name = format("#{}", i);
+        testlog.info("[run {}] params: {}", name, p);
+        co_await run_simulation(p, name);
     }
 }
 
@@ -382,8 +386,14 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
-            ("runs", bpo::value<int>()->default_value(1), "Number of simulation runs.")
+            ("runs", bpo::value<int>(), "Number of simulation runs.")
             ("iterations", bpo::value<int>()->default_value(8), "Number of topology-changing cycles in each run.")
+            ("nodes", bpo::value<int>(), "Number of nodes in the cluster.")
+            ("tablets1", bpo::value<int>(), "Number of tablets for the first table.")
+            ("tablets2", bpo::value<int>(), "Number of tablets for the second table.")
+            ("rf1", bpo::value<int>(), "Replication factor for the first table.")
+            ("rf2", bpo::value<int>(), "Replication factor for the second table.")
+            ("shards", bpo::value<int>(), "Number of shards per node.")
             ("verbose", "Enables standard logging")
             ;
     return app.run(argc, argv, [&] {
@@ -399,7 +409,20 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
             });
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             try {
-                run_simulations(app.configuration()).get();
+                if (app.configuration().contains("runs")) {
+                    run_simulations(app.configuration()).get();
+                } else {
+                    params p {
+                        .iterations = app.configuration()["iterations"].as<int>(),
+                        .nodes = app.configuration()["nodes"].as<int>(),
+                        .tablets1 = app.configuration()["tablets1"].as<int>(),
+                        .tablets2 = app.configuration()["tablets2"].as<int>(),
+                        .rf1 = app.configuration()["rf1"].as<int>(),
+                        .rf2 = app.configuration()["rf2"].as<int>(),
+                        .shards = app.configuration()["shards"].as<int>(),
+                    };
+                    run_simulation(p).get();
+                }
             } catch (seastar::abort_requested_exception&) {
                 // Ignore
             }
