@@ -1347,6 +1347,33 @@ public:
         co_return min_candidate;
     }
 
+    future<> log_table_load(node_load_map& nodes, table_id table) {
+        size_t total_load = 0;
+        size_t shard_count = 0;
+        size_t max_shard_load = 0;
+
+        for (auto&& [host, node] : nodes) {
+            if (node.drained) {
+                continue;
+            }
+            shard_count += node.shard_count;
+            size_t this_node_max_shard_load = 0;
+            size_t node_load = 0;
+            for (shard_id shard = 0; shard < node.shard_count; shard++) {
+                co_await coroutine::maybe_yield();
+                auto load = node.shards[shard].tablet_count_per_table[table];
+                total_load += load;
+                node_load += load;
+                max_shard_load = std::max(max_shard_load, load);
+                this_node_max_shard_load = std::max(this_node_max_shard_load, load);
+            }
+            lblogger.debug("Load on host {} for table {}: total={}, max={}", host, table, node_load, this_node_max_shard_load);
+        }
+        auto avg_load = double(total_load) / shard_count;
+        auto overcommit = max_shard_load / avg_load;
+        lblogger.debug("Table {} shard overcommit: {}", table, overcommit);
+    }
+
     future<migration_plan> make_internode_plan(const dc_name& dc, node_load_map& nodes,
                                                const std::unordered_set<host_id>& nodes_to_drain,
                                                host_id target) {
@@ -1615,6 +1642,10 @@ public:
             if (src_node_info.tablet_count == 0) {
                 push_back_node_candidate.cancel();
                 nodes_by_load.pop_back();
+            }
+
+            if (lblogger.is_enabled(seastar::log_level::debug)) {
+                co_await log_table_load(nodes, source_tablet.table);
             }
         }
 
