@@ -86,40 +86,33 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
             co_await coroutine::return_exception(utils::injected_error("injected_error_before_save_promise"));
         }
 
-        auto [f1, f2] = co_await when_all(
+        // The all() below throws only if save_paxos_promise fails.
+        // If querying the result fails we continue without read round optimization
+        auto [data_or_digest] = co_await coroutine::all(
             [&] {
                 return sys_ks.save_paxos_promise(*schema, std::ref(key), ballot, timeout);
             },
-            coroutine::lambda([&] () -> future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> {
-                co_return co_await sp.get_db().local().query(schema, cmd,
-                        {only_digest ? query::result_request::only_digest : query::result_request::result_and_digest, da},
-                        dht::partition_range_vector({dht::partition_range::make_singular({token, key})}), tr_state, timeout);
-            })
+            [&] () -> future<std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>>> {
+                try {
+                    auto&& [result, hit_rate] = co_await sp.get_db().local().query(schema, cmd,
+                            {only_digest ? query::result_request::only_digest : query::result_request::result_and_digest, da},
+                            dht::partition_range_vector({dht::partition_range::make_singular({token, key})}), tr_state, timeout);
+                    if (only_digest) {
+                        co_return *result->digest();
+                    } else {
+                        co_return make_foreign(std::move(result));
+                    }
+                } catch(...) {
+                    logger.debug("Failed to get data or digest: {}. Ignored.", std::current_exception());
+                    co_return std::nullopt;
+                }
+            }
         );
 
         if (utils::get_local_injector().enter("paxos_error_after_save_promise")) {
             co_await coroutine::return_exception(utils::injected_error("injected_error_after_save_promise"));
         }
 
-        if (f1.failed()) {
-            f2.ignore_ready_future();
-            // Failed to save promise. Nothing we can do but throw.
-            co_return coroutine::exception(f1.get_exception());
-        }
-        std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>> data_or_digest;
-        if (!f2.failed()) {
-            auto&& [result, hit_rate] = f2.get();
-            if (only_digest) {
-                data_or_digest = *result->digest();
-            } else {
-                data_or_digest = make_foreign(std::move(result));
-            }
-        } else {
-            // Don't return errors querying the current value, just debug-log them, as the caller is prepared to fall back
-            // on querying it by itself in case it's missing in the response.
-            auto ex = f2.get_exception();
-            logger.debug("Failed to get data or digest: {}. Ignored.", std::move(ex));
-        }
         auto upgrade_if_needed = [schema = std::move(schema), &sys_ks] (std::optional<proposal> p) -> future<std::optional<proposal>> {
             if (!p || p->update.schema_version() == schema->version()) {
                 co_return std::move(p);
