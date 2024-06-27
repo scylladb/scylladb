@@ -871,6 +871,28 @@ sstables::compaction_stopped_exception compaction_task_executor::make_compaction
     return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), _compaction_data.stop_requested);
 }
 
+class compaction_manager::strategy_control : public compaction::strategy_control {
+    compaction_manager& _cm;
+public:
+    explicit strategy_control(compaction_manager& cm) noexcept : _cm(cm) {}
+
+    bool has_ongoing_compaction(table_state& table_s) const noexcept override {
+        return std::any_of(_cm._tasks.begin(), _cm._tasks.end(), [&s = table_s.schema()] (const shared_ptr<compaction_task_executor>& task) {
+            return task->compaction_running()
+                && task->compacting_table()->schema()->ks_name() == s->ks_name()
+                && task->compacting_table()->schema()->cf_name() == s->cf_name();
+        });
+    }
+
+    std::vector<sstables::shared_sstable> candidates(table_state& t) const override {
+        return _cm.get_candidates(t, *t.main_sstable_set().all());
+    }
+
+    std::vector<sstables::frozen_sstable_run> candidates_as_runs(table_state& t) const override {
+        return _cm.get_candidates(t, t.main_sstable_set().all_sstable_runs());
+    }
+};
+
 compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _cfg(std::move(cfg))
@@ -2159,28 +2181,6 @@ void compaction_manager::propagate_replacement(table_state& t,
         }
     }
 }
-
-class compaction_manager::strategy_control : public compaction::strategy_control {
-    compaction_manager& _cm;
-public:
-    explicit strategy_control(compaction_manager& cm) noexcept : _cm(cm) {}
-
-    bool has_ongoing_compaction(table_state& table_s) const noexcept override {
-        return std::any_of(_cm._tasks.begin(), _cm._tasks.end(), [&s = table_s.schema()] (const shared_ptr<compaction_task_executor>& task) {
-            return task->compaction_running()
-                && task->compacting_table()->schema()->ks_name() == s->ks_name()
-                && task->compacting_table()->schema()->cf_name() == s->cf_name();
-        });
-    }
-
-    std::vector<sstables::shared_sstable> candidates(table_state& t) const override {
-        return _cm.get_candidates(t, *t.main_sstable_set().all());
-    }
-
-    std::vector<sstables::frozen_sstable_run> candidates_as_runs(table_state& t) const override {
-        return _cm.get_candidates(t, t.main_sstable_set().all_sstable_runs());
-    }
-};
 
 strategy_control& compaction_manager::get_strategy_control() const noexcept {
     return *_strategy_control;
