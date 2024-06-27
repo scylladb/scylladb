@@ -58,7 +58,7 @@ The diagram below shows a single datacenter cluster deployment, with the list of
 Most of the ports' settings are configurable in the scylla.yaml file.
 Also, see the list of ports used by ScyllaDB.
 
-.. image:: ScyllaDB-Ports2.png
+.. image:: Scylla-Ports2.png
 
 The ScyllaDB ports are detailed in the table below. For ScyllaDB Manager ports, see the `ScyllaDB Manager Documentation <https://manager.docs.scylladb.com>`_.
 
