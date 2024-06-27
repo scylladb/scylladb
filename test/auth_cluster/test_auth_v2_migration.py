@@ -53,17 +53,19 @@ async def populate_test_data(manager: ManagerClient, data):
 async def populate_auth_v1_data(manager: ManagerClient):
     await populate_test_data(manager, auth_data())
     # test also absence of deleted data
+    username = unique_name("deleted_user_")
+    logging.info(f"Creating deleted auth-v1 user: {username}")
     await populate_test_data(manager, [
         {
             "statement": "INSERT INTO system_auth.roles (role, can_login, is_superuser, member_of, salted_hash) VALUES (?, ?, ?, ?, ?)",
             "rows": [
-                ("deleted_user", True, False, None, "fefe"),
+                (username, True, False, None, "fefe"),
             ]
         },
         {
             "statement": "DELETE FROM system_auth.roles WHERE role = ?",
             "rows": [
-                ("deleted_user",),
+                (username,),
             ]
         },
     ])
@@ -123,14 +125,16 @@ async def check_auth_v2_works(manager: ManagerClient, hosts):
     assert len(user1_roles) == 2
     assert set([user1_roles[0].role, user1_roles[1].role]) == set(["users",  "user 1"])
 
-    await cql.run_async("CREATE ROLE user_after_migration")
+    username = unique_name("user_after_migration_")
+    logging.info(f"Create role after migration: {username}")
+    await cql.run_async(f"CREATE ROLE {username}")
     await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
     # see warmup_v1_static_values for background about checks below
     # check if it was added to a new table
-    assert len(await cql.run_async("SELECT role FROM system.roles WHERE role = 'user_after_migration'")) == 1
+    assert len(await cql.run_async(f"SELECT role FROM system.roles WHERE role = '{username}'")) == 1
     # check whether list roles statement sees it also via new table (on all nodes)
-    await asyncio.gather(*(cql.run_async("LIST ROLES OF user_after_migration", host=host) for host in hosts))
-    await cql.run_async("DROP ROLE user_after_migration")
+    await asyncio.gather(*(cql.run_async(f"LIST ROLES OF {username}", host=host) for host in hosts))
+    await cql.run_async(f"DROP ROLE {username}")
 
 
 @pytest.mark.asyncio
