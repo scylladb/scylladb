@@ -1,9 +1,4 @@
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
-  # -fasan -Og breaks some coroutines on aarch64, use -O0 instead
-  set(OptimizationLevel "0")
-else()
-  set(OptimizationLevel "g")
-endif()
+set(OptimizationLevel "g")
 
 update_cxx_flags(CMAKE_CXX_FLAGS_DEBUG
   WITH_DEBUG_INFO
