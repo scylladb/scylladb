@@ -40,6 +40,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/local_strategy.hh"
 #include "tools/schema_loader.hh"
 #include "view_info.hh"
 
@@ -159,7 +160,8 @@ private:
         return is_system_keyspace(unwrap(ks).metadata->name());
     }
     virtual const locator::abstract_replication_strategy& get_replication_strategy(data_dictionary::keyspace ks) const override {
-        throw std::bad_function_call();
+        static const locator::local_strategy strategy{locator::replication_strategy_params{locator::replication_strategy_config_options{}, 0}};
+        return strategy;
     }
     virtual const std::vector<view_ptr>& get_table_views(data_dictionary::table t) const override {
         static const std::vector<view_ptr> empty;
