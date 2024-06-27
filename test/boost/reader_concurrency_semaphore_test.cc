@@ -2018,4 +2018,62 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_count) {
 
     BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(count(), initial_memory));
 }
+<<<<<<< HEAD
 >>>>>>> 59faa6d4ff (reader_concurrency_semaphore: add cpu_concurrency constructor parameter)
+=======
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concurrency) {
+    simple_schema s;
+    const auto schema = s.schema();
+
+    utils::updateable_value_source<uint32_t> cpu_concurrency{2};
+    const int32_t initial_count = 4;
+    const uint32_t initial_memory = 4 * 1024;
+    const auto serialize_multiplier = std::numeric_limits<uint32_t>::max();
+    const auto kill_multiplier = std::numeric_limits<uint32_t>::max();
+
+    reader_concurrency_semaphore semaphore(
+            utils::updateable_value<int>(initial_count),
+            initial_memory,
+            get_name(),
+            100,
+            utils::updateable_value<uint32_t>(serialize_multiplier),
+            utils::updateable_value<uint32_t>(kill_multiplier),
+            utils::updateable_value(cpu_concurrency),
+            reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto require_can_admit = [&] (bool expected_can_admit, const char* description,
+            seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+        ::require_can_admit(schema, semaphore, expected_can_admit, description, sl);
+    };
+
+    auto permit1 = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+
+    require_can_admit(true, "!need_cpu");
+    {
+        reader_permit::need_cpu_guard ncpu_guard{permit1};
+
+        require_can_admit(true, "need_cpu < cpu_concurrency");
+
+        auto permit2 = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+
+        // no change
+        require_can_admit(true, "need_cpu < cpu_concurrency");
+        {
+            reader_permit::need_cpu_guard ncpu_guard{permit2};
+            require_can_admit(false, "need_cpu == cpu_concurrency");
+
+            cpu_concurrency.set(3);
+
+            require_can_admit(true, "after set(3): need_cpu < cpu_concurrency");
+
+            cpu_concurrency.set(2);
+
+            require_can_admit(false, "after set(2): need_cpu == cpu_concurrency");
+        }
+        require_can_admit(true, "need_cpu < cpu_concurrency");
+    }
+    require_can_admit(true, "!need_cpu");
+}
+>>>>>>> b4f3809ad2 (test/boost/reader_concurrency_semaphore_test: add test for live-configurable cpu concurrenc)
