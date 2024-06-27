@@ -142,7 +142,7 @@ Networking
 
 The ScyllaDB ports are detailed in the table below. For ScyllaDB Manager ports, see the `ScyllaDB Manager Documentation <https://manager.docs.scylladb.com/>`_.
 
-.. image:: /operating-scylla/security/ScyllaDB-Ports2.png
+.. image:: /operating-scylla/security/Scylla-Ports2.png
 
 .. include:: /operating-scylla/_common/networking-ports.rst
 
