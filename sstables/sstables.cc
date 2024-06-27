@@ -1373,6 +1373,13 @@ future<> sstable::drop_caches() {
     });
 }
 
+// Return the filter format for the given sstable version
+static inline utils::filter_format get_filter_format(sstable_version_types version) {
+    return (version >= sstable_version_types::mc)
+               ? utils::filter_format::m_format
+               : utils::filter_format::k_l_format;
+}
+
 future<> sstable::read_filter(sstable_open_config cfg) {
     if (!cfg.load_bloom_filter || !has_component(component_type::Filter)) {
         _components->filter = std::make_unique<utils::filter::always_present_filter>();
@@ -1384,10 +1391,7 @@ future<> sstable::read_filter(sstable_open_config cfg) {
         read_simple<component_type::Filter>(filter).get();
         auto nr_bits = filter.buckets.elements.size() * std::numeric_limits<typename decltype(filter.buckets.elements)::value_type>::digits;
         large_bitset bs(nr_bits, std::move(filter.buckets.elements));
-        utils::filter_format format = (_version >= sstable_version_types::mc)
-                                      ? utils::filter_format::m_format
-                                      : utils::filter_format::k_l_format;
-        _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs), format);
+        _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs), get_filter_format(_version));
     });
 }
 
@@ -1401,6 +1405,65 @@ void sstable::write_filter() {
     auto&& bs = f->bits();
     auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
     write_simple<component_type::Filter>(filter_ref);
+}
+
+void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
+    if (!has_component(component_type::Filter)) {
+        return;
+    }
+
+    // Skip rebuilding the bloom filter if the false positive rate based
+    // on the current bitset size is within 75% to 125% of the configured
+    // false positive rate.
+    auto curr_bitset_size = static_cast<utils::filter::bloom_filter*>(_components->filter.get())->bits().memory_size();
+    auto bitset_size_lower_bound = utils::i_filter::get_filter_size(num_partitions,
+                                                                    _schema->bloom_filter_fp_chance() * 1.25);
+    auto bitset_size_upper_bound = utils::i_filter::get_filter_size(num_partitions,
+                                                                    _schema->bloom_filter_fp_chance() * 0.75);
+    if (bitset_size_lower_bound <= curr_bitset_size && curr_bitset_size <= bitset_size_upper_bound) {
+        return;
+    }
+
+    // Consumer that adds the keys from index entries to the given bloom filter
+    class bloom_filter_builder {
+        utils::filter_ptr& _filter;
+    public:
+        bloom_filter_builder(utils::filter_ptr &filter) : _filter(filter) {}
+        void consume_entry(parsed_partition_index_entry&& e) {
+            _filter->add(to_bytes_view(e.key));
+        }
+    };
+
+    // Replace the existing filter with a new one that can optimally represent the given num_partitions.
+    // The rebuilding is done in-place as this method is only called before the sstable is sealed.
+    _components->filter = utils::i_filter::get_filter(num_partitions, _schema->bloom_filter_fp_chance(), get_filter_format(_version));
+    sstlog.info("Rebuilding bloom filter {}: resizing bitset from {} bytes to {} bytes.", filename(component_type::Filter), curr_bitset_size,
+                static_cast<utils::filter::bloom_filter*>(_components->filter.get())->bits().memory_size());
+
+    auto index_file = open_file(component_type::Index, open_flags::ro).get();
+    auto index_file_closer = deferred_action([&index_file] {
+        try {
+            index_file.close().get();
+        } catch (...) {
+            sstlog.warn("sstable close index_file failed: {}", std::current_exception());
+            general_disk_error();
+        }
+    });
+    auto index_file_size = index_file.size().get();
+
+    auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstable::rebuild_filter_from_index");
+    auto sem_stopper = deferred_stop(sem);
+
+    // rebuild the filter using index_consume_entry_context
+    bloom_filter_builder bfb_consumer(_components->filter);
+    index_consume_entry_context<bloom_filter_builder> consumer_ctx(
+            *this, sem.make_tracking_only_permit(_schema, "rebuild_filter_from_index", db::no_timeout, {}), bfb_consumer, trust_promoted_index::no,
+            make_file_input_stream(index_file, 0, index_file_size, {.buffer_size = sstable_buffer_size}), 0, index_file_size,
+            (_version >= sstable_version_types::mc
+                ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
+                : std::optional<column_values_fixed_lengths>{}));
+    auto consumer_ctx_closer = deferred_close(consumer_ctx);
+    consumer_ctx.consume_input().get();
 }
 
 size_t sstable::total_reclaimable_memory_size() const {

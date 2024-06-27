@@ -246,6 +246,10 @@ public:
     void reload_reclaimed_components() {
         _sst->reload_reclaimed_components().get();
     }
+
+    const utils::filter_ptr& get_filter() const {
+        return _sst->_components->filter;
+    }
 };
 
 inline auto replacer_fn_no_op() {
