@@ -26,17 +26,6 @@
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
-table_for_tests::data::data()
-{ }
-
-table_for_tests::data::~data() {}
-
-schema_ptr table_for_tests::make_default_schema() {
-    return schema_builder(some_keyspace, some_column_family)
-        .with_column(utf8_type->decompose("p1"), utf8_type, column_kind::partition_key)
-        .build();
-}
-
 class table_for_tests::table_state : public compaction::table_state {
     table_for_tests::data& _data;
     sstables::sstables_manager& _sstables_manager;
@@ -126,6 +115,17 @@ public:
         return _staging_condition;
     }
 };
+
+table_for_tests::data::data()
+{ }
+
+table_for_tests::data::~data() {}
+
+schema_ptr table_for_tests::make_default_schema() {
+    return schema_builder(some_keyspace, some_column_family)
+        .with_column(utf8_type->decompose("p1"), utf8_type, column_kind::partition_key)
+        .build();
+}
 
 table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, compaction_manager& cm, schema_ptr s, replica::table::config cfg, data_dictionary::storage_options storage)
     : _data(make_lw_shared<data>())
