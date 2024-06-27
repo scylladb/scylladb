@@ -17,7 +17,7 @@ class query_ranges_to_vnodes_generator {
     dht::partition_range_vector::iterator _i; // iterator to current range in _ranges
     bool _local;
     std::unique_ptr<locator::token_range_splitter> _splitter;
-    void process_one_range(size_t n, dht::partition_range_vector& ranges);
+    stop_iteration process_one_range(size_t n, dht::partition_range_vector& ranges);
 public:
     query_ranges_to_vnodes_generator(std::unique_ptr<locator::token_range_splitter> splitter, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
     query_ranges_to_vnodes_generator(const query_ranges_to_vnodes_generator&) = delete;

@@ -34,9 +34,7 @@ dht::partition_range_vector query_ranges_to_vnodes_generator::operator()(size_t 
     dht::partition_range_vector result;
     if (n) {
         result.reserve(n);
-        while (result.size() != n) {
-            process_one_range(n, result);
-        }
+        while (!process_one_range(n, result)) {}
     }
     return result;
 }
@@ -49,7 +47,7 @@ bool query_ranges_to_vnodes_generator::empty() const {
  * Compute all ranges we're going to query, in sorted order. Nodes can be replica destinations for many ranges,
  * so we need to restrict each scan to the specific range we want, or else we'd get duplicate results.
  */
-void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partition_range_vector& ranges) {
+stop_iteration query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partition_range_vector& ranges) {
     dht::ring_position_comparator cmp(*_s);
     dht::partition_range& cr = *_i;
 
@@ -58,23 +56,26 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
        return std::move(cr);
     };
 
-    auto add_range = [&ranges] (dht::partition_range&& r) {
+    auto is_done = [&] {
+        return stop_iteration(ranges.size() >= n);
+    };
+
+    auto add_range = [&] (dht::partition_range&& r) {
         ranges.emplace_back(std::move(r));
+        return is_done();
     };
 
     if (_local) { // if the range is local no need to divide to vnodes
-        add_range(get_remainder());
-        return;
+        return add_range(get_remainder());
     }
 
     // special case for bounds containing exactly 1 token
     if (start_token(cr) == end_token(cr)) {
         if (start_token(cr).is_minimum()) {
             _i++; // empty range? Move to the next one
-            return;
+            return stop_iteration::no;
         }
-        add_range(get_remainder());
-        return;
+        return add_range(get_remainder());
     }
 
     // divide the queryRange into pieces delimited by the ring
@@ -105,16 +106,16 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
         std::pair<dht::partition_range, dht::partition_range> splits =
                 cr.split(split_point, cmp);
 
-        add_range(std::move(splits.first));
+        auto stop = add_range(std::move(splits.first));
         cr = std::move(splits.second);
-        if (ranges.size() == n) {
+        if (stop) {
             // we have enough ranges
-            return;
+            return stop;
         }
     }
 
     if (ranges.size() >= n) {
         on_internal_error(qlogger, format("ran out of ranges: size={} n={}", ranges.size(), n));
     }
-    add_range(get_remainder());
+    return add_range(get_remainder());
 }
