@@ -182,6 +182,8 @@ public:
     table_for_tests make_table_for_tests(schema_ptr s, sstring dir);
 
     table_for_tests make_table_for_tests(schema_ptr s = nullptr);
+
+    void request_abort();
 };
 
 }   // namespace sstables

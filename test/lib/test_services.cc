@@ -476,6 +476,10 @@ test_env::make_table_for_tests(schema_ptr s) {
     return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
 }
 
+void test_env::request_abort() {
+    _impl->abort.request_abort();
+}
+
 data_dictionary::storage_options make_test_object_storage_options() {
     data_dictionary::storage_options ret;
     ret.value = data_dictionary::storage_options::s3 {
