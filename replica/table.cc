@@ -2005,6 +2005,8 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     _t._compaction_manager.add(as_table_state());
 }
 
+compaction_group::~compaction_group() = default;
+
 future<> compaction_group::stop() noexcept {
     if (_async_gate.is_closed()) {
         co_return;
