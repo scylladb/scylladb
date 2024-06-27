@@ -140,7 +140,10 @@ def test_desc_scylla_keyspace(scylla_only, cql, random_seed):
 
 # Test that `DESC TABLE {tbl}` contains appropriate create statement for table
 # This test compares the content of `system_schema.tables` and `system_schema.columns` tables.
-def test_desc_table(cql, test_keyspace, random_seed):
+def test_desc_table(cql, test_keyspace, random_seed, has_tablets):
+    if has_tablets:  # issue #18180
+        global counter_table_chance
+        counter_table_chance = 0
     with new_random_table(cql, test_keyspace) as tbl:
         desc = cql.execute(f"DESC TABLE {tbl}")
         desc_stmt = desc.one().create_statement
@@ -191,7 +194,10 @@ def test_desc_table(cql, test_keyspace, random_seed):
 # Test that `DESC TABLE {tbl}` contains appropriate create statement for table
 # This test compares the content of `system_schema.scylla_tables` tables, thus the test
 # is `scylla_only`.
-def test_desc_scylla_table(scylla_only, cql, test_keyspace, random_seed):
+def test_desc_scylla_table(scylla_only, cql, test_keyspace, random_seed, has_tablets):
+    if has_tablets:  # issue #18180
+        global counter_table_chance
+        counter_table_chance = 0
     with new_random_table(cql, test_keyspace) as tbl:
         desc = cql.execute(f"DESC TABLE {tbl}")
         desc_stmt = desc.one().create_statement
@@ -345,7 +351,10 @@ def test_desc_table_internals(cql, test_keyspace):
         assert f"ALTER TABLE {tbl} ADD b int" in desc_internals
 
 # Test that `DESC KEYSPACE {ks}` contains not only keyspace create statement but also for its elements
-def test_desc_keyspace_elements(cql, random_seed):
+def test_desc_keyspace_elements(cql, random_seed, has_tablets):
+    if has_tablets:  # issue #18180
+        global counter_table_chance
+        counter_table_chance = 0
     with new_random_keyspace(cql) as ks:
         with new_random_type(cql, ks) as udt:
             with new_random_table(cql, ks, [udt]) as tbl:
@@ -365,7 +374,10 @@ def test_desc_keyspace_elements(cql, random_seed):
 
 # Test that `DESC SCHEMA` contains all information for user created keyspaces
 # and `DESC FULL SCHEMA` contains also information for system keyspaces
-def test_desc_schema(cql, test_keyspace, random_seed):
+def test_desc_schema(cql, test_keyspace, random_seed, has_tablets):
+    if has_tablets:  # issue #18180
+        global counter_table_chance
+        counter_table_chance = 0
     with new_random_keyspace(cql) as ks:
         with new_random_table(cql, test_keyspace) as tbl1, new_random_table(cql, ks) as tbl2:
             desc = cql.execute("DESC SCHEMA")
@@ -483,7 +495,10 @@ def test_index_desc_in_table_desc(cql, test_keyspace):
 # keyspace, table, view, index, UDT, UDF, UDA
 
 # Cassandra compatibility require us to be able generic describe: keyspace, table, view, index.
-def test_generic_desc(cql, random_seed):
+def test_generic_desc(cql, random_seed, has_tablets):
+    if has_tablets:  # issue #18180
+        global counter_table_chance
+        counter_table_chance = 0
     with new_random_keyspace(cql) as ks:
         with new_random_table(cql, ks) as t1, new_test_table(cql, ks, "a int primary key, b int, c int") as tbl:
             cql.execute(f"CREATE INDEX idx ON {tbl}(b)")
