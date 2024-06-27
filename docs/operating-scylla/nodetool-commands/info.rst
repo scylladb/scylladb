@@ -83,7 +83,7 @@ Example output:
 |           |                              |
 |           |                              |
 +-----------+------------------------------+
-| Heap      |Not applicable with ScyllaDB    |
+| Heap      |Not applicable with ScyllaDB  |
 | Memory    |                              |
 | (MB)      |                              |
 |           |                              |
@@ -116,12 +116,12 @@ Example output:
 |           |                              |
 |           |                              |
 +-----------+------------------------------+
-| Exceptions|Not applicable with ScyllaDB    |
+| Exceptions|Not applicable with ScyllaDB  |
 |           |                              |
 |           |                              |
 |           |                              |
 +-----------+------------------------------+
-| Key       |Not applicable with ScyllaDB    |
+| Key       |Not applicable with ScyllaDB  |
 | Cache     |                              |
 |           |                              |
 |           |                              |
@@ -129,7 +129,7 @@ Example output:
 | Row       |Row Cache usage               |
 | Cache     |                              |
 +-----------+------------------------------+
-| Counter   |Not applicable with ScyllaDB    |
+| Counter   |Not applicable with ScyllaDB  |
 | Cache     |                              |
 |           |                              |
 |           |                              |

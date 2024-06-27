@@ -260,7 +260,7 @@ Notable differences:
 
 
 +---------------------------------------------------------------+---------------------------------------------------------------+
-|Apache Cassandra 3.10 (uses 3.x Schema)                        |ScyllaDB 2.x 1.x (uses Apache Cassandra 2.1 Schema)              |
+|Apache Cassandra 3.10 (uses 3.x Schema)                        |ScyllaDB 2.x 1.x (uses Apache Cassandra 2.1 Schema)            |
 +===============================================================+===============================================================+
 |.. code-block:: cql                                            |.. code-block:: cql                                            |
 |                                                               |                                                               |

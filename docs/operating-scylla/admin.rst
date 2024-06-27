@@ -29,7 +29,7 @@ ScyllaDB configuration files are:
 | :code:`/etc/default/scylla-server` (Ubuntu/Debian)    | Server startup options          |
 | :code:`/etc/sysconfig/scylla-server` (others)         |                                 |
 +-------------------------------------------------------+---------------------------------+
-| :code:`/etc/scylla/scylla.yaml`                       | Main ScyllaDB configuration file  |
+| :code:`/etc/scylla/scylla.yaml`                       | Main ScyllaDB configuration file|
 +-------------------------------------------------------+---------------------------------+
 | :code:`/etc/scylla/cassandra-rackdc.properties`       | Rack & dc configuration file    |
 +-------------------------------------------------------+---------------------------------+
