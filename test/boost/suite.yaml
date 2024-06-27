@@ -44,5 +44,7 @@ custom_args:
         - '-c1 -m256M'
     commitlog_cleanup_test:
         - '-c1 -m2G'
+    bloom_filter_test:
+        - '-c1'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
