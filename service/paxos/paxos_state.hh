@@ -39,18 +39,6 @@ private:
         map _locks;
     public:
 
-        //
-        // A thin RAII aware wrapper around the lock map to garbage
-        // collect the decorated key from the map on unlock if there
-        // are no waiters.
-        ///
-        template<typename Func>
-        futurize_t<std::invoke_result_t<Func>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {
-            return with_semaphore(get_semaphore_for_key(key), 1, timeout - clock_type::now(), std::move(func)).finally([key, this] {
-                release_semaphore_for_key(key);
-            });
-        }
-
         friend class guard;
     };
 
@@ -86,13 +74,6 @@ private:
     // each other.
     static thread_local key_lock_map _coordinator_lock;
 
-
-    // protects access to system.paxos
-    template<typename Func>
-    static
-    futurize_t<std::invoke_result_t<Func>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {
-        return _paxos_table_lock.with_locked_key(key, timeout, std::move(func));
-    }
 
     static future<guard> get_replica_lock(const dht::token& key, clock_type::time_point timeout);
 
