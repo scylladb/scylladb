@@ -6,7 +6,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/core/on_internal_error.hh>
+
 #include "query_ranges_to_vnodes.hh"
+#include "log.hh"
+
+static logging::logger qlogger("query_ranges_to_vnodes_generator");
 
 static inline
 const dht::token& start_token(const dht::partition_range& r) {
@@ -27,9 +32,11 @@ dht::partition_range_vector query_ranges_to_vnodes_generator::operator()(size_t 
     n = std::min({n, size_t(1024), size_t(_ranges.end() - _i)});
 
     dht::partition_range_vector result;
-    result.reserve(n);
-    while (result.size() != n) {
-        process_one_range(n, result);
+    if (n) {
+        result.reserve(n);
+        while (result.size() != n) {
+            process_one_range(n, result);
+        }
     }
     return result;
 }
@@ -106,7 +113,8 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
         }
     }
 
-    if (ranges.size() < n) {
-        add_range(get_remainder());
+    if (ranges.size() >= n) {
+        on_internal_error(qlogger, format("ran out of ranges: size={} n={}", ranges.size(), n));
     }
+    add_range(get_remainder());
 }
