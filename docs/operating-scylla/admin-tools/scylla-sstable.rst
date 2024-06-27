@@ -1,5 +1,5 @@
 ScyllaDB SStable
-==============
+================
 
 Introduction
 -------------
@@ -780,7 +780,7 @@ consume_stream_end()
 * Called at the very end of the stream.
 
 ScyllaDB LUA API
-~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~
 
 In addition to the `ScyllaDB Consume API <scylla-consume-api_>`_, the Lua bindings expose various types and methods that allow you to work with ScyllaDB types and values.
 The listing uses the following terminology:
@@ -808,7 +808,7 @@ Magic methods have their signature defined by Lua and so that is not described h
 .. _scylla-atomic-cell-type:
 
 ScyllaDB.atomic_cell
-""""""""""""""""""
+""""""""""""""""""""
 
 Attributes:
 
@@ -835,7 +835,7 @@ A counter-shard table has the following keys:
 .. _scylla-clustering-key-type:
 
 ScyllaDB.clustering_key
-"""""""""""""""""""""
+"""""""""""""""""""""""""
 
 Attributes:
 
@@ -852,7 +852,7 @@ Magic methods:
 .. _scylla-clustering-row-type:
 
 ScyllaDB.clustering_row
-"""""""""""""""""""""
+"""""""""""""""""""""""""
 
 Attributes:
 
@@ -869,7 +869,7 @@ See also:
 .. _scylla-collection-type:
 
 ScyllaDB.collection
-"""""""""""""""""
+"""""""""""""""""""""
 
 Attributes:
 
@@ -880,7 +880,7 @@ Attributes:
 .. _scylla-collection-cell-value-type:
 
 ScyllaDB.collection_cell_value
-""""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""""
 
 Attributes:
 
@@ -890,7 +890,7 @@ Attributes:
 .. _scylla-column-definition-type:
 
 ScyllaDB.column_definition
-""""""""""""""""""""""""
+""""""""""""""""""""""""""""
 
 Attributes:
 
@@ -901,7 +901,7 @@ Attributes:
 .. _scylla-counter-shards-value-type:
 
 ScyllaDB.counter_shards_value
-"""""""""""""""""""""""""""
+"""""""""""""""""""""""""""""""
 
 Attributes:
 
@@ -919,7 +919,7 @@ Magic methods:
 .. _scylla-data-value-type:
 
 ScyllaDB.data_value
-"""""""""""""""""
+"""""""""""""""""""""
 
 Attributes:
 
@@ -932,7 +932,7 @@ Magic methods:
 .. _scylla-gc-clock-time-point-type:
 
 ScyllaDB.gc_clock_time_point
-""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""
 
 A time point belonging to the gc_clock, in UTC.
 
@@ -960,7 +960,7 @@ See also:
 .. _scylla-json-writer-type:
 
 ScyllaDB.json_writer
-""""""""""""""""""
+""""""""""""""""""""""
 
 A JSON writer object, with both low-level and high-level APIs.
 The low-level API allows you to write custom JSON and it loosely follows the API of `rapidjson::Writer <https://rapidjson.org/classrapidjson_1_1_writer.html>`_ (upon which it is implemented).
@@ -994,14 +994,14 @@ High level API Methods:
 .. _scylla-new-json-writer-method:
 
 ScyllaDB.new_json_writer()
-""""""""""""""""""""""""
+""""""""""""""""""""""""""""
 
 Create a `ScyllaDB.json_writer <scylla-json-writer-type_>`_ instance.
 
 .. _scylla-new-position-in-partition-method:
 
 ScyllaDB.new_position_in_partition()
-""""""""""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""""""""""
 
 Creates a `ScyllaDB.position_in_partition <scylla-position-in-partition-type_>`_ instance.
 
@@ -1013,7 +1013,7 @@ Arguments:
 .. _scylla-new-ring-position-method:
 
 ScyllaDB.new_ring_position()
-""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""
 
 Creates a `ScyllaDB.ring_position <scylla-ring-position-type_>`_ instance.
 
@@ -1032,14 +1032,14 @@ Where:
 .. _scylla-now-method:
 
 ScyllaDB.now()
-""""""""""""
+""""""""""""""""
 
 Create a `ScyllaDB.gc_clock_time_point <scylla-gc-clock-time-point-type_>`_ instance, representing the current time.
 
 .. _scylla-partition-key-type:
 
 ScyllaDB.partition_key
-""""""""""""""""""""
+""""""""""""""""""""""""
 
 Attributes:
 
@@ -1061,7 +1061,7 @@ See also:
 .. _scylla-partition-start-type:
 
 ScyllaDB.partition_start
-""""""""""""""""""""""
+""""""""""""""""""""""""""
 
 Attributes:
 
@@ -1072,7 +1072,7 @@ Attributes:
 .. _scylla-position-in-partition-type:
 
 ScyllaDB.position_in_partition
-""""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""""
 
 Currently used only for clustering positions.
 
@@ -1092,7 +1092,7 @@ See also:
 .. _scylla-range-tombstone-change-type:
 
 ScyllaDB.range_tombstone_change
-"""""""""""""""""""""""""""""
+"""""""""""""""""""""""""""""""""
 
 Attributes:
 
@@ -1103,7 +1103,7 @@ Attributes:
 .. _scylla-ring-position-type:
 
 ScyllaDB.ring_position
-""""""""""""""""""""
+""""""""""""""""""""""""
 
 Attributes:
 
@@ -1122,7 +1122,7 @@ See also:
 .. _scylla-row-marker-type:
 
 ScyllaDB.row_marker
-"""""""""""""""""
+"""""""""""""""""""""
 
 Attributes:
 
@@ -1136,7 +1136,7 @@ Attributes:
 .. _scylla-schema-type:
 
 ScyllaDB.schema
-"""""""""""""
+"""""""""""""""""
 
 Attributes:
 
@@ -1149,7 +1149,7 @@ Attributes:
 .. _scylla-sstable-type:
 
 ScyllaDB.sstable
-""""""""""""""
+""""""""""""""""""
 
 Attributes:
 
@@ -1158,7 +1158,7 @@ Attributes:
 .. _scylla-static-row-type:
 
 ScyllaDB.static_row
-"""""""""""""""""
+"""""""""""""""""""""
 
 Attributes:
 
@@ -1167,7 +1167,7 @@ Attributes:
 .. _scylla-time-point-from-string-method:
 
 ScyllaDB.time_point_from_string()
-"""""""""""""""""""""""""""""""
+"""""""""""""""""""""""""""""""""""
 
 Create a `ScyllaDB.gc_clock_time_point <scylla-gc-clock-time-point-type_>`_ instance from the passed in string.
 Argument is string, using the same format as the CQL timestamp type, see https://en.wikipedia.org/wiki/ISO_8601.
@@ -1175,14 +1175,14 @@ Argument is string, using the same format as the CQL timestamp type, see https:/
 .. _scylla-token-of-method:
 
 ScyllaDB.token_of()
-"""""""""""""""""
+"""""""""""""""""""""
 
 Compute and return the token (integer) for a `ScyllaDB.partition_key <scylla-partition-key-type_>`_.
 
 .. _scylla-tombstone-type:
 
 ScyllaDB.tombstone
-""""""""""""""""
+""""""""""""""""""""
 
 Attributes:
 
@@ -1192,7 +1192,7 @@ Attributes:
 .. _scylla-unserialize-clustering-key-method:
 
 ScyllaDB.unserialize_clustering_key()
-"""""""""""""""""""""""""""""""""""
+"""""""""""""""""""""""""""""""""""""""
 
 Create a `ScyllaDB.clustering_key <scylla-clustering-key-type_>`_ instance.
 
@@ -1201,7 +1201,7 @@ Argument is a string representing serialized clustering key in hex format.
 .. _scylla-unserialize-partition-key-method:
 
 ScyllaDB.unserialize_partition_key()
-""""""""""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""""""""""
 
 Create a `ScyllaDB.partition_key <scylla-partition-key-type_>`_ instance.
 

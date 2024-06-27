@@ -10,7 +10,7 @@ ScyllaDB Seed Nodes
 
 
 What is the Function of a Seed Node in ScyllaDB?
-----------------------------------------------
+------------------------------------------------
 
 .. note:: 
     Seed nodes function was changed in ScyllaDB Open Source 4.3 and ScyllaDB Enterprise 2021.1; if you are running an older version, see :ref:`Older Version Of ScyllaDB <seeds-older-versions>`.

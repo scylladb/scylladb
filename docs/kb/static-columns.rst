@@ -1,5 +1,5 @@
 ScyllaDB payload sent duplicated static columns
-=============================================
+===============================================
 ScyllaDB payload, which refers to the actual network packets transferred from the ScyllaDB server to the client as a result of a query, contains duplicate static columns.
 
 Issue description

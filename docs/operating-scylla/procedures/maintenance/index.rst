@@ -1,5 +1,5 @@
 ScyllaDB Maintenance Procedures
-=============================
+===============================
 
 .. toctree::
    :hidden:

@@ -1,5 +1,5 @@
 ScyllaDB consistency quiz for administrators
-==========================================
+============================================
 **Topic: Architecture and development**
 
 **Learn: Understanding consistency in ScyllaDB: a quiz**

@@ -30,7 +30,7 @@ For a single node, the firewall will need to be set up to allow TCP on
 the following :ref:`ports <cqlsh-networking>`.
 
 ScyllaDB Configuration
---------------------
+------------------------
 
 POSIX mode is the default, in ``/etc/sysconfig/scylla-server``. Check
 that ``NETWORK_MODE`` is set to ``posix``.

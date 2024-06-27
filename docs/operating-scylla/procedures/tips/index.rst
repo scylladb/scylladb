@@ -1,5 +1,5 @@
 ScyllaDB Best Practices 
-=====================
+=======================
 
 .. toctree::
    :hidden:

@@ -128,7 +128,7 @@ Management
 You must use both ScyllaDB Manager and ScyllaDB Monitor.
 
 ScyllaDB Manager
-==============
+================
 
 ScyllaDB Manager enables centralized cluster administration and database
 automation such as repair, backup, and health-check.

@@ -58,7 +58,7 @@ meaning that pre-existing values for those columns will be preserved.
 
 
 JSON Encoding of ScyllaDB Data Types
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Where possible, ScyllaDB will represent and accept data types in their native ``JSON`` representation. ScyllaDB will
 also accept string representations matching the CQL literal format for all single-field types. For example, floats,

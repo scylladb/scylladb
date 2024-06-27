@@ -5,7 +5,7 @@ Compaction
 This document gives a high level overview of Compaction, focusing on what compaction is, and how it works. There is a different document that covers the :doc:`CQL syntax </cql/compaction>` for setting a compaction strategy. There is also another document, :doc:`Compaction Strategy Matrix </architecture/compaction/compaction-strategies>`, that covers how to decide which strategy works best.
 
 How ScyllaDB Writes Data
-----------------------
+------------------------
 
 ScyllaDB’s write path follows the well-known **Log Structured Merge (LSM)** design for efficient writes that are immediately available for reads. ScyllaDB is not the first project to use this method. Popular projects to use this method include Lucene Search Engine, Google BigTable, and Apache Cassandra.
 

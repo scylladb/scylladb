@@ -1,5 +1,5 @@
 ScyllaDB Memory Usage
-===================
+=====================
 
 ScyllaDB memory usage might be larger than the data set used.
 

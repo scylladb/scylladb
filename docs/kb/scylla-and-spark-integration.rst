@@ -1,9 +1,9 @@
 ScyllaDB and Spark integration
-============================
+==============================
 
 
 Simple ScyllaDB-Spark integration example
----------------------------------------
+-----------------------------------------
 
 This is an example of how to create a very simple Spark application that
 uses ScyllaDB to store its data. The application is going to read people's
@@ -345,7 +345,7 @@ is to actually run the application:
     mvn exec:java
 
 ScyllaDB limitations
-------------------
+----------------------
 
 -  ScyllaDB needs Spark Cassandra Connector 1.3.0 or later.
 -  ScyllaDB doesn't populate ``system.size_estimates``, and therefore the

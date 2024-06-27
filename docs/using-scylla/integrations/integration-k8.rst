@@ -11,7 +11,7 @@ The list below contains integration projects using ScyllaDB with Kubernetes. If 
 
 
 ScyllaDB Operator
-===============
+=================
 
 `ScyllaDB Operator <https://github.com/scylladb/scylla-operator>`_ is a Kubernetes Operator for managing and automating tasks related to managing ScyllaDB clusters.
 

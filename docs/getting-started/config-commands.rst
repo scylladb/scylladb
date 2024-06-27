@@ -47,7 +47,7 @@ For example:
 .. note:: This is an incomplete screenshot. For the complete file, run the command in a terminal.
 
 ScyllaDB Configuration Files and ScyllaDB Commands
-----------------------------------------------
+------------------------------------------------
 
 Some ScyllaDB Command Line commands are derived from the `scylla.yaml <https://github.com/scylladb/scylla/blob/master/conf/scylla.yaml>`_ configuration parameters.
 

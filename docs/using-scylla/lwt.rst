@@ -119,7 +119,7 @@ evaluate the condition of the "missing" regular row:
 		+-------------+-----+
 
 ScyllaDB Paxos
-============
+================
 
 The statements with an ``IF`` clause use a different write path, employing the Paxos consensus algorithm (see `figure`_) to ensure linearizability of the execution history.
 

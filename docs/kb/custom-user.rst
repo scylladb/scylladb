@@ -1,5 +1,5 @@
 Run ScyllaDB and supporting services as a custom user:group
-=========================================================
+===========================================================
 **Topic: Planning and setup**
 By default, ScyllaDB runs as user ``scylla`` in group ``scylla``. The following procedure will allow you to use a custom user and group to run ScyllaDB.
 1. Create the new user and update file permissions

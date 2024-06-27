@@ -10,12 +10,12 @@ This quickstart will show you how to setup the ScyllaDB CDC Source Connector to 
 a ScyllaDB table using :doc:`ScyllaDB CDC <../cdc/cdc-intro>`.
 
 ScyllaDB setup
-------------
+----------------
 
 First, let's setup a ScyllaDB cluster and create a CDC-enabled table.
 
 ScyllaDB installation
-^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
 
 For the purpose of this quickstart, we will configure a ScyllaDB instance using Docker. You can skip this 
 section if you have already installed ScyllaDB. To learn more about installing ScyllaDB in production
@@ -88,7 +88,7 @@ If you are new to Confluent, `download Confluent Platform <https://www.confluent
 #. Continue with the setup following `this document <https://docs.confluent.io/current/quickstart/ce-quickstart.html#ce-quickstart>`_
 
 Installing ScyllaDB CDC Source Connector
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 #. Download or build ScyllaDB CDC Source Connector using `the project build instructions <https://github.com/scylladb/scylla-cdc-source-connector#building>`_
 

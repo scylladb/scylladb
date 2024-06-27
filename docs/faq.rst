@@ -11,15 +11,15 @@ Performance
 -----------
 
 ScyllaDB is using all of my memory! Why is that? What if the server runs out of memory?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ScyllaDB uses available memory to cache your data. ScyllaDB knows how to dynamically manage memory for optimal performance; for example, if many clients connect to ScyllaDB, it will evict some data from the cache to make room for these connections; when the connection count drops again, this memory is returned to the cache.
 
 Can I limit ScyllaDB to use less CPU and memory?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 The :code:`--smp` option (for instance, :code:`--smp 2`) will restrict ScyllaDB to a smaller number of CPUs. It will still use 100 % of those CPUs, but at least won’t take your system out completely. An analogous option exists for memory: :code:`-m`.
 
 What are some of the techniques ScyllaDB uses to achieve its performance?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ScyllaDB tries to utilize all available resources (processor cores, memory, storage, and networking) by always operating in parallel and never blocking. If ScyllaDB needs to read a disk block, it initiates the read and immediately moves on to another task. Later, when the read completes ScyllaDB resumes the original task from where it left off. By never blocking, a high degree of concurrency is achieved, allowing all resources to be utilized to their limit.
 Read more on ScyllaDB Architecture:
 
@@ -27,11 +27,11 @@ Read more on ScyllaDB Architecture:
 * `ScyllaDB Memory Management <http://www.scylladb.com/product/technology/memory-management/>`_
 
 I thought that ScyllaDB's underlying `Seastar framework <https://github.com/scylladb/seastar>`_ uses one thread per core, but I see more than two threads per core. Why?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Seastar creates an extra thread per core for blocking syscalls (like :code:`open()`/ :code:`fsync()` / :code:`close()` ); this allows the Seastar reactor to continue executing while a blocking operation takes place. Those threads are usually idle, so they don’t contribute to significant context switching activity.
 
 I’m seeing X compaction running in parallel on a single ScyllaDB node. Is it normal?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Yes, for more than one reason:
 
 * each shard (core) will run its compactions independently, often at the same time,
@@ -49,13 +49,13 @@ As part of the ScyllaDB setup process, **iotune** runs a short benchmark of your
 Therefore, when using ScyllaDB with HDD storage, it is recommended to use RAID0 on all of your available disks, and manually update the `io.conf` configuration file `max-io-request` parameter. This parameter sets the number of concurrent requests sent to the storage. The value for this parameter should be 3X (3 times) the number of your disks. For example, if you have 3 disks, you would set `max-io-request=9`.
 
 How many connections is it recommended to open from each ScyllaDB client application?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 As a rule of thumb, for ScyllaDB's best performance, each client needs at least 1-3 connection per ScyllaDB core.
 For example, a cluster with three nodes, each node with 16 cores, each client application should open 32 (2x16) connections to each ScyllaDB node.
 
 Do I need to configure ``swap`` on a ScyllaDB node?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Yes, configuring ``swap`` on a ScyllaDB node is recommended.
 ``swap`` size should be set to either ``total_mem``/3 or 16GB - lower of the two.
@@ -92,7 +92,7 @@ Disk Space
 .. _reclaim-space:
 
 Dropping a table does not reduce storage used by ScyllaDB, how can I clean the disk from dropped tables?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 scylla.yaml includes an ``auto_snapshot`` parameter; when true (it is by default), ScyllaDB creates a snapshot for a table just before dropping it, as a safety measure.
 You can find the snapshot in the ``snapshots`` directory, under the table SSTable. For example, for dropped table ``users`` in keyspace ``mykeyspace``:
 
@@ -128,7 +128,7 @@ You need to add the line :code:`experimental: true`  to your :code:`scylla.yaml`
 You should now be able to use the experimental features available in your version of ScyllaDB.
 
 How do I check the current version of ScyllaDB that I am running?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 * On a regular system or VM (running Ubuntu, CentOS, or RedHat Enterprise): :code:`$ scylla --version`
 
 Check the :doc:`Operating System Support Guide </getting-started/os-support>` for a list of supported operating systems and versions.
@@ -157,7 +157,7 @@ See `Error connecting Java Spring application to ScyllaDB Cluster in Docker <htt
 Installation
 ------------
 Can I install ScyllaDB on an Apache Cassandra server?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ScyllaDB comes with its own version of the Apache Cassandra client tools, in the package :code:`scylla-tools`. Trying to install it on a server with Cassandra already installed may result in something like:
 
 .. code-block:: console
@@ -337,7 +337,7 @@ Where can I ask a question not covered here?
 
 
 I deleted data from ScyllaDB, but disk usage stays the same. Why?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Data you write to ScyllaDB gets persisted to SSTables. Since SSTables are immutable, the data can't actually be removed
 when you perform a delete, instead, a marker (also called a "tombstone") is written to indicate the value's new status.
@@ -358,7 +358,7 @@ We recommend updating your ScyllaDB to version 4.3 or later (Open Source) or 202
 .. _faq-raid0-required:
 
 Is RAID0 required for ScyllaDB? Why?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 No, it is not required, but it is highly recommended when using ScyllaDB with more than one drive. ScyllaDB requires one drive for its data file and one drive for commit log (can be the same). If you want to take advantage of more than one drive, the easiest way to do so is set RAID0 (striped) across all of them. If you choose, scylla_setup will setup RAID0 for you on your selected drive, as well as XFS file system (recommended).
 Similarly, ScyllaDB AMI on EC2 will automatically mount all available SSD drives in RAID0.

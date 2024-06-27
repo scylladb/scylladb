@@ -18,7 +18,7 @@ If you are not planning to read this document fully, then here are the most impo
 * expect to get at least 12.5K operations per second (OPS) per physical core for simple operations on selected hardware
 
 ScyllaDB Design Advantages
-------------------------
+----------------------------
 
 ScyllaDB is different from any other NoSQL database. It achieves the highest levels of performance and takes full control of the hardware by utilizing all of the server cores in order to provide strict SLAs for low-latency operations.
 If you run ScyllaDB in an over-committed environment, performance won't just be linearly slower &emdash; it will tank completely.
@@ -31,7 +31,7 @@ It is not that difficult to get the best performance out of ScyllaDB. Mostly, it
 The remainder of this document contains the best practices to follow to make sure that ScyllaDB keeps tuning itself and that your performance has maximum results.
 
 Install ScyllaDB Monitoring Stack
--------------------------------
+-----------------------------------
 
 Install and use the `ScyllaDB Monitoring Stack <http://monitoring.docs.scylladb.com/>`_; it gives excellent additional value beyond performance.
 If you don’t know what your bottleneck is, you have not configured your system correctly. The ScyllaDB monitoring stack dashboards will help you sort this out.
@@ -39,7 +39,7 @@ If you don’t know what your bottleneck is, you have not configured your system
 With the recent addition of the `ScyllaDB Advisor <http://monitoring.docs.scylladb.com/stable/advisor.html>`_ to the ScyllaDB Monitoring Stack, it is even easier to find potential issues.
 
 Install ScyllaDB Manager
-----------------------
+--------------------------
 
 Install and use `ScyllaDB Manager <https://manager.docs.scylladb.com>` together with the `ScyllaDB Monitoring Stack <http://monitoring.docs.scylladb.com/>`_.
 ScyllaDB Manager provides automated backups and repairs of your database.

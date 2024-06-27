@@ -40,7 +40,7 @@ A heart_beat_state contains integers for generation and “version number”. Th
 A round of gossip is designed to minimize the amount of data sent, while resolving any conflicts between the node state data on the two gossiping nodes. In the gossip_digest_syn message, Node A sends a gossip digest: a list of all its known nodes, generations, and versions. Node B compares generation and version to its known nodes, and, in the gossip_digest_ack message, sends any of its own data that differ, along with its own digest. Finally, Node A replies with any state differences between its known state and Node B’s digest.
 
 ScyllaDB gossip implementation
-----------------------------
+--------------------------------
 ScyllaDB gossip messages run over the ScyllaDB messaging_service, along with all other inter-node traffic including sending mutations, and streaming of data. ScyllaDB’s messaging_service runs on the Seastar RPC service. Seastar is the scalable software framework for multicore systems that ScyllaDB uses. If no TCP connection is up between a pair of nodes, messaging_service will create a new one. If it is up already, messaging service will use the existing one.
 
 Gossip on multicore

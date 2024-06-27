@@ -1,5 +1,5 @@
 ScyllaDB Anti-Entropy
-===================
+=====================
 
 .. toctree::
    :hidden:

@@ -1,6 +1,6 @@
 
 Configure ScyllaDB Networking with Multiple NIC/IP Combinations
-=============================================================
+===============================================================
 
 There are many ways to configure IP addresses in scylla.yaml. Setting the IP addresses incorrectly, can yield less than optimal results. This article focuses on configuring the addresses which are vital to network communication. 
 

@@ -180,7 +180,7 @@ You may also see this message if you were running a cluster with an old version 
 Make sure to upgrade all nodes **before** you start doing CDC writes: one of the nodes will be responsible for creating the first CDC generation and informing other nodes about it.
 
 Differences in ScyllaDB 4.3
--------------------------
+-----------------------------
 
 In ScyllaDB 4.3 the tables ``cdc_generation_timestamps`` and ``cdc_streams_descriptions_v2`` don't exist. Instead there is the ``cdc_streams_descriptions`` table. To retrieve all generation timestamps, instead of querying the ``time`` column of ``cdc_generation_timestamps`` using a single-partition query (i.e. using ``WHERE key = 'timestamps'``), you would query the ``time`` column of ``cdc_streams_descriptions`` with a full range scan (without specifying a single partition):
 

@@ -170,7 +170,7 @@ You should keep querying streams from generation ``2020-03-25 16:05:29.484000+00
 and so on. After you make sure that every node uses the new generation, you can query streams from the previous generation one last time, and then switch to querying streams from the new generation.
 
 Differences in ScyllaDB 4.3
--------------------------
+-----------------------------
 
 In ScyllaDB 4.3 the tables ``cdc_generation_timestamps`` and ``cdc_streams_descriptions_v2`` don't exist. Instead there is the ``cdc_streams_descriptions`` table. To retrieve all generation timestamps, instead of querying the ``time`` column of ``cdc_generation_timestamps`` using a single-partition query (i.e. using ``WHERE key = 'timestamps'``), you would query the ``time`` column of ``cdc_streams_descriptions`` with a full range scan (without specifying a single partition):
 
@@ -189,7 +189,7 @@ All stream IDs are stored in a single row, unlike ``cdc_streams_descriptions_v2`
 .. _scylla-4-3-to-4-4-upgrade:
 
 ScyllaDB 4.3 to ScyllaDB 4.4 upgrade
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 If you didn't enable CDC on any table while using ScyllaDB 4.3 or earlier, you don't need to understand this section. Simply upgrade to 4.4 (we recommend doing it as soon as you can) and implement your application to query streams as described above.
 

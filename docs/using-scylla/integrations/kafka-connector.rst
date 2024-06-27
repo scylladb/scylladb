@@ -159,7 +159,7 @@ Connector configuration
        1 |     first |     last
 
 ScyllaDB modes
-------------
+----------------
 
 There are two modes, Standalone and Distributed.
 

@@ -20,7 +20,7 @@ See :ref:`System Configuration Guide <system-configuration-files-and-scripts>` f
 .. _admin-scylla-configuration:
 
 ScyllaDB Configuration
-====================
+========================
 ScyllaDB configuration files are:
 
 +-------------------------------------------------------+---------------------------------+

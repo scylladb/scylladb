@@ -1,5 +1,5 @@
 ScyllaDB Configuration Procedures
-===============================
+=================================
 
 
 .. toctree::
