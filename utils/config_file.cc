@@ -270,7 +270,7 @@ utils::config_file::add_options(bpo::options_description_easy_init& init) {
 
 
 bpo::options_description_easy_init&
-utils::config_file::add_deprecated_options(bpo::options_description_easy_init&& init) {
+utils::config_file::add_deprecated_options(bpo::options_description_easy_init& init) {
     for (config_src& src : _cfgs) {
         if (src.status() == value_status::Deprecated) {
             src.add_command_line_option(init);

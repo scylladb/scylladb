@@ -281,7 +281,7 @@ public:
     boost::program_options::options_description_easy_init&
     add_options(boost::program_options::options_description_easy_init&);
     boost::program_options::options_description_easy_init&
-    add_deprecated_options(boost::program_options::options_description_easy_init&&);
+    add_deprecated_options(boost::program_options::options_description_easy_init&);
 
     /**
      * Default behaviour for yaml parser is to throw on
