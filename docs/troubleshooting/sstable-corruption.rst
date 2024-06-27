@@ -21,7 +21,7 @@ For example:
  
 In this scenario, a missing ``TOC`` file will prevent the Scylla node from starting.
 
-The SSTable corporation problem can be different, for example, other missing or unreadable files. The following solution apply for all of the scenarios.
+The SSTable corruption problem can be different, for example, other missing or unreadable files. The following solution applies to all scenarios.
 
 Solution
 ^^^^^^^^
