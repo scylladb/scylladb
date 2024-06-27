@@ -371,8 +371,7 @@ modes = {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*40,
-        # -fasan -Og breaks some coroutines on aarch64, use -O0 instead
-        'optimization-level': ('0' if platform.machine() == 'aarch64' else 'g'),
+        'optimization-level': 'g',
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'Debug',
         'can_have_debug_info': True,
@@ -1543,10 +1542,6 @@ def get_warning_options(cxx):
 def get_clang_inline_threshold():
     if args.clang_inline_threshold != -1:
         return args.clang_inline_threshold
-    elif platform.machine() == 'aarch64':
-        # we see miscompiles with 1200 and above with format("{}", uuid)
-        # also coroutine miscompiles with 600
-        return 300
     else:
         return 2500
 
