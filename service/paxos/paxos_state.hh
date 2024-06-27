@@ -26,9 +26,8 @@ using clock_type = db::timeout_clock;
 
 // The state of a CAS update of a given primary key as persisted in the paxos table.
 class paxos_state {
-public:
-    class guard;
 private:
+    class guard;
 
     class key_lock_map {
         using semaphore = basic_semaphore<semaphore_default_exception_factory, clock_type>;
@@ -55,29 +54,6 @@ private:
         friend class guard;
     };
 
-    // Locks are local to the shard which owns the corresponding token range.
-    // Protects concurrent reads and writes of the same row in system.paxos table.
-    static thread_local key_lock_map _paxos_table_lock;
-    // Taken by the coordinator code to allow only one instance of PAXOS to run for each key.
-    // This prevents contantion between multiple clients trying to modify the
-    // same key through the same coordinator and stealing the ballot from
-    // each other.
-    static thread_local key_lock_map _coordinator_lock;
-
-
-    // protects access to system.paxos
-    template<typename Func>
-    static
-    futurize_t<std::invoke_result_t<Func>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {
-        return _paxos_table_lock.with_locked_key(key, timeout, std::move(func));
-    }
-
-    utils::UUID _promised_ballot = utils::UUID_gen::min_time_UUID();
-    std::optional<proposal> _accepted_proposal;
-    std::optional<proposal> _most_recent_commit;
-
-public:
-
     class guard {
         key_lock_map& _map;
         dht::token _key;
@@ -100,6 +76,31 @@ public:
             }
         }
     };
+
+    // Locks are local to the shard which owns the corresponding token range.
+    // Protects concurrent reads and writes of the same row in system.paxos table.
+    static thread_local key_lock_map _paxos_table_lock;
+    // Taken by the coordinator code to allow only one instance of PAXOS to run for each key.
+    // This prevents contantion between multiple clients trying to modify the
+    // same key through the same coordinator and stealing the ballot from
+    // each other.
+    static thread_local key_lock_map _coordinator_lock;
+
+
+    // protects access to system.paxos
+    template<typename Func>
+    static
+    futurize_t<std::invoke_result_t<Func>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {
+        return _paxos_table_lock.with_locked_key(key, timeout, std::move(func));
+    }
+
+    static future<guard> get_replica_lock(const dht::token& key, clock_type::time_point timeout);
+
+    utils::UUID _promised_ballot = utils::UUID_gen::min_time_UUID();
+    std::optional<proposal> _accepted_proposal;
+    std::optional<proposal> _most_recent_commit;
+
+public:
 
     static future<guard> get_cas_lock(const dht::token& key, clock_type::time_point timeout);
 

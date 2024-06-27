@@ -36,6 +36,12 @@ void paxos_state::key_lock_map::release_semaphore_for_key(const dht::token& key)
     }
 }
 
+future<paxos_state::guard> paxos_state::get_replica_lock(const dht::token& key, clock_type::time_point timeout) {
+    guard m(_paxos_table_lock, key, timeout);
+    co_await m.lock();
+    co_return m;
+}
+
 future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, clock_type::time_point timeout) {
     guard m(_coordinator_lock, key, timeout);
     co_await m.lock();
