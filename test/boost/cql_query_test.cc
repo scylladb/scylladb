@@ -4125,7 +4125,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND read_repair_chance = 0\n"
                 "    AND speculative_retry = '99.0PERCENTILE'\n"
                 "    AND paxos_grace_seconds = 43200\n"
-                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"
+                "    AND tombstone_gc = {'mode': 'timeout','propagation_delay_in_seconds': '3600'};\n"
             },
             {"cf1", "CREATE TABLE ks.cf1 (\n"
                 "    pk blob,\n"
@@ -4149,7 +4149,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND read_repair_chance = 0\n"
                 "    AND speculative_retry = '99.0PERCENTILE'\n"
                 "    AND paxos_grace_seconds = 43200\n"
-                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"
+                "    AND tombstone_gc = {'mode': 'timeout','propagation_delay_in_seconds': '3600'};\n"
             },
             {"CF2", "CREATE TABLE ks.\"CF2\" (\n"
                 "    pk blob,\n"
@@ -4173,7 +4173,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND read_repair_chance = 0\n"
                 "    AND speculative_retry = '99.0PERCENTILE'\n"
                 "    AND paxos_grace_seconds = 43200\n"
-                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"
+                "    AND tombstone_gc = {'mode': 'timeout','propagation_delay_in_seconds': '3600'};\n"
             },
             {"Cf3", "CREATE TABLE ks.\"Cf3\" (\n"
                 "    pk blob,\n"
@@ -4198,7 +4198,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND read_repair_chance = 0\n"
                 "    AND speculative_retry = '99.0PERCENTILE'\n"
                 "    AND paxos_grace_seconds = 43200\n"
-                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"
+                "    AND tombstone_gc = {'mode': 'timeout','propagation_delay_in_seconds': '3600'};\n"
             },
             {"cf4", "CREATE TABLE ks.cf4 (\n"
                 "    pk blob,\n"
@@ -4222,7 +4222,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND read_repair_chance = 0\n"
                 "    AND speculative_retry = '99.0PERCENTILE'\n"
                 "    AND paxos_grace_seconds = 43200\n"
-                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"
+                "    AND tombstone_gc = {'mode': 'timeout','propagation_delay_in_seconds': '3600'};\n"
             }
 
         };
@@ -4267,7 +4267,7 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
                 "    AND read_repair_chance = 0\n"
                 "    AND speculative_retry = '99.0PERCENTILE'\n"
                 "    AND paxos_grace_seconds = 43200\n"
-                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n";
+                "    AND tombstone_gc = {'mode': 'timeout','propagation_delay_in_seconds': '3600'};\n";
 
         std::unordered_map<std::string, std::string> cql_create_tables {
           {"cf_view", "CREATE MATERIALIZED VIEW \"KS\".cf_view AS\n"
@@ -4291,7 +4291,7 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
               "    AND read_repair_chance = 0\n"
               "    AND speculative_retry = '99.0PERCENTILE'\n"
               "    AND paxos_grace_seconds = 43200\n"
-              "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"},
+              "    AND tombstone_gc = {'mode': 'timeout','propagation_delay_in_seconds': '3600'};\n"},
           {"cf_index_index", "CREATE INDEX cf_index ON \"KS\".\"cF\"(col2);"},
           {"cf_index1_index", "CREATE INDEX cf_index1 ON \"KS\".\"cF\"(pk);"},
           {"cf_index2_index", "CREATE INDEX cf_index2 ON \"KS\".\"cF\"(pk1);"},

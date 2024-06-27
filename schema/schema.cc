@@ -768,6 +768,16 @@ static std::ostream& map_as_cql_param(std::ostream& os, const std::map<sstring, 
     return os;
 }
 
+// default impl assumes options are in a map.
+// implementations should override if not
+std::string schema_extension::options_to_string() const {
+    std::ostringstream ss;
+    ss << '{';
+    map_as_cql_param(ss, ser::deserialize_from_buffer(serialize(), boost::type<default_map_type>(), 0));
+    ss << '}';
+    return ss.str();
+}
+
 static std::ostream& column_definition_as_cql_key(std::ostream& os, const column_definition & cd) {
     os << cd.name_as_cql_string();
     os << " " << cd.type->cql3_type_name();
@@ -922,23 +932,19 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
     os << "}";
 
     os << "\n    AND crc_check_chance = " << crc_check_chance();
-    os << "\n    AND dclocal_read_repair_chance = " << dc_local_read_repair_chance();
+    os << "\n    AND dclocal_read_repair_chance = " << dc_local_read_repair_chance();    
     os << "\n    AND default_time_to_live = " << default_time_to_live().count();
     os << "\n    AND gc_grace_seconds = " << gc_grace_seconds().count();
     os << "\n    AND max_index_interval = " << max_index_interval();
     os << "\n    AND memtable_flush_period_in_ms = " << memtable_flush_period();
     os << "\n    AND min_index_interval = " << min_index_interval();
-    os << "\n    AND read_repair_chance = " << read_repair_chance();
+    os << "\n    AND read_repair_chance = " << read_repair_chance(); 
     os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
-    os << "\n    AND paxos_grace_seconds = " << paxos_grace_seconds().count();
-
-    auto tombstone_gc_str = tombstone_gc_options().to_sstring();
-    std::replace(tombstone_gc_str.begin(), tombstone_gc_str.end(), '"', '\'');
-    os << "\n    AND tombstone_gc = " << tombstone_gc_str;
     
-    if (cdc_options().enabled()) {
-        os << "\n    AND cdc = " << cdc_options().to_sstring();
+    for (auto& [type, ext] : extensions()) {
+        os << "\n    AND " << type << " = " << ext->options_to_string();
     }
+
     if (is_view() && !is_index(db, view_info()->base_id(), *this)) {
         auto is_sync_update = db::find_tag(*this, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
         if (is_sync_update.has_value()) {
