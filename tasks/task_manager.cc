@@ -10,8 +10,13 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/util/defer.hh>
 
+#include "db/timeout_clock.hh"
 #include "task_manager.hh"
+#include "utils/error_injection.hh"
+
+using namespace std::chrono_literals;
 
 namespace tasks {
 
@@ -90,7 +95,7 @@ task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_
     // Child tasks do not need to subscribe to abort source because they will be aborted recursively by their parents.
     if (!parent_id) {
         _shutdown_subscription = module->abort_source().subscribe([this] () noexcept {
-            (void)abort();
+            abort();
         });
     }
 }
@@ -138,25 +143,31 @@ is_internal task_manager::task::impl::is_internal() const noexcept {
     return tasks::is_internal(bool(_parent_id));
 }
 
-future<> task_manager::task::impl::abort() noexcept {
+static future<> abort_children(task_manager::module_ptr module, task_id parent_id) noexcept {
+    co_await utils::get_local_injector().inject("tasks_abort_children",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+
+    auto entered = module->async_gate().try_enter();
+    if (!entered) {
+        co_return;
+    }
+    auto leave_gate = defer([&module] () {
+        module->async_gate().leave();
+    });
+    co_await module->get_task_manager().container().invoke_on_all([parent_id] (task_manager& tm) {
+        for (auto& task : tm.get_all_tasks()) {
+            if (task.second->get_parent_id() == parent_id) {
+                task.second->abort();
+            }
+        }
+    });
+}
+
+void task_manager::task::impl::abort() noexcept {
     if (!_as.abort_requested()) {
         _as.request_abort();
 
-        std::vector<task_info> children_info = co_await _children.map_each_task<task_info>([] (const foreign_task_ptr& child) {
-            return task_info{child->id(), child.get_owner_shard()};
-        }, [] (const task_essentials& child) {
-            return std::nullopt;
-        });
-
-        co_await coroutine::parallel_for_each(children_info, [this] (auto info) {
-            return smp::submit_to(info.shard, [info, &tm = _module->get_task_manager().container()] {
-                auto& tasks = tm.local().get_all_tasks();
-                if (auto it = tasks.find(info.id); it != tasks.end()) {
-                    return it->second->abort();
-                }
-                return make_ready_future<>();
-            });
-        });
+        (void)abort_children(_module, _status.id);
     }
 }
 
@@ -321,8 +332,8 @@ is_internal task_manager::task::is_internal() const noexcept {
     return _impl->is_internal();
 }
 
-future<> task_manager::task::abort() noexcept {
-    return _impl->abort();
+void task_manager::task::abort() noexcept {
+    _impl->abort();
 }
 
 bool task_manager::task::abort_requested() const noexcept {
@@ -425,7 +436,7 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
         }));
     }
     if (abort) {
-        co_await task->abort();
+        task->abort();
     }
     co_return task;
 }

@@ -167,7 +167,7 @@ public:
             virtual future<task_manager::task::progress> get_progress() const;
             virtual tasks::is_abortable is_abortable() const noexcept;
             virtual tasks::is_internal is_internal() const noexcept;
-            virtual future<> abort() noexcept;
+            virtual void abort() noexcept;
             bool is_complete() const noexcept;
             bool is_done() const noexcept;
             virtual void release_resources() noexcept {}
@@ -206,7 +206,7 @@ public:
         future<progress> get_progress() const;
         tasks::is_abortable is_abortable() const noexcept;
         tasks::is_internal is_internal() const noexcept;
-        future<> abort() noexcept;
+        void abort() noexcept;
         bool abort_requested() const noexcept;
         future<> done() const noexcept;
         void register_task();

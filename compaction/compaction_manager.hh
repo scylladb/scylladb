@@ -594,7 +594,7 @@ public:
         return _compaction_data.abort.abort_requested();
     }
 
-    future<> abort(abort_source& as) noexcept;
+    void abort(abort_source& as) noexcept;
 
     void stop_compaction(sstring reason) noexcept;
 
