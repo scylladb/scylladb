@@ -618,5 +618,16 @@ maintenance_socket: ignore
 #  - SimpleStrategy
 # replication_strategy_fail_list:
 
-# This enables tablets on newly created keyspaces
+# Enables the tablets feature.
+# When enabled, newly created keyspaces will have tablets enabled by default.
+# That can be explicitly disabled in the CREATE KEYSPACE query
+# by using the `tablets = {'enabled': false}` replication option.
+#
+# When the tablets feature is disabled, there is no way to enable tablets
+# per keyspace.
+#
+# Note that creating keyspaces with tablets enabled is irreversible.
+# Disabling the tablets feature may impact existing keyspaces that were created with tablets.
+# For example, the tablets map would remain "frozen" and will not respond to topology changes
+# like adding, removing, or replacing nodes, or to replication factor changes.
 enable_tablets: true
