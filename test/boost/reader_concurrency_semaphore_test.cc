@@ -611,6 +611,35 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits
     }
 }
 
+
+static void require_can_admit(schema_ptr schema, reader_concurrency_semaphore& semaphore, bool expected_can_admit, const char* description,
+        seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+    testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
+    const auto stats_before = semaphore.get_stats();
+
+    auto admit_fut = semaphore.obtain_permit(schema, "require_can_admit", 1024, db::timeout_clock::now(), {});
+    admit_fut.wait();
+    const bool can_admit = !admit_fut.failed();
+    if (can_admit) {
+        admit_fut.ignore_ready_future();
+    } else {
+        // Make sure we have a timeout exception, not something else
+        BOOST_REQUIRE_THROW(std::rethrow_exception(admit_fut.get_exception()), semaphore_timed_out);
+    }
+
+    const auto stats_after = semaphore.get_stats();
+    BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted + uint64_t(can_admit));
+    // Deliberately not checking `reads_enqueued_for_admission`, a read can be enqueued temporarily during the admission process.
+
+    if (can_admit == expected_can_admit) {
+        testlog.trace("admission scenario '{}' with expected_can_admit={} passed at {}:{}", description, expected_can_admit, sl.file_name(),
+                sl.line());
+    } else {
+        BOOST_FAIL(fmt::format("admission scenario '{}'  with expected_can_admit={} failed at {}:{}\ndiagnostics: {}", description,
+                expected_can_admit, sl.file_name(), sl.line(), semaphore.dump_diagnostics()));
+    }
+};
+
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     simple_schema s;
     const auto schema = s.schema();
@@ -620,30 +649,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     auto require_can_admit = [&] (bool expected_can_admit, const char* description,
             seastar::compat::source_location sl = seastar::compat::source_location::current()) {
-        testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
-        const auto stats_before = semaphore.get_stats();
-
-        auto admit_fut = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {});
-        admit_fut.wait();
-        const bool can_admit = !admit_fut.failed();
-        if (can_admit) {
-            admit_fut.ignore_ready_future();
-        } else {
-            // Make sure we have a timeout exception, not something else
-            BOOST_REQUIRE_THROW(std::rethrow_exception(admit_fut.get_exception()), semaphore_timed_out);
-        }
-
-        const auto stats_after = semaphore.get_stats();
-        BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted + uint64_t(can_admit));
-        // Deliberately not checking `reads_enqueued_for_admission`, a read can be enqueued temporarily during the admission process.
-
-        if (can_admit == expected_can_admit) {
-            testlog.trace("admission scenario '{}' with expected_can_admit={} passed at {}:{}", description, expected_can_admit, sl.file_name(),
-                    sl.line());
-        } else {
-            BOOST_FAIL(fmt::format("admission scenario '{}'  with expected_can_admit={} failed at {}:{}\ndiagnostics: {}", description,
-                    expected_can_admit, sl.file_name(), sl.line(), semaphore.dump_diagnostics()));
-        }
+        ::require_can_admit(schema, semaphore, expected_can_admit, description, sl);
     };
 
     require_can_admit(true, "semaphore in initial state");
