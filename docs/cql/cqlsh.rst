@@ -173,7 +173,7 @@ SHOW VERSION
 This command is useful if you want to check which Cassandra version is compatible with your ScyllaDB version.
 Note that the two standards are not 100% identical and this command is simply a comparison tool.
 
-If you want to display your current ScyllaDB version, refer to :ref:`Check your current version of Scylla <check-your-current-version-of-scylla>`.
+If you want to display your current ScyllaDB version, refer to :ref:`Check your current version of ScyllaDB <check-your-current-version-of-scylla>`.
 
 The display shows:
 
@@ -539,7 +539,7 @@ Options that are common to both ``COPY TO`` and ``COPY FROM``.
 
 See also:
 
-CQLSH `lesson <https://university.scylladb.com/courses/data-modeling/lessons/basic-data-modeling-2/topic/cql-cqlsh-and-basic-cql-syntax/>`_ on Scylla University
+CQLSH `lesson <https://university.scylladb.com/courses/data-modeling/lessons/basic-data-modeling-2/topic/cql-cqlsh-and-basic-cql-syntax/>`_ on ScyllaDB University
 
 * :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 

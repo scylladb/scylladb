@@ -28,7 +28,7 @@
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: Scylla Metrics Update - Scylla 5.4 to 6.0
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 5.4 to 6.0
 .. _SCYLLA_METRICS: ../metric-update-5.4-to-6.0
 
 =============================================================================

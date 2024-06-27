@@ -31,7 +31,7 @@ Log into one of the nodes in the cluster to collect the following information:
 Procedure
 ---------
 
-#. Install ScyllaDB on the nodes you want to add to the cluster. See :doc:`Getting Started</getting-started/index>` for further instructions. Follow the Scylla installation procedure up to ``scylla.yaml`` configuration phase. Make sure that the Scylla version of the new node is identical to the other nodes in the cluster. 
+#. Install ScyllaDB on the nodes you want to add to the cluster. See :doc:`Getting Started</getting-started/index>` for further instructions. Follow the ScyllaDB installation procedure up to ``scylla.yaml`` configuration phase. Make sure that the ScyllaDB version of the new node is identical to the other nodes in the cluster. 
 
    If the node starts during the process, follow :doc:`What to do if a Node Starts Automatically </operating-scylla/procedures/cluster-management/clear-data>`.
 
@@ -43,7 +43,7 @@ Procedure
 
     * **cluster_name** - Specifies the name of the cluster.
 
-    * **listen_address** - Specifies the IP address that Scylla used to connect to the other Scylla nodes in the cluster.
+    * **listen_address** - Specifies the IP address that ScyllaDB used to connect to the other ScyllaDB nodes in the cluster.
 
     * **endpoint_snitch** - Specifies the selected snitch.
 
@@ -98,7 +98,7 @@ Procedure
 
 #. Wait until the new node becomes UN (Up Normal) in the output of :doc:`nodetool status </operating-scylla/nodetool-commands/status>` on one of the old nodes. 
 
-#. If you are using Scylla Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using Scylla Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_, and Manager can access it.
+#. If you are using ScyllaDB Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using ScyllaDB Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_, and Manager can access it.
 
 
 .. _add-new-node-upgrade-info:

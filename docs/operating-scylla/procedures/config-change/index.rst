@@ -1,4 +1,4 @@
-Scylla Configuration Procedures
+ScyllaDB Configuration Procedures
 ===============================
 
 
@@ -15,11 +15,11 @@ Scylla Configuration Procedures
    <div class="panel callout radius animated">
             <div class="row">
               <div class="medium-3 columns">
-                <h5 id="getting-started">Scylla Configuration Procedures</h5>
+                <h5 id="getting-started">ScyllaDB Configuration Procedures</h5>
               </div>
               <div class="medium-9 columns">
 
-Procedures to change Scylla Configuration settings.
+Procedures to change ScyllaDB Configuration settings.
 
 * :doc:`How to Switch Snitches </operating-scylla/procedures/config-change/switch-snitch/>`
 

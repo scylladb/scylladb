@@ -74,7 +74,7 @@ This example shows how to install and configure a three-node cluster using Gossi
 
 .. code-block:: shell
 
-   cluster_name: 'Scylla_cluster_demo'
+   cluster_name: 'ScyllaDB_cluster_demo'
    seeds: "192.168.1.201"
    endpoint_snitch: GossipingPropertyFileSnitch
    rpc_address: "192.168.1.201"
@@ -84,7 +84,7 @@ This example shows how to install and configure a three-node cluster using Gossi
 
 .. code-block:: shell
 
-   cluster_name: 'Scylla_cluster_demo'
+   cluster_name: 'ScyllaDB_cluster_demo'
    seeds: "192.168.1.201"
    endpoint_snitch: GossipingPropertyFileSnitch
    rpc_address: "192.168.1.202"
@@ -94,7 +94,7 @@ This example shows how to install and configure a three-node cluster using Gossi
 
 .. code-block:: shell
 
-   cluster_name: 'Scylla_cluster_demo'
+   cluster_name: 'ScyllaDB_cluster_demo'
    seeds: "192.168.1.201"
    endpoint_snitch: GossipingPropertyFileSnitch
    rpc_address: "192.168.1.203"

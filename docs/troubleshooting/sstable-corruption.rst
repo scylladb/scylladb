@@ -1,13 +1,13 @@
 ScyllaDB Fails to Start - SSTable Corruption Problem
 =====================================================
 
-This troubleshooting guide describes what to do when Scylla fails to start due to a corrupted SSTables.
+This troubleshooting guide describes what to do when ScyllaDB fails to start due to a corrupted SSTables.
 Corruption can be a result of a bug, disk issue or human error, for example deleting one of the SSTable files
 
 
 Problem
 ^^^^^^^
-Scylla node fails to start, node status shows that the node is down (DN)
+ScyllaDB node fails to start, node status shows that the node is down (DN)
 
 How to Verify
 ^^^^^^^^^^^^^
@@ -19,7 +19,7 @@ For example:
 
    scylla[28659]:  [shard 0] database - Exception while populating keyspace '<mykeyspace>' with 'test' table from file '/var/lib/scylla/data/mykeyspace/test-fa9994e02fd811e7a4ee000000000000': sstables::malformed_sstable_exception (At directory:/var/lib/scylla/data/mykeyspace/test-fa9994e02fd811e7a4ee000000000000: no TOC found for SSTable with generation 2!. Refusing to boot)
  
-In this scenario, a missing ``TOC`` file will prevent the Scylla node from starting.
+In this scenario, a missing ``TOC`` file will prevent the ScyllaDB node from starting.
 
 The SSTable corporation problem can be different, for example, other missing or unreadable files. The following solution apply for all of the scenarios.
 
@@ -42,11 +42,11 @@ For example:
    -rw-r--r-- 1 scylla scylla   10 May  8 14:17 test-ka-2-Digest.sha1
    -rw-r--r-- 1 scylla scylla   24 May  8 14:17 test-ka-2-Filter.db
    -rw-r--r-- 1 scylla scylla  140 May  8 14:17 test-ka-2-Index.db
-   -rw-r--r-- 1 scylla scylla   38 May  8 14:17 test-ka-2-Scylla.db
+   -rw-r--r-- 1 scylla scylla   38 May  8 14:17 test-ka-2-ScyllaDB.db
    -rw-r--r-- 1 scylla scylla 4446 May  8 14:17 test-ka-2-Statistics.db
    -rw-r--r-- 1 scylla scylla   92 May  8 14:17 test-ka-2-Summary.db
 
-3. Start Scylla node
+3. Start ScyllaDB node
 
 ``sudo systemctl start scylla-server``
 

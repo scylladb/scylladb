@@ -1,7 +1,7 @@
 Nodetool version
 ================
-**version** - Displays the Apache Cassandra version which your version of Scylla is most compatible with, not your current Scylla version.
-To display the Scylla version, refer to :ref:`Check your current version of Scylla <check-your-current-version-of-scylla>`.
+**version** - Displays the Apache Cassandra version which your version of ScyllaDB is most compatible with, not your current ScyllaDB version.
+To display the ScyllaDB version, refer to :ref:`Check your current version of ScyllaDB <check-your-current-version-of-scylla>`.
 To display additional compatibility metrics, such as CQL spec version, refer to :ref:`SHOW VERSION <cqlsh-show-version>`.
 
 

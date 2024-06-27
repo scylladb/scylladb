@@ -5,7 +5,7 @@ Remove a Seed Node from Seed List
 This procedure describes how to remove a seed node from the seed list.
 
 .. note::
-   The seed concept in gossip has been removed. Starting with Scylla Open Source 4.3 and Scylla Enterprise 2021.1, a seed node 
+   The seed concept in gossip has been removed. Starting with ScyllaDB Open Source 4.3 and ScyllaDB Enterprise 2021.1, a seed node 
    is only used by a new node during startup to learn about the cluster topology. As a result, you only need to configure one 
    seed node in a node's ``scylla.yaml`` file.
 
@@ -19,7 +19,7 @@ Verify that the seed node you want to remove is listed as a seed node in the ``s
 Procedure
 ---------
 
-1. Update the Scylla configuration file, scylla.yaml, which can be found under ``/etc/scylla/``. For example:
+1. Update the ScyllaDB configuration file, scylla.yaml, which can be found under ``/etc/scylla/``. For example:
 
 Seed list before removing the node:
 
@@ -33,6 +33,6 @@ Seed list after removing the node:
 
    - seeds: "10.240.0.83,10.240.0.93" 
 
-2. Scylla will read the updated seed list the next time it starts. You can force Scylla to read the list immediately by restarting Scylla as follows:
+2. ScyllaDB will read the updated seed list the next time it starts. You can force ScyllaDB to read the list immediately by restarting ScyllaDB as follows:
 
 .. include:: /rst_include/scylla-commands-restart-index.rst

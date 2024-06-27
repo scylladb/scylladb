@@ -2,11 +2,11 @@ POSIX networking for Scylla
 ===========================
 **Topic: Planning and setup**
 
-**Learn: How to configure POSIX networking for Scylla**
+**Learn: How to configure POSIX networking for ScyllaDB**
 
 **Audience: Developers, devops, integration testers**
 
-The Seastar framework used in Scylla can support two networking modes.
+The Seastar framework used in ScyllaDB can support two networking modes.
 For high-performance production workloads, use the Data Plane
 Development Kit (DPDK) for maximum performance on specific modern
 network hardware.
@@ -29,7 +29,7 @@ Firewall Configuration
 For a single node, the firewall will need to be set up to allow TCP on
 the following :ref:`ports <cqlsh-networking>`.
 
-Scylla Configuration
+ScyllaDB Configuration
 --------------------
 
 POSIX mode is the default, in ``/etc/sysconfig/scylla-server``. Check

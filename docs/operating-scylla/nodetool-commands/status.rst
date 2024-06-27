@@ -54,7 +54,7 @@ Example output:
 |Address   |The IP address of the node.            |
 |          |                                       |
 +----------+---------------------------------------+
-|Load      |The size on disk the Scylla data takes |
+|Load      |The size on disk the ScyllaDB data takes |
 |          |up (updates every 60 seconds).         |
 |          |                                       |
 |          |                                       |

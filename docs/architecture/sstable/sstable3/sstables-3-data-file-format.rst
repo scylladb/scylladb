@@ -233,9 +233,9 @@ If `EXTENSION_FLAG` is set, the following byte `extended_flags` is a bitwise-or 
        // Whether the encoded row is a static. If there is no extended flag, the row is assumed not static.
        IS_STATIC = 0x01, 
        // Whether the row deletion is shadowable. If there is no extended flag (or no row deletion), the deletion is assumed not shadowable. This flag is deprecated - see CASSANDRA-11500.
-       // This flag is not supported by Scylla and SSTables that have this flag set fail to be loaded.
+       // This flag is not supported by ScyllaDB and SSTables that have this flag set fail to be loaded.
        HAS_SHADOWABLE_DELETION_CASSANDRA = 0x02, 
-       // A Scylla-specific flag (not supported by Cassandra) that indicates the presence of a shadowable tombstone.
+       // A ScyllaDB-specific flag (not supported by Cassandra) that indicates the presence of a shadowable tombstone.
        // See below for details
        HAS_SHADOWABLE_DELETION_SCYLLA = 0x80, 
    };
@@ -317,9 +317,9 @@ Shadowable Tombstones
 Cassandra only maintains up to one tombstone for a row. In case if it is shadowable, Cassandra sets the corresponding HAS_SHADOWABLE_DELETION_CASSANDRA flag.
 
 It turns out that this approach is imperfect and there are known issues with the current shadowable deletions support in Cassandra (see https://issues.apache.org/jira/browse/CASSANDRA-13826 for details).
-To address those, Scylla maintains a separate shadowable tombstone in addition to the regular one. That means a row can have up to two tombstones in Scylla-written SSTables. If the second tombstone is present, the Scylla-specific extended flag HAS_SHADOWABLE_DELETION_SCYLLA is set. 
+To address those, ScyllaDB maintains a separate shadowable tombstone in addition to the regular one. That means a row can have up to two tombstones in ScyllaDB-written SSTables. If the second tombstone is present, the ScyllaDB-specific extended flag HAS_SHADOWABLE_DELETION_SCYLLA is set. 
 
-Note that Cassandra does not know this flag and would consider those files invalid. This is deemed to be safe to do because shadowable tombstones can only appear in Materialized Views tables and those are not supposed to be ever exported and imported between Scylla and Cassandra.
+Note that Cassandra does not know this flag and would consider those files invalid. This is deemed to be safe to do because shadowable tombstones can only appear in Materialized Views tables and those are not supposed to be ever exported and imported between ScyllaDB and Cassandra.
 
 Missing Columns Encoding
 ------------------------
@@ -342,7 +342,7 @@ If `columns.count() < superset.count() / 2`, the **present** columns indices are
 
 Although the field is named `missing_columns`, one can see from the algorithm described above that in some cases the values stored are indices of present columns, not missing ones. This may be a bit confusing, but it helps to reason about it in the following way: whatever is stored can be used to get the list of missing columns.
 
-As of today, Scylla treats the whole set of columns as a superset regardless of whether all columns are ever filled or not. `See for details`_.
+As of today, ScyllaDB treats the whole set of columns as a superset regardless of whether all columns are ever filled or not. `See for details`_.
 
 .. _`See for details`: https://github.com/scylladb/scylla/issues/3901
 
@@ -538,7 +538,7 @@ Shadowable Deletion
 Initially, an extended `HAS_SHADOWABLE_DELETION` flag has been introduced in 3.0 format to solve a tricky problem described in [CASSANDRA-10261](https://issues.apache.org/jira/browse/CASSANDRA-10261). Later some other problems have been discovered ([CASSANDRA-11500](https://issues.apache.org/jira/browse/CASSANDRA-11500)) which led to a more generic approach that deprecated shadowable tombstones and used expired liveness info instead.
 
 As a result, this flag is not supposed to be written for new SSTables by Cassandra.
-Scylla tracks the presence of this flag and fails to load files that have it set.
+ScyllaDB tracks the presence of this flag and fails to load files that have it set.
 
 
 References

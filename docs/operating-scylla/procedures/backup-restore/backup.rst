@@ -49,7 +49,7 @@ For example:
 
 | ``$ nodetool snapshot mykeyspace``
 
-| The snapshot is created under Scylla data directory ``/var/lib/scylla/data``
+| The snapshot is created under ScyllaDB data directory ``/var/lib/scylla/data``
 | It will have the following structure:
 | ``keyspace_name/table_name-UUID/snapshots/snapshot_name``
 
@@ -68,11 +68,11 @@ Incremental Backup
 
   * A snapshot 
   * All incremental backups and commit logs from the time of the snapshot. 
-  * Make sure to delete unnecessary incremental backups. Scylla does not do this automatically.
+  * Make sure to delete unnecessary incremental backups. ScyllaDB does not do this automatically.
 
 **Procedure**
 
-| 1. In the ``/etc/scylla/scylla.yaml`` file set the ``incremental backups`` parameters to ``true`` and restart the Scylla service. Snapshot are created under Scylla data directory ``/var/lib/scylla/data``
+| 1. In the ``/etc/scylla/scylla.yaml`` file set the ``incremental backups`` parameters to ``true`` and restart the ScyllaDB service. Snapshot are created under ScyllaDB data directory ``/var/lib/scylla/data``
 | with the following structure:
 | ``keyspace_name/table_name-UUID/backups/backups_name``
 
@@ -83,6 +83,6 @@ Incremental Backup
 Additional Resources
 ====================
 
-* :doc:`Scylla Snapshots </kb/snapshots>`
+* :doc:`ScyllaDB Snapshots </kb/snapshots>`
 
 

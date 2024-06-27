@@ -1,7 +1,7 @@
 .. |SRC_VERSION| replace:: 5.4
 .. |NEW_VERSION| replace:: 6.0
 
-ScyllaDB Metric Update - Scylla |SRC_VERSION| to |NEW_VERSION|
+ScyllaDB Metric Update - ScyllaDB |SRC_VERSION| to |NEW_VERSION|
 ====================================================================
 
 .. toctree::

@@ -3,7 +3,7 @@ Adding a New Data Center Into an Existing ScyllaDB Cluster
 
 .. scylladb_include_flag:: upgrade-note-add-new-dc.rst
 
-The following procedure specifies how to add a Data Center (DC) to a live Scylla Cluster, in a single data center, :ref:`multi-availability zone <faq-best-scenario-node-multi-availability-zone>`, or multi-datacenter. Adding a DC out-scales the cluster and provides higher availability (HA).
+The following procedure specifies how to add a Data Center (DC) to a live ScyllaDB Cluster, in a single data center, :ref:`multi-availability zone <faq-best-scenario-node-multi-availability-zone>`, or multi-datacenter. Adding a DC out-scales the cluster and provides higher availability (HA).
 
 The procedure includes:
 
@@ -31,8 +31,8 @@ Prerequisites
 
 #. On all client applications, switch the consistency level to ``LOCAL_*`` (LOCAL_ONE, LOCAL_QUORUM,etc.) to prevent the coordinators from accessing the data center you're adding.
 
-#. Install the new **clean** Scylla nodes (See `Clean Data from Nodes`_ below) on the new datacenter, see :doc:`Getting Started </getting-started/index>` for further instructions, create as many nodes that you need.
-   Follow the Scylla install procedure up to ``scylla.yaml`` configuration phase.
+#. Install the new **clean** ScyllaDB nodes (See `Clean Data from Nodes`_ below) on the new datacenter, see :doc:`Getting Started </getting-started/index>` for further instructions, create as many nodes that you need.
+   Follow the ScyllaDB install procedure up to ``scylla.yaml`` configuration phase.
    In the case that the node starts during the installation process follow :doc:`these instructions </operating-scylla/procedures/cluster-management/clear-data>`.
 
 .. include:: /operating-scylla/procedures/cluster-management/_common/quorum-requirement.rst
@@ -119,7 +119,7 @@ Add New DC
 
    * **cluster_name** - Set the selected cluster_name.
    * **seeds** - IP address of an existing node (or nodes).
-   * **listen_address** - IP address that Scylla used to connect to the other Scylla nodes in the cluster.
+   * **listen_address** - IP address that ScyllaDB used to connect to the other ScyllaDB nodes in the cluster.
    * **endpoint_snitch** - Set the selected snitch.
    * **rpc_address** - Address for CQL client connections.
 
@@ -201,9 +201,9 @@ Add New DC
 
    The rebuild ensures that the new nodes that were just added to the cluster will recognize the existing datacenters in the cluster.
 
-#. Run a full cluster repair, using :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair>` on each node, or using `Scylla Manager ad-hoc repair <https://manager.docs.scylladb.com/stable/repair>`_
+#. Run a full cluster repair, using :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair>` on each node, or using `ScyllaDB Manager ad-hoc repair <https://manager.docs.scylladb.com/stable/repair>`_
 
-#. If you are using Scylla Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using Scylla Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_ and Manager can access the new DC.
+#. If you are using ScyllaDB Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using ScyllaDB Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_ and Manager can access the new DC.
 
 
 Configure the Client not to Connect to the New DC

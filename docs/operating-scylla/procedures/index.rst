@@ -9,8 +9,8 @@ Procedures
    Change Configuration <config-change/index>
    Maintenance <maintenance/index>
    Best Practices <tips/index>
-   Benchmarking Scylla </operating-scylla/benchmarking-scylla>
-   Migrate from Cassandra to Scylla <cassandra-to-scylla-migration-process>
+   Benchmarking ScyllaDB </operating-scylla/benchmarking-scylla>
+   Migrate from Cassandra to ScyllaDB <cassandra-to-scylla-migration-process>
    Disable Housekeeping </getting-started/installation-common/disable-housekeeping>
 
 
@@ -24,18 +24,18 @@ Procedures
               </div>
               <div class="medium-9 columns">
 
-Procedures to create, out-scale, down-scale, and backup Scylla clusters 
+Procedures to create, out-scale, down-scale, and backup ScyllaDB clusters 
 
 * :doc:`Cluster management procedures </operating-scylla/procedures/cluster-management/index>`
 * :doc:`Backup & Restore procedures </operating-scylla/procedures/backup-restore/index>`
 * :doc:`Procedures to change configuration </operating-scylla/procedures/config-change/index>`
 * :doc:`Maintenance Procedures </operating-scylla/procedures/maintenance/index>`
 * :doc:`Best Practices </operating-scylla/procedures/tips/index>`
-* :doc:`Benchmarking Scylla </operating-scylla/benchmarking-scylla>`
-* :doc:`Migrate from Cassandra to Scylla </operating-scylla/procedures/cassandra-to-scylla-migration-process>`
-* :doc:`Disable Scylla Housekeeping </getting-started/installation-common/disable-housekeeping>`
+* :doc:`Benchmarking ScyllaDB </operating-scylla/benchmarking-scylla>`
+* :doc:`Migrate from Cassandra to ScyllaDB </operating-scylla/procedures/cassandra-to-scylla-migration-process>`
+* :doc:`Disable ScyllaDB Housekeeping </getting-started/installation-common/disable-housekeeping>`
 * :doc:`How to Change Log Level in Runtime </troubleshooting/log-level/>`
-* For training material and hands-on examples also check out the `Cluster Management Repair and Scylla Manager lesson <https://university.scylladb.com/courses/scylla-operations/lessons/cluster-management-repair-and-scylla-manager/>`_ on Scylla University.
+* For training material and hands-on examples also check out the `Cluster Management Repair and ScyllaDB Manager lesson <https://university.scylladb.com/courses/scylla-operations/lessons/cluster-management-repair-and-scylla-manager/>`_ on ScyllaDB University.
 
 .. raw:: html
 

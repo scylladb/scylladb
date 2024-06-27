@@ -8,7 +8,7 @@ How to Change gc_grace_seconds for a Table
 
 How to change (reduce) gc_grace_seconds parameter of the table
 
-**Audience: Scylla administrators**
+**Audience: ScyllaDB administrators**
 
 
 Issue

@@ -1,7 +1,7 @@
 Cassandra Stress
 ================
 
-The cassandra-stress tool is used for benchmarking and load testing both Scylla and Cassandra clusters. The cassandra-stress tool also supports testing arbitrary CQL tables and queries to allow users to benchmark their data model.
+The cassandra-stress tool is used for benchmarking and load testing both ScyllaDB and Cassandra clusters. The cassandra-stress tool also supports testing arbitrary CQL tables and queries to allow users to benchmark their data model.
 
 This documentation focuses on user mode as this allows the testing of your actual schema.
 

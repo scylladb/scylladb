@@ -6,7 +6,7 @@ Configure ScyllaDB
    <div class="panel callout radius animated">
             <div class="row">
               <div class="medium-3 columns">
-                <h5 id="getting-started">Configure Scylla</h5>
+                <h5 id="getting-started">Configure ScyllaDB</h5>
               </div>
               <div class="medium-9 columns">
 

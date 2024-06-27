@@ -1,4 +1,4 @@
-Scylla Types
+ScyllaDB Types
 ==============
 
 Introduction

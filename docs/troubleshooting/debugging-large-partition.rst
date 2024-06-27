@@ -10,7 +10,7 @@ What Should Make You Want To Start Looking For A Large Partition?
 
 Any of the following:
 
-* Latencies on a single shard become very long (look at the "Scylla Overview Metrics" dashboard of `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_).
+* Latencies on a single shard become very long (look at the "ScyllaDB Overview Metrics" dashboard of `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_).
 * Oversized allocation warning messages in the log:
 
   .. code-block:: none
@@ -47,7 +47,7 @@ For example:
 Using system tables to detect large partitions, rows, or cells
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Large rows and large cells are listed in the ``system.large_rows`` and ``system.large_cells`` tables, respectively.  See :doc:`Scylla Large Rows and Cells Tables </troubleshooting/large-rows-large-cells-tables/>` for more information.
+Large rows and large cells are listed in the ``system.large_rows`` and ``system.large_cells`` tables, respectively.  See :doc:`ScyllaDB Large Rows and Cells Tables </troubleshooting/large-rows-large-cells-tables/>` for more information.
 
 
 When Compaction Creates an Error

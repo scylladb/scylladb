@@ -2,11 +2,11 @@ DPDK mode
 =========
 **Topic:	Planning and setup**
 
-**Learn:	How to select networking hardware for Scylla**
+**Learn:	How to select networking hardware for ScyllaDB**
 
-**Audience:	Scylla administrators**
+**Audience:	ScyllaDB administrators**
 
-Scylla is designed to use the Seastar framework, which uses the Data Plane Development Kit (DPDK) to drive NIC hardware directly, instead of relying on the kernel’s network stack. This provides an enormous performance boost for Scylla. Scylla and DPDK also rely on the Linux “hugepages” feature to minimize overhead on memory allocations. DPDK is supported on a variety of high-performance network devices.
+ScyllaDB is designed to use the Seastar framework, which uses the Data Plane Development Kit (DPDK) to drive NIC hardware directly, instead of relying on the kernel’s network stack. This provides an enormous performance boost for ScyllaDB. ScyllaDB and DPDK also rely on the Linux “hugepages” feature to minimize overhead on memory allocations. DPDK is supported on a variety of high-performance network devices.
 
 .. role:: raw-html(raw)
    :format: html
@@ -19,7 +19,7 @@ Scylla is designed to use the Seastar framework, which uses the Data Plane Devel
 |Intel |i40e (X710, XL710)                                 | :raw-html:`<span class="icon-yes"/>` |
 +------+---------------------------------------------------+--------------------------------------+
 
-Scylla RPM packages are built with DPDK support, but the package defaults to POSIX networking mode (see Administration Guide). To enable DPDK, edit ``/etc/sysconfig/scylla-server`` and edit the following lines:
+ScyllaDB RPM packages are built with DPDK support, but the package defaults to POSIX networking mode (see Administration Guide). To enable DPDK, edit ``/etc/sysconfig/scylla-server`` and edit the following lines:
 
 .. code-block:: ini
 

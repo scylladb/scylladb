@@ -11,18 +11,18 @@ This is a general procedure that describes how to perform a rolling restart. You
 Procedure
 ---------
 
-1. Run :doc:`nodetool drain </operating-scylla/nodetool-commands/drain/>` command (Scylla stops listening to its connections from the client and other nodes).
+1. Run :doc:`nodetool drain </operating-scylla/nodetool-commands/drain/>` command (ScyllaDB stops listening to its connections from the client and other nodes).
 
-2. Stop the Scylla node.
+2. Stop the ScyllaDB node.
 
 .. include:: /rst_include/scylla-commands-stop-index.rst
 
 3. Update the relevant configuration file, for example, scylla.yaml the file can be found under ``/etc/scylla/``.
 
-4. Start the Scylla node. 
+4. Start the ScyllaDB node. 
 
 .. include:: /rst_include/scylla-commands-start-index.rst
 
-5. Verify the node is up and has returned to the Scylla cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status/>`.
+5. Verify the node is up and has returned to the ScyllaDB cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status/>`.
 
 6. Repeat this procedure for all the relevant nodes in the cluster.

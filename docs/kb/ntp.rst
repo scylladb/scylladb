@@ -2,11 +2,11 @@ NTP Configuration for Scylla
 ============================
 **Topic: System administration**
 
-**Learn: How to configure time synchronization for Scylla**
+**Learn: How to configure time synchronization for ScyllaDB**
 
-**Audience: Scylla and Apache Cassandra administrators**
+**Audience: ScyllaDB and Apache Cassandra administrators**
 
-Apache Cassandra and Scylla depend on an accurate system clock. Kyle Kingsbury,
+Apache Cassandra and ScyllaDB depend on an accurate system clock. Kyle Kingsbury,
 author of the ``jepsen`` distributed systems testing tool,
 `writes <https://aphyr.com/posts/299-the-trouble-with-timestamps>`_,
 

@@ -5,11 +5,11 @@ Compaction
 ----------
 
 
-This document describes the compaction strategy options available when creating a table. For more information about creating a table in Scylla, refer to the :ref:`CQL Reference <create-table-statement>`.
+This document describes the compaction strategy options available when creating a table. For more information about creating a table in ScyllaDB, refer to the :ref:`CQL Reference <create-table-statement>`.
 
-By default, Scylla starts a compaction task whenever a new SSTable is written. Compaction merges several SSTables into a new SSTable, which contains only the live data from the input SSTables. Merging several sorted files to get a sorted result is an efficient process, and this is the main reason why SSTables are kept sorted. 
+By default, ScyllaDB starts a compaction task whenever a new SSTable is written. Compaction merges several SSTables into a new SSTable, which contains only the live data from the input SSTables. Merging several sorted files to get a sorted result is an efficient process, and this is the main reason why SSTables are kept sorted. 
 
-The following compaction strategies are supported by Scylla: 
+The following compaction strategies are supported by ScyllaDB: 
 
 * Size-tiered Compaction Strategy (`STCS`_)
 
@@ -19,7 +19,7 @@ The following compaction strategies are supported by Scylla:
 
 * Time-window Compaction Strategy (`TWCS`_)
 
-This page concentrates on the parameters to use when creating a table with a compaction strategy. If you are unsure which strategy to use or want general information on the compaction strategies which are available to Scylla, refer to :doc:`Compaction Strategies </architecture/compaction/compaction-strategies>`.
+This page concentrates on the parameters to use when creating a table with a compaction strategy. If you are unsure which strategy to use or want general information on the compaction strategies which are available to ScyllaDB, refer to :doc:`Compaction Strategies </architecture/compaction/compaction-strategies>`.
 
 Common options
 ^^^^^^^^^^^^^^
@@ -214,7 +214,7 @@ TWCS options
 =====
 
 ``expired_sstable_check_frequency_seconds`` (default: 600)
-  Specifies (in seconds) how often Scylla will check for fully expired SSTables, which can be immediately dropped.
+  Specifies (in seconds) how often ScyllaDB will check for fully expired SSTables, which can be immediately dropped.
 
 =====
 

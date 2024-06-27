@@ -2,7 +2,7 @@
 Upgrading from experimental CDC
 ===============================
 
-If you used CDC in Scylla 4.2 or earlier by enabling the experimental feature and you upgrade to 4.3, you must perform additional steps for CDC to work properly.
+If you used CDC in ScyllaDB 4.2 or earlier by enabling the experimental feature and you upgrade to 4.3, you must perform additional steps for CDC to work properly.
 
 First, if you enabled CDC on any table (using ``with cdc = { ... }``), you should stop all writes to this table. Then disable CDC before the upgrade:
 
@@ -18,7 +18,7 @@ This should work even if you already upgraded, but preferably disable CDC on all
 
 After disabling CDC and finishing the upgrade you can safely re-enable it.
 
-The next step is running ``nodetool checkAndRepairCdcStreams``. Up to this point, Scylla may have periodically reported the following errors in its logs:
+The next step is running ``nodetool checkAndRepairCdcStreams``. Up to this point, ScyllaDB may have periodically reported the following errors in its logs:
 
 .. code-block:: none
 

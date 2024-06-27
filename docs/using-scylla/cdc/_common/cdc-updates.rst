@@ -84,7 +84,7 @@ You can read about row deletions in the :ref:`corresponding section <row-deletio
 Digression: static rows in Scylla
 +++++++++++++++++++++++++++++++++
 
-If a table in Scylla has static columns, then every partition in this table contains a *static row*, which is global for the partition. This static row is different from the clustered rows: it contains values for partition key columns and static columns, while clustered rows contain values for partition key, clustering key, and regular columns. The following example illustrates how the static row can be used:
+If a table in ScyllaDB has static columns, then every partition in this table contains a *static row*, which is global for the partition. This static row is different from the clustered rows: it contains values for partition key columns and static columns, while clustered rows contain values for partition key, clustering key, and regular columns. The following example illustrates how the static row can be used:
 
 .. code-block:: cql
 

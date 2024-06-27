@@ -45,7 +45,7 @@ Procedures for Upgrading ScyllaDB
 
 * :doc:`Upgrade ScyllaDB Open Source <upgrade-opensource/index>`
 
-* :doc:`Upgrade from ScyllaDB Open Source to Scylla Enterprise <upgrade-to-enterprise/index>`
+* :doc:`Upgrade from ScyllaDB Open Source to ScyllaDB Enterprise <upgrade-to-enterprise/index>`
 
 * :doc:`Upgrade ScyllaDB Image <ami-upgrade>`
 

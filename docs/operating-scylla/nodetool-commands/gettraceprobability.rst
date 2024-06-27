@@ -24,5 +24,5 @@ Additional Information
 ----------------------
 
 * :doc:`settraceprobability </operating-scylla/nodetool-commands/settraceprobability/>` - Nodetool Reference
-* `CQL tracing in Scylla blog <https://www.scylladb.com/2016/08/04/cql-tracing/>`_
+* `CQL tracing in ScyllaDB blog <https://www.scylladb.com/2016/08/04/cql-tracing/>`_
 

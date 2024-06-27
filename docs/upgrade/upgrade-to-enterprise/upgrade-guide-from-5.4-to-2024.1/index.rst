@@ -11,5 +11,5 @@ Upgrade - ScyllaDB 5.4 to ScyllaDB Enterprise 2024.1
    Metrics <metric-update-5.4-to-2024.1>
 
 * :doc:`Upgrade ScyllaDB from 5.4.x to 2024.1.y <upgrade-guide-from-5.4-to-2024.1-generic>`
-* :doc:`ScyllaDB Metrics Update - Scylla 5.4 to 2024.1 <metric-update-5.4-to-2024.1>`
+* :doc:`ScyllaDB Metrics Update - ScyllaDB 5.4 to 2024.1 <metric-update-5.4-to-2024.1>`
 

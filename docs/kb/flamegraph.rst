@@ -5,8 +5,8 @@ Debug your database with Flame Graphs
 Flame Graphs are used as a debugging tool to identify latency and the part of the execution path that takes most of the CPU time. 
 Use Flame Graphs when you:
 
-* Need to understand which Scylla code path/functions are using the most time. For instance, when you have latency issues.
-* Need to compare time spent in particular Scylla code paths/functions on different shards. For instance, when you have latency issues on one CPU but not on the other.
+* Need to understand which ScyllaDB code path/functions are using the most time. For instance, when you have latency issues.
+* Need to compare time spent in particular ScyllaDB code paths/functions on different shards. For instance, when you have latency issues on one CPU but not on the other.
 
 Run a Flame Graph
 -----------------
@@ -28,7 +28,7 @@ Run a Flame Graph
       git clone https://github.com/brendangregg/FlameGraph
       cd FlameGraph
 
-#. Run the following perf commands, using :doc:`Map CPU to Scylla Shards </kb/map-cpu>`  and :doc:`Using the perf utility with Scylla </kb/use-perf>` for reference.
+#. Run the following perf commands, using :doc:`Map CPU to ScyllaDB Shards </kb/map-cpu>`  and :doc:`Using the perf utility with ScyllaDB </kb/use-perf>` for reference.
 
    .. code-block:: shell
 
@@ -43,7 +43,7 @@ Run a Flame Graph
 Tips
 ----
 
-* On the CPU you are recording, try to load Scylla to consume 100% of the CPU runtime. Otherwise you’ll see a lot of OS functions related to the idle time handling
+* On the CPU you are recording, try to load ScyllaDB to consume 100% of the CPU runtime. Otherwise you’ll see a lot of OS functions related to the idle time handling
 
 * Recording on all shards (e.g. using “perf record” -p parameter) may lead to confusing results recording the same symbol called from different threads (shards). This is not recommended.
 

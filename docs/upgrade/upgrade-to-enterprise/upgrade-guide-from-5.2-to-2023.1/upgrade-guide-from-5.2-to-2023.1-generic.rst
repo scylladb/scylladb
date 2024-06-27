@@ -232,7 +232,7 @@ Validate
 
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
 
-See |Scylla_METRICS|_ for more information.
+See |ScyllaDB_METRICS|_ for more information.
 
 Rollback Procedure
 ==================
