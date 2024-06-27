@@ -815,7 +815,7 @@ bool query_processor::has_more_results(cql3::internal_query_state& state) const 
 
 future<> query_processor::for_each_cql_result(
         cql3::internal_query_state& state,
-         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)>&& f) {
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)> f) {
     do {
         auto msg = co_await execute_paged_internal(state);
         for (auto& row : *msg) {
@@ -1116,14 +1116,14 @@ future<> query_processor::query_internal(
         db::consistency_level cl,
         const std::initializer_list<data_value>& values,
         int32_t page_size,
-        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f) {
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
     auto query_state = create_paged_state(query_string, cl, values, page_size);
     co_return co_await for_each_cql_result(query_state, std::move(f));
 }
 
 future<> query_processor::query_internal(
         const sstring& query_string,
-        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f) {
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
     return query_internal(query_string, db::consistency_level::ONE, {}, 1000, std::move(f));
 }
 
