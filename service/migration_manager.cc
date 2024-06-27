@@ -473,20 +473,6 @@ future<> migration_notifier::create_view(view_ptr view) {
     });
 }
 
-#if 0
-public void notifyCreateFunction(UDFunction udf)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onCreateFunction(udf.name().keyspace, udf.name().name);
-}
-
-public void notifyCreateAggregate(UDAggregate udf)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onCreateAggregate(udf.name().keyspace, udf.name().name);
-}
-#endif
-
 future<> migration_notifier::update_keyspace(lw_shared_ptr<keyspace_metadata> ksm) {
     const auto& name = ksm->name();
     co_await on_schema_change([&] (migration_listener* listener) {
@@ -533,20 +519,6 @@ future<> migration_notifier::update_tablet_metadata() {
         });
     });
 }
-
-#if 0
-public void notifyUpdateFunction(UDFunction udf)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onUpdateFunction(udf.name().keyspace, udf.name().name);
-}
-
-public void notifyUpdateAggregate(UDAggregate udf)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onUpdateAggregate(udf.name().keyspace, udf.name().name);
-}
-#endif
 
 future<> migration_notifier::drop_keyspace(sstring ks_name) {
     co_await on_schema_change([&] (migration_listener* listener) {
@@ -637,20 +609,6 @@ void migration_notifier::before_drop_keyspace(const sstring& keyspace_name,
     });
 }
 
-#if 0
-public void notifyDropFunction(UDFunction udf)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onDropFunction(udf.name().keyspace, udf.name().name);
-}
-
-public void notifyDropAggregate(UDAggregate udf)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onDropAggregate(udf.name().keyspace, udf.name().name);
-}
-#endif
-
 std::vector<mutation> prepare_keyspace_update_announcement(replica::database& db, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type ts) {
     db.validate_keyspace_update(*ksm);
     mlogger.info("Update Keyspace: {}", ksm);
@@ -693,9 +651,6 @@ static future<std::vector<mutation>> do_prepare_new_column_family_announcement(s
 }
 
 future<std::vector<mutation>> prepare_new_column_family_announcement(storage_proxy& sp, schema_ptr cfm, api::timestamp_type timestamp) {
-#if 0
-    cfm.validate();
-#endif
     try {
         auto& db = sp.get_db().local();
         auto ksm = db.find_keyspace(cfm->ks_name()).metadata();
@@ -717,15 +672,9 @@ future<> prepare_new_column_family_announcement(std::vector<mutation>& mutations
 future<std::vector<mutation>> prepare_column_family_update_announcement(storage_proxy& sp,
         schema_ptr cfm, std::vector<view_ptr> view_updates, api::timestamp_type ts) {
     warn(unimplemented::cause::VALIDATION);
-#if 0
-    cfm.validate();
-#endif
     try {
         auto& db = sp.local_db();
         auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
-#if 0
-        oldCfm.validateCompatility(cfm);
-#endif
         mlogger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
         auto&& keyspace = db.find_keyspace(cfm->ks_name()).metadata();
 
@@ -872,9 +821,6 @@ future<std::vector<mutation>> prepare_type_drop_announcement(storage_proxy& sp, 
 }
 
 future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
-#if 0
-    view.metadata.validate();
-#endif
     auto& db = sp.local_db();
     try {
         auto keyspace = db.find_keyspace(view->ks_name()).metadata();
@@ -898,9 +844,6 @@ future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, v
 }
 
 future<std::vector<mutation>> prepare_view_update_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
-#if 0
-    view.metadata.validate();
-#endif
     auto db = sp.data_dictionary();
     try {
         auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
@@ -908,9 +851,6 @@ future<std::vector<mutation>> prepare_view_update_announcement(storage_proxy& sp
         if (!old_view->is_view()) {
             co_await coroutine::return_exception(exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table"));
         }
-#if 0
-        oldCfm.validateCompatility(cfm);
-#endif
         mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
         auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, true);
         co_return co_await include_keyspace(sp, *keyspace, std::move(mutations));
@@ -1074,75 +1014,6 @@ future<> migration_manager::passive_announce() {
     mlogger.info("Gossiping my schema version {}", _schema_version_to_publish);
     return _gossiper.add_local_application_state(gms::application_state::SCHEMA, gms::versioned_value::schema(_schema_version_to_publish));
 }
-
-#if 0
-/**
- * Clear all locally stored schema information and reset schema to initial state.
- * Called by user (via JMX) who wants to get rid of schema disagreement.
- *
- * @throws IOException if schema tables truncation fails
- */
-public static void resetLocalSchema() throws IOException
-{
-    mlogger.info("Starting local schema reset...");
-
-    mlogger.debug("Truncating schema tables...");
-
-    LegacySchemaTables.truncateSchemaTables();
-
-    mlogger.debug("Clearing local schema keyspace definitions...");
-
-    Schema.instance.clear();
-
-    Set<InetAddress> liveEndpoints = Gossiper.instance.getLiveMembers();
-    liveEndpoints.remove(FBUtilities.getBroadcastAddress());
-
-    // force migration if there are nodes around
-    for (InetAddress node : liveEndpoints)
-    {
-        if (shouldPullSchemaFrom(node))
-        {
-            mlogger.debug("Requesting schema from {}", node);
-            FBUtilities.waitOnFuture(submitMigrationTask(node));
-            break;
-        }
-    }
-
-    mlogger.info("Local schema reset is complete.");
-}
-
-public static class MigrationsSerializer implements IVersionedSerializer<Collection<Mutation>>
-{
-    public static MigrationsSerializer instance = new MigrationsSerializer();
-
-    public void serialize(Collection<Mutation> schema, DataOutputPlus out, int version) throws IOException
-    {
-        out.writeInt(schema.size());
-        for (Mutation mutation : schema)
-            Mutation.serializer.serialize(mutation, out, version);
-    }
-
-    public Collection<Mutation> deserialize(DataInput in, int version) throws IOException
-    {
-        int count = in.readInt();
-        Collection<Mutation> schema = new ArrayList<>(count);
-
-        for (int i = 0; i < count; i++)
-            schema.add(Mutation.serializer.deserialize(in, version));
-
-        return schema;
-    }
-
-    public long serializedSize(Collection<Mutation> schema, int version)
-    {
-        int size = TypeSizes.NATIVE.sizeof(schema.size());
-        for (Mutation mutation : schema)
-            size += Mutation.serializer.serializedSize(mutation, version);
-        return size;
-    }
-}
-#endif
-
 
 // Ensure that given schema version 's' was synced with on current node. See schema::is_synced().
 //
