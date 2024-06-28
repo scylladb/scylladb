@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/exception.hh>
 
 #include "task_manager.hh"
 #include "api/api-doc/task_manager.json.hh"
@@ -139,6 +140,8 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
 
         std::function<future<>(output_stream<char>&&)> f = [r = std::move(res)] (output_stream<char>&& os) -> future<> {
             auto s = std::move(os);
+            std::exception_ptr ex;
+          try {
             auto res = std::move(r);
             co_await s.write("[");
             std::string delim = "";
@@ -152,7 +155,13 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
             }
             co_await s.write("]");
             co_await s.flush();
+          } catch (...) {
+              ex = std::current_exception();
+          }
             co_await s.close();
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
         };
         co_return std::move(f);
     });
