@@ -116,11 +116,10 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
             locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets()));
         if (rs->uses_tablets()) {
             warnings.push_back(
-                "Tables in this keyspace will be replicated using tablets, "
-                "and will not support the CDC feature (issue #16317) and LWT "
-                "may suffer from issue #5251 more often. If you want to use "
-                "CDC or LWT, please drop this keyspace and re-create it "
-                "without tablets, by adding AND TABLETS = {'enabled': false} "
+                "Tables in this keyspace will be replicated using Tablets "
+                "and will not support CDC, LWT and counters features. "
+                "To use CDC, LWT or counters, drop this keyspace and re-create it "
+                "without tablets by adding AND TABLETS = {'enabled': false} "
                 "to the CREATE KEYSPACE statement.");
         }
     } catch (const exceptions::already_exists_exception& e) {
