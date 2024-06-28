@@ -152,10 +152,11 @@ void set_compaction_manager(http_context& ctx, routes& r) {
     });
 
     cm::get_compaction_history.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        std::function<future<>(output_stream<char>&&)> f = [&ctx](output_stream<char>&& s) {
-            return do_with(output_stream<char>(std::move(s)), true, [&ctx] (output_stream<char>& s, bool& first){
-                return s.write("[").then([&ctx, &s, &first] {
-                    return ctx.db.local().get_compaction_manager().get_compaction_history([&s, &first](const db::compaction_history_entry& entry) mutable {
+        std::function<future<>(output_stream<char>&&)> f = [&ctx] (output_stream<char>&& out) -> future<> {
+            auto s = std::move(out);
+            bool first = true;
+                co_await s.write("[");
+                co_await ctx.db.local().get_compaction_manager().get_compaction_history([&s, &first](const db::compaction_history_entry& entry) mutable -> future<> {
                         cm::history h;
                         h.id = entry.id.to_sstring();
                         h.ks = std::move(entry.ks);
@@ -169,18 +170,14 @@ void set_compaction_manager(http_context& ctx, routes& r) {
                             e.value = it.second;
                             h.rows_merged.push(std::move(e));
                         }
-                        auto fut = first ? make_ready_future<>() : s.write(", ");
+                        if (!first) {
+                            co_await s.write(", ");
+                        }
                         first = false;
-                        return fut.then([&s, h = std::move(h)] {
-                            return formatter::write(s, h);
-                        });
-                    }).then([&s] {
-                        return s.write("]").then([&s] {
-                            return s.close();
-                        });
+                        co_await formatter::write(s, h);
                     });
-                });
-            });
+                co_await s.write("]");
+            co_await s.close();
         };
         return make_ready_future<json::json_return_type>(std::move(f));
     });
