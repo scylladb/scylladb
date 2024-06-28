@@ -221,6 +221,20 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
                 do_add_service_level(sl.first, sl.second).get();
             }
         });
+    }).handle_exception([this] (std::exception_ptr eptr) {
+        try {
+            std::rethrow_exception(eptr);
+        } catch (const broken_semaphore& ex) {
+            // Catch broken semaphore exception.
+            // If it was caused by early abort subscription, ignore the exception.
+            // Otherwise, rethrow it.
+
+            if (!*_early_abort_subscription) {
+                // Early abort subscription was fired
+                return make_ready_future();
+            }
+            std::rethrow_exception(std::move(eptr));
+        }
     });
 }
 
