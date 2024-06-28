@@ -1557,6 +1557,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto result = co_await snap_ctl.local().get_snapshot_details();
         co_return std::function([res = std::move(result)] (output_stream<char>&& o) -> future<> {
+<<<<<<< HEAD
           std::exception_ptr ex;
           output_stream<char> out = std::move(o);
           try {
@@ -1571,27 +1572,39 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             for (auto& [name, details] : result) {
                 if (!first) {
                     co_await out.write(", ");
+=======
+            std::exception_ptr ex;
+            output_stream<char> out = std::move(o);
+            try {
+                auto result = std::move(res);
+                bool first = true;
+
+                co_await out.write("[");
+                for (auto& [name, details] : result) {
+                    if (!first) {
+                        co_await out.write(", ");
+                    }
+                    std::vector<ss::snapshot> snapshot;
+                    for (auto& cf : details) {
+                        ss::snapshot snp;
+                        snp.ks = cf.ks;
+                        snp.cf = cf.cf;
+                        snp.live = cf.details.live;
+                        snp.total = cf.details.total;
+                        snapshot.push_back(std::move(snp));
+                    }
+                    ss::snapshots all_snapshots;
+                    all_snapshots.key = name;
+                    all_snapshots.value = std::move(snapshot);
+                    co_await all_snapshots.write(out);
+                    first = false;
+>>>>>>> 1839030e3b (api: Fix indentation after previous patch)
                 }
-                std::vector<ss::snapshot> snapshot;
-                for (auto& cf : details) {
-                    ss::snapshot snp;
-                    snp.ks = cf.ks;
-                    snp.cf = cf.cf;
-                    snp.live = cf.details.live;
-                    snp.total = cf.details.total;
-                    snapshot.push_back(std::move(snp));
-                }
-                ss::snapshots all_snapshots;
-                all_snapshots.key = name;
-                all_snapshots.value = std::move(snapshot);
-                co_await all_snapshots.write(out);
-                first = false;
+                co_await out.write("]");
+                co_await out.flush();
+            } catch (...) {
+              ex = std::current_exception();
             }
-            co_await out.write("]");
-            co_await out.flush();
-          } catch (...) {
-            ex = std::current_exception();
-          }
             co_await out.close();
 <<<<<<< HEAD
 >>>>>>> d1fd886608 (api: Flush response output stream before closing)
