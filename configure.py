@@ -1684,10 +1684,10 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
-        '-DCMAKE_CXX_STANDARD=20',
+        '-DCMAKE_CXX_STANDARD=23',
         '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags']),
         '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], seastar_cxx_ld_flags)),
-        '-DSeastar_CXX_DIALECT=gnu++20',
+        '-DSeastar_CXX_DIALECT=gnu++23',
         '-DSeastar_API_LEVEL=7',
         '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
@@ -1750,7 +1750,7 @@ def configure_abseil(build_dir, mode, mode_config):
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), cxx_flags),
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
-        '-DCMAKE_CXX_STANDARD=20',
+        '-DCMAKE_CXX_STANDARD=23',
         '-DABSL_PROPAGATE_CXX_STD=ON',
     ]
 
@@ -1885,7 +1885,7 @@ def write_build_file(f,
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = -std=gnu++20 {user_cflags} {warnings} {defines}
+        cxxflags = -std=gnu++23 {user_cflags} {warnings} {defines}
         ldflags = {linker_flags} {user_ldflags}
         ldflags_build = {linker_flags}
         libs = {libs}

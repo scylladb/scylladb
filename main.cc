@@ -648,7 +648,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     init("list-tools", bpo::bool_switch(), "list included tools and exit");
 
     bpo::options_description deprecated_options("Deprecated options - ignored");
-    cfg->add_deprecated_options(deprecated_options.add_options());
+    auto deprecated_options_easy_init = deprecated_options.add_options();
+    cfg->add_deprecated_options(deprecated_options_easy_init);
     app.get_options_description().add(deprecated_options);
 
     // TODO : default, always read?

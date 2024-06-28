@@ -8,12 +8,12 @@
 
 #pragma once
 #include <memory>
+#include "query-request.hh"
 
 class mutation_reader;
 
 namespace query {
     struct max_result_size;
-    class partition_slice;
 }
 
 

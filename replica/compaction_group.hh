@@ -85,6 +85,7 @@ public:
         boost::intrusive::constant_time_size<false>>;
 
     compaction_group(table& t, size_t gid, dht::token_range token_range);
+    ~compaction_group();
 
     void update_id_and_range(size_t id, dht::token_range token_range) {
         _group_id = id;

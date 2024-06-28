@@ -44,7 +44,7 @@ endif()
 
 include(limit_jobs)
 # Configure Seastar compile options to align with Scylla
-set(CMAKE_CXX_STANDARD "20" CACHE INTERNAL "")
+set(CMAKE_CXX_STANDARD "23" CACHE INTERNAL "")
 set(CMAKE_CXX_EXTENSIONS ON CACHE INTERNAL "")
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE INTERNAL "")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
