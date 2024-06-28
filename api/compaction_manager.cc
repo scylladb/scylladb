@@ -178,6 +178,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
                         co_await formatter::write(s, h);
                     });
                 co_await s.write("]");
+                co_await s.flush();
             co_await s.close();
         };
         return make_ready_future<json::json_return_type>(std::move(f));
