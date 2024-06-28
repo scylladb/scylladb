@@ -2,6 +2,8 @@
 Change Data Capture (CDC)
 =========================
 
+.. note:: CDC is not supported in keyspaces with :doc:`tablets</architecture/tablets>` enabled.
+
 .. toctree::
    :maxdepth: 2
    :hidden:
