@@ -151,6 +151,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
                 }
             }
             co_await s.write("]");
+            co_await s.flush();
             co_await s.close();
         };
         co_return std::move(f);
