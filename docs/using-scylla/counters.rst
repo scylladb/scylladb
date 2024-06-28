@@ -3,7 +3,9 @@
 ScyllaDB Counters
 ==================
 
-Counters are useful for any application where you need to increment a count,  such as keeping track of:
+.. note:: Counters are not supported in Keyspaces with Tablets. See :doc:`a full list of features not supported with Tablets</architecture/tablets>`.
+
+Counters are useful for any application where you need to increment a count, such as keeping a track of:
 
 * The number of web page views on a website.
 * The number of apps/updates downloaded.

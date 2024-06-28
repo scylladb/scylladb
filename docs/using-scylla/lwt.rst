@@ -2,6 +2,8 @@
 Lightweight Transactions
 ========================
 
+.. note:: LWT feature is not supported in Keyspaces with Tablets. See :doc:`a full list of features not supported with Tablets</architecture/tablets>`.
+
 There are cases when it is necessary to modify data based on its current state: that is, to perform an update that is executed only if a row does not exist or contains a certain value.
 :abbr:`LWTs (lightweight transactions)` provide this functionality by only allowing changes to data to occur if the condition provided evaluates as true.
 The conditional statements provide linearizable semantics thus allowing data to remain consistent.

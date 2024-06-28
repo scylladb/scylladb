@@ -1,5 +1,8 @@
 # Alternator: DynamoDB API in Scylla
 
+
+**Alternator doesn't support Tablets, because it relies on LWT.**
+
 ## Introduction
 Alternator is a Scylla feature adding compatibility with Amazon DynamoDB(TM).
 DynamoDB's API uses JSON-encoded requests and responses which are sent over
