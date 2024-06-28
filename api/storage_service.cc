@@ -1552,7 +1552,33 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 });
             };
 
+<<<<<<< HEAD
             return make_ready_future<json::json_return_type>(std::move(f));
+=======
+            co_await out.write("[");
+            for (auto& [name, details] : result) {
+                if (!first) {
+                    co_await out.write(", ");
+                }
+                std::vector<ss::snapshot> snapshot;
+                for (auto& cf : details) {
+                    ss::snapshot snp;
+                    snp.ks = cf.ks;
+                    snp.cf = cf.cf;
+                    snp.live = cf.details.live;
+                    snp.total = cf.details.total;
+                    snapshot.push_back(std::move(snp));
+                }
+                ss::snapshots all_snapshots;
+                all_snapshots.key = name;
+                all_snapshots.value = std::move(snapshot);
+                co_await all_snapshots.write(out);
+                first = false;
+            }
+            co_await out.write("]");
+            co_await out.flush();
+            co_await out.close();
+>>>>>>> d1fd886608 (api: Flush response output stream before closing)
         });
     });
 
