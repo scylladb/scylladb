@@ -29,6 +29,7 @@
 #include <seastar/http/exception.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/exception.hh>
 #include "repair/row_level.hh"
 #include "locator/snitch_base.hh"
 #include "column_family.hh"
@@ -1519,6 +1520,7 @@ enum class scrub_status {
 };
 
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
+<<<<<<< HEAD
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) {
         return snap_ctl.local().get_snapshot_details().then([] (std::unordered_map<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& result) {
             std::function<future<>(output_stream<char>&&)> f = [result = std::move(result)](output_stream<char>&& s) {
@@ -1551,6 +1553,16 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                     });
                 });
             };
+=======
+    ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto result = co_await snap_ctl.local().get_snapshot_details();
+        co_return std::function([res = std::move(result)] (output_stream<char>&& o) -> future<> {
+          std::exception_ptr ex;
+          output_stream<char> out = std::move(o);
+          try {
+            auto result = std::move(res);
+            bool first = true;
+>>>>>>> a0c1552cea (api: Close output_stream on error)
 
 <<<<<<< HEAD
             return make_ready_future<json::json_return_type>(std::move(f));
@@ -1577,8 +1589,17 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             }
             co_await out.write("]");
             co_await out.flush();
+          } catch (...) {
+            ex = std::current_exception();
+          }
             co_await out.close();
+<<<<<<< HEAD
 >>>>>>> d1fd886608 (api: Flush response output stream before closing)
+=======
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
+>>>>>>> a0c1552cea (api: Close output_stream on error)
         });
     });
 
