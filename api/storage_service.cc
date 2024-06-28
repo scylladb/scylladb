@@ -1686,6 +1686,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 first = false;
             }
             co_await out.write("]");
+            co_await out.flush();
             co_await out.close();
         });
     });
