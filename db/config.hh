@@ -212,6 +212,7 @@ public:
     named_value<uint32_t> schema_commitlog_segment_size_in_mb;
     named_value<uint32_t> commitlog_sync_period_in_ms;
     named_value<uint32_t> commitlog_sync_batch_window_in_ms;
+    named_value<uint32_t> commitlog_max_data_lifetime_in_seconds;
     named_value<int64_t> commitlog_total_space_in_mb;
     named_value<bool> commitlog_reuse_segments; // unused. retained for upgrade compat
     named_value<int64_t> commitlog_flush_threshold_in_mb;
