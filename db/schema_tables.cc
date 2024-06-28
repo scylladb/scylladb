@@ -755,20 +755,6 @@ schema_ptr scylla_table_schema_history() {
 
 }
 
-#if 0
-    public static void truncateSchemaTables()
-    {
-        for (String table : ALL)
-            getSchemaCFS(table).truncateBlocking();
-    }
-
-    private static void flushSchemaTables()
-    {
-        for (String table : ALL)
-            SystemKeyspace.forceBlockingFlush(table);
-    }
-#endif
-
 static
 mutation
 redact_columns_for_missing_features(mutation&& m, schema_features features) {
@@ -1881,61 +1867,6 @@ static std::vector<data_value> read_arg_values(const query::result_set_row& row)
     return std::vector<data_value>(args.begin(), args.end());
 }
 
-#if 0
-    // see the comments for mergeKeyspaces()
-    private static void mergeAggregates(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
-    {
-        List<UDAggregate> created = new ArrayList<>();
-        List<UDAggregate> altered = new ArrayList<>();
-        List<UDAggregate> dropped = new ArrayList<>();
-
-        MapDifference<DecoratedKey, ColumnFamily> diff = Maps.difference(before, after);
-
-        // New keyspace with functions
-        for (Map.Entry<DecoratedKey, ColumnFamily> entry : diff.entriesOnlyOnRight().entrySet())
-            if (entry.getValue().hasColumns())
-                created.addAll(createAggregatesFromAggregatesPartition(new Row(entry.getKey(), entry.getValue())).values());
-
-        for (Map.Entry<DecoratedKey, MapDifference.ValueDifference<ColumnFamily>> entry : diff.entriesDiffering().entrySet())
-        {
-            ColumnFamily pre = entry.getValue().leftValue();
-            ColumnFamily post = entry.getValue().rightValue();
-
-            if (pre.hasColumns() && post.hasColumns())
-            {
-                MapDifference<ByteBuffer, UDAggregate> delta =
-                    Maps.difference(createAggregatesFromAggregatesPartition(new Row(entry.getKey(), pre)),
-                                    createAggregatesFromAggregatesPartition(new Row(entry.getKey(), post)));
-
-                dropped.addAll(delta.entriesOnlyOnLeft().values());
-                created.addAll(delta.entriesOnlyOnRight().values());
-                Iterables.addAll(altered, Iterables.transform(delta.entriesDiffering().values(), new Function<MapDifference.ValueDifference<UDAggregate>, UDAggregate>()
-                {
-                    public UDAggregate apply(MapDifference.ValueDifference<UDAggregate> pair)
-                    {
-                        return pair.rightValue();
-                    }
-                }));
-            }
-            else if (pre.hasColumns())
-            {
-                dropped.addAll(createAggregatesFromAggregatesPartition(new Row(entry.getKey(), pre)).values());
-            }
-            else if (post.hasColumns())
-            {
-                created.addAll(createAggregatesFromAggregatesPartition(new Row(entry.getKey(), post)).values());
-            }
-        }
-
-        for (UDAggregate udf : created)
-            Schema.instance.addAggregate(udf);
-        for (UDAggregate udf : altered)
-            Schema.instance.updateAggregate(udf);
-        for (UDAggregate udf : dropped)
-            Schema.instance.dropAggregate(udf);
-    }
-#endif
-
 static seastar::future<shared_ptr<cql3::functions::user_function>> create_func(replica::database& db, const query::result_set_row& row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
@@ -2863,18 +2794,6 @@ std::vector<mutation> make_update_table_mutations(replica::database& db,
     make_update_columns_mutations(std::move(old_table), std::move(new_table), timestamp, mutations);
 
     warn(unimplemented::cause::TRIGGERS);
-#if 0
-        MapDifference<String, TriggerDefinition> triggerDiff = Maps.difference(oldTable.getTriggers(), newTable.getTriggers());
-
-        // dropped triggers
-        for (TriggerDefinition trigger : triggerDiff.entriesOnlyOnLeft().values())
-            dropTriggerFromSchemaMutation(oldTable, trigger, timestamp, mutation);
-
-        // newly created triggers
-        for (TriggerDefinition trigger : triggerDiff.entriesOnlyOnRight().values())
-            addTriggerToSchemaMutation(newTable, trigger, timestamp, mutation);
-
-#endif
     return mutations;
 }
 
@@ -2910,15 +2829,6 @@ std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata>
     std::vector<mutation> mutations;
     make_drop_table_or_view_mutations(tables(), std::move(table), timestamp, mutations);
 
-#if 0
-    for (TriggerDefinition trigger : table.getTriggers().values())
-        dropTriggerFromSchemaMutation(table, trigger, timestamp, mutation);
-
-    // TODO: get rid of in #6717
-    ColumnFamily indexCells = mutation.addOrGet(SystemKeyspace.BuiltIndexes);
-    for (String indexName : Keyspace.open(keyspace.name).getColumnFamilyStore(table.cfName).getBuiltIndexes())
-        indexCells.addTombstone(indexCells.getComparator().makeCellName(indexName), ldt, timestamp);
-#endif
     return mutations;
 }
 
@@ -2934,19 +2844,6 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
         [&] { return read_schema_partition_for_table(proxy, scylla_tables(), table.keyspace_name, table.table_name); }
     );
     co_return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
-#if 0
-        // FIXME:
-    Row serializedTriggers = readSchemaPartitionForTable(TRIGGERS, ksName, cfName);
-    try
-    {
-        for (TriggerDefinition trigger : createTriggersFromTriggersPartition(serializedTriggers))
-            cfm.addTriggerDefinition(trigger);
-    }
-    catch (InvalidRequestException e)
-    {
-        throw new RuntimeException(e);
-    }
-#endif
 }
 
 future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
@@ -2973,14 +2870,6 @@ future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distri
     });
     co_return std::move(tables);
 }
-
-#if 0
-    public static CFMetaData createTableFromTablePartitionAndColumnsPartition(Row serializedTable, Row serializedColumns)
-    {
-        String query = String.format("SELECT * FROM %s.%s", SystemKeyspace.NAME, COLUMNFAMILIES);
-        return createTableFromTableRowAndColumnsPartition(QueryProcessor.resultify(query, serializedTable).one(), serializedColumns);
-    }
-#endif
 
 /**
  * Deserialize table metadata from low-level representation
@@ -3554,150 +3443,6 @@ std::vector<mutation> make_drop_view_mutations(lw_shared_ptr<keyspace_metadata> 
     make_drop_table_or_view_mutations(views(), view, timestamp, mutations);
     return mutations;
 }
-
-#if 0
-    private static AbstractType<?> getComponentComparator(AbstractType<?> rawComparator, Integer componentIndex)
-    {
-        return (componentIndex == null || (componentIndex == 0 && !(rawComparator instanceof CompositeType)))
-               ? rawComparator
-               : ((CompositeType)rawComparator).types.get(componentIndex);
-    }
-
-    /*
-     * Trigger metadata serialization/deserialization.
-     */
-
-    private static void addTriggerToSchemaMutation(CFMetaData table, TriggerDefinition trigger, long timestamp, Mutation mutation)
-    {
-        ColumnFamily cells = mutation.addOrGet(Triggers);
-        Composite prefix = Triggers.comparator.make(table.cfName, trigger.name);
-        CFRowAdder adder = new CFRowAdder(cells, prefix, timestamp);
-        adder.addMapEntry("trigger_options", "class", trigger.classOption);
-    }
-
-    private static void dropTriggerFromSchemaMutation(CFMetaData table, TriggerDefinition trigger, long timestamp, Mutation mutation)
-    {
-        ColumnFamily cells = mutation.addOrGet(Triggers);
-        int ldt = (int) (System.currentTimeMillis() / 1000);
-
-        Composite prefix = Triggers.comparator.make(table.cfName, trigger.name);
-        cells.addAtom(new RangeTombstone(prefix, prefix.end(), timestamp, ldt));
-    }
-
-    /**
-     * Deserialize triggers from storage-level representation.
-     *
-     * @param partition storage-level partition containing the trigger definitions
-     * @return the list of processed TriggerDefinitions
-     */
-    private static List<TriggerDefinition> createTriggersFromTriggersPartition(Row partition)
-    {
-        List<TriggerDefinition> triggers = new ArrayList<>();
-        String query = String.format("SELECT * FROM %s.%s", SystemKeyspace.NAME, TRIGGERS);
-        for (UntypedResultSet.Row row : QueryProcessor.resultify(query, partition))
-        {
-            String name = row.getString("trigger_name");
-            String classOption = row.getMap("trigger_options", UTF8Type.instance, UTF8Type.instance).get("class");
-            triggers.add(new TriggerDefinition(name, classOption));
-        }
-        return triggers;
-    }
-
-    /*
-     * Aggregate UDF metadata serialization/deserialization.
-     */
-
-    public static Mutation makeCreateAggregateMutation(KSMetaData keyspace, UDAggregate aggregate, long timestamp)
-    {
-        // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
-        addAggregateToSchemaMutation(aggregate, timestamp, mutation);
-        return mutation;
-    }
-
-    private static void addAggregateToSchemaMutation(UDAggregate aggregate, long timestamp, Mutation mutation)
-    {
-        ColumnFamily cells = mutation.addOrGet(Aggregates);
-        Composite prefix = Aggregates.comparator.make(aggregate.name().name, UDHelper.calculateSignature(aggregate));
-        CFRowAdder adder = new CFRowAdder(cells, prefix, timestamp);
-
-        adder.resetCollection("argument_types");
-        adder.add("return_type", aggregate.returnType().toString());
-        adder.add("state_func", aggregate.stateFunction().name().name);
-        if (aggregate.stateType() != null)
-            adder.add("state_type", aggregate.stateType().toString());
-        if (aggregate.finalFunction() != null)
-            adder.add("final_func", aggregate.finalFunction().name().name);
-        if (aggregate.initialCondition() != null)
-            adder.add("initcond", aggregate.initialCondition());
-
-        for (AbstractType<?> argType : aggregate.argTypes())
-            adder.addListEntry("argument_types", argType.toString());
-    }
-
-    private static Map<ByteBuffer, UDAggregate> createAggregatesFromAggregatesPartition(Row partition)
-    {
-        Map<ByteBuffer, UDAggregate> aggregates = new HashMap<>();
-        String query = String.format("SELECT * FROM %s.%s", SystemKeyspace.NAME, AGGREGATES);
-        for (UntypedResultSet.Row row : QueryProcessor.resultify(query, partition))
-        {
-            UDAggregate aggregate = createAggregateFromAggregateRow(row);
-            aggregates.put(UDHelper.calculateSignature(aggregate), aggregate);
-        }
-        return aggregates;
-    }
-
-    private static UDAggregate createAggregateFromAggregateRow(UntypedResultSet.Row row)
-    {
-        String ksName = row.getString("keyspace_name");
-        String functionName = row.getString("aggregate_name");
-        FunctionName name = new FunctionName(ksName, functionName);
-
-        List<String> types = row.getList("argument_types", UTF8Type.instance);
-
-        List<AbstractType<?>> argTypes;
-        if (types == null)
-        {
-            argTypes = Collections.emptyList();
-        }
-        else
-        {
-            argTypes = new ArrayList<>(types.size());
-            for (String type : types)
-                argTypes.add(parseType(type));
-        }
-
-        AbstractType<?> returnType = parseType(row.getString("return_type"));
-
-        FunctionName stateFunc = new FunctionName(ksName, row.getString("state_func"));
-        FunctionName finalFunc = row.has("final_func") ? new FunctionName(ksName, row.getString("final_func")) : null;
-        AbstractType<?> stateType = row.has("state_type") ? parseType(row.getString("state_type")) : null;
-        ByteBuffer initcond = row.has("initcond") ? row.getBytes("initcond") : null;
-
-        try
-        {
-            return UDAggregate.create(name, argTypes, returnType, stateFunc, finalFunc, stateType, initcond);
-        }
-        catch (InvalidRequestException reason)
-        {
-            return UDAggregate.createBroken(name, argTypes, returnType, initcond, reason);
-        }
-    }
-
-    public static Mutation makeDropAggregateMutation(KSMetaData keyspace, UDAggregate aggregate, long timestamp)
-    {
-        // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
-
-        ColumnFamily cells = mutation.addOrGet(Aggregates);
-        int ldt = (int) (System.currentTimeMillis() / 1000);
-
-        Composite prefix = Aggregates.comparator.make(aggregate.name().name, UDHelper.calculateSignature(aggregate));
-        cells.addAtom(new RangeTombstone(prefix, prefix.end(), timestamp, ldt));
-
-        return mutation;
-    }
-#endif
 
 data_type parse_type(sstring str)
 {
