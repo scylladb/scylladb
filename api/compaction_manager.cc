@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/exception.hh>
 
 #include "compaction_manager.hh"
 #include "compaction/compaction_manager.hh"
@@ -155,6 +156,8 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         std::function<future<>(output_stream<char>&&)> f = [&ctx] (output_stream<char>&& out) -> future<> {
             auto s = std::move(out);
             bool first = true;
+            std::exception_ptr ex;
+            try {
                 co_await s.write("[");
                 co_await ctx.db.local().get_compaction_manager().get_compaction_history([&s, &first](const db::compaction_history_entry& entry) mutable -> future<> {
                         cm::history h;
@@ -178,7 +181,13 @@ void set_compaction_manager(http_context& ctx, routes& r) {
                     });
                 co_await s.write("]");
                 co_await s.flush();
+            } catch (...) {
+                ex = std::current_exception();
+            }
             co_await s.close();
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
         };
         return make_ready_future<json::json_return_type>(std::move(f));
     });
