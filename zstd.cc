@@ -11,7 +11,7 @@
 // We need to use experimental features of the zstd library (to allocate compression/decompression context),
 // which are available only when the library is linked statically.
 #define ZSTD_STATIC_LINKING_ONLY
-#include "zstd.h"
+#include <zstd.h>
 
 #include "compress.hh"
 #include "exceptions/exceptions.hh"
