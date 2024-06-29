@@ -224,7 +224,7 @@ if [[ -n "$interactive" || -n "$is_podman" ]]; then
 
     # We also avoid detached mode with podman, which doesn't need it
     # (it does not proxy SIGTERM) and doesn't work well with it.
-    $tool run --rm "${docker_common_args[@]}"
+    $tool run --tty --rm "${docker_common_args[@]}"
     ret=$?
     cleanup
     exit $ret
