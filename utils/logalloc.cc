@@ -1087,7 +1087,7 @@ public:
     void set_current_emergency_reserve_goal(size_t goal) noexcept { _current_emergency_reserve_goal = goal; }
     void clear_allocation_failure_flag() noexcept { _allocation_failure_flag = false; }
     bool allocation_failure_flag() const noexcept { return _allocation_failure_flag; }
-    void refill_emergency_reserve();
+    bool refill_emergency_reserve(bool throw_on_failure = true);
     void add_non_lsa_memory_in_use(size_t n) noexcept {
         _non_lsa_memory_in_use += n;
     }
@@ -1329,15 +1329,19 @@ void segment_pool::deallocate_segment(segment* seg) noexcept
     _free_segments++;
 }
 
-void segment_pool::refill_emergency_reserve() {
+bool segment_pool::refill_emergency_reserve(bool throw_on_failure) {
     while (_free_segments < _emergency_reserve_max) {
         auto seg = allocate_segment(_emergency_reserve_max);
         if (!seg) {
+          if (throw_on_failure) {
             throw bad_alloc(format("failed to refill emergency reserve of {} (have {} free segments)", _emergency_reserve_max, _free_segments));
+          }
+          return false;
         }
         ++_segments_in_use;
         free_segment(seg);
     }
+    return true;
 }
 
 segment*
@@ -2926,7 +2930,10 @@ void allocating_section::reserve(tracker::impl& tracker) {
     auto& pool = tracker.segment_pool();
   try {
     pool.set_emergency_reserve_max(std::max(_lsa_reserve, _minimum_lsa_emergency_reserve));
-    pool.refill_emergency_reserve();
+    if (!pool.refill_emergency_reserve(false)) {
+        auto to_reclaim = (pool.emergency_reserve_max() - pool.free_segments()) * segment::size;
+        tracker.reclaim(to_reclaim, is_preemptible::yes);
+    }
 
     while (true) {
         size_t free = memory::free_memory();
