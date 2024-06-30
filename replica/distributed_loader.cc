@@ -295,6 +295,9 @@ public:
     future<> start() {
         assert(this_shard_id() == 0);
 
+        // The table base directory (with sstable_state::normal) must be
+        // loaded and processed first as it now may contain the shared
+        // pending_delete_dir, possibly referring to sstables in sub-directories.
         for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
             co_await start_subdir(state);
         }

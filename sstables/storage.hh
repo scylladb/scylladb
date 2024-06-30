@@ -22,6 +22,7 @@
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
 #include "utils/disk-error-handler.hh"
+#include "sstables/sstable_directory.hh"
 
 namespace data_dictionary {
 class storage_options;
@@ -35,7 +36,7 @@ class sstable;
 class sstables_manager;
 class entry_descriptor;
 
-using atomic_delete_context = std::unordered_map<sstring, sstring>;
+using atomic_delete_context = sstable_directory::pending_delete_result;
 
 class opened_directory final {
     std::filesystem::path _pathname;
@@ -73,7 +74,7 @@ public:
 class storage {
     friend class test;
 
-    std::filesystem::path _base_dir;    // Local base directory (of table)
+    mutable opened_directory _base_dir;    // Local base directory (of table)
 
     // Internal, but can also be used by tests
     virtual void change_dir_for_test(sstring nd) {
@@ -93,7 +94,7 @@ public:
     using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
 
-    const std::filesystem::path& base_dir() const {
+    opened_directory& base_dir() const {
         return _base_dir;
     }
 

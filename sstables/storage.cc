@@ -470,26 +470,24 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
 }
 
 future<atomic_delete_context> filesystem_storage::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
-    return sstable_directory::create_pending_deletion_log(ssts);
+    co_return co_await sstable_directory::create_pending_deletion_log(base_dir(), ssts);
 }
 
 future<> filesystem_storage::atomic_delete_complete(atomic_delete_context ctx) const {
-    co_await coroutine::parallel_for_each(ctx, [] (const auto& x) -> future<> {
-        const auto& dir = x.first;
-        const auto& log = x.second;
-
+    co_await coroutine::parallel_for_each(ctx.prefixes, [] (const auto& dir) -> future<> {
         co_await sync_directory(dir);
+    });
 
         // Once all sstables are deleted, the log file can be removed.
         // Note: the log file will be removed also if unlink failed to remove
         // any sstable and ignored the error.
+        const auto& log = ctx.pending_delete_log;
         try {
             co_await remove_file(log);
             sstlog.debug("{} removed.", log);
         } catch (...) {
             sstlog.warn("Error removing {}: {}. Ignoring.", log, std::current_exception());
         }
-    });
 }
 
 future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc) {
