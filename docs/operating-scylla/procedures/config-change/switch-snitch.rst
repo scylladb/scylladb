@@ -13,7 +13,7 @@ How to Switch Snitches
 
 This procedure describes the steps that need to be done when switching from one type of snitch to another.
 Such a scenario can be when increasing the cluster and adding more data-centers in different locations. 
-Snitches are responsible for specifying how Scylla distributes the replicas. The procedure is dependent on any changes in the cluster topology.
+Snitches are responsible for specifying how ScyllaDB distributes the replicas. The procedure is dependent on any changes in the cluster topology.
 
 **Note** - Switching a snitch requires a full cluster shutdown, so It is highly recommended to choose the :doc:`right snitch </operating-scylla/system-configuration/snitch>` for your needs at the cluster setup phase.
 

@@ -16,12 +16,12 @@ The recommended alternative is to query each stream separately:
 
  SELECT * FROM ks.t_scylla_cdc_log WHERE "cdc$stream_id" = 0x365fd1a9ae34373954529ac8169dfb93;
 
-With the above approach you can, for instance, build a distributed CDC consumer, where each of the consumer nodes queries only streams that are replicated to Scylla nodes in proximity to the consumer node. This allows efficient, concurrent querying of streams, without putting strain on a single node due to a partition scan.
+With the above approach you can, for instance, build a distributed CDC consumer, where each of the consumer nodes queries only streams that are replicated to ScyllaDB nodes in proximity to the consumer node. This allows efficient, concurrent querying of streams, without putting strain on a single node due to a partition scan.
 
 .. caution::
-   The tables mentioned in the following sections: ``system_distributed.cdc_generation_timestamps`` and ``system_distributed.cdc_streams_descriptions_v2`` have been introduced in Scylla 4.4. It is highly recommended to upgrade to 4.4 for efficient CDC usage. The last section explains how to run the below examples in Scylla 4.3.
+   The tables mentioned in the following sections: ``system_distributed.cdc_generation_timestamps`` and ``system_distributed.cdc_streams_descriptions_v2`` have been introduced in ScyllaDB 4.4. It is highly recommended to upgrade to 4.4 for efficient CDC usage. The last section explains how to run the below examples in ScyllaDB 4.3.
 
-   If you use CDC in Scylla 4.3 and your application is constantly querying CDC log tables and using the old description table to learn about new generations and stream IDs, you should upgrade your application before upgrading to 4.4. The upgraded application should dynamically switch from using the old description table to the new description tables when the cluster is upgraded from 4.3 to 4.4. We present an example algorithm that the application can perform in the last section.
+   If you use CDC in ScyllaDB 4.3 and your application is constantly querying CDC log tables and using the old description table to learn about new generations and stream IDs, you should upgrade your application before upgrading to 4.4. The upgraded application should dynamically switch from using the old description table to the new description tables when the cluster is upgraded from 4.3 to 4.4. We present an example algorithm that the application can perform in the last section.
 
    We highly recommend using the newest releases of our client CDC libraries (`Java CDC library <https://github.com/scylladb/scylla-cdc-java>`_, `Go CDC library <https://github.com/scylladb/scylla-cdc-go>`_, `Rust CDC library <https://github.com/scylladb/scylla-cdc-rust>`_). They take care of correctly querying the stream description tables and they handle the upgrade procedure for you.
 
@@ -169,10 +169,10 @@ You should keep querying streams from generation ``2020-03-25 16:05:29.484000+00
 
 and so on. After you make sure that every node uses the new generation, you can query streams from the previous generation one last time, and then switch to querying streams from the new generation.
 
-Differences in Scylla 4.3
--------------------------
+Differences in ScyllaDB 4.3
+---------------------------
 
-In Scylla 4.3 the tables ``cdc_generation_timestamps`` and ``cdc_streams_descriptions_v2`` don't exist. Instead there is the ``cdc_streams_descriptions`` table. To retrieve all generation timestamps, instead of querying the ``time`` column of ``cdc_generation_timestamps`` using a single-partition query (i.e. using ``WHERE key = 'timestamps'``), you would query the ``time`` column of ``cdc_streams_descriptions`` with a full range scan (without specifying a single partition):
+In ScyllaDB 4.3 the tables ``cdc_generation_timestamps`` and ``cdc_streams_descriptions_v2`` don't exist. Instead there is the ``cdc_streams_descriptions`` table. To retrieve all generation timestamps, instead of querying the ``time`` column of ``cdc_generation_timestamps`` using a single-partition query (i.e. using ``WHERE key = 'timestamps'``), you would query the ``time`` column of ``cdc_streams_descriptions`` with a full range scan (without specifying a single partition):
 
 .. code-block:: cql
 
@@ -188,20 +188,20 @@ All stream IDs are stored in a single row, unlike ``cdc_streams_descriptions_v2`
 
 .. _scylla-4-3-to-4-4-upgrade:
 
-Scylla 4.3 to Scylla 4.4 upgrade
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ScyllaDB 4.3 to ScyllaDB 4.4 upgrade
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-If you didn't enable CDC on any table while using Scylla 4.3 or earlier, you don't need to understand this section. Simply upgrade to 4.4 (we recommend doing it as soon as you can) and implement your application to query streams as described above.
+If you didn't enable CDC on any table while using ScyllaDB 4.3 or earlier, you don't need to understand this section. Simply upgrade to 4.4 (we recommend doing it as soon as you can) and implement your application to query streams as described above.
 
-However, if you use CDC with Scylla 4.3 and your application is periodically querying the old ``cdc_streams_descriptions`` table, you should upgrade your application *before* upgrading the cluster to Scylla 4.4.
+However, if you use CDC with ScyllaDB 4.3 and your application is periodically querying the old ``cdc_streams_descriptions`` table, you should upgrade your application *before* upgrading the cluster to ScyllaDB 4.4.
 
 The upgraded application should understand both the old ``cdc_streams_descriptions`` table and the new ``cdc_generation_timestamps`` and ``cdc_streams_descriptions_v2`` tables. It should smoothly transition from querying the old table to querying the new tables as the cluster upgrades.
 
-When Scylla upgrades from 4.3 to 4.4 it will attempt to copy descriptions of all existing generations from the old table to the new tables. This copying procedure may take a while. Until it finishes, your application should keep using the old table; it should switch as soon as it detects that the procedure is finished. To detect that the procedure is finished, you can query the ``system.cdc_local`` table: if the table contains a row with ``key = 'rewritten'``, the procedure was finished; otherwise it is still in progress.
+When ScyllaDB upgrades from 4.3 to 4.4 it will attempt to copy descriptions of all existing generations from the old table to the new tables. This copying procedure may take a while. Until it finishes, your application should keep using the old table; it should switch as soon as it detects that the procedure is finished. To detect that the procedure is finished, you can query the ``system.cdc_local`` table: if the table contains a row with ``key = 'rewritten'``, the procedure was finished; otherwise it is still in progress.
 
-It is possible to disable the rewriting procedure. In that case only the latest generation will be inserted to the new table and your application should act accordingly (it shouldn't wait for the ``'rewritten'`` row to appear but start using the new tables immediately). It is not recommended to disable the rewriting procedure and we've purposefully left it undocumented how to do it. This option exists only for emergencies and should be used only with the assistance of a qualified Scylla engineer.
+It is possible to disable the rewriting procedure. In that case only the latest generation will be inserted to the new table and your application should act accordingly (it shouldn't wait for the ``'rewritten'`` row to appear but start using the new tables immediately). It is not recommended to disable the rewriting procedure and we've purposefully left it undocumented how to do it. This option exists only for emergencies and should be used only with the assistance of a qualified ScyllaDB engineer.
 
-In fresh Scylla 4.4 clusters (that were not upgraded from a previous version) the old description table does not exist. Thus the application should check for its existence and when it detects its absence, it should use the new tables immediately.
+In fresh ScyllaDB 4.4 clusters (that were not upgraded from a previous version) the old description table does not exist. Thus the application should check for its existence and when it detects its absence, it should use the new tables immediately.
 
 With the above considerations in mind, the application should behave as follows. When it wants to learn if there are new generations:
 

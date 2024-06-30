@@ -23,7 +23,7 @@
 JSON Support
 ------------
 
-Scylla introduces JSON support to :ref:`SELECT <select-statement>` and :ref:`INSERT <insert-statement>`
+ScyllaDB introduces JSON support to :ref:`SELECT <select-statement>` and :ref:`INSERT <insert-statement>`
 statements. This support does not fundamentally alter the CQL API (for example, the schema is still enforced). It simply
 provides a convenient way to work with JSON documents.
 
@@ -57,17 +57,17 @@ Alternatively, if the ``DEFAULT UNSET`` directive is used after the value, omitt
 meaning that pre-existing values for those columns will be preserved.
 
 
-JSON Encoding of Scylla Data Types
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+JSON Encoding of ScyllaDB Data Types
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Where possible, Scylla will represent and accept data types in their native ``JSON`` representation. Scylla will
+Where possible, ScyllaDB will represent and accept data types in their native ``JSON`` representation. ScyllaDB will
 also accept string representations matching the CQL literal format for all single-field types. For example, floats,
 ints, UUIDs, and dates can be represented by CQL literal strings. However, compound types, such as collections, tuples,
 and user-defined types, must be represented by native ``JSON`` collections (maps and lists) or a JSON-encoded string
 representation of the collection.
 
-The following table describes the encodings that Scylla will accept in ``INSERT JSON`` values (and ``fromJson()``
-arguments) as well as the format Scylla will use when returning data for ``SELECT JSON`` statements (and
+The following table describes the encodings that ScyllaDB will accept in ``INSERT JSON`` values (and ``fromJson()``
+arguments) as well as the format ScyllaDB will use when returning data for ``SELECT JSON`` statements (and
 ``fromJson()``):
 
 =============== ======================== =============== ==============================================================

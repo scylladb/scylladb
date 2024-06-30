@@ -1,12 +1,12 @@
-Scylla and Spark integration
-============================
+ScyllaDB and Spark integration
+==============================
 
 
-Simple Scylla-Spark integration example
----------------------------------------
+Simple ScyllaDB-Spark integration example
+-----------------------------------------
 
 This is an example of how to create a very simple Spark application that
-uses Scylla to store its data. The application is going to read people's
+uses ScyllaDB to store its data. The application is going to read people's
 names and ages from one table and write the names of the adults to
 another one. It also will show the number of adults and all people in
 the database.
@@ -14,16 +14,16 @@ the database.
 Prerequisites
 ~~~~~~~~~~~~~
 
--  Scylla
+-  ScyllaDB
 -  sbt
 
-Prepare Scylla
-~~~~~~~~~~~~~~
+Prepare ScyllaDB
+~~~~~~~~~~~~~~~~
 
 Firstly, we need to create keyspace and tables in which data processed
 by the example application will be stored.
 
-Launch Scylla and connect to it using cqlsh. The following commands will
+Launch ScyllaDB and connect to it using cqlsh. The following commands will
 create a new keyspace for our tests and make it the current one.
 
 ::
@@ -105,7 +105,7 @@ the actual logic of the application. Create file
     }
 
 Since we don't want to hardcode in our application any information about
-Scylla or Spark we will also need an additional configuration file
+ScyllaDB or Spark we will also need an additional configuration file
 ``spark-scylla.conf``.
 
 ::
@@ -130,7 +130,7 @@ Download and run Spark
 The next step is to get Spark running. Pre-built binaries can be
 downloaded from `this <http://spark.apache.org/downloads.html>`__
 website. Make sure to choose release 1.5.0. Since we are going to use it
-with Scylla Hadoop version doesn't matter.
+with ScyllaDB Hadoop version doesn't matter.
 
 Once the download has finished, unpack the archive and in its root
 directory, execute the following command to start Spark Master:
@@ -153,9 +153,9 @@ command:
 Run application
 ~~~~~~~~~~~~~~~
 
-The application is built, Spark is up, and Scylla has all the necessary
+The application is built, Spark is up, and ScyllaDB has all the necessary
 tables created and contains the input data for our example. This means
-that we are ready to run the application. Make sure that Scylla is
+that we are ready to run the application. Make sure that ScyllaDB is
 running and execute (still in the Spark directory) the following
 command):
 
@@ -172,7 +172,7 @@ them, there should be a message from the application:
     Adults: 5
     Total: 7
 
-You can also connect to Scylla with cqlsh, and using the following query,
+You can also connect to ScyllaDB with cqlsh, and using the following query,
 see the results of our example in the database.
 
 ::
@@ -200,12 +200,12 @@ RoadTrip example
 
 This is a short guide explaining how to run a Spark example application
 available `here <https://github.com/jsebrien/spark-tests>`__ with
-Scylla.
+ScyllaDB.
 
 Prerequisites
 ~~~~~~~~~~~~~
 
--  Scylla
+-  ScyllaDB
 -  Maven
 -  Git
 
@@ -247,7 +247,7 @@ Update connector
 
 spark-tests use Spark Cassandra Connector in version 1.1.0 which is too
 old for our purposes. Before 1.3.0 the connector used to use Thrift as
-well CQL and that won't work with Scylla. Updating the example isn't
+well CQL and that won't work with ScyllaDB. Updating the example isn't
 very complicated and can be accomplished by applying the following
 patch:
 
@@ -321,11 +321,11 @@ The example can be built with Maven:
 
     mvn compile
 
-Start Scylla
-~~~~~~~~~~~~
+Start ScyllaDB
+~~~~~~~~~~~~~~
 
-The application we are trying to run will try to connect with Scylla
-using custom port 9142. That's why when starting Scylla, an additional
+The application we are trying to run will try to connect with ScyllaDB
+using custom port 9142. That's why when starting ScyllaDB, an additional
 flag is needed to make sure that's the port it listens on
 (alternatively, you can change all occurrences of 9142 to 9042 in the
 example source code).
@@ -337,21 +337,21 @@ example source code).
 Run the application
 ~~~~~~~~~~~~~~~~~~~
 
-With the example compiled and Scylla running all that is left to be done
+With the example compiled and ScyllaDB running all that is left to be done
 is to actually run the application:
 
 ::
 
     mvn exec:java
 
-Scylla limitations
-------------------
+ScyllaDB limitations
+--------------------
 
--  Scylla needs Spark Cassandra Connector 1.3.0 or later.
--  Scylla doesn't populate ``system.size_estimates``, and therefore the
+-  ScyllaDB needs Spark Cassandra Connector 1.3.0 or later.
+-  ScyllaDB doesn't populate ``system.size_estimates``, and therefore the
    connector won't be able to perform automatic split sizing optimally.
 
-For more compatibility information check `Scylla status <http://www.scylladb.com/technology/status/>`_
+For more compatibility information check `ScyllaDB status <http://www.scylladb.com/technology/status/>`_
 
 :doc:`Knowledge Base </kb/index>`
 

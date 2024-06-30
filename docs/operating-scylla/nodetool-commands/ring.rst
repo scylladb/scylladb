@@ -2,7 +2,7 @@ Nodetool ring
 =============
 **ring** ``[<keyspace>] [<table>]`` - The nodetool ring command displays the token
 ring information. The token ring is responsible for managing the
-partitioning of data within the Scylla cluster. This command is
+partitioning of data within the ScyllaDB cluster. This command is
 critical if a cluster is facing data consistency issues.
 
 By default, ``ring`` command shows all keyspaces.

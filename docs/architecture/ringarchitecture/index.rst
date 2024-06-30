@@ -1,13 +1,13 @@
 ScyllaDB Ring Architecture - Overview
 ======================================
 
-Scylla is a database that scales out and up. Scylla adopted much of its distributed scale-out design from the Apache Cassandra project (which adopted distribution concepts from Amazon Dynamo and data modeling concepts from Google BigTable).
+ScyllaDB is a database that scales out and up. ScyllaDB adopted much of its distributed scale-out design from the Apache Cassandra project (which adopted distribution concepts from Amazon Dynamo and data modeling concepts from Google BigTable).
 
 In the world of big data, a single node cannot hold the entire dataset and thus, a cluster of nodes is needed.
 
-A Scylla :term:`cluster<Cluster>` is a collection of :term:`nodes<Node>`, or Scylla instances, visualized as a ring. All of the nodes should be homogeneous using a shared-nothing approach. This article describes the design that determines how data is distributed among the cluster members.
+A ScyllaDB :term:`cluster<Cluster>` is a collection of :term:`nodes<Node>`, or ScyllaDB instances, visualized as a ring. All of the nodes should be homogeneous using a shared-nothing approach. This article describes the design that determines how data is distributed among the cluster members.
 
-A Scylla :term:`keyspace<Keyspace>` is a collection of tables with attributes that define how data is replicated on nodes.   A keyspace is analogous to a database in SQL. When a new keyspace is created, the user sets a numerical attribute, the :term:`replication factor<Replication Factor (RF)>`, that defines how data is replicated on nodes. For example, an :abbr:`RF (Replication Factor)` of 2 means a given token or token range will be stored on 2 nodes (or replicated on one additional node).   We will use an RF value of 2 in our examples.
+A ScyllaDB :term:`keyspace<Keyspace>` is a collection of tables with attributes that define how data is replicated on nodes.   A keyspace is analogous to a database in SQL. When a new keyspace is created, the user sets a numerical attribute, the :term:`replication factor<Replication Factor (RF)>`, that defines how data is replicated on nodes. For example, an :abbr:`RF (Replication Factor)` of 2 means a given token or token range will be stored on 2 nodes (or replicated on one additional node).   We will use an RF value of 2 in our examples.
 
 A :term:`table<Table>` is a standard collection of columns and rows, as defined by a schema. Subsequently, when a table is created, using CQL (Cassandra Query Language) within a keyspace, a primary key is defined out of a subset of the table’s columns.
 
@@ -49,7 +49,7 @@ The hashed output of the partition key determines its placement within the clust
 
 The figure above illustrates an example 0-1200 token range divided evenly amongst a three node cluster.
 
-Scylla, by default, uses the Murmur3 partitioner. With the MurmurHash3 function, the 64-bit hash values (produced for the partition key) range from  |From| to |To|.  This explains why there are also negative values in our ``nodetool ring`` output below.
+ScyllaDB, by default, uses the Murmur3 partitioner. With the MurmurHash3 function, the 64-bit hash values (produced for the partition key) range from  |From| to |To|.  This explains why there are also negative values in our ``nodetool ring`` output below.
 
 .. |From| image:: CodeCogsEqn.gif
 .. |To| image:: CodeCogsEqn-2.gif
@@ -58,9 +58,9 @@ Scylla, by default, uses the Murmur3 partitioner. With the MurmurHash3 function,
 
 In the drawing above, each number represents a token range.  With a replication factor of 2, we see that each node holds one range from the previous node, and one range from the next node.  
  
-Note, however, that Scylla exclusively uses a Vnode-oriented architecture.  A :term:`Virtual node` represents a contiguous range of tokens owned by a single Scylla node.  A physical node may be assigned multiple, non-contiguous Vnodes.
+Note, however, that ScyllaDB exclusively uses a Vnode-oriented architecture.  A :term:`Virtual node` represents a contiguous range of tokens owned by a single ScyllaDB node.  A physical node may be assigned multiple, non-contiguous Vnodes.
 
-Scylla’s implementation of a Vnode oriented architecture provides several advantages.  First of all, rebalancing a cluster is no longer required when adding or removing nodes. Secondly, as rebuilding can stream data from all available nodes (instead of just the nodes where data would reside on a one-token-per-node setup), Scylla can rebuild faster.
+ScyllaDB’s implementation of a Vnode oriented architecture provides several advantages.  First of all, rebalancing a cluster is no longer required when adding or removing nodes. Secondly, as rebuilding can stream data from all available nodes (instead of just the nodes where data would reside on a one-token-per-node setup), ScyllaDB can rebuild faster.
 
 .. image:: ring-architecture-5.png
 
@@ -113,7 +113,7 @@ We can also get information on our cluster with
       Schema versions:
          082bce63-be30-3e6b-9858-4fb243ce409c: [172.17.0.2, 172.17.0.3, 172.17.0.4]
 
-Learn more in the `Cluster Node Ring lesson <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/architecture/topic/cluster-node-ring/>`_ on Scylla University
+Learn more in the `Cluster Node Ring lesson <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/architecture/topic/cluster-node-ring/>`_ on ScyllaDB University
 
 .. include:: /rst_include/apache-copyrights.rst
 

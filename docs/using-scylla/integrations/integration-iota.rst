@@ -1,9 +1,9 @@
-====================================
-Integrate Scylla with IOTA Chronicle
-====================================
+======================================
+Integrate ScyllaDB with IOTA Chronicle
+======================================
 
 The IOTA protocol is a permissionless trust layer for the Internet of Things which enables a frictionless exchange of value between machines and humans.
-Anyone can secure data on the Tangle and make it verifiable to third-parties such as Scylla.
+Anyone can secure data on the Tangle and make it verifiable to third-parties such as ScyllaDB.
 
 
 An example of such a third-party integration uses Chronicle as follows:
@@ -12,8 +12,8 @@ An example of such a third-party integration uses Chronicle as follows:
 .. image:: images/iota.png
    :width: 600pt
 
-The list below contains integration projects using Scylla with IOTA Chronicle.
-If you have tested your application with Scylla and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
+The list below contains integration projects using ScyllaDB with IOTA Chronicle.
+If you have tested your application with ScyllaDB and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
 
 
 

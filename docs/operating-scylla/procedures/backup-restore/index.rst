@@ -18,7 +18,7 @@ Backup and Restore Procedures
               </div>
               <div class="medium-9 columns">
 
-Procedures to backup and restore your Scylla data safely
+Procedures to backup and restore your ScyllaDB data safely
 
 * :doc:`Backup your Data <backup>`
 

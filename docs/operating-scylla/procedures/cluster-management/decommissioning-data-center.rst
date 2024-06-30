@@ -74,7 +74,7 @@ Procedure
       cqlsh> ALTER KEYSPACE nba WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'EUROPE-DC' : 3};
 
 #. Run :doc:`nodetool decommission </operating-scylla/nodetool-commands/decommission>` on every node in the data center that is to be removed.
-   Refer to :doc:`Remove a Node from a Scylla Cluster - Down Scale </operating-scylla/procedures/cluster-management/remove-node>` for further information.
+   Refer to :doc:`Remove a Node from a ScyllaDB Cluster - Down Scale </operating-scylla/procedures/cluster-management/remove-node>` for further information.
 
    For example:
 

@@ -91,7 +91,7 @@ considered present:
 		+-------------+-----+------+------+------+
 
 It is OK to us a comparison with ``NULL`` in a condition.
-But since ``NULL`` value and missing value in Scylla are
+But since ``NULL`` value and missing value in ScyllaDB are
 indistinguishable, conditions which compare with ``NULL``
 will return the same result when applied to both
 missing rows or existing rows with ``NULL`` cells:
@@ -118,8 +118,8 @@ evaluate the condition of the "missing" regular row:
 		| True        |   2 |
 		+-------------+-----+
 
-Scylla Paxos
-============
+ScyllaDB Paxos
+==============
 
 The statements with an ``IF`` clause use a different write path, employing the Paxos consensus algorithm (see `figure`_) to ensure linearizability of the execution history.
 
@@ -139,7 +139,7 @@ allows the coordinator to proceed with reading and updating a row
 without interference. The state of the protocol is persisted in
 system.paxos table, which is local to each replica.
 
-Unlike Cassandra, Scylla piggy-backs the old version of the row on
+Unlike Cassandra, ScyllaDB piggy-backs the old version of the row on
 response to "Prepare" request, so reading a row doesn't require
 a separate message exchange.
 
@@ -166,10 +166,10 @@ from system.paxos.
 The size of the quorum impacts how many acknowledgements the
 coordinator must get before proceeding to the next round or
 responding to the client. For Prepare and Accept, it is configured
-with ``SERIAL CONSISTENCY`` setting. For Learn, Scylla's eventual
+with ``SERIAL CONSISTENCY`` setting. For Learn, ScyllaDB's eventual
 ``CONSISTENCY`` is used. Pruning is done in the background.
 
-Key differences between Scylla and Cassandra Paxos implementations
+Key differences between ScyllaDB and Cassandra Paxos implementations
 are in collapsing prepare and read actions into a single round, and
 also introducing an extra asynchronous "prune" round, which keeps
 system.paxos table small and thus reduces write amplification
@@ -186,7 +186,7 @@ Batch statements
 The entire conditional batch has an isolated view of the database and is executed using all-or-nothing principle. In many ways, conditional batches are similar to ACID transactions in relational databases, with the exception that a batch is executed only if **all conditions** in **all statements** are **true**, if not it does nothing.
 
 .. A number of new database usage patterns emerge when lightweight transactions are part of the database features portfolio.
-.. Scylla now can not only handle large volumes of data for analytics, event history and such, but serve as a reliable and efficient back-end for web, mobile, IIoT and cybersecurity applications.
+.. ScyllaDB now can not only handle large volumes of data for analytics, event history and such, but serve as a reliable and efficient back-end for web, mobile, IIoT and cybersecurity applications.
 
 Reading with Paxos
 ==================
@@ -539,5 +539,5 @@ Other limitations are more minor:
 Additional Information
 ======================
 
-* :doc:`How does Scylla LWT Differ from Apache Cassandra ? </kb/lwt-differences>` - How does Scylla's implementation of lightweight transactions differ from Apache Cassandra?
+* :doc:`How does ScyllaDB LWT Differ from Apache Cassandra ? </kb/lwt-differences>` - How does ScyllaDB's implementation of lightweight transactions differ from Apache Cassandra?
 * :doc:`How to Change gc_grace_seconds for a Table </kb/gc-grace-seconds/>` - How to change the ``gc_grace_seconds`` parameter for a table

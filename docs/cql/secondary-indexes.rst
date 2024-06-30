@@ -59,7 +59,7 @@ automatically at insertion time.
 Local Secondary Index
 ^^^^^^^^^^^^^^^^^^^^^
 
-:doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes>` is an enhancement of :doc:`Global Secondary Indexes </using-scylla/secondary-indexes>`, which allows Scylla to optimize the use case in which the partition key of the base table is also the partition key of the index. Local Secondary Index syntax is the same as above, with extra parentheses on the partition key.
+:doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes>` is an enhancement of :doc:`Global Secondary Indexes </using-scylla/secondary-indexes>`, which allows ScyllaDB to optimize the use case in which the partition key of the base table is also the partition key of the index. Local Secondary Index syntax is the same as above, with extra parentheses on the partition key.
 
 .. code-block::
 
@@ -78,7 +78,7 @@ More on :doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes>`
 .. Attempting to create an already existing index will return an error unless the ``IF NOT EXISTS`` option is used. If it
 .. is used, the statement will be a no-op if the index already exists.
 
-.. Indexes on Map Keys (supported in Scylla 2.2)
+.. Indexes on Map Keys (supported in ScyllaDB 2.2)
 .. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. When creating an index on a :ref:`maps <maps>`, you may index either the keys or the values. If the column identifier is
@@ -108,7 +108,7 @@ Additional Information
 * :doc:`Global Secondary Indexes </using-scylla/secondary-indexes/>`
 * :doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes/>`
 
-The following courses are available from Scylla University:
+The following courses are available from ScyllaDB University:
 
 * `Materialized Views and Secondary Indexes <https://university.scylladb.com/courses/data-modeling/lessons/materialized-views-secondary-indexes-and-filtering/>`_
 * `Global Secondary Indexes <https://university.scylladb.com/courses/data-modeling/lessons/materialized-views-secondary-indexes-and-filtering/topic/global-secondary-indexes/>`_

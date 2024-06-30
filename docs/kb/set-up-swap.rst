@@ -15,7 +15,7 @@ The help for the script can be accessed by ``scylla_swap_setup --help``.
    scylla_swap_setup --help
    usage: scylla_swap_setup [-h] [--swap-directory SWAP_DIRECTORY] [--swap-size SWAP_SIZE]
 
-   Configure swap for Scylla.
+   Configure swap for ScyllaDB.
 
    optional arguments:
     -h, --help            show this help message and exit
@@ -116,5 +116,5 @@ Remove a Swap File
 Additional Information
 ----------------------
 
-* `Configure swap for Scylla <https://github.com/scylladb/scylla/blob/master/dist/common/scripts/scylla_swap_setup>`_
+* `Configure swap for ScyllaDB <https://github.com/scylladb/scylla/blob/master/dist/common/scripts/scylla_swap_setup>`_
 * :doc:`Setup Scripts </getting-started/system-configuration>`.

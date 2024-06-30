@@ -12,4 +12,4 @@ If you’re using your own image and have installed ScyllaDB packages for Ubuntu
 follow the extended upgrade procedure on the **EC2/GCP/Azure Ubuntu image** tab 
 in the :doc:`upgrade guide </upgrade/index/>` for your ScyllaDB version.
 
-To check your Scylla version, run the ``scylla --version`` command.
+To check your ScyllaDB version, run the ``scylla --version`` command.

@@ -100,7 +100,7 @@ Consistency Level (read and write)
 | LOCAL_SERIAL                        | |v|:sup:`*`  |
 +-------------------------------------+--------------+
 
-:sup:`*` See :doc:`Scylla LWT </using-scylla/lwt>`.
+:sup:`*` See :doc:`ScyllaDB LWT </using-scylla/lwt>`.
 
 
 Snitches

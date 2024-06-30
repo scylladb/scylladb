@@ -16,7 +16,7 @@ This quickstart will show how to setup the ScyllaDB Sink Connector against a Doc
 
 Preliminary setup
 -----------------
-#. Using `Docker <https://hub.docker.com/r/scylladb/scylla/>`_, follow the instructions to launch Scylla.
+#. Using `Docker <https://hub.docker.com/r/scylladb/scylla/>`_, follow the instructions to launch ScyllaDB.
 #. Start the Docker container, replacing the ``--name`` and ``--host name`` parameters with your own information. For example:
 
    .. code-block:: none
@@ -70,7 +70,7 @@ Install Kafka Connector manually
 Add Sink Connector plugin
 -------------------------
 
-The Scylla sink connector is used to publish records from a Kafka topic into Scylla. 
+The ScyllaDB sink connector is used to publish records from a Kafka topic into ScyllaDB. 
 Adding a new connector plugin requires restarting Connect. 
 Use the Confluent CLI to restart Connect.
 
@@ -149,7 +149,7 @@ Connector configuration
       {"name":"firstName","type":"string"},{"name":"lastName","type":"string"}]}'
       {"id":1}${"id":1,"firstName":"first","lastName":"last"}
 
-#. Test Scylla by running a select cql query:
+#. Test ScyllaDB by running a select cql query:
 
    .. code-block:: none
 
@@ -158,8 +158,8 @@ Connector configuration
      ----+-----------+----------
        1 |     first |     last
 
-Scylla modes
-------------
+ScyllaDB modes
+--------------
 
 There are two modes, Standalone and Distributed.
 
@@ -255,7 +255,7 @@ Run the select cql query to view the data:
 Authentication
 --------------
 
-This example connects to a Scylla instance with security enabled and username / password authentication.
+This example connects to a ScyllaDB instance with security enabled and username / password authentication.
 
 Select one of the following configuration methods based on how you have deployed ``|kconnect-long|``. Distributed Mode will the JSON / REST examples. The standalone mode will use the properties based example.
 
@@ -302,7 +302,7 @@ To check logs for the Confluent Platform use:
 
    confluent local log <service> -- [<argument>] --path <path-to-confluent>
 
-To check logs for Scylla:
+To check logs for ScyllaDB:
 
 .. code-block:: none
 

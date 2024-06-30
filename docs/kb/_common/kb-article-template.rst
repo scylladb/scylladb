@@ -12,9 +12,9 @@ Title in Title Caps
 
 .. in 1-3 words what will users learn by reading this article?
 
-**Audience: Scylla administrators**
+**Audience: ScyllaDB administrators**
 
-.. Choose (Application Developer, Scylla Administrator, Internal, All)
+.. Choose (Application Developer, ScyllaDB Administrator, Internal, All)
 
 Synopsis
 --------

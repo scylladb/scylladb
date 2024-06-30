@@ -1,7 +1,7 @@
 CQL Command ``COPY FROM`` fails - field larger than the field limit
 ===================================================================
 
-This troubleshooting guide describes what to do when Scylla fails to import data using the CQL ``COPY FROM`` command
+This troubleshooting guide describes what to do when ScyllaDB fails to import data using the CQL ``COPY FROM`` command
 
 
 Problem

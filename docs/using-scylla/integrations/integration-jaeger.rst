@@ -1,6 +1,6 @@
-===================================
-Integrate Scylla with Jaeger Server
-===================================
+=====================================
+Integrate ScyllaDB with Jaeger Server
+=====================================
 
 `Jaeger Server <https://www.jaegertracing.io>`_ is an open-source distributed tracing system, originally developed by Uber Technologies,
 aimed at monitoring and troubleshooting the performance of microservices-based applications.

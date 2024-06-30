@@ -3,7 +3,7 @@ Failed Decommission
 
 This article describes the troubleshooting procedure when node decommission fails.
 
-During decommissioning, the streaming process starts, and the node streams its data to the other nodes in the Scylla cluster.
+During decommissioning, the streaming process starts, and the node streams its data to the other nodes in the ScyllaDB cluster.
 The process may fail if the node fails to read from the HDD or a network problem occurs.
 
 
@@ -26,7 +26,7 @@ The following error message will appear in the logs_:
 
 .. code-block:: shell
 
-   nodetool: Scylla API server HTTP POST to URL '/storage_service/decommission' failed: stream_ranges failed
+   nodetool: ScyllaDB API server HTTP POST to URL '/storage_service/decommission' failed: stream_ranges failed
 
 Solution
 ^^^^^^^^

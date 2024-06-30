@@ -9,7 +9,7 @@ When CQLSh query returns partial results with followed by "More"
 **Topic: When results are missing from query**
 
 
-**Audience: Scylla administrators**
+**Audience: ScyllaDB administrators**
 
 Synopsis
 ---------
@@ -22,7 +22,7 @@ If you send a cqlsh query similar to:
 
 and the results show a single row with ``--More``, the ``--More--`` indicates that there are additional pages - if you click Enter, additional rows are displayed.
 
-As the query is using paging (from cqlsh by default page size is 100) - Scylla uses this information internally and will fetch internally page size results. Some of these may be discarded and not returned to you or the output may reveal blank pages where you will see the ``more`` prompt causing you to page through empty pages. Neither of these outputs is desired.
+As the query is using paging (from cqlsh by default page size is 100) - ScyllaDB uses this information internally and will fetch internally page size results. Some of these may be discarded and not returned to you or the output may reveal blank pages where you will see the ``more`` prompt causing you to page through empty pages. Neither of these outputs is desired.
 
 If you need this in query as a single result you can turn off paging and include paging off in the query.
 

@@ -6,7 +6,7 @@ Nodetool removenode
     Before using the command, make sure the node is permanently down and cannot be recovered.
 
     If the node is up and reachable by other nodes, use ``nodetool decommission``.
-    See :doc:`Remove a Node from a Scylla Cluster </operating-scylla/procedures/cluster-management/remove-node>` for more information.
+    See :doc:`Remove a Node from a ScyllaDB Cluster </operating-scylla/procedures/cluster-management/remove-node>` for more information.
 
 
 This command allows you to remove a node from the cluster when the status of the node is Down Normal (DN) and all attempts to restore the node have failed.

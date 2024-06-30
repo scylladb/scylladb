@@ -2,7 +2,7 @@
 Recreate RAID devices
 =====================
 
-Scylla creates a RAID device on all storage devices assigned to it as part of Scylla setup. However, there are situations in which we want to redo just this step, without invoking the entire setup phase again. One example of such a situation is when Scylla is used in Clouds with ephemeral storage. After a hard stop, the storage devices will be reset and the previous setup will be destroyed. 
+ScyllaDB creates a RAID device on all storage devices assigned to it as part of ScyllaDB setup. However, there are situations in which we want to redo just this step, without invoking the entire setup phase again. One example of such a situation is when ScyllaDB is used in Clouds with ephemeral storage. After a hard stop, the storage devices will be reset and the previous setup will be destroyed. 
 To recreate your RAID devices, run this script:
 
 .. code-block:: shell

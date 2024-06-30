@@ -3,7 +3,7 @@ Logging
 
 Logging with the systemd journal (CentOS, Amazon AMI, Ubuntu, Debian)
 ---------------------------------------------------------------------
-On distributions with systemd, Scylla logs are written to the `systemd journal <http://www.freedesktop.org/software/systemd/man/systemd-journald.service.html>`_. You can retrieve log entries with the `journalctl <http://www.freedesktop.org/software/systemd/man/journalctl.html>`_ command.
+On distributions with systemd, ScyllaDB logs are written to the `systemd journal <http://www.freedesktop.org/software/systemd/man/systemd-journald.service.html>`_. You can retrieve log entries with the `journalctl <http://www.freedesktop.org/software/systemd/man/journalctl.html>`_ command.
 
 Listed below are a few useful examples.
 
@@ -19,7 +19,7 @@ Listed below are a few useful examples.
 
      journalctl _COMM=scylla
 
-* filter only Scylla logs by priority:
+* filter only ScyllaDB logs by priority:
 
   .. code-block:: shell
 
@@ -29,7 +29,7 @@ Listed below are a few useful examples.
 
      journalctl _COMM=scylla -p warning
 
-* filter only Scylla logs by date:
+* filter only ScyllaDB logs by date:
 
   .. code-block:: shell
 
@@ -43,7 +43,7 @@ Listed below are a few useful examples.
 
      journalctl _COMM=scylla --since yesterday
 
-* filter only Scylla logs since last server boot:
+* filter only ScyllaDB logs since last server boot:
 
   .. code-block:: shell
 
@@ -51,9 +51,9 @@ Listed below are a few useful examples.
 
 Logging on Ubuntu 14.04
 -----------------------
-On Ubuntu 14.04, Scylla writes its initial boot message into :code:`/var/log/upstart/scylla-server.log`.
+On Ubuntu 14.04, ScyllaDB writes its initial boot message into :code:`/var/log/upstart/scylla-server.log`.
 
-After Scylla has started, logs are stored in :code:`/var/log/syslog`. Scylla logs can be filter by creating a :code:`rsyslog` configuration file with the following rule (for example, in :code:`/etc/rsyslog.d/10-scylla.conf`)
+After ScyllaDB has started, logs are stored in :code:`/var/log/syslog`. ScyllaDB logs can be filter by creating a :code:`rsyslog` configuration file with the following rule (for example, in :code:`/etc/rsyslog.d/10-scylla.conf`)
 
 .. code-block:: shell
 
@@ -67,11 +67,11 @@ And then creating the log file with the correct permissions and restarting the s
    install -o syslog -g adm -m 0640 /dev/null /var/log/scylla/scylla.log
    service rsyslog restart
 
-This will send Scylla only logs to :code:`/var/log/scylla/scylla.log`
+This will send ScyllaDB only logs to :code:`/var/log/scylla/scylla.log`
 
 Logging on Docker
 -----------------
-Starting from Scylla 1.3, `Scylla Docker <https://hub.docker.com/r/scylladb/scylla/>`_, you should use :code:`docker logs` command to access Scylla server and JMX proxy logs
+Starting from ScyllaDB 1.3, `ScyllaDB Docker <https://hub.docker.com/r/scylladb/scylla/>`_, you should use :code:`docker logs` command to access ScyllaDB server and JMX proxy logs
 
 
 .. include:: /rst_include/advance-index.rst

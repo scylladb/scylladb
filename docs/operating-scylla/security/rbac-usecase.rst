@@ -9,7 +9,7 @@ Role Based Access Control (RBAC) is a method of reducing lists of authorized use
 
 Roles vs Users
 --------------
-Roles supersede users and generalize them. In addition to doing with `roles` everything that you could previously do with `users` in older versions of Scylla, roles can be granted to other roles. If a role `developer` is granted to a role `manager`, then all permissions of the `developer` are granted to the `manager`.
+Roles supersede users and generalize them. In addition to doing with `roles` everything that you could previously do with `users` in older versions of ScyllaDB, roles can be granted to other roles. If a role `developer` is granted to a role `manager`, then all permissions of the `developer` are granted to the `manager`.
 
 In order to distinguish roles which correspond uniquely to an individual person and roles which are representative of a group, any role that can login is a user. Within that framework, you can conclude that all users are roles, but not all roles are users.
 
@@ -47,7 +47,7 @@ Use case
 --------
 
 This is a use case that is given as an example. You should modify the commands to your organization’s requirements.
-A health club has opened, and they have an application that supports their clients, which is using Scylla as the database backend. The following groups would need to be given permissions:
+A health club has opened, and they have an application that supports their clients, which is using ScyllaDB as the database backend. The following groups would need to be given permissions:
 The office staff can add new customers and can cancel subscriptions, view all customer data, and can change classes for the trainers as well as view the trainers’ data.  
 Trainers can only view their schedule and can view customer data. 
 Customers view the class schedule. 

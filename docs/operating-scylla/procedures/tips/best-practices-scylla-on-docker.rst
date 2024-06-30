@@ -136,7 +136,7 @@ Overriding scylla.yaml with a Master File
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Sometimes, it’s not possible to adjust ScyllaDB-specific settings (including non-network properties, like ``cluster_name`` ) directly from the command line when ScyllaDB is running within Docker.
 
-Instead, it may be necessary to incrementally override ``scylla.yaml`` settings by passing an external, master Scylla.yaml file when starting the Docker container for the node.
+Instead, it may be necessary to incrementally override ``scylla.yaml`` settings by passing an external, master ScyllaDB.yaml file when starting the Docker container for the node.
 
 To do this, you can use the ``--volume (-v)`` command as before to specify the overriding ``.yaml`` file:
 
@@ -278,7 +278,7 @@ To disable developer mode:
 
 --experimental ENABLE
 ---------------------
-The ``--experimental`` command line option enables Scylla's experimental mode. If no ``--experimental`` command line option is defined, ScyllaDB defaults to running with experimental mode disabled.
+The ``--experimental`` command line option enables ScyllaDB's experimental mode. If no ``--experimental`` command line option is defined, ScyllaDB defaults to running with experimental mode disabled.
 
 **It is highly recommended to disable experimental mode for production deployments.**
 

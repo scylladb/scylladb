@@ -25,7 +25,7 @@ A CDC generation consists of:
 This is the mapping used to decide on which stream IDs to use when making writes, as explained in the :doc:`./cdc-streams` document. It is a global property of the cluster: it doesn't depend on the table you're making writes to.
 
 .. caution::
-   The tables mentioned in the following sections: ``system_distributed.cdc_generation_timestamps`` and ``system_distributed.cdc_streams_descriptions_v2`` have been introduced in Scylla 4.4. It is highly recommended to upgrade to 4.4 for efficient CDC usage. The last section explains how to run the below examples in Scylla 4.3.
+   The tables mentioned in the following sections: ``system_distributed.cdc_generation_timestamps`` and ``system_distributed.cdc_streams_descriptions_v2`` have been introduced in ScyllaDB 4.4. It is highly recommended to upgrade to 4.4 for efficient CDC usage. The last section explains how to run the below examples in ScyllaDB 4.3.
 
 When CDC generations change
 ---------------------------
@@ -140,7 +140,7 @@ Suppose a node was started at 17:59:35 UTC+1 time, as reported by the node's log
 
 .. code-block:: none
 
-   INFO  2020-02-06 17:59:35,087 [shard 0] init - Scylla version 666.development-0.20200206.9eae0b57a with build-id 052adc1eb0601af2 starting ...
+   INFO  2020-02-06 17:59:35,087 [shard 0] init - ScyllaDB version 666.development-0.20200206.9eae0b57a with build-id 052adc1eb0601af2 starting ...
 
 You immediately connected to the node using cqlsh and queried the ``cdc_generation_timestamps`` table:
 
@@ -158,7 +158,7 @@ The result was:
 
    (1 rows)
 
-This generation's timestamp is ``17:00:43 UTC time`` (timestamp columns in Scylla always show the timestamp as a UTC time-date), which is a little more than a minute later compared to the node's startup time (which was ``16:59:35 UTC time``).
+This generation's timestamp is ``17:00:43 UTC time`` (timestamp columns in ScyllaDB always show the timestamp as a UTC time-date), which is a little more than a minute later compared to the node's startup time (which was ``16:59:35 UTC time``).
 
 If you then immediately create a CDC-enabled table and attempt to make an insert:
 
@@ -176,18 +176,18 @@ the result will be an error message:
 
 If you see a message like that, it doesn't necessarily mean something is wrong, as it may simply mean that the first generation hasn't started operating yet. If you wait for about a minute, you should be able to write to a CDC-enabled table.
 
-You may also see this message if you were running a cluster with an old version of Scylla (which didn't support CDC) and started a rolling upgrade.
+You may also see this message if you were running a cluster with an old version of ScyllaDB (which didn't support CDC) and started a rolling upgrade.
 Make sure to upgrade all nodes **before** you start doing CDC writes: one of the nodes will be responsible for creating the first CDC generation and informing other nodes about it.
 
-Differences in Scylla 4.3
--------------------------
+Differences in ScyllaDB 4.3
+---------------------------
 
-In Scylla 4.3 the tables ``cdc_generation_timestamps`` and ``cdc_streams_descriptions_v2`` don't exist. Instead there is the ``cdc_streams_descriptions`` table. To retrieve all generation timestamps, instead of querying the ``time`` column of ``cdc_generation_timestamps`` using a single-partition query (i.e. using ``WHERE key = 'timestamps'``), you would query the ``time`` column of ``cdc_streams_descriptions`` with a full range scan (without specifying a single partition):
+In ScyllaDB 4.3 the tables ``cdc_generation_timestamps`` and ``cdc_streams_descriptions_v2`` don't exist. Instead there is the ``cdc_streams_descriptions`` table. To retrieve all generation timestamps, instead of querying the ``time`` column of ``cdc_generation_timestamps`` using a single-partition query (i.e. using ``WHERE key = 'timestamps'``), you would query the ``time`` column of ``cdc_streams_descriptions`` with a full range scan (without specifying a single partition):
 
 .. code-block:: cql
 
    SELECT time FROM system_distributed.cdc_streams_descriptions;
 
-Unfortunately, the ``time`` column is the partition key column of this table. Therefore the values are not sorted, unlike the values of the ``time`` column of the ``cdc_generation_timestamps`` table (in which ``time`` is the clustering key). You will have to sort them yourselves in order to learn the timestamp of the last generation. Furthermore, querying the table with a full range scan like above requires the coordinator to contact the entire cluster, potentially increasing resource usage and latency. Thus we recommend upgrading to Scylla 4.4 and use the new description tables instead.
+Unfortunately, the ``time`` column is the partition key column of this table. Therefore the values are not sorted, unlike the values of the ``time`` column of the ``cdc_generation_timestamps`` table (in which ``time`` is the clustering key). You will have to sort them yourselves in order to learn the timestamp of the last generation. Furthermore, querying the table with a full range scan like above requires the coordinator to contact the entire cluster, potentially increasing resource usage and latency. Thus we recommend upgrading to ScyllaDB 4.4 and use the new description tables instead.
 
 .. TODO: CDC generation expiration

@@ -1,9 +1,9 @@
-=============================
-Maximizing Scylla Performance
-=============================
+===============================
+Maximizing ScyllaDB Performance
+===============================
 
-The purpose of this guide is to provide an overview of the best practices for maximizing the performance of Scylla, the next-generation NoSQL database.
-Even though Scylla auto-tunes for optimal performance, users still need to apply best practices in order to get the most out of their Scylla deployments.
+The purpose of this guide is to provide an overview of the best practices for maximizing the performance of ScyllaDB, the next-generation NoSQL database.
+Even though ScyllaDB auto-tunes for optimal performance, users still need to apply best practices in order to get the most out of their ScyllaDB deployments.
 
 
 
@@ -12,45 +12,45 @@ Performance Tips Summary
 If you are not planning to read this document fully, then here are the most important parts of this guide:
 
 * use the best hardware you can reasonably afford
-* install Scylla Monitoring Stack
+* install ScyllaDB Monitoring Stack
 * run scylla_setup script
 * use Cassandra stress test
 * expect to get at least 12.5K operations per second (OPS) per physical core for simple operations on selected hardware
 
-Scylla Design Advantages
-------------------------
+ScyllaDB Design Advantages
+--------------------------
 
-Scylla is different from any other NoSQL database. It achieves the highest levels of performance and takes full control of the hardware by utilizing all of the server cores in order to provide strict SLAs for low-latency operations.
-If you run Scylla in an over-committed environment, performance won't just be linearly slower &emdash; it will tank completely.
+ScyllaDB is different from any other NoSQL database. It achieves the highest levels of performance and takes full control of the hardware by utilizing all of the server cores in order to provide strict SLAs for low-latency operations.
+If you run ScyllaDB in an over-committed environment, performance won't just be linearly slower &emdash; it will tank completely.
 
-This is because Scylla has a reactor design that runs on all the (configured) cores and a scheduler that assumes a 0.5 ms tick.
-Scylla does everything it can to control queues in userspace and not in the OS/drives.
+This is because ScyllaDB has a reactor design that runs on all the (configured) cores and a scheduler that assumes a 0.5 ms tick.
+ScyllaDB does everything it can to control queues in userspace and not in the OS/drives.
 Thus, it assumes the bandwidth that was measured by ``scylla_setup``.
 
-It is not that difficult to get the best performance out of Scylla. Mostly, it is automatically tuned as long as you do not work against the system.
-The remainder of this document contains the best practices to follow to make sure that Scylla keeps tuning itself and that your performance has maximum results.
+It is not that difficult to get the best performance out of ScyllaDB. Mostly, it is automatically tuned as long as you do not work against the system.
+The remainder of this document contains the best practices to follow to make sure that ScyllaDB keeps tuning itself and that your performance has maximum results.
 
-Install Scylla Monitoring Stack
--------------------------------
+Install ScyllaDB Monitoring Stack
+---------------------------------
 
-Install and use the `Scylla Monitoring Stack <http://monitoring.docs.scylladb.com/>`_; it gives excellent additional value beyond performance.
-If you don’t know what your bottleneck is, you have not configured your system correctly. The Scylla monitoring stack dashboards will help you sort this out.
+Install and use the `ScyllaDB Monitoring Stack <http://monitoring.docs.scylladb.com/>`_; it gives excellent additional value beyond performance.
+If you don’t know what your bottleneck is, you have not configured your system correctly. The ScyllaDB monitoring stack dashboards will help you sort this out.
 
-With the recent addition of the `Scylla Advisor <http://monitoring.docs.scylladb.com/stable/advisor.html>`_ to the Scylla Monitoring Stack, it is even easier to find potential issues.
+With the recent addition of the `ScyllaDB Advisor <http://monitoring.docs.scylladb.com/stable/advisor.html>`_ to the ScyllaDB Monitoring Stack, it is even easier to find potential issues.
 
-Install Scylla Manager
-----------------------
+Install ScyllaDB Manager
+------------------------
 
-Install and use `Scylla Manager <https://manager.docs.scylladb.com>` together with the `Scylla Monitoring Stack <http://monitoring.docs.scylladb.com/>`_.
-Scylla Manager provides automated backups and repairs of your database.
-Scylla Manager can manage multiple Scylla clusters and run cluster-wide tasks in a controlled and predictable way.
-For example, with Scylla Manager you can control the intensity of a repair, increasing it to speed up the process, or lower the intensity to ensure it minimizes impact on ongoing operations.
+Install and use `ScyllaDB Manager <https://manager.docs.scylladb.com>` together with the `ScyllaDB Monitoring Stack <http://monitoring.docs.scylladb.com/>`_.
+ScyllaDB Manager provides automated backups and repairs of your database.
+ScyllaDB Manager can manage multiple ScyllaDB clusters and run cluster-wide tasks in a controlled and predictable way.
+For example, with ScyllaDB Manager you can control the intensity of a repair, increasing it to speed up the process, or lower the intensity to ensure it minimizes impact on ongoing operations.
 
 Run scylla_setup
 ----------------
 
-Before running Scylla, it is critical that the scylla_setup script has been executed.
-Scylla doesn't require manual optimization &emdash; it is the task of the scylla_setup script to determine the optimal configuration.
+Before running ScyllaDB, it is critical that the scylla_setup script has been executed.
+ScyllaDB doesn't require manual optimization &emdash; it is the task of the scylla_setup script to determine the optimal configuration.
 But, if ``scylla_setup`` has not run, the system won’t be configured optimally. Refer to the :doc:`System Configuration </getting-started/system-configuration/>` guide for details.
 
 Benchmarking Best Practices
@@ -129,7 +129,7 @@ Instead of rolling out custom benchmarks, use proven tools like cassandra-stress
 It is very flexible and takes care of coordinated omission.
 Yahoo! Cloud Serving Benchmark (YCSB) is also an option, but needs to be configured correctly to prevent coordinated omission.
 TLP-stress is not recommended because it suffers from coordinated omission.
-When benchmarking make sure that cassandra-stress that is part of the Scylla distribution is used because it contains the shard aware drivers.
+When benchmarking make sure that cassandra-stress that is part of the ScyllaDB distribution is used because it contains the shard aware drivers.
 
 Use the Same Benchmark Tool
 ===========================
@@ -165,13 +165,13 @@ Use Prepared Statements
 
 Prepared statements provide better performance because: parsing is done once, token/shard aware routing and less data is sent.
 Apart from performance improvements, prepared statements also increase security because it prevents CQL injection.
-Read more about `Stop Wasting Scylla’s CPU Time by Not Being Prepared <https://www.scylladb.com/2017/12/13/prepared-statements-scylla/>`_.
+Read more about `Stop Wasting ScyllaDB’s CPU Time by Not Being Prepared <https://www.scylladb.com/2017/12/13/prepared-statements-scylla/>`_.
 
 Use Paged Queries
 =================
 
 It is best to run queries that return a small number of rows.
-However, if a query can return many rows, then the unpaged query can lead to a huge memory bubble. This will eventually cause Scylla to kill the query.
+However, if a query can return many rows, then the unpaged query can lead to a huge memory bubble. This will eventually cause ScyllaDB to kill the query.
 With a paged query, the execution collects a page's worth of data and new pages are retrieved on demand, leading to smaller memory bubbles.
 Read about `More Efficient Query Paging <https://www.scylladb.com/2018/07/13/efficient-query-paging/>`_.
 
@@ -181,7 +181,7 @@ Use Workload Prioritization
 In a typical application there are operational workloads that require low latency.
 Sometimes these run in parallel with analytic workloads that process high volumes of data and do not require low latency.
 With workload prioritization, one can prevent that the analytic workloads lead to an unwanted high latency on operational workload.
-`Workload prioritization <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>`_ is only available with `Scylla Enterprise <https://enterprise.docs.scylladb.com/>`_.
+`Workload prioritization <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>`_ is only available with `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_.
 
 Bypass Cache
 ============
@@ -206,13 +206,13 @@ This is 19% of the latency compared to no batching.
 Driver Guidelines
 -----------------
 
-Use the :doc:`Scylla drivers </using-scylla/drivers/index>` that are available for Java, Python, Go, and C/C++.
+Use the :doc:`ScyllaDB drivers </using-scylla/drivers/index>` that are available for Java, Python, Go, and C/C++.
 They provide much better performance than third-party drivers because they are shard aware &emdash; they can route requests to the right CPU core (shard).
 When the driver starts, it gets the topology of the cluster and therefore it knows exactly which CPU core should get a request.
 Our latest shard-aware drivers also improve the efficiency of our Change Data Capture (CDC) feature.
-If the Scylla drivers are not an option, make sure that at least a token aware driver is used so that one round trip is removed.
+If the ScyllaDB drivers are not an option, make sure that at least a token aware driver is used so that one round trip is removed.
 
-Check if there are sufficient connections created by the client, otherwise performance could suffer. The general rule is between 1-3 connections per Scylla CPU per node.
+Check if there are sufficient connections created by the client, otherwise performance could suffer. The general rule is between 1-3 connections per ScyllaDB CPU per node.
 
 Hardware Guidelines
 -------------------
@@ -220,7 +220,7 @@ Hardware Guidelines
 CPU Core Count guidelines
 =========================
 
-Scylla, by default, will make use of all of its CPUs cores and is designed to perform well on powerful machines and as a consequence fewer machines are needed.
+ScyllaDB, by default, will make use of all of its CPUs cores and is designed to perform well on powerful machines and as a consequence fewer machines are needed.
 The recommended minimum number of CPU cores per node for operational workloads is 20.
 
 The rule of thumb is that a single physical CPU can process 12.5 K queries per second with a payload of up to 1 KB.
@@ -228,39 +228,39 @@ If a single node should process 400K queries per second, at least 32 physical CP
 In cloud environments hyper-threaded cores are often called virtual CPUs (vCPUs) or just cores.
 So it is important to determine if a virtual CPU is the same as a physical CPU or if it is a hyper threaded CPU.
 
-Scylla relies on temporarily spinning the CPU instead of blocking and waiting for data to arrive. This is done to reduce latency due to reduced context switching.
-The drawback is that the CPUs are 100% utilized and you might falsely conclude that Scylla can’t keep up with the load.
-Read more about :doc:`Scylla System Requirements </getting-started/system-requirements>`.
+ScyllaDB relies on temporarily spinning the CPU instead of blocking and waiting for data to arrive. This is done to reduce latency due to reduced context switching.
+The drawback is that the CPUs are 100% utilized and you might falsely conclude that ScyllaDB can’t keep up with the load.
+Read more about :doc:`ScyllaDB System Requirements </getting-started/system-requirements>`.
 
 Memory Guidelines
 =================
-During startup, Scylla claims nearly all of the available memory for itself.
+During startup, ScyllaDB claims nearly all of the available memory for itself.
 This is done for caching purposes to reduce the number of I/O operations.
 So the more memory available, the better the performance.
 
-Scylla recommends at least 2 GB of memory per core and a minimum of 16 GB of memory for a system (pick the highest value).
+ScyllaDB recommends at least 2 GB of memory per core and a minimum of 16 GB of memory for a system (pick the highest value).
 This means if you have a 64 core system, you should have at least 2x64=128 GB of memory.
 
 The max recommended ratio of storage/memory for good performance is 30:1.
 So for a system with 128 GB of memory, the recommended upper bound on the storage capacity is 3.8 TB per node of data.
 To store 6 TB of data per node, the minimum recommended amount of memory is 200 GB.
 
-Read more about  :doc:`Scylla System Requirements </getting-started/system-requirements>` or :doc:`Starting Scylla in a Shared Environment </getting-started/scylla-in-a-shared-environment/>`.
+Read more about  :doc:`ScyllaDB System Requirements </getting-started/system-requirements>` or :doc:`Starting ScyllaDB in a Shared Environment </getting-started/scylla-in-a-shared-environment/>`.
 
 
 Storage Guidelines
 ==================
 
-Scylla utilizes the full potential of modern NVMe SSDs; so the faster drive, the better the performance.
+ScyllaDB utilizes the full potential of modern NVMe SSDs; so the faster drive, the better the performance.
 If there is more than one SSD, it is recommended to use them as RAID 0 for the best performance.
-This is configured during ``scylla_setup`` and Scylla will create the RAID device automatically.
+This is configured during ``scylla_setup`` and ScyllaDB will create the RAID device automatically.
 If there is limited SSD capacity, the commit log should be placed on the SSD.
 
 The recommended file system is XFS because of its asynchronous appending write support and is the primary file system ScyllaDB is tested with.
 
-As SSD’s wear out over time, it is recommended to re-run the iotune tool every few months. This helps Scylla’s IO scheduler to make the best performing choices.
+As SSD’s wear out over time, it is recommended to re-run the iotune tool every few months. This helps ScyllaDB’s IO scheduler to make the best performing choices.
 
-Read more about :doc:`Scylla System Requirements </getting-started/system-requirements>`.
+Read more about :doc:`ScyllaDB System Requirements </getting-started/system-requirements>`.
 
 Networking Guidelines
 =====================
@@ -268,19 +268,19 @@ Networking Guidelines
 For operational workloads the minimum recommended network bandwidth is 10 Gbps.
 The scylla_setup script takes care of optimizing the kernel parameters, IRQ handling etc.
 
-Read more about :ref:`Scylla Network Requirements <system-requirements-network>`.
+Read more about :ref:`ScyllaDB Network Requirements <system-requirements-network>`.
 
 Cloud Compute Instance Recommendations
 --------------------------------------
 
-Scylla is designed to utilize all hardware resources. Bare metal instances are preferred for best performance.
+ScyllaDB is designed to utilize all hardware resources. Bare metal instances are preferred for best performance.
 
-Read more about :doc:`Starting Scylla in a Shared Environment </getting-started/scylla-in-a-shared-environment/>`.
+Read more about :doc:`Starting ScyllaDB in a Shared Environment </getting-started/scylla-in-a-shared-environment/>`.
 
 Image Guidelines
 ================
 
-Use the Scylla provided AMI on AWS EC2 or the Google Cloud Platform (CGP) image, if possible.
+Use the ScyllaDB provided AMI on AWS EC2 or the Google Cloud Platform (CGP) image, if possible.
 They have already been correctly configured for use in those public cloud environments.
 
 AWS
@@ -288,7 +288,7 @@ AWS
 
 AWS EC2 i3, i3en, i4i and c5d bare metal instances are **highly recommended** because they are optimized for high I/O.
 
-Read more about :ref:`Scylla Supported Platforms <system-requirements-supported-platforms>`.
+Read more about :ref:`ScyllaDB Supported Platforms <system-requirements-supported-platforms>`.
 
 If bare metal isn’t an option, use Nitro based instances and run with ‘host’ as tenancy policy to prevent the instance being shared with other VM’s.
 If Nitro isn’t possible, then use instance storage over EBS.
@@ -313,7 +313,7 @@ Docker
 ======
 
 When running in Docker platform, please use CPU pinning and host networking for best performance.
-Read more about `The Cost of Containerization for Your Scylla <https://www.scylladb.com/2018/08/09/cost-containerization-scylla/>`_.
+Read more about `The Cost of Containerization for Your ScyllaDB <https://www.scylladb.com/2018/08/09/cost-containerization-scylla/>`_.
 
 Kubernetes
 ==========
@@ -321,7 +321,7 @@ Kubernetes
 Just as with Docker, on a Kubernetes environment CPU pinning should be used as well.
 In this case the pod should be pinned to a CPU so that no sharing takes place.
 
-Read more about `Exploring Scylla on Kubernetes <https://www.scylladb.com/2018/03/29/scylla-kubernetes-overview/>`_.
+Read more about `Exploring ScyllaDB on Kubernetes <https://www.scylladb.com/2018/03/29/scylla-kubernetes-overview/>`_.
 
 Data Compaction
 ---------------
@@ -330,7 +330,7 @@ When records get updated or deleted, the old data eventually needs to be deleted
 The compaction settings can make a huge difference.
 
 * Use the following :ref:`Compaction Strategy Matrix <CSM1>` to use the correct compaction strategy for your workload.
-* ICS is an incremental compaction strategy that combines the low space amplification of LCS with the low write amplification of STCS. It is **only** available with Scylla Enterprise.
+* ICS is an incremental compaction strategy that combines the low space amplification of LCS with the low write amplification of STCS. It is **only** available with ScyllaDB Enterprise.
 * If you have time series data, the TWCS should be used.
 
 Read more about :doc:`Compaction Strategies </architecture/compaction/compaction-strategies>`
@@ -366,5 +366,5 @@ Read more about `Maximizing Performance via Concurrency While Minimizing Timeout
 Conclusion
 ----------
 
-Maximizing Scylla performance does require some effort even though Scylla will do its best to reduce the amount of configuration.
+Maximizing ScyllaDB performance does require some effort even though ScyllaDB will do its best to reduce the amount of configuration.
 If the best practices are correctly applied, then most common performance problems will be prevented.

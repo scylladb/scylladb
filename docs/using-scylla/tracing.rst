@@ -3,7 +3,7 @@ Tracing
 
 
 
-Tracing is a ScyllaDB tool meant to help debugging and analyzing internal flows in the server.  There are three types of tracing you can use with Scylla:
+Tracing is a ScyllaDB tool meant to help debugging and analyzing internal flows in the server.  There are three types of tracing you can use with ScyllaDB:
 
 * **User Defined CQL query** - One example of such a flow is CQL request processing. By placing a flag inside a CQL query, you can start tracing.
 * **Probalistic Tracing** randomly chooses a request to be traced with some defined probability.
@@ -149,8 +149,8 @@ Traces are created in the context of a **tracing session**. For instance, if we 
 * ``duration``:  the total duration of this tracing session in microseconds
 * ``parameters``: this map contains string pairs that describe the query. This may include *query string* or *consistency level*.
 * ``request``: a short string describing the current query, like "Execute CQL3 query".
-* ``request_size``: size of the request (available from Scylla 3.0).
-* ``response_size``: size of the response (available from Scylla 3.0).
+* ``request_size``: size of the request (available from ScyllaDB 3.0).
+* ``response_size``: size of the response (available from ScyllaDB 3.0).
 * ``started_at``: a timestamp taken when the tracing session has begun.
 
 ``events`` table column descriptions
@@ -323,7 +323,7 @@ Therefore all of them are likely going to hit the Slow Query threshold and get l
 If queueing is caused by some particularly heavy request, we would like to be able to filter this request from those that got logged due to a long queueing. 
 We have recently added tools that would help us do that:
 
-New columns were added to `system_traces.sessions`_ (available from Scylla 3.0)
+New columns were added to `system_traces.sessions`_ (available from ScyllaDB 3.0)
 
 * ``request_size``
 * ``response_size``
@@ -401,4 +401,4 @@ This procedure can also be used to collect tracing data in order to view which q
       COPY system_traces.events TO '/tmp/tracing/events.out' WITH HEADER = TRUE;
 
 
-If you are sending this data to Scylla for help, follow the directions in :ref:`How to Report a Scylla Problem <report-performance-problem>`.
+If you are sending this data to ScyllaDB for help, follow the directions in :ref:`How to Report a ScyllaDB Problem <report-performance-problem>`.

@@ -50,7 +50,7 @@ Some examples where CDC may be beneficial:
 * Implementing a notification system.
 * In-flight analytics: looking for patterns in the changes in order to derive useful information, e.g. for fraud detection.
 
-In Scylla CDC is optional and enabled on a per-table basis. The history of changes made to a CDC-enabled table is stored in a separate associated table.
+In ScyllaDB CDC is optional and enabled on a per-table basis. The history of changes made to a CDC-enabled table is stored in a separate associated table.
 
 Terminology
 -----------
@@ -75,7 +75,7 @@ You can enable CDC when creating or altering a table using the ``cdc`` option, f
 Using CDC with Applications
 ---------------------------
 
-When writing applications, you can now use our language specific libraries to simplify writing applications which will read from Scylla CDC.
+When writing applications, you can now use our language specific libraries to simplify writing applications which will read from ScyllaDB CDC.
 The following libraries are available:
 
 * `Go <https://github.com/scylladb/scylla-cdc-go>`_
@@ -85,7 +85,7 @@ The following libraries are available:
 More information
 ----------------
 
-`Scylla University: Change Data Capture (CDC) lesson <https://university.scylladb.com/courses/data-modeling/lessons/change-data-capture-cdc/>`_ -  Learn how to use CDC. Some of the topics covered are:
+`ScyllaDB University: Change Data Capture (CDC) lesson <https://university.scylladb.com/courses/data-modeling/lessons/change-data-capture-cdc/>`_ -  Learn how to use CDC. Some of the topics covered are:
 
 * An overview of Change Data Capture,  what exactly is it, what are some common use cases, what does it do, and an overview of how it works
 * How can that data be consumed? Different options for consuming the data changes including normal CQL, a layered approach, and integrators

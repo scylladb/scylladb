@@ -4,7 +4,7 @@ Increase Permission Cache to Avoid Non-paged Queries
 
 **Topic: Mitigate non-paged queries coming from connection authentications**
 
-**Audience: Scylla administrators**
+**Audience: ScyllaDB administrators**
 
 
 
