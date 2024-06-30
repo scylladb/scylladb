@@ -570,6 +570,7 @@ future<std::pair<sstring, std::unordered_set<sstring>>> sstable_directory::creat
     sstring pending_delete_dir = (base_dir / sstables::pending_delete_dir).native();
     sstring pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
     sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
+    sstring* ret_pending_delete_log = &tmp_pending_delete_log;   // until renamed
     sstlog.trace("Writing {}", tmp_pending_delete_log);
     std::optional<output_stream<char>> out;
     std::optional<file> dir_f;
@@ -594,6 +595,7 @@ future<std::pair<sstring, std::unordered_set<sstring>>> sstable_directory::creat
         dir_f = co_await open_directory(pending_delete_dir);
         // Once flushed and closed, the temporary log file can be renamed.
         co_await rename_file(tmp_pending_delete_log, pending_delete_log);
+        ret_pending_delete_log = &pending_delete_log;
 
         // Guarantee that the changes above reached the disk.
         co_await dir_f->flush();
@@ -613,7 +615,7 @@ future<std::pair<sstring, std::unordered_set<sstring>>> sstable_directory::creat
         }
     }
 
-    co_return std::make_pair(std::move(pending_delete_log), std::move(prefixes));
+    co_return std::make_pair(std::move(*ret_pending_delete_log), std::move(prefixes));
 }
 
 // FIXME: Go through maybe_delete_large_partitions_entry on recovery since
