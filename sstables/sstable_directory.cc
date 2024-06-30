@@ -558,8 +558,8 @@ bool sstable_directory::compare_sstable_storage_prefix(const sstring& prefix_a, 
     return size_a == size_b && sstring::traits_type::compare(prefix_a.begin(), prefix_b.begin(), size_a) == 0;
 }
 
-future<std::pair<sstring, sstring>> sstable_directory::create_pending_deletion_log(const std::vector<shared_sstable>& ssts) {
-    return seastar::async([&ssts] {
+future<std::pair<sstring, sstring>> sstable_directory::create_pending_deletion_log(const std::filesystem::path& base_dir, const std::vector<shared_sstable>& ssts) {
+    return seastar::async([&] {
         shared_sstable first = nullptr;
         min_max_tracker<generation_type> gen_tracker;
 
@@ -580,7 +580,7 @@ future<std::pair<sstring, sstring>> sstable_directory::create_pending_deletion_l
             }
         }
 
-        sstring pending_delete_dir = first->_storage->prefix() + "/" + sstables::pending_delete_dir;
+        sstring pending_delete_dir = (base_dir / sstables::pending_delete_dir).native();
         sstring pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
         sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
         sstlog.trace("Writing {}", tmp_pending_delete_log);

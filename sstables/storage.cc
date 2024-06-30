@@ -479,7 +479,7 @@ public:
 };
 
 future<atomic_delete_context> filesystem_storage::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
-    auto [ pending_delete_log, sst_directory ] = co_await sstable_directory::create_pending_deletion_log(ssts);
+    auto [ pending_delete_log, sst_directory ] = co_await sstable_directory::create_pending_deletion_log(base_dir(), ssts);
     co_return std::make_unique<filesystem_atomic_delete_ctx>(std::move(pending_delete_log), std::move(sst_directory));
 }
 
