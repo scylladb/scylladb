@@ -24,6 +24,9 @@ def table2(cql, test_keyspace):
 # Test that the function counterasblob() exists and works as expected -
 # same as bigintasblob on the same number (a counter is a 64-bit number).
 # Reproduces #14742
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
+                         indirect=True)
 def test_counter_to_blob(cql, table1, table2):
     p = unique_key_int()
     cql.execute(f'UPDATE {table1} SET i = 1000 WHERE p = {p}')
