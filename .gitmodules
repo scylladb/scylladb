@@ -20,4 +20,6 @@
 	url = ../scylla-python3
 [submodule "tools/cqlsh"]
 	path = tools/cqlsh
-	url = ../scylla-cqlsh
+	url = git@github.com:fruch/scylla-cqlsh.git
+        branch = patch_so_files
+
