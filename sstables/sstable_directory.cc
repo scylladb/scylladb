@@ -558,26 +558,14 @@ bool sstable_directory::compare_sstable_storage_prefix(const sstring& prefix_a, 
     return size_a == size_b && sstring::traits_type::compare(prefix_a.begin(), prefix_b.begin(), size_a) == 0;
 }
 
-future<std::pair<sstring, sstring>> sstable_directory::create_pending_deletion_log(const std::filesystem::path& base_dir, const std::vector<shared_sstable>& ssts) {
+future<std::pair<sstring, std::unordered_set<sstring>>> sstable_directory::create_pending_deletion_log(const std::filesystem::path& base_dir, const std::vector<shared_sstable>& ssts) {
     return seastar::async([&] {
-        shared_sstable first = nullptr;
         min_max_tracker<generation_type> gen_tracker;
+        std::unordered_set<sstring> prefixes;
 
         for (const auto& sst : ssts) {
             gen_tracker.update(sst->generation());
-
-            if (first == nullptr) {
-                first = sst;
-            } else {
-                // All sstables are assumed to be in the same column_family, hence
-                // sharing their base directory. Since lexicographical comparison of
-                // paths is not the same as their actually equivalence, this should
-                // rather check for fs::equivalent call on _storage.prefix()-s. But
-                // since we know that the worst thing filesystem storage driver can
-                // do is to prepend/drop the trailing slash, it should be enough to
-                // compare prefixes of both ... prefixes
-                assert(compare_sstable_storage_prefix(first->_storage->prefix(), sst->_storage->prefix()));
-            }
+            prefixes.insert(sst->_storage->prefix());
         }
 
         sstring pending_delete_dir = (base_dir / sstables::pending_delete_dir).native();
@@ -615,7 +603,7 @@ future<std::pair<sstring, sstring>> sstable_directory::create_pending_deletion_l
             sstlog.warn("Error while writing {}: {}. Ignoring.", pending_delete_log, std::current_exception());
         }
 
-        return std::make_pair<sstring, sstring>(std::move(pending_delete_log), first->_storage->prefix());
+        return std::make_pair(std::move(pending_delete_log), std::move(prefixes));
     });
 }
 
