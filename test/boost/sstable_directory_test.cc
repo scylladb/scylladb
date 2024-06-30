@@ -7,6 +7,7 @@
  */
 
 
+#include <fmt/format.h>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/file.hh>
@@ -145,7 +146,7 @@ static void with_sstable_directory(
     wrapped_test_env env_wrap,
     noncopyable_function<void (sharded<sstable_directory>&)> func) {
 
-    testlog.debug("with_sstable_directory: {}", path);
+    testlog.debug("with_sstable_directory: {}/{}", path, state);
 
     sharded<sstables::directory_semaphore> sstdir_sem;
     sstdir_sem.start(1).get();
@@ -782,14 +783,24 @@ SEASTAR_THREAD_TEST_CASE(test_system_datadir_layout) {
 
 SEASTAR_TEST_CASE(test_pending_log_garbage_collection) {
     return sstables::test_env::do_with_sharded_async([] (auto& env) {
+      for (auto state : {sstables::sstable_state::normal, sstables::sstable_state::staging}) {
+        auto base = env.local().tempdir().path() / fmt::to_string(table_id::create_random_id());
+        auto dir = base / format("{}", state);
+        recursive_touch_directory(dir.native()).get();
+
+        auto new_sstable = [&] {
+            return env.local().make_sstable(test_table_schema(), dir.native());
+        };
         std::vector<shared_sstable> ssts_to_keep;
         for (int i = 0; i < 2; i++) {
-            ssts_to_keep.emplace_back(make_sstable_for_this_shard(std::bind(new_env_sstable, std::ref(env.local()))));
+            ssts_to_keep.emplace_back(make_sstable_for_this_shard(new_sstable));
         }
+        testlog.debug("SSTables to keep: {}", ssts_to_keep);
         std::vector<shared_sstable> ssts_to_remove;
         for (int i = 0; i < 3; i++) {
-            ssts_to_remove.emplace_back(make_sstable_for_this_shard(std::bind(new_env_sstable, std::ref(env.local()))));
+            ssts_to_remove.emplace_back(make_sstable_for_this_shard(new_sstable));
         }
+        testlog.debug("SSTables to remove: {}", ssts_to_remove);
 
         // Now start atomic deletion -- create the pending deletion log for all
         // three sstables, move TOC file for one of them into temporary-TOC, and 
@@ -799,7 +810,16 @@ SEASTAR_TEST_CASE(test_pending_log_garbage_collection) {
         rename_file(test(ssts_to_remove[2]).filename(sstables::component_type::TOC).native(), test(ssts_to_remove[2]).filename(sstables::component_type::TemporaryTOC).native()).get();
         remove_file(test(ssts_to_remove[2]).filename(sstables::component_type::Data).native()).get();
 
-        with_sstable_directory(env, [&] (sharded<sstables::sstable_directory>& sstdir) {
+        // mimic distributed_loader table_populator::start order
+        // as the pending_delete_dir is now shared, at the table base directory
+        if (state != sstables::sstable_state::normal) {
+            with_sstable_directory(base, sstables::sstable_state::normal, env, [&] (sharded<sstables::sstable_directory>& sstdir) {
+                auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true, .garbage_collect = true });
+                BOOST_REQUIRE_NO_THROW(expect_ok.get());
+            });
+        }
+
+        with_sstable_directory(base, state, env, [&] (sharded<sstables::sstable_directory>& sstdir) {
             auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true, .garbage_collect = true });
             BOOST_REQUIRE_NO_THROW(expect_ok.get());
 
@@ -827,5 +847,6 @@ SEASTAR_TEST_CASE(test_pending_log_garbage_collection) {
 
             BOOST_REQUIRE_EQUAL(expected, collected);
         });
+      }
     });
 }

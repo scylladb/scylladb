@@ -31,11 +31,8 @@ class delayed_commit_changes;
 class sstable;
 class sstables_manager;
 class entry_descriptor;
-class atomic_delete_context_impl {
-public:
-    virtual ~atomic_delete_context_impl() {}
-};
-using atomic_delete_context = std::unique_ptr<atomic_delete_context_impl>;
+
+using atomic_delete_context = std::unordered_map<sstring, sstring>;
 
 class storage {
     friend class test;
