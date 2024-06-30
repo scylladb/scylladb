@@ -2831,8 +2831,10 @@ future<> storage_service::init_address_map(raft_address_map& address_map, gms::g
         address_map.add_or_update_entry(raft::server_id(host.uuid()), ip);
     }
     const auto& topology = get_token_metadata().get_topology();
-    address_map.add_or_update_entry(raft::server_id{topology.my_host_id().uuid()},
-        topology.my_address(), new_generation);
+    raft::server_id myid{topology.my_host_id().uuid()};
+    address_map.add_or_update_entry(myid,topology.my_address(), new_generation);
+    // Make my entry non expiring
+    address_map.set_nonexpiring(myid);
     _raft_ip_address_updater = make_shared<raft_ip_address_updater>(address_map, *this);
     _gossiper.register_(_raft_ip_address_updater);
 }
