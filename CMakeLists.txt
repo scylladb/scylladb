@@ -101,12 +101,21 @@ find_package(libxcrypt REQUIRED)
 find_package(Snappy REQUIRED)
 find_package(RapidJSON REQUIRED)
 find_package(xxHash REQUIRED)
+find_package(zstd REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
 
 include(add_version_library)
 generate_scylla_version()
+
+add_library(scylla-zstd STATIC
+    zstd.cc)
+target_link_libraries(scylla-zstd
+  PRIVATE
+    db
+    Seastar::seastar
+    zstd::libzstd)
 
 add_library(scylla-main STATIC)
 target_sources(scylla-main
@@ -146,10 +155,10 @@ target_sources(scylla-main
     timeout_config.cc
     unimplemented.cc
     validation.cc
-    vint-serialization.cc
-    zstd.cc)
+    vint-serialization.cc)
 target_link_libraries(scylla-main
   PRIVATE
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,scylla-zstd>"
     db
     absl::headers
     absl::btree
