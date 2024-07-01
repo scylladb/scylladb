@@ -437,7 +437,7 @@ def testFromJsonFct(cql, test_keyspace):
 
             # ================ timestamp ================
             execute(cql, table, "INSERT INTO %s (k, timestampval) VALUES (?, fromJson(?))", 0, "123123123123")
-            assert_rows(execute(cql, table, "SELECT k, timestampval FROM %s WHERE k = ?", 0), [0, datetime.utcfromtimestamp(123123123123/1e3)])
+            assert_rows(execute(cql, table, "SELECT k, timestampval FROM %s WHERE k = ?", 0), [0, datetime.fromtimestamp(123123123123/1e3, timezone.utc)])
 
             execute(cql, table, "INSERT INTO %s (k, timestampval) VALUES (?, fromJson(?))", 0, "\"2014-01-01\"")
             # The following comparison is a big mess in Python because of
@@ -445,7 +445,7 @@ def testFromJsonFct(cql, test_keyspace):
             # timezone, but not to indicate that it does otherwise the
             # result will not compare equal. The following weird conversion
             # appears to do the right thing...
-            assert_rows(execute(cql, table, "SELECT k, timestampval FROM %s WHERE k = ?", 0), [0, datetime.utcfromtimestamp(datetime(2014, 1, 1, 0, 0, 0).timestamp())])
+            assert_rows(execute(cql, table, "SELECT k, timestampval FROM %s WHERE k = ?", 0), [0, datetime.fromtimestamp(datetime(2014, 1, 1, 0, 0, 0).timestamp(), timezone.utc)])
             assert_invalid_throw(cql, table, FunctionFailure,
                 "INSERT INTO %s (k, timestampval) VALUES (?, fromJson(?))", 0, "123.456")
             assert_invalid_throw(cql, table, FunctionFailure,
