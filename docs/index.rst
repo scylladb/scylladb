@@ -7,7 +7,7 @@ ScyllaDB Open Source Documentation
 .. meta::
    :title: ScyllaDB Open Source Documentation
    :description: ScyllaDB Open Source Documentation
-   :keywords: ScyllaDB Open Source, Scylla Open Source, Scylla docs, ScyllaDB documentation, Scylla Documentation
+   :keywords: ScyllaDB Open Source, ScyllaDB Open Source, ScyllaDB docs, ScyllaDB documentation, ScyllaDB Documentation
 
 About This User Guide
 -----------------------

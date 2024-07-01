@@ -52,4 +52,4 @@ Security
   * :doc:`Generating a self-signed Certificate Chain Using openssl </operating-scylla/security/generate-certificate/>`
   * `Encryption at Rest <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/encryption-at-rest.html>`_ available in `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_
 
-Also check out the `Security Features lesson <https://university.scylladb.com/courses/scylla-operations/lessons/security-features/topic/security-features/>`_ on Scylla University.
+Also check out the `Security Features lesson <https://university.scylladb.com/courses/scylla-operations/lessons/security-features/topic/security-features/>`_ on ScyllaDB University.

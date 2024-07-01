@@ -4,7 +4,7 @@ Inserts
 Digression: the difference between inserts and updates
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-Inserts are not the same as updates, contrary to a popular belief in Cassandra/Scylla communities. The following example illustrates the difference:
+Inserts are not the same as updates, contrary to a popular belief in Cassandra/ScyllaDB communities. The following example illustrates the difference:
 
 .. code-block:: cql
 

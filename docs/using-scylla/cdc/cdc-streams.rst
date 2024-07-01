@@ -3,7 +3,7 @@ CDC Streams
 ===========
 
 Streams are partitions in CDC log tables. They are identified by their keys: *stream identifiers*. 
-When you perform a base table write, Scylla chooses a stream ID for the corresponding CDC log entries based on two things:
+When you perform a base table write, ScyllaDB chooses a stream ID for the corresponding CDC log entries based on two things:
 
 * the currently operating *CDC generation* (:doc:`./cdc-stream-generations`),
 * the base write's partition key.
@@ -38,7 +38,7 @@ returns:
 
 Observe that in the example above, all base writes made to partition ``0`` were sent to the same stream. The same is true for all base writes made to partition ``1``.
 
-Underneath, Scylla uses the token of the base write's partition key to decide the stream ID. 
+Underneath, ScyllaDB uses the token of the base write's partition key to decide the stream ID. 
 It stores a mapping from the token ring (the set of all tokens, which are 64-bit integers) to the set of stream IDs associated with the currently operating CDC generation. 
 Thus, choosing a stream proceeds in two steps:
 
@@ -71,7 +71,7 @@ returns:
 
 .. note:: For a given stream there is no straightforward way to find a partition key which will get mapped to this stream, because of the partitioner, which uses the murmur3 hash function underneath (the truth is you can efficiently find such a key, as murmur3 is not a cryptographic hash, but it's not completely obvious).
 
-The set of used stream IDs is independent from the table. It's a global property of the Scylla cluster:
+The set of used stream IDs is independent from the table. It's a global property of the ScyllaDB cluster:
 
 .. code-block:: cql
       

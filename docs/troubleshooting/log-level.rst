@@ -1,7 +1,7 @@
 Change the Log Level
 ====================
 
-You have the option to change the log level either while the cluster is offline or during runtime. Each log level is assigned to a specific Scylla class. To display the log classes (output changes with each version), run the following: 
+You have the option to change the log level either while the cluster is offline or during runtime. Each log level is assigned to a specific ScyllaDB class. To display the log classes (output changes with each version), run the following: 
 
 .. code-block:: shell
 
@@ -11,7 +11,7 @@ You have the option to change the log level either while the cluster is offline 
 How to Change the Log Level without Downtime
 --------------------------------------------
 
-Scylla presents the user with a variety of loggers that control the amount and detail of information printed to the system logs. This article contains information about how to query and change the log level of each individual logging system.
+ScyllaDB presents the user with a variety of loggers that control the amount and detail of information printed to the system logs. This article contains information about how to query and change the log level of each individual logging system.
 
 
 To obtain the status of a particular logger:
@@ -32,24 +32,24 @@ To change the status of a particular logger:
 
 Valid log levels are: ``trace``, ``debug``, ``info``, ``warn``, ``error``.
 
-Alternatively, you can use Nodetool commands. Refer to :doc:`setlogginglevel</operating-scylla/nodetool-commands/setlogginglevel>` to set the logging level threshold for Scylla classes.
+Alternatively, you can use Nodetool commands. Refer to :doc:`setlogginglevel</operating-scylla/nodetool-commands/setlogginglevel>` to set the logging level threshold for ScyllaDB classes.
 
 How to Change Log Level Offline
 -------------------------------
 
-In order to debug issues that occur during the Scylla start, the procedure above will not be helpful. This procedure can be used to assess Scylla Start issues, or it can be used when the cluster is down.  Note that any changes made here will only take effect after Scylla starts. 
+In order to debug issues that occur during the ScyllaDB start, the procedure above will not be helpful. This procedure can be used to assess ScyllaDB Start issues, or it can be used when the cluster is down.  Note that any changes made here will only take effect after ScyllaDB starts. 
 
-Scylla has command line options you can invoke to set the log level. Once set, the change is implemented during the Scylla start. Thus users can append new log level options by editing the SCYLLA_ARGS parameter in ``/etc/sysconfig/scylla-server``. 
+ScyllaDB has command line options you can invoke to set the log level. Once set, the change is implemented during the ScyllaDB start. Thus users can append new log level options by editing the SCYLLA_ARGS parameter in ``/etc/sysconfig/scylla-server``. 
 
 
 
-**Scylla Options**
+**ScyllaDB Options**
 
 .. list-table::
    :widths: 50 50
    :header-rows: 1
 
-   * - Scylla Options
+   * - ScyllaDB Options
      - Description
    * - ``--default-log-level arg (=info)``
      - Default log level for log messages. Valid values are trace, debug, info, warn, error.

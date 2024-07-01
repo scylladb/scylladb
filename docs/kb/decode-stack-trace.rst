@@ -2,24 +2,24 @@
 Decoding Stack Traces
 =====================
 
-**Topic: Decoding stack traces in Scylla logs**
+**Topic: Decoding stack traces in ScyllaDB logs**
 
-**Environment: Any Scylla setup on any supported OS**
+**Environment: Any ScyllaDB setup on any supported OS**
 
 **Audience: All**
 
 Synopsis
 --------
 
-This article describes how to decode the stack traces found in Scylla logs.
+This article describes how to decode the stack traces found in ScyllaDB logs.
 
 
 What are Stack Traces?
 ----------------------
 
-Stack traces can appear in the logs due to various errors or in the course of regular database operation. It is useful to be able to decode the trace in order to understand what exactly happened. Decoding the stack trace requires the Debug binaries for the specific Scylla build and OS in use are installed.
+Stack traces can appear in the logs due to various errors or in the course of regular database operation. It is useful to be able to decode the trace in order to understand what exactly happened. Decoding the stack trace requires the Debug binaries for the specific ScyllaDB build and OS in use are installed.
 
-Note that sharing the stack trace as part of your support ticket or Github issue, helps the Scylla support team to understand the issue better.
+Note that sharing the stack trace as part of your support ticket or Github issue, helps the ScyllaDB support team to understand the issue better.
 
 
 Install Debug Binary files
@@ -31,13 +31,13 @@ Install the Debug binaries according to your OS distribution
 
    .. group-tab:: RPM based distributions
 
-      For Scylla Enterprise:
+      For ScyllaDB Enterprise:
 
       .. code-block:: none
 
          yum install scylla-enterprise-debuginfo
 
-      For Scylla Open Source:
+      For ScyllaDB Open Source:
 
       .. code-block:: none
 
@@ -45,13 +45,13 @@ Install the Debug binaries according to your OS distribution
 
    .. group-tab:: DEB based distributions
 
-      For Scylla Enterprise:
+      For ScyllaDB Enterprise:
 
       .. code-block:: none
 
          apt-get install scylla-enterprise-server-dbg
 
-      For Scylla Open Source:
+      For ScyllaDB Open Source:
 
       .. code-block:: none
 
@@ -114,7 +114,7 @@ Locate and Analyze the Logs
 
       find . -name "scylla*.debug"
 
-   With Scylla 4.1 for example, returns:
+   With ScyllaDB 4.1 for example, returns:
 
    .. code-block:: shell
 

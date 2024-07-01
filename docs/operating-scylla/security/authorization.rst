@@ -5,7 +5,7 @@
 Grant Authorization CQL Reference
 ---------------------------------
 
-Authorization is the process by where users are granted permissions, which entitle them to access, or permission to change data on specific keyspaces, tables or an entire datacenter. Authorization for Scylla is done internally within Scylla and is not done with a third-party such as LDAP or OAuth. Granting permissions to users requires the use of a role such as a Database Administrator as well as :doc:`enabling the CassandraAuthorizer </operating-scylla/security/enable-authorization>`. It also requires a user who has been :doc:`authenticated </operating-scylla/security/authentication>`.
+Authorization is the process by where users are granted permissions, which entitle them to access, or permission to change data on specific keyspaces, tables or an entire datacenter. Authorization for ScyllaDB is done internally within ScyllaDB and is not done with a third-party such as LDAP or OAuth. Granting permissions to users requires the use of a role such as a Database Administrator as well as :doc:`enabling the CassandraAuthorizer </operating-scylla/security/enable-authorization>`. It also requires a user who has been :doc:`authenticated </operating-scylla/security/authentication>`.
 
 
 
@@ -66,7 +66,7 @@ If a role has the ``LOGIN`` privilege, clients may identify as that role when co
 connection, the client will acquire any roles and privileges granted to that role.
 
 Only a client with the ``CREATE`` permission on the database roles resource may issue ``CREATE ROLE`` requests (see
-the :ref:`relevant section <cql-permissions>` below) unless the client is a ``SUPERUSER``. Role management in Scylla
+the :ref:`relevant section <cql-permissions>` below) unless the client is a ``SUPERUSER``. Role management in ScyllaDB
 is pluggable, and custom implementations may support only a subset of the listed options.
 
 Role names should be quoted if they contain non-alphanumeric characters.
@@ -217,8 +217,8 @@ lists all roles directly granted to ``bob`` without including any of the transit
 Users
 ^^^^^
 
-Prior to the introduction of roles in Scylla 2.2, authentication and authorization were based around the concept of a
-``USER``. For backward compatibility, this syntax has been preserved. From Scylla 2.2 and onward, it is recommended to use :ref:`roles <db-roles>`.
+Prior to the introduction of roles in ScyllaDB 2.2, authentication and authorization were based around the concept of a
+``USER``. For backward compatibility, this syntax has been preserved. From ScyllaDB 2.2 and onward, it is recommended to use :ref:`roles <db-roles>`.
 
 .. _create-user-statement:
 
@@ -307,7 +307,7 @@ Data Control
 Permissions
 ~~~~~~~~~~~
 
-Permissions on resources are granted to users; there are several different types of resources in Scylla, and each type
+Permissions on resources are granted to users; there are several different types of resources in ScyllaDB, and each type
 is modelled hierarchically:
 
 - The hierarchy of Data resources, Keyspaces, and Tables has the structure ``ALL KEYSPACES`` -> ``KEYSPACE`` ->

@@ -1,14 +1,14 @@
 ScyllaDB Hinted Handoff
 ========================
 
-A typical write in Scylla works according to the scenarios described in our :doc:`Fault Tolerance documentation </architecture/architecture-fault-tolerance>`.
+A typical write in ScyllaDB works according to the scenarios described in our :doc:`Fault Tolerance documentation </architecture/architecture-fault-tolerance>`.
 
-But what happens when a write request is sent to a Scylla node that is unresponsive due to reasons including heavy write load on a node, network issues, or even hardware failure? To ensure availability and consistency, Scylla implements :term:`hinted handoff<Hinted Handoff>`. 
+But what happens when a write request is sent to a ScyllaDB node that is unresponsive due to reasons including heavy write load on a node, network issues, or even hardware failure? To ensure availability and consistency, ScyllaDB implements :term:`hinted handoff<Hinted Handoff>`. 
 
  :term:`Hint<Hint>` = target replica ID + :term:`mutation<Mutation>` data
 
 
-In other words, Scylla saves a copy of the writes intended for down nodes, and replays them to the nodes when they are up later.  Thus, the write operation flow, when a node is down, looks like this:
+In other words, ScyllaDB saves a copy of the writes intended for down nodes, and replays them to the nodes when they are up later.  Thus, the write operation flow, when a node is down, looks like this:
 
 1. The co-ordinator determines all the replica nodes;
 
@@ -39,7 +39,7 @@ Hinted handoff is enabled and managed by these settings in :code:`scylla.yaml`:
 
 * :code:`hinted_handoff_enabled`: enables or disables the hinted handoff feature completely or enumerates data centers where hints are allowed. By default, “true” enables hints to all nodes.
 * :code:`max_hint_window_in_ms`: do not generate hints if the destination node has been down for more than this value.  If  a node is down longer than this period, new hints are not created.  Hint generation resumes once the destination node is back up. By default, this is set to 3 hours.
-* :code:`hints_directory`: the directory where Scylla will store hints. By default this is :code:`$SCYLLA_HOME/hints`.
+* :code:`hints_directory`: the directory where ScyllaDB will store hints. By default this is :code:`$SCYLLA_HOME/hints`.
 
 Storing of the hint can also fail. Enabling hinted handoff therefore does not eliminate the need for repair; a user must recurrently :doc:`run a full repair </operating-scylla/procedures/maintenance/repair/>` to ensure data consistency across the cluster nodes.
 

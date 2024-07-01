@@ -153,7 +153,7 @@ If you're executing ``removenode`` too quickly after a failed membership change,
 
 .. code-block:: console
 
-    nodetool: Scylla API server HTTP POST to URL '/storage_service/remove_node' failed: seastar::rpc::remote_verb_error (node_ops_cmd_check: Node 127.0.0.2 rejected node_ops_cmd=removenode_abort from node=127.0.0.1 with ops_uuid=0ba0a5ab-efbd-4801-a31c-034b5f55487c, pending_node_ops={b47523f2-de6a-4c38-8490-39127dba6b6a}, pending node ops is in progress)
+    nodetool: ScyllaDB API server HTTP POST to URL '/storage_service/remove_node' failed: seastar::rpc::remote_verb_error (node_ops_cmd_check: Node 127.0.0.2 rejected node_ops_cmd=removenode_abort from node=127.0.0.1 with ops_uuid=0ba0a5ab-efbd-4801-a31c-034b5f55487c, pending_node_ops={b47523f2-de6a-4c38-8490-39127dba6b6a}, pending node ops is in progress)
 
 In that case simply wait for 2 minutes before trying ``removenode`` again.
 
@@ -161,6 +161,6 @@ If ``removenode`` returns an error like:
 
 .. code-block:: console
 
-    nodetool: Scylla API server HTTP POST to URL '/storage_service/remove_node' failed: std::runtime_error (removenode[12e7e05b-d1ae-4978-b6a6-de0066aa80d8]: Host ID 42405b3b-487e-4759-8590-ddb9bdcebdc5 not found in the cluster)
+    nodetool: ScyllaDB API server HTTP POST to URL '/storage_service/remove_node' failed: std::runtime_error (removenode[12e7e05b-d1ae-4978-b6a6-de0066aa80d8]: Host ID 42405b3b-487e-4759-8590-ddb9bdcebdc5 not found in the cluster)
 
 and you're sure that you're providing the correct Host ID, it means that the member was already removed and you don't have to clean up after it.

@@ -1,10 +1,10 @@
 ==============================
-Integrate Scylla with Spring
+Integrate ScyllaDB with Spring
 ==============================
 
 `Spring <https://spring.io>`_ is a java framework for creating easy to use web services.
 `Spring Boot <https://spring.io/projects/spring-boot>`_ makes it easy to create stand-alone, production-grade Spring based Applications that you can "just run".
-If you have tested your application with Scylla and Spring and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
+If you have tested your application with ScyllaDB and Spring and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
 
 
 Additional Information

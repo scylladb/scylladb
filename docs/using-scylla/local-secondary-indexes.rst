@@ -3,10 +3,10 @@ Local Secondary Indexes
 ===============================
 
 Local Secondary Indexes is an enhancement to :doc:`Global Secondary Indexes <secondary-indexes>`,
-which allows Scylla to optimize workloads where the partition key of the base table and the index are the same key.
+which allows ScyllaDB to optimize workloads where the partition key of the base table and the index are the same key.
 
 .. note::
-   As of Scylla Open Source 4.0, updates for local secondary indexes are performed **synchronously**. When updates are synchronous, the client acknowledges the write
+   As of ScyllaDB Open Source 4.0, updates for local secondary indexes are performed **synchronously**. When updates are synchronous, the client acknowledges the write
    operation only **after both** the base table modification **and** the view update are written.
    This is important to note because the process is no longer asynchronous and the modifications are immediately reflected in the index.
    In addition, if the view update fails, the client receives a write error.
@@ -100,7 +100,7 @@ The coordinator processes the request for the index and base table internally an
 
 .. note::
 
-   When the same table has both LSI and GSI, Scylla will automatically use the right Index for each query.
+   When the same table has both LSI and GSI, ScyllaDB will automatically use the right Index for each query.
 
 When should you use a Local Secondary Index
 ...........................................
@@ -113,7 +113,7 @@ More information
 * :doc:`Global Secondary Indexes </using-scylla/secondary-indexes/>`
 * :doc:`CQL Reference </cql/secondary-indexes/>` - CQL Reference for Secondary Indexes
 
-The following courses are available from Scylla University:
+The following courses are available from ScyllaDB University:
 
 * `Materialized Views and Secondary Indexes <https://university.scylladb.com/courses/data-modeling/lessons/materialized-views-secondary-indexes-and-filtering/>`_
 * `Local Secondary Indexes <https://university.scylladb.com/courses/data-modeling/lessons/materialized-views-secondary-indexes-and-filtering/topic/local-secondary-indexes-and-combining-both-types-of-indexes/>`_

@@ -4,7 +4,7 @@ Upscale a Cluster
 
 Upcaling your cluster involves moving the cluster to a larger instance. With this procedure, it can be done without downtime.
 
-Scylla was designed with big servers and multi-cores in mind. In most cases, it is better to run a smaller cluster on a bigger machine instance than a larger cluster on a small machine instance.
+ScyllaDB was designed with big servers and multi-cores in mind. In most cases, it is better to run a smaller cluster on a bigger machine instance than a larger cluster on a small machine instance.
 However, there may be cases where you started with a small cluster, and you now you want to upscale.
 
 There are a few alternatives to do this:
@@ -44,10 +44,10 @@ to avoid interrupting the availability of your application:
    .. include:: /rst_include/scylla-commands-stop-index.rst
 
 #. Add cores
-#. Run ``scylla_setup`` to set Scylla to the new HW configuration.
+#. Run ``scylla_setup`` to set ScyllaDB to the new HW configuration.
 #. Start the service
 
    .. include:: /rst_include/scylla-commands-start-index.rst
 
 
-.. note:: Updating the number of cores will cause Scylla to reshard the SSTables to match the new core number. This is done by compacting all of the data on disk at startup.
+.. note:: Updating the number of cores will cause ScyllaDB to reshard the SSTables to match the new core number. This is done by compacting all of the data on disk at startup.

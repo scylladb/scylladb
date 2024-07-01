@@ -30,7 +30,7 @@ For example:
    nodetool getendpoints mykeyspace superheroes "peter:parker"
 
 
-Scylla does not support *getendpoints* for a partition key with a frozen UDT.
+ScyllaDB does not support *getendpoints* for a partition key with a frozen UDT.
     
 
 .. include:: nodetool-index.rst

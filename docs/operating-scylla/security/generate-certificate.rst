@@ -94,9 +94,9 @@ As a result, we should now have:
 * :code:`db.crt` - PEM format certificate for the `db.key` signed by the `cadb.pem` and used by database node.
 * :code:`cadb.pem` - PEM format signing identity that can be used as a trust store. Use it to sign client certificates that will connect to the database nodes.
 
-Place the files in a directory of your choice and make sure you set permissions so your Scylla instance can read them. Then update the server/client configuration to reference them.
+Place the files in a directory of your choice and make sure you set permissions so your ScyllaDB instance can read them. Then update the server/client configuration to reference them.
 
-When restarting Scylla with the new configuration, you should see the following messages in the log:
+When restarting ScyllaDB with the new configuration, you should see the following messages in the log:
 
 When node-to-node encryption is active:
 

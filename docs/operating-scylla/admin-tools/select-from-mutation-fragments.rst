@@ -8,7 +8,7 @@ Reading mutation fragments
 
 The ``SELECT * FROM MUTATION_FRAGMENTS()`` statement allows for reading the raw underlying mutations (data) from a table.
 This is intended to be used as a diagnostics tool to debug performance or correctness issues, where inspecting the raw underlying data, as scylla stores it, is desired.
-So far this was only possible with sstables, using a tool like :doc:`Scylla SStable</operating-scylla/admin-tools/scylla-sstable>`.
+So far this was only possible with sstables, using a tool like :doc:`ScyllaDB SStable</operating-scylla/admin-tools/scylla-sstable>`.
 This statement allows inspecting the content of the row-cache, as well as that of individual memtables, in addition to individual sstables.
 
 The statement has to be used on an existing table, by using a regular ``SELECT`` query, which wraps the table name in ``MUTATION_FRAGMENTS()``. For example, to dump all mutations from ``my_keyspace.my_table``:

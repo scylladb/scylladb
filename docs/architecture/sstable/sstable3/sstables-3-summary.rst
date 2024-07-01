@@ -64,7 +64,7 @@ Summary Entries
 
 The ``offsets`` array contains offsets of corresponding entries in the ``entries`` array below. The offsets are taken from the beginning of the ``summary_entries_block`` so ``offsets[0] == sizeof(uint32) * header.entries_count`` as the first entry begins right after the array of offsets.
 
-Note that ``offsets`` are written in the native order format although typically all the integers in SSTables files are written in big-endian. In Scylla, they are always written in little-endian order to allow interoperability with 1. Summary files written by Cassandra on the more common little-endian machines, and 2. Summary files written by Scylla on the rarer big-endian machines.
+Note that ``offsets`` are written in the native order format although typically all the integers in SSTables files are written in big-endian. In ScyllaDB, they are always written in little-endian order to allow interoperability with 1. Summary files written by Cassandra on the more common little-endian machines, and 2. Summary files written by ScyllaDB on the rarer big-endian machines.
 
 Here is how a summary entry looks:
 

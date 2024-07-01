@@ -1,17 +1,17 @@
 
-Configure Scylla Networking with Multiple NIC/IP Combinations
-=============================================================
+Configure ScyllaDB Networking with Multiple NIC/IP Combinations
+===============================================================
 
 There are many ways to configure IP addresses in scylla.yaml. Setting the IP addresses incorrectly, can yield less than optimal results. This article focuses on configuring the addresses which are vital to network communication. 
 
 This article contains examples of the different ways to configure networking in scylla.yaml. The entire scope for address configuration is in the :ref:`Admin guide <admin-address-configuration-in-scylla>`. 
 
-As these values depend on a particular network configuration in your setup there are a few ways to configure the address parameters. In the examples below, we will provide instructions for the most common use cases (all in the resolution of a single Scylla node).
+As these values depend on a particular network configuration in your setup there are a few ways to configure the address parameters. In the examples below, we will provide instructions for the most common use cases (all in the resolution of a single ScyllaDB node).
 
 1 NIC, 1 IP
 -----------
 
-This is the case where a Scylla cluster is meant to operate in a single subnet with a single address space (no "public/internal IP"s).
+This is the case where a ScyllaDB cluster is meant to operate in a single subnet with a single address space (no "public/internal IP"s).
 
 In this case:
 
@@ -67,5 +67,5 @@ In this case:
 Additional References
 ---------------------
 
-:doc:`Administration Guide </operating-scylla/admin>` - User guide for Scylla Administration
+:doc:`Administration Guide </operating-scylla/admin>` - User guide for ScyllaDB Administration
 

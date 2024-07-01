@@ -1,5 +1,5 @@
-Scylla Best Practices 
-=====================
+ScyllaDB Best Practices 
+========================
 
 .. toctree::
    :hidden:
@@ -12,18 +12,18 @@ Scylla Best Practices
 
 
 .. panel-box::
-  :title: Scylla Best Practices
+  :title: ScyllaDB Best Practices
   :id: "getting-started"
   :class: my-panel
 
 
-  Best Practices for running Scylla
+  Best Practices for running ScyllaDB
 
-  * :doc:`Best Practices for Running Scylla on Docker <best-practices-scylla-on-docker>`
+  * :doc:`Best Practices for Running ScyllaDB on Docker <best-practices-scylla-on-docker>`
   * :doc:`Production Readiness Guidelines <production-readiness>`
   * :doc:`How to Avoid Node Mismanagement <avoid-node-mismanagement>`
-  * :doc:`Maximizing Scylla Performance <benchmark-tips>`
-  * `ScyllaDB Monitoring lesson <https://university.scylladb.com/courses/scylla-operations/lessons/scylla-monitoring/>`_ on Scylla University
+  * :doc:`Maximizing ScyllaDB Performance <benchmark-tips>`
+  * `ScyllaDB Monitoring lesson <https://university.scylladb.com/courses/scylla-operations/lessons/scylla-monitoring/>`_ on ScyllaDB University
 
 
 

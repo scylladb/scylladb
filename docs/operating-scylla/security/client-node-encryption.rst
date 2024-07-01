@@ -3,19 +3,19 @@ Encryption: Data in Transit Client to Node
 
 Follow the procedures below to enable a client to node encryption.
 Once enabled, all communication between the client and the node is transmitted over TLS/SSL.
-The libraries used by Scylla for OpenSSL are FIPS 140-2 certified.
+The libraries used by ScyllaDB for OpenSSL are FIPS 140-2 certified.
 
 Workflow
 ^^^^^^^^
 
-Each Scylla node needs to be enabled for TLS/SSL encryption separately. Repeat this procedure for each node.
+Each ScyllaDB node needs to be enabled for TLS/SSL encryption separately. Repeat this procedure for each node.
 
 #. `Configure the Node`_
 #. `Validate the Clients`_
 
 Configure the Node
 ^^^^^^^^^^^^^^^^^^
-This procedure is to be done on **every** Scylla node, one node at a time (one by one).
+This procedure is to be done on **every** ScyllaDB node, one node at a time (one by one).
 
 .. note:: If you are working on a new cluster skip steps 1 & 2.
 
@@ -23,7 +23,7 @@ This procedure is to be done on **every** Scylla node, one node at a time (one b
 
 #. Run ``nodetool drain``.
 
-#. Stop Scylla.
+#. Stop ScyllaDB.
 
    .. include:: /rst_include/scylla-commands-stop-index.rst
 
@@ -34,7 +34,7 @@ This procedure is to be done on **every** Scylla node, one node at a time (one b
    * ``enabled`` (default - false)
    * ``certificate`` - A PEM format certificate, either self-signed, or provided by a certificate authority (CA).
    * ``keyfile`` - The corresponding PEM format key for the certificate
-   * ``truststore`` - Optional path to a PEM format certificate store holding the trusted CA certificates. If not    provided, Scylla will attempt to use the system truststore to authenticate certificates.
+   * ``truststore`` - Optional path to a PEM format certificate store holding the trusted CA certificates. If not    provided, ScyllaDB will attempt to use the system truststore to authenticate certificates.
 
       .. note:: If using a self-signed certificate, the "truststore" parameter needs to be set to a PEM format container with the private authority.
 
@@ -53,7 +53,7 @@ This procedure is to be done on **every** Scylla node, one node at a time (one b
           require_client_auth: ...
           priority_string: SECURE128:-VERS-TLS1.0:-VERS-TLS1.1
 
-#. Start Scylla: 
+#. Start ScyllaDB: 
 
    .. include:: /rst_include/scylla-commands-start-index.rst
 
@@ -124,7 +124,7 @@ For Complete instructions, see :doc:`Generate a cqlshrc File <gen-cqlsh-file>`
 
    .. note:: when running cassandra-stress you may encounter an exception, if some nodes are still not in client to node SSL encrypted mode, yet the cassandra-stress will continue to run and connect only to the nodes it can.
 
-   .. When using Scylla v1.6.x or lower you will need a dummy keystore in the default (conf/.keystore) location with password "cassandra" to run. The contents is irrelevant. Also, it only pertains to cassandra-stress. It has no impact/relation to using the normal java driver connection or cqlsh.
+   .. When using ScyllaDB v1.6.x or lower you will need a dummy keystore in the default (conf/.keystore) location with password "cassandra" to run. The contents is irrelevant. Also, it only pertains to cassandra-stress. It has no impact/relation to using the normal java driver connection or cqlsh.
 
 #. Enable encryption on the client application.
 

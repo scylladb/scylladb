@@ -7,32 +7,32 @@ Troubleshooting guide for ScyllaDB Manager and ScyllaDB Monitoring integration
 Symptom
 -------
 
-Scylla Manager and Scylla Monitoring are installed, but when you look at Scylla Monitoring, the Scylla Manager dashboard shows the status of Scylla Manager as not connected. 
+ScyllaDB Manager and ScyllaDB Monitoring are installed, but when you look at ScyllaDB Monitoring, the ScyllaDB Manager dashboard shows the status of ScyllaDB Manager as not connected. 
 
 The following procedure contains several tests to pinpoint the integration issue. 
 
 Solution
 --------
 
-1. Verify that Scylla Manager Server is up and running. From the Scylla Monitoring node, run the following Scylla Manager commands:
+1. Verify that ScyllaDB Manager Server is up and running. From the ScyllaDB Monitoring node, run the following ScyllaDB Manager commands:
 
 .. code-block:: none
 
    sctool version
    sctool status -c <CLUSTERNAME>
 
-If you get a response with no errors, Scylla Manager is running.
+If you get a response with no errors, ScyllaDB Manager is running.
 
 
-2. Verify that Scylla Monitoring is running with the Manager Dashboard (Monitoring server) by running the command for monitoring, including the ``-M`` flag, which specifies the Manager Dashboard version. For example, 2.0.
+2. Verify that ScyllaDB Monitoring is running with the Manager Dashboard (Monitoring server) by running the command for monitoring, including the ``-M`` flag, which specifies the Manager Dashboard version. For example, 2.0.
 
 .. code-block:: none
 
    /start-all.sh -s path/to/scylla_servers.yml -n path/to/node_exporter_servers.yml -d path/to/mydata -v 3.0 -M 2.0
 
-3. From Scylla Monitoring, check the Scylla Manager Dashboard and confirm if the Scylla Manager dashboard shows Scylla Manager as connected. If yes, you do not need to continue. If no, continue to the next step.
+3. From ScyllaDB Monitoring, check the ScyllaDB Manager Dashboard and confirm if the ScyllaDB Manager dashboard shows ScyllaDB Manager as connected. If yes, you do not need to continue. If no, continue to the next step.
 
-4. The issue might be a case where the IP addresses are not synchronized. This happens when Scylla Manager binds the Prometheus API to one IP address and the Prometheus pulls Manager metrics from a different IP address. 
+4. The issue might be a case where the IP addresses are not synchronized. This happens when ScyllaDB Manager binds the Prometheus API to one IP address and the Prometheus pulls Manager metrics from a different IP address. 
 
    .. note:: When Monitoring and Manager are running on the same server, this IP might be **different** than 127.0.0.1 (localhost).
 
@@ -47,15 +47,15 @@ If you get a response with no errors, Scylla Manager is running.
       prometheus: '172.17.0.1:5090'
 
 
-   * In  ``scylla-monitoring/prometheus/scylla_manager_servers.yml``, change the IP address Prometheus uses to pull Scylla Manager metrics from. The IP address is set to ``172.17.0.1:5090`` by default. 
+   * In  ``scylla-monitoring/prometheus/scylla_manager_servers.yml``, change the IP address Prometheus uses to pull ScyllaDB Manager metrics from. The IP address is set to ``172.17.0.1:5090`` by default. 
 
    .. code-block:: none
 
       - targets:
         - 172.17.0.1:5090
 
-5. If you are not using the Scylla Monitoring stack (Docker), and are using your own Prometheus stack, check that the Scylla Manager target is listed. 
-Navigate to: ``http://[Prometheus_IP]:9090/targets (status menu -> targets)``. It may be that only Scylla and Node_Exporter sections are there, and Scylla Manager is missing:
+5. If you are not using the ScyllaDB Monitoring stack (Docker), and are using your own Prometheus stack, check that the ScyllaDB Manager target is listed. 
+Navigate to: ``http://[Prometheus_IP]:9090/targets (status menu -> targets)``. It may be that only ScyllaDB and Node_Exporter sections are there, and ScyllaDB Manager is missing:
 
 .. image:: Prometheus1.png
 

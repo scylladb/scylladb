@@ -52,7 +52,7 @@ In terms of the number of cores, any number will work since ScyllaDB scales up w
 A practical approach is to use a large number of cores as long as the hardware price remains reasonable. 
 Between 20-60 logical cores (including hyperthreading) is a recommended number. However, any number will fit. 
 When using virtual machines, containers, or the public cloud, remember that each virtual CPU is mapped to a single logical core, or thread. 
-Allow ScyllaDB to run independently without any additional CPU intensive tasks on the same server/cores as Scylla.
+Allow ScyllaDB to run independently without any additional CPU intensive tasks on the same server/cores as ScyllaDB.
 
 .. _system-requirements-memory:
 

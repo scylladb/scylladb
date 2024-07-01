@@ -3,7 +3,7 @@ Choose a Compaction Strategy
 ============================
 
 
-Scylla implements the following compaction strategies in order to reduce :term:`read amplification<Read Amplification>`, :term:`write amplification<Write Amplification>`, and :term:`space amplification<Space Amplification>`, which causes bottlenecks and poor performance. These strategies include:
+ScyllaDB implements the following compaction strategies in order to reduce :term:`read amplification<Read Amplification>`, :term:`write amplification<Write Amplification>`, and :term:`space amplification<Space Amplification>`, which causes bottlenecks and poor performance. These strategies include:
 
 * `Size-tiered compaction strategy (STCS)`_ - triggered when the system has enough (four by default) similarly sized SSTables.
 * `Leveled compaction strategy (LCS)`_ - the system uses small, fixed-size (by default 160 MB) SSTables distributed across different levels.
@@ -12,7 +12,7 @@ Scylla implements the following compaction strategies in order to reduce :term:`
 
 This document covers how to choose a compaction strategy and presents the benefits and disadvantages of each one. If you want more information on compaction in general or on any of these strategies, refer to the :doc:`Compaction Overview </kb/compaction>`. If you want an explanation of the CQL commands used to create a compaction strategy, refer to :doc:`Compaction CQL Reference </cql/compaction>` .
 
-Learn more in the `Compaction Strategies lesson <https://university.scylladb.com/courses/scylla-operations/lessons/compaction-strategies/>`_ on Scylla University
+Learn more in the `Compaction Strategies lesson <https://university.scylladb.com/courses/scylla-operations/lessons/compaction-strategies/>`_ on ScyllaDB University
 
 .. _STCS1:
 
@@ -197,6 +197,6 @@ References
 ----------
 * :doc:`Compaction Overview </kb/compaction>` - contains in depth information on all of the strategies
 * :doc:`Compaction CQL Reference </cql/compaction>` - covers the CQL parameters used for implementing compaction
-* Scylla Summit Tech Talk: `How to Ruin Performance by Choosing the Wrong Compaction Strategy <https://www.scylladb.com/tech-talk/ruin-performance-choosing-wrong-compaction-strategy-scylla-summit-2017/>`_
+* ScyllaDB Summit Tech Talk: `How to Ruin Performance by Choosing the Wrong Compaction Strategy <https://www.scylladb.com/tech-talk/ruin-performance-choosing-wrong-compaction-strategy-scylla-summit-2017/>`_
 
 

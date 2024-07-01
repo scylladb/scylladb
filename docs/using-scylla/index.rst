@@ -37,7 +37,7 @@ ScyllaDB for Developers
   :id: "getting-started"
   :class: my-panel
  
-  * :doc:`ScyllaDB Tools </operating-scylla/admin-tools/index>` - Tools for testing and integrating with Scylla
+  * :doc:`ScyllaDB Tools </operating-scylla/admin-tools/index>` - Tools for testing and integrating with ScyllaDB
   * :doc:`cqlsh </cql/cqlsh>` - A command line shell for interacting with ScyllaDB through CQL
  
 

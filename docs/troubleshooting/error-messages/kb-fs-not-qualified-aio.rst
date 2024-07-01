@@ -17,7 +17,7 @@ There can be two causes for this error:
 
   * Remedy: upgrade your kernel
 
-Scylla requires using the XFS filesystem, since it is the only Linux filesystem with good Asynchronous I/O support. In addition, Linux kernels before 3.15 did not have good asynchronous append support, which is required by Scylla.
+ScyllaDB requires using the XFS filesystem, since it is the only Linux filesystem with good Asynchronous I/O support. In addition, Linux kernels before 3.15 did not have good asynchronous append support, which is required by ScyllaDB.
 
 If you are using Red Hat Enterprise Linux or CentOS, use version 7.2 or higher of the operating system. These versions contain a kernel that provides the necessary support.
 

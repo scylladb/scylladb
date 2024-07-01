@@ -9,7 +9,7 @@ The procedure requires cluster downtime and as a result, all auth data is delete
 Procedure
 .........
 
-| 1. Stop Scylla nodes (**Stop all the nodes in the cluster**).
+| 1. Stop ScyllaDB nodes (**Stop all the nodes in the cluster**).
 
 .. code-block:: shell 
 
@@ -21,14 +21,14 @@ Procedure
 
    rm -rf /var/lib/scylla/data/system/role*
 
-| 3. Start Scylla nodes.
+| 3. Start ScyllaDB nodes.
 
 .. code-block:: shell 
 
    sudo systemctl start scylla-server
 
 | 4. Verify that you can log in to your node using ``cqlsh`` command.
-| The access is only possible using Scylla superuser.
+| The access is only possible using ScyllaDB superuser.
 
 .. code-block:: cql
  

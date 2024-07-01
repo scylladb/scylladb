@@ -7,14 +7,14 @@ How to flush old tombstones from a table
 Description
 -----------
 If you have large partitions with lots of tombstones, you can use this workaround to flush the old tombstones.
-To avoid data resurrection, make sure that tables are repaired (either with nodetool repair or Scylla Manager) before the ``gc_grace_seconds`` threshold is reached. 
+To avoid data resurrection, make sure that tables are repaired (either with nodetool repair or ScyllaDB Manager) before the ``gc_grace_seconds`` threshold is reached. 
 After the repair finishes, any tombstone older than the previous repair can be flushed.
 
 .. note:: Use :doc:`this article </troubleshooting/large-partition-table/>` to help you find large partitions.
 
 Steps:
 ^^^^^^
-1. Run nodetool repair to synchronize the data between nodes. Alternatively, you can use Scylla Manager to run a repair.
+1. Run nodetool repair to synchronize the data between nodes. Alternatively, you can use ScyllaDB Manager to run a repair.
 
 .. code-block:: sh
    
@@ -22,7 +22,7 @@ Steps:
    
 2. Set  the ``gc_grace_seconds`` to the time since last repair was started -  For instance, if the last repair was executed one day ago, then set ``gc_grace_seconds`` to one day (86400sec). For more information, please refer to :doc:`this KB article </kb/gc-grace-seconds/>`.
 
-.. note:: To prevent the compaction of unsynched tombstones, it is important to get the timing correctly. If you are not sure what time should set, please contact `Scylla support <https://www.scylladb.com/product/support/>`_.
+.. note:: To prevent the compaction of unsynched tombstones, it is important to get the timing correctly. If you are not sure what time should set, please contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_.
 
 .. code-block:: sh
 

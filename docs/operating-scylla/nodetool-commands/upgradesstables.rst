@@ -1,9 +1,9 @@
 Nodetool upgradesstables
 ========================
 
-**upgradesstables** - Upgrades each table that is not running the latest Scylla version by rewriting the SSTables. 
+**upgradesstables** - Upgrades each table that is not running the latest ScyllaDB version by rewriting the SSTables. 
 
-Note that this is *not* required when enabling mc format or upgrading to a newer Scylla version. In these cases, Scylla writes a new SSTable, either in MemTable flush or compaction, while keeping the old tables in the old format. 
+Note that this is *not* required when enabling mc format or upgrading to a newer ScyllaDB version. In these cases, ScyllaDB writes a new SSTable, either in MemTable flush or compaction, while keeping the old tables in the old format. 
 
 You can specify to run this action on a specific table or keyspace or on all SSTables. Use this command when changing compression options, or encrypting/decrypting a table for encryption at rest and you want to rewrite SSTable to the new format, instead of waiting for compaction to do it for you at a later time.
 

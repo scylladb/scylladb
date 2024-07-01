@@ -1,8 +1,8 @@
 SSTabledump
 ============
 
-.. warning:: SSTabledump is deprecated since Scylla 5.4, and will be removed in a future release.
-             Please consider switching to :doc:`Scylla SSTable </operating-scylla/admin-tools/scylla-sstable>`.
+.. warning:: SSTabledump is deprecated since ScyllaDB 5.4, and will be removed in a future release.
+             Please consider switching to :doc:`ScyllaDB SSTable </operating-scylla/admin-tools/scylla-sstable>`.
 
 This tool allows you to converts SSTable into a JSON format file.
 If you need more flexibility or want to dump more than just the data-component, see :doc:`scylla-sstable </operating-scylla/admin-tools/scylla-sstable>`.

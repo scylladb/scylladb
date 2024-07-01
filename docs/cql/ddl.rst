@@ -121,7 +121,7 @@ name                 kind       mandatory   default   description
 
 The ``replication`` property is mandatory and must at least contains the ``'class'`` sub-option, which defines the
 replication strategy class to use. The rest of the sub-options depend on what replication
-strategy is used. By default, Scylla supports the following ``'class'``:
+strategy is used. By default, ScyllaDB supports the following ``'class'``:
 
 .. _replication-strategy:
 
@@ -544,7 +544,7 @@ Another useful property of a partition is that when writing data, all the update
 done *atomically* and in *isolation*, which is not the case across partitions.
 
 The proper choice of the partition key and clustering columns for a table is probably one of the most important aspects
-of data modeling in Scylla. It largely impacts which queries can be performed and how efficient they are.
+of data modeling in ScyllaDB. It largely impacts which queries can be performed and how efficient they are.
 
 .. note:: An empty string is *not* allowed as a partition key value. In a compound partition key (multiple partition-key columns), any or all of them may be empty strings. Empty string is *not* a Null value.
 
@@ -555,7 +555,7 @@ The clustering columns
 ``````````````````````
 
 The clustering columns of a table define the clustering order for the partition of that table. For a given
-:ref:`partition <partition-key>`, all the rows are physically ordered inside Scylla by that clustering order. For
+:ref:`partition <partition-key>`, all the rows are physically ordered inside ScyllaDB by that clustering order. For
 instance, given::
 
     CREATE TABLE t (
@@ -709,7 +709,7 @@ A table supports the following options:
 Speculative retry options
 #########################
 
-By default, Scylla read coordinators only query as many replicas as necessary to satisfy
+By default, ScyllaDB read coordinators only query as many replicas as necessary to satisfy
 consistency levels: one for consistency level ``ONE``, a quorum for ``QUORUM``, and so on.
 ``speculative_retry`` determines when coordinators may query additional replicas, which is useful
 when replicas are slow or unresponsive.  The following are legal values (case-insensitive):
@@ -972,7 +972,7 @@ The ``ALTER TABLE`` statement can:
 
 .. warning:: Dropping a column assumes that the timestamps used for the value of this column are "real" timestamp in
    microseconds. Using "real" timestamps in microseconds is the default is and is **strongly** recommended, but as
-   Scylla allows the client to provide any timestamp on any table, it is theoretically possible to use another
+   ScyllaDB allows the client to provide any timestamp on any table, it is theoretically possible to use another
    convention. Please be aware that if you do so, dropping a column will not work correctly.
 
 .. warning:: Once a column is dropped, it is allowed to re-add a column with the same name as the dropped one

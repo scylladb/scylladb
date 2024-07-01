@@ -58,7 +58,7 @@ Nodetool
    nodetool-commands/viewbuildstatus
    nodetool-commands/version
 
-The ``nodetool`` utility provides a simple command-line interface to the following exposed operations and attributes. Scylla’s nodetool is a fork of `the Apache Cassandra nodetool <https://cassandra.apache.org/doc/latest/tools/nodetool/nodetool.html>`_ with the same syntax and a subset of the operations.
+The ``nodetool`` utility provides a simple command-line interface to the following exposed operations and attributes. ScyllaDB’s nodetool is a fork of `the Apache Cassandra nodetool <https://cassandra.apache.org/doc/latest/tools/nodetool/nodetool.html>`_ with the same syntax and a subset of the operations.
 
 .. _nodetool-generic-options:
 
@@ -123,7 +123,7 @@ Operations that are not listed below are currently not available.
 * :doc:`resetlocalschema </operating-scylla/nodetool-commands/resetlocalschema/>` - Reset the node's local schema.
 * :doc:`ring <nodetool-commands/ring/>` - The nodetool ring command display the token ring information.
 * :doc:`scrub </operating-scylla/nodetool-commands/scrub>` :code:`[-m mode] [--no-snapshot] <keyspace> [<table>...]` - Scrub the SSTable files in the specified keyspace or table(s)
-* :doc:`setlogginglevel</operating-scylla/nodetool-commands/setlogginglevel>` - sets the logging level threshold for Scylla classes
+* :doc:`setlogginglevel</operating-scylla/nodetool-commands/setlogginglevel>` - sets the logging level threshold for ScyllaDB classes
 * :doc:`settraceprobability </operating-scylla/nodetool-commands/settraceprobability/>` ``<value>`` - Sets the probability for tracing a request. race probability value
 * :doc:`snapshot </operating-scylla/nodetool-commands/snapshot>` :code:`[-t tag] [-cf column_family] <keyspace>`  - Take a snapshot of specified keyspaces or a snapshot of the specified table.
 * :doc:`sstableinfo </operating-scylla/nodetool-commands/sstableinfo>` - Get information about sstables per keyspace/table.
@@ -135,7 +135,7 @@ Operations that are not listed below are currently not available.
 * **tablehistograms** see :doc:`cfhistograms <nodetool-commands/cfhistograms/>`
 * :doc:`tablestats </operating-scylla/nodetool-commands/tablestats/>` - Provides in-depth diagnostics regard table. 
 * :doc:`toppartitions </operating-scylla/nodetool-commands/toppartitions/>` - Samples cluster writes and reads and reports the most active partitions in a specified table and time frame.
-* :doc:`upgradesstables </operating-scylla/nodetool-commands/upgradesstables>` - Upgrades each table that is not running the latest Scylla version, by rewriting SSTables.
+* :doc:`upgradesstables </operating-scylla/nodetool-commands/upgradesstables>` - Upgrades each table that is not running the latest ScyllaDB version, by rewriting SSTables.
 * :doc:`viewbuildstatus </operating-scylla/nodetool-commands/viewbuildstatus/>` - Shows the progress of a materialized view build.
 * :doc:`version </operating-scylla/nodetool-commands/version>` - Print the DB version.
 

@@ -41,7 +41,7 @@ Note that:
 - ``BATCH`` statements may only contain ``UPDATE``, ``INSERT`` and ``DELETE`` statements (not other batches, for instance).
 - Batches are *not* a full analogue for SQL transactions.
 - If a timestamp is not specified for each operation, then all operations will be applied with the same timestamp
-  (either one generated automatically, or the timestamp provided at the batch level). Due to Scylla's conflict
+  (either one generated automatically, or the timestamp provided at the batch level). Due to ScyllaDB's conflict
   resolution procedure in the case of timestamp ties, operations may be applied in an order that is different from the order they are listed in the ``BATCH`` statement. To force a
   particular operation ordering, you must specify per-operation timestamps.
 - A LOGGED batch to a single partition will be converted to an UNLOGGED batch as an optimization.
@@ -54,18 +54,18 @@ For more information on the :token:`update_parameter` refer to the :ref:`UPDATE 
 ``UNLOGGED`` batches
 ~~~~~~~~~~~~~~~~~~~~
 
-By default, Scylla uses a batch log to ensure all operations in a batch eventually complete or none will (note,
+By default, ScyllaDB uses a batch log to ensure all operations in a batch eventually complete or none will (note,
 however, that operations are only isolated within a single partition).
 
 There is a performance penalty for batch atomicity when a batch spans multiple partitions. If you do not want to incur
-this penalty, you can tell Scylla to skip the batchlog with the ``UNLOGGED`` option. If the ``UNLOGGED`` option is
+this penalty, you can tell ScyllaDB to skip the batchlog with the ``UNLOGGED`` option. If the ``UNLOGGED`` option is
 used, a failed batch might leave the batch only partly applied.
 
 ``COUNTER`` batches
 ~~~~~~~~~~~~~~~~~~~
 
 Use the ``COUNTER`` option for batched counter updates. Unlike other
-updates in Scylla, counter updates are not idempotent.
+updates in ScyllaDB, counter updates are not idempotent.
 
 
 :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`

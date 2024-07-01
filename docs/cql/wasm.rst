@@ -10,7 +10,7 @@ This document describes the details of Wasm language support in user-defined fun
 How to generate a correct Wasm UDF source code
 ----------------------------------------------
 
-Scylla accepts UDF's source code in WebAssembly Text ("WAT") format. The source can use and define whatever's needed for execution, including multiple helper functions and symbols. The requirements for it to be accepted as correct UDF source are that the WebAssembly module export a symbol with the same name as the function, this symbol's type should be indeed a function with correct signature, and the module export a ``_scylla_abi`` global and all symbols related to the selected :ref:`ABI version <abi-versions>`.
+ScyllaDB accepts UDF's source code in WebAssembly Text ("WAT") format. The source can use and define whatever's needed for execution, including multiple helper functions and symbols. The requirements for it to be accepted as correct UDF source are that the WebAssembly module export a symbol with the same name as the function, this symbol's type should be indeed a function with correct signature, and the module export a ``_scylla_abi`` global and all symbols related to the selected :ref:`ABI version <abi-versions>`.
 
 UDF's source code can be, naturally, simply coded by hand in WAT. It is not often very convenient to program directly in assembly, so here are a few tips.
 

@@ -1,28 +1,28 @@
-============================================
-Increase Scylla resource limits over systemd
-============================================
+==============================================
+Increase ScyllaDB resource limits over systemd
+==============================================
 
-**Topic: Increasing resource limits when Scylla runs and is managed via systemd**
+**Topic: Increasing resource limits when ScyllaDB runs and is managed via systemd**
 
-**Audience: Scylla administrators**
+**Audience: ScyllaDB administrators**
 
 
 
 Issue
 -----
 
-Updates to ``/etc/security/limits.d/scylla.conf`` do not have any effect. After a cluster rolling restart is completed, the Scylla limits listed under ``/proc/<PID>/limits`` are still the same or lower than what has been configured.
+Updates to ``/etc/security/limits.d/scylla.conf`` do not have any effect. After a cluster rolling restart is completed, the ScyllaDB limits listed under ``/proc/<PID>/limits`` are still the same or lower than what has been configured.
 
 Root Cause
 ----------
 
-When running under systemd, Scylla enforces the **LimitNOFILE** and **LimitNPROC** values under ``/lib/systemd/system/scylla-server.service``, where:
+When running under systemd, ScyllaDB enforces the **LimitNOFILE** and **LimitNPROC** values under ``/lib/systemd/system/scylla-server.service``, where:
 
 **LimitNOFILE** - Maximum number of file descriptors allowed to be opened simultaneously (defaults to 800000)
 
 **LimitNPROC** - Maximum number of processes allowed to run in parallel (defaults to 8096)
 
-Even though Scylla's provided defaults are suitable for most workloads, there may be situations on which these values may need to be overridden.
+Even though ScyllaDB's provided defaults are suitable for most workloads, there may be situations on which these values may need to be overridden.
 
 Before you start
 ----------------
@@ -31,7 +31,7 @@ The Linux kernel imposes an upper limit on the maximum number of file-handles th
 
 The ``fs.nr_open`` parameter default value is 1048576 (1024*1024) and it must be increased whenever it is required to overcome such limit.
 
-As a rule of thumb, always ensure that the value of ``fs.nr_open`` is **equal or greater than** the maximum number of file-handles that Scylla may be able to consume.
+As a rule of thumb, always ensure that the value of ``fs.nr_open`` is **equal or greater than** the maximum number of file-handles that ScyllaDB may be able to consume.
 
 1. To check the value of ``fs.nr_open`` run:
 
@@ -58,7 +58,7 @@ As a rule of thumb, always ensure that the value of ``fs.nr_open`` is **equal or
 Solution
 --------
 
-1. To override Scylla limits on systemd, run:
+1. To override ScyllaDB limits on systemd, run:
 
 .. code-block:: shell
 
@@ -73,15 +73,15 @@ Solution
     [Service]
     LimitNOFILE=5000000
 
-3. Restart Scylla:
+3. Restart ScyllaDB:
 
 .. code-block:: shell
 
     sudo systemctl restart scylla-server.service
 
-This will create a configuration file named ``override.conf`` under the ``/etc/systemd/system/scylla-server.service.d`` folder. Whenever editing this file by hand manually, remember to run ``sudo systemctl daemon-reload`` before restarting Scylla, so that systemd reloads the changes.
+This will create a configuration file named ``override.conf`` under the ``/etc/systemd/system/scylla-server.service.d`` folder. Whenever editing this file by hand manually, remember to run ``sudo systemctl daemon-reload`` before restarting ScyllaDB, so that systemd reloads the changes.
 
-4. To check the updated limits allowed by the Scylla process run:
+4. To check the updated limits allowed by the ScyllaDB process run:
 
 .. code-block:: shell
 

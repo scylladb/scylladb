@@ -6,7 +6,7 @@ How to Safely Increase the Replication Factor
 **Topic: What can happen when you increase RF**
 
 
-**Audience: Scylla administrators**
+**Audience: ScyllaDB administrators**
 
 
 Issue

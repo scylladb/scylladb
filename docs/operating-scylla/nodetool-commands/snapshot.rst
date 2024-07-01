@@ -99,7 +99,7 @@ Each of the snapshots is a **hardlink** to to the SSTable directory.
    la-1-big-Digest.sha1
    la-1-big-Filter.db
    la-1-big-Index.db
-   la-1-big-Scylla.db
+   la-1-big-ScyllaDB.db
    la-1-big-Statistics.db
    la-1-big-Summary.db
    la-1-big-TOC.txt
@@ -109,6 +109,6 @@ Additional Resources
 ^^^^^^^^^^^^^^^^^^^^
 
 * :doc:`Backup your data </operating-scylla/procedures/backup-restore/backup>`
-* :doc:`Scylla Snapshots </kb/snapshots>`
+* :doc:`ScyllaDB Snapshots </kb/snapshots>`
 
 .. include:: /rst_include/apache-copyrights.rst

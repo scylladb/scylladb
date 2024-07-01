@@ -1,27 +1,27 @@
-==============================================
-Scylla CDC Source Connector Quickstart
-==============================================
+========================================
+ScyllaDB CDC Source Connector Quickstart
+========================================
 
 
 Synopsis
 --------
 
-This quickstart will show you how to setup the Scylla CDC Source Connector to replicate changes made in 
-a Scylla table using :doc:`Scylla CDC <../cdc/cdc-intro>`.
+This quickstart will show you how to setup the ScyllaDB CDC Source Connector to replicate changes made in 
+a ScyllaDB table using :doc:`ScyllaDB CDC <../cdc/cdc-intro>`.
 
-Scylla setup
-------------
+ScyllaDB setup
+--------------
 
-First, let's setup a Scylla cluster and create a CDC-enabled table.
+First, let's setup a ScyllaDB cluster and create a CDC-enabled table.
 
-Scylla installation
-^^^^^^^^^^^^^^^^^^^
+ScyllaDB installation
+^^^^^^^^^^^^^^^^^^^^^
 
-For the purpose of this quickstart, we will configure a Scylla instance using Docker. You can skip this 
-section if you have already installed Scylla. To learn more about installing Scylla in production
-environments, please refer to the :doc:`Install Scylla page </getting-started/install-scylla/index>`.
+For the purpose of this quickstart, we will configure a ScyllaDB instance using Docker. You can skip this 
+section if you have already installed ScyllaDB. To learn more about installing ScyllaDB in production
+environments, please refer to the :doc:`Install ScyllaDB page </getting-started/install-scylla/index>`.
 
-#. Using `Docker <https://hub.docker.com/r/scylladb/scylla/>`_, follow the instructions to launch Scylla.
+#. Using `Docker <https://hub.docker.com/r/scylladb/scylla/>`_, follow the instructions to launch ScyllaDB.
 #. Start the Docker container, replacing the ``--name`` and ``--host name`` parameters with your own information. For example:
 
    .. code-block:: bash
@@ -43,7 +43,7 @@ environments, please refer to the :doc:`Install Scylla page </getting-started/in
 Creating a CDC-enabled table
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Let's connect to your Scylla cluster and create a new CDC-enabled table. We will create an example table by 
+Let's connect to your ScyllaDB cluster and create a new CDC-enabled table. We will create an example table by 
 issuing the following CQL query and insert some example data:
 
 .. code-block:: cql
@@ -66,12 +66,12 @@ If you already have a table you wish to use, but it does not have CDC enabled, y
 
    ALTER TABLE keyspace.table_name with cdc = {'enabled': true};
 
-To learn more about Scylla CDC, visit :doc:`Change Data Capture (CDC) page <../cdc/index>`.
+To learn more about ScyllaDB CDC, visit :doc:`Change Data Capture (CDC) page <../cdc/index>`.
 
 Kafka setup
 -----------
 
-Scylla CDC Source Connector works well with both `open-source Kafka <https://kafka.apache.org/>`_ 
+ScyllaDB CDC Source Connector works well with both `open-source Kafka <https://kafka.apache.org/>`_ 
 and `Confluent Platform <https://www.confluent.io/>`_. In this quickstart we will show how
 to install the Confluent Platform and deploy the connector (applicable to both open-source Kafka
 and Confluent Platform).
@@ -87,10 +87,10 @@ If you are new to Confluent, `download Confluent Platform <https://www.confluent
 #. You will receive an email with instructions. Download / move the file to the desired location
 #. Continue with the setup following `this document <https://docs.confluent.io/current/quickstart/ce-quickstart.html#ce-quickstart>`_
 
-Installing Scylla CDC Source Connector
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Installing ScyllaDB CDC Source Connector
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-#. Download or build Scylla CDC Source Connector using `the project build instructions <https://github.com/scylladb/scylla-cdc-source-connector#building>`_
+#. Download or build ScyllaDB CDC Source Connector using `the project build instructions <https://github.com/scylladb/scylla-cdc-source-connector#building>`_
 
 #. Deploy the connector:
 
@@ -101,13 +101,13 @@ Installing Scylla CDC Source Connector
 Connector configuration
 -----------------------
 
-After you have successfully configured Scylla and Kafka, the next step is to configure the connector
+After you have successfully configured ScyllaDB and Kafka, the next step is to configure the connector
 and start it up.
 
 Configuration using Confluent Control Center
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-If you use Confluent Platform, the easiest way to configure and start up the Scylla CDC Source Connector
+If you use Confluent Platform, the easiest way to configure and start up the ScyllaDB CDC Source Connector
 is to use Confluent Control Center web interface.
 
 #. Open the Confluent Control Center. By default, it is started at port ``9021``:
@@ -145,15 +145,15 @@ is to use Confluent Control Center web interface.
    #. Name: the name of this configuration
    #. Key converter class, value converter class: converters that determine the format 
       of produced messages. You can read more about them at `Kafka Connect Deep Dive – Converters and Serialization Explained <https://www.confluent.io/blog/kafka-connect-deep-dive-converters-serialization-explained/>`_
-   #. Hosts: contact points of Scylla
-   #. Namespace: a unique name that identifies the Scylla cluster and that is used as a prefix for all schemas, topics.
+   #. Hosts: contact points of ScyllaDB
+   #. Namespace: a unique name that identifies the ScyllaDB cluster and that is used as a prefix for all schemas, topics.
    #. Table names: the names of CDC-enabled tables you want to replicate
 
    For the quickstart example here are the values we will use:
 
    #. Name: ``QuickstartConnector``
    #. Key converter class, value converter class: ``org.apache.kafka.connect.json.JsonConverter``
-   #. Hosts: ``172.17.0.2:9042`` (Scylla started in Docker)
+   #. Hosts: ``172.17.0.2:9042`` (ScyllaDB started in Docker)
    #. Namespace: ``QuickstartConnectorNamespace``
    #. Table names: ``quickstart_keyspace.orders``
 
@@ -197,4 +197,4 @@ Configuration using open-source Kafka
 Additional information
 ----------------------
 
-* `Scylla CDC Source Connector GitHub project <https://github.com/scylladb/scylla-cdc-source-connector>`_
+* `ScyllaDB CDC Source Connector GitHub project <https://github.com/scylladb/scylla-cdc-source-connector>`_

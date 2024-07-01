@@ -1,14 +1,14 @@
 Dropped (or truncated) Table (or keyspace) and Disk Space is not Reclaimed 
 ==========================================================================
 
-This troubleshooting guide describes what to do when Scylla keeps using disk space after a table or keyspaces are dropped or truncated.
+This troubleshooting guide describes what to do when ScyllaDB keeps using disk space after a table or keyspaces are dropped or truncated.
 
 Problem
 ^^^^^^^
 
 When performing a ``DROP`` or ``TRUNCATE`` operation on a table or keyspace, disk usage is not seen to be reduced.
 Usually this is verified by using an external utility like the ``du`` Linux command.
-This is caused by the fact that by default, Scylla creates a snapshot of every dropped table. Space won't be reclaimed until the snapshot is dropped.
+This is caused by the fact that by default, ScyllaDB creates a snapshot of every dropped table. Space won't be reclaimed until the snapshot is dropped.
 
 Solution
 ^^^^^^^^

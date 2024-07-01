@@ -14,7 +14,7 @@ When running any Nodetool command, users may see the following error:
 
 Analysis
 ^^^^^^^^
-Nodetool is a Java based application which requires memory. Scylla by default consumes 93% of the node’s RAM (for MemTables + Cache) and leaves 7% for other applications, such as nodetool.
+Nodetool is a Java based application which requires memory. ScyllaDB by default consumes 93% of the node’s RAM (for MemTables + Cache) and leaves 7% for other applications, such as nodetool.
 
 If cases where this is not enough memory (e.g. small instances with ~64GB RAM or lower), Nodetool may not be able to run due to insufficient memory. In this case an out of memory (OOM) error may appear and scylla-jmx will not run.
 
@@ -41,7 +41,7 @@ If the service is running you will see something similar to:
 .. code-block:: none
 
    sudo service scylla-jmx status
-   ● scylla-jmx.service - Scylla JMX
+   ● scylla-jmx.service - ScyllaDB JMX
       Loaded: loaded (/lib/systemd/system/scylla-jmx.service; disabled; vendor preset: enabled)
       Active: active (running) since Wed 2018-07-18 20:59:08 UTC; 3s ago
     Main PID: 256050 (scylla-jmx)
@@ -56,7 +56,7 @@ If it isn't, you will see an error similar to:
 .. code-block:: none
 
    sudo systemctl status scylla-jmx
-   ● scylla-jmx.service - Scylla JMX
+   ● scylla-jmx.service - ScyllaDB JMX
      Loaded: loaded (/usr/lib/systemd/system/scylla-jmx.service; disabled; vendor preset: disabled)
      Active: failed (Result: exit-code) since Thu 2018-05-10 10:34:15 EDT; 3min 47s ago
      Process: 1417 ExecStart=/usr/lib/scylla/jmx/scylla-jmx $SCYLLA_JMX_PORT $SCYLLA_API_PORT $SCYLLA_API_ADDR $SCYLLA_JMX_ADDR
@@ -101,7 +101,7 @@ There are two ways to fix this problem, one is faster but may not permanently fi
    * Ubuntu: ``/etc/default/scylla-server``. 
    * Red Hat/ CentOS: ``/etc/sysconfig/scylla-server`` 
 3. In the file you are editing, add to the ``SCYLLA_ARGS`` statement ``--reserve-memory 5G`` (the amount you calculated above). Save and exit.
-4. Restart Scylla server 
+4. Restart ScyllaDB server 
 
 .. code-block:: none
 

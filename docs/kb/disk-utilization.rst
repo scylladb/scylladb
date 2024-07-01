@@ -6,10 +6,10 @@ Snapshots and Disk Utilization
 
 **Learn: understand how nodetool snapshot utilizes disk space**
 
-**Audience: Scylla administrators**
+**Audience: ScyllaDB administrators**
 
 
-When you create a snapshot using :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>` command, Scylla is not going to copy existing SStables to the snapshot directory as one could have expected. Instead, it is going to create hard links to them. While this may seem trivial, what should be noted is the following:
+When you create a snapshot using :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>` command, ScyllaDB is not going to copy existing SStables to the snapshot directory as one could have expected. Instead, it is going to create hard links to them. While this may seem trivial, what should be noted is the following:
 
 * The snapshot disk space at first will start at zero and will grow to become equal to the size of the node data set when the snapshot was created. So at the beginning there will not be any significant increase in the disk space utilization.
 * While it may seem plausible to believe that the snapshot image is immediately created, the snapshot eventually grows to its expected size

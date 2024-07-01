@@ -19,7 +19,7 @@ Cluster Management Procedures
    rebuild-node
    Remove a DC <decommissioning-data-center>
    Clear Data <clear-data>
-   Add a Decommissioned Node Back to a Scylla Cluster <revoke-decommission>
+   Add a Decommissioned Node Back to a ScyllaDB Cluster <revoke-decommission>
    Remove a Seed Node from Seed List <remove-seed>
    Update Topology Strategy From Simple to Network <update-topology-strategy-from-simple-to-network>
    Safely Shutdown Your Cluster <safe-shutdown>

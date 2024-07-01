@@ -1,17 +1,17 @@
-==================================
-Using the perf utility with Scylla
-==================================
+====================================
+Using the perf utility with ScyllaDB
+====================================
 
 .. meta::
    :title:
    :description: Debugging or Diving into a Pegged Shard
    :keywords: perf, pegged shard, list processes, analyze perf issue
 
-This article contains useful tips & tricks for using the `perf` utility with Scylla.
+This article contains useful tips & tricks for using the `perf` utility with ScyllaDB.
 The `perf` utility is particularly useful when debugging a pegged shard.
 
 
-Due to its thread-per-core nature, looking at aggregates is rarely useful as it tends to hide bad behavior that is localized to specific CPUs. Looking at an individual CPU will make those anomalies easier to see. Once you notice that a Scylla shard requires investigation (for example, when the Scylla Monitor shard view shows that a particular shard is more loaded than others), you can use the ``seastar-cpu-map.sh`` script described :doc:`here </kb/map-cpu/>` to determine which Linux CPU hosts that Scylla shard. For example:
+Due to its thread-per-core nature, looking at aggregates is rarely useful as it tends to hide bad behavior that is localized to specific CPUs. Looking at an individual CPU will make those anomalies easier to see. Once you notice that a ScyllaDB shard requires investigation (for example, when the ScyllaDB Monitor shard view shows that a particular shard is more loaded than others), you can use the ``seastar-cpu-map.sh`` script described :doc:`here </kb/map-cpu/>` to determine which Linux CPU hosts that ScyllaDB shard. For example:
 .. code-block:: bash
 
    seastar-cpu-map.sh -n scylla -s 0
@@ -30,9 +30,9 @@ When is perf useful?
 
 `Perf`` is most useful when the CPU being probed runs at 100% utilization so that you can identify large chunks of execution time used by particular functions.
 
-Note that due to polling, Scylla will easily drive CPUs to 100% even when it is not bottlenecked. It will spin (poll) for some time, waiting for new requests. It tends to show in the perf reports as functions related to polling having high CPU time.
+Note that due to polling, ScyllaDB will easily drive CPUs to 100% even when it is not bottlenecked. It will spin (poll) for some time, waiting for new requests. It tends to show in the perf reports as functions related to polling having high CPU time.
 
-Perf can also be a useful tool when you suspect that something that shouldn’t be running is running. One example is systems with very high ``reactor_utilization`` (indicating non-polling work), where the Linux view of ``system`` CPU utilization is also high. It indicates that the Linux Kernel, not Scylla, is the main user of the CPU, so additional investigation is needed.
+Perf can also be a useful tool when you suspect that something that shouldn’t be running is running. One example is systems with very high ``reactor_utilization`` (indicating non-polling work), where the Linux view of ``system`` CPU utilization is also high. It indicates that the Linux Kernel, not ScyllaDB, is the main user of the CPU, so additional investigation is needed.
 
 perf top
 --------

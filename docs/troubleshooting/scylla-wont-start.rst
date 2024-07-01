@@ -9,7 +9,7 @@ The scylla process stopped hours ago and it won’t start
 How to Verify
 ^^^^^^^^^^^^^
 
-Possible cause: The Scylla process is managed by systemd, and systemd expects it to be able to fully start within a timeout. If this timeout is reached, systemd will kill the Scylla process and try to start it again. If that is the case, you will see the following message in the Scylla logs:
+Possible cause: The ScyllaDB process is managed by systemd, and systemd expects it to be able to fully start within a timeout. If this timeout is reached, systemd will kill the ScyllaDB process and try to start it again. If that is the case, you will see the following message in the ScyllaDB logs:
 
 .. code-block:: shell
 
