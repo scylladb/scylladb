@@ -4,16 +4,16 @@ Compaction
 
 This document gives a high level overview of Compaction, focusing on what compaction is, and how it works. There is a different document that covers the :doc:`CQL syntax </cql/compaction>` for setting a compaction strategy. There is also another document, :doc:`Compaction Strategy Matrix </architecture/compaction/compaction-strategies>`, that covers how to decide which strategy works best.
 
-How Scylla Writes Data
-----------------------
+How ScyllaDB Writes Data
+------------------------
 
-Scylla’s write path follows the well-known **Log Structured Merge (LSM)** design for efficient writes that are immediately available for reads. Scylla is not the first project to use this method. Popular projects to use this method include Lucene Search Engine, Google BigTable, and Apache Cassandra.
+ScyllaDB’s write path follows the well-known **Log Structured Merge (LSM)** design for efficient writes that are immediately available for reads. ScyllaDB is not the first project to use this method. Popular projects to use this method include Lucene Search Engine, Google BigTable, and Apache Cassandra.
 
-Scylla writes its updates to a :term:`memory table (MemTable)<MemTable>`, and when that becomes too big, it is flushed to a new file. This file is sorted to make it easy to search and later merge. This is why the tables are known as Sorted String Tables or :term:`SSTables<SSTable>`.
+ScyllaDB writes its updates to a :term:`memory table (MemTable)<MemTable>`, and when that becomes too big, it is flushed to a new file. This file is sorted to make it easy to search and later merge. This is why the tables are known as Sorted String Tables or :term:`SSTables<SSTable>`.
 
 .. image:: write-path-image-memtable-sstable.png
 
-In time, two major problems start to appear. First, data in one SSTable which is later modified or deleted in another SSTable wastes space as both tables are present in the system. Second, when data is split across many SSTables, read requests are processed slower as many SSTables need to be read. Scylla mitigates the second problem by using a bloom filter and other techniques to avoid reading from SSTables that do not include the desired partition. However, as the number of SSTables grows, inevitably so do the number of disk blocks from which we need to read on every read query. For these reasons, as soon as enough SSTables have accumulated, Scylla performs a :term:`compaction<Compaction>`.
+In time, two major problems start to appear. First, data in one SSTable which is later modified or deleted in another SSTable wastes space as both tables are present in the system. Second, when data is split across many SSTables, read requests are processed slower as many SSTables need to be read. ScyllaDB mitigates the second problem by using a bloom filter and other techniques to avoid reading from SSTables that do not include the desired partition. However, as the number of SSTables grows, inevitably so do the number of disk blocks from which we need to read on every read query. For these reasons, as soon as enough SSTables have accumulated, ScyllaDB performs a :term:`compaction<Compaction>`.
 
 
 Compaction Overview
@@ -24,17 +24,17 @@ Compaction merges several SSTables into new SSTable(s) which contain(s) only the
 There are two types of compactions:
 
 * Minor Compaction
-   Scylla automatically triggers a compaction of some SSTables, according to a :term:`compaction strategy<Compaction Strategy>` (as described below). This is the recommended method.
+   ScyllaDB automatically triggers a compaction of some SSTables, according to a :term:`compaction strategy<Compaction Strategy>` (as described below). This is the recommended method.
 
 * Major Compaction
    A user triggers (using nodetool) a compaction over all SSTables, merging the individual tables according to the selected compaction strategy.  
 
-.. caution:: It is always best to allow Scylla to automatically run minor compactions. Major compactions can exhaust resources, increase operational costs, and take up valuable disk space. This requires you to have 50% more disk space than your data unless you are using :ref:`Incremental compaction strategy (ICS) <incremental-compaction-strategy-ics>`. 
+.. caution:: It is always best to allow ScyllaDB to automatically run minor compactions. Major compactions can exhaust resources, increase operational costs, and take up valuable disk space. This requires you to have 50% more disk space than your data unless you are using :ref:`Incremental compaction strategy (ICS) <incremental-compaction-strategy-ics>`. 
 
 View Compaction Statistics
 --------------------------
 
-Scylla has tools you can use to see the status of your compactions. These include nodetool (:doc:`compactionhistory </operating-scylla/nodetool-commands/compactionhistory>`  and :doc:`compactionstats </operating-scylla/nodetool-commands/compactionstats>`)  and the Grafana dashboards which are part of the `Scylla Monitoring Stack <https://monitoring.docs.scylladb.com/>`_ which display the compaction statistics on a per cluster and per node basis.  Compaction errors can be seen in the `logs <https://manager.docs.scylladb.com/stable/config/scylla-manager-config.html>`_. 
+ScyllaDB has tools you can use to see the status of your compactions. These include nodetool (:doc:`compactionhistory </operating-scylla/nodetool-commands/compactionhistory>`  and :doc:`compactionstats </operating-scylla/nodetool-commands/compactionstats>`)  and the Grafana dashboards which are part of the `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/>`_ which display the compaction statistics on a per cluster and per node basis.  Compaction errors can be seen in the `logs <https://manager.docs.scylladb.com/stable/config/scylla-manager-config.html>`_. 
 
 Compaction strategy
 -------------------
@@ -111,7 +111,7 @@ Temporary Fallback to STCS
 
 When new data is written very quickly, the Leveled Compaction strategy may be temporarily unable to keep up with the demand. This can result in an accumulation of a large number of SSTables in L0 which in turn create very slow reads as all read requests read from all SSTables in L0. So as an emergency measure, when the number of SSTables in L0 grows to 32, LCS falls back to STCS to quickly reduce the number of SSTables in L0. Eventually, LCS will move this data again to fixed-sized SSTables in higher levels.
 
-Likewise, when :term:`bootstrapping<Bootstrap>` a new node, SSTables are streamed from other nodes. The level of the remote SSTable is kept to avoid many compactions until after the bootstrap is done. During the bootstrap, the new node receives regular write requests while it is streaming the data from the remote node. Just like any other write, these writes are flushed to L0. If Scylla did an LCS compaction on these L0 SSTables and created SSTables in higher level, this could have blocked the remote SSTables from going to the correct level (remember that SSTables in a run must not have overlapping key ranges). To remedy this from happening, Scylla compacts the tables using STCS only in L0 until the bootstrap process is complete. Once done, all resumes as normal under LCS.
+Likewise, when :term:`bootstrapping<Bootstrap>` a new node, SSTables are streamed from other nodes. The level of the remote SSTable is kept to avoid many compactions until after the bootstrap is done. During the bootstrap, the new node receives regular write requests while it is streaming the data from the remote node. Just like any other write, these writes are flushed to L0. If ScyllaDB did an LCS compaction on these L0 SSTables and created SSTables in higher level, this could have blocked the remote SSTables from going to the correct level (remember that SSTables in a run must not have overlapping key ranges). To remedy this from happening, ScyllaDB compacts the tables using STCS only in L0 until the bootstrap process is complete. Once done, all resumes as normal under LCS.
 
 .. _incremental-compaction-strategy-ics:
 
@@ -180,8 +180,8 @@ References
 
 * :doc:`How to Choose a Compaction Strategy </architecture/compaction/compaction-strategies>`.
 
-* `Blog: Scylla’s Compaction Strategies Series: Write Amplification in Leveled Compaction <https://www.scylladb.com/2018/01/31/compaction-series-leveled-compaction/>`_
+* `Blog: ScyllaDB’s Compaction Strategies Series: Write Amplification in Leveled Compaction <https://www.scylladb.com/2018/01/31/compaction-series-leveled-compaction/>`_
 
-* `Blog: Scylla’s Compaction Strategies Series: Space Amplification in Size-Tiered Compaction <https://www.scylladb.com/2018/01/17/compaction-series-space-amplification/>`_
+* `Blog: ScyllaDB’s Compaction Strategies Series: Space Amplification in Size-Tiered Compaction <https://www.scylladb.com/2018/01/17/compaction-series-space-amplification/>`_
 
 * Size Tiered: `Shrikant Bang’s Notes <https://shrikantbang.wordpress.com/2014/04/22/size-tiered-compaction-strategy-in-apache-cassandra/>`_ 

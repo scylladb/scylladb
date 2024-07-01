@@ -1,7 +1,7 @@
 Clients Table
 ==============
 
-This document describes how to work with Scylla's client table, which provides real-time information on CQL clients **currently** connected to the Scylla cluster.
+This document describes how to work with ScyllaDB's client table, which provides real-time information on CQL clients **currently** connected to the ScyllaDB cluster.
 
 Viewing - List Active CQL connections
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -31,6 +31,6 @@ port (CK)                                         Client's outgoing port number
 ------------------------------------------------  ---------------------------------------------------------------------------------
 username                                          Username - when Authentication is used
 ------------------------------------------------  ---------------------------------------------------------------------------------
-shard_id                                          Scylla node shard handing the connection
+shard_id                                          ScyllaDB node shard handing the connection
 ================================================  =================================================================================
 

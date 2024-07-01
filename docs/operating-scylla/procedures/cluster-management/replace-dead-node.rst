@@ -48,13 +48,13 @@ Login to one of the nodes in the cluster with the UN status. Collect the followi
   * cluster_name - ``cat /etc/scylla/scylla.yaml | grep cluster_name``
   * seeds - ``cat /etc/scylla/scylla.yaml | grep seeds:``
   * endpoint_snitch - ``cat /etc/scylla/scylla.yaml | grep endpoint_snitch``
-  * Scylla version - ``scylla --version``
+  * ScyllaDB version - ``scylla --version``
 
 ---------
 Procedure
 ---------
 
-#. Install Scylla on a new node, see :doc:`Getting Started</getting-started/index>` for further instructions. Follow the Scylla install procedure up to ``scylla.yaml`` configuration phase. Ensure that the Scylla version of the new node is identical to the other nodes in the cluster. 
+#. Install ScyllaDB on a new node, see :doc:`Getting Started</getting-started/index>` for further instructions. Follow the ScyllaDB install procedure up to ``scylla.yaml`` configuration phase. Ensure that the ScyllaDB version of the new node is identical to the other nodes in the cluster. 
 
    .. include:: /operating-scylla/procedures/cluster-management/_common/match_version.rst
 
@@ -62,7 +62,7 @@ Procedure
 
     - **cluster_name** - Set the selected cluster_name
  
-    - **listen_address** - IP address that Scylla uses to connect to other Scylla nodes in the cluster
+    - **listen_address** - IP address that ScyllaDB uses to connect to other ScyllaDB nodes in the cluster
 
     - **seeds** - Set the seed nodes
 
@@ -149,7 +149,7 @@ Procedure
        UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
        UN  192.168.1.204  124.42 KB  256     32.6%             655ae64d-e3fb-45cc-9792-2b648b151b67   B1 
 
-#. Run the ``nodetool repair`` command on the node that was replaced to make sure that the data is synced with the other nodes in the cluster. You can use `Scylla Manager <https://manager.docs.scylladb.com/>`_ to run the repair.
+#. Run the ``nodetool repair`` command on the node that was replaced to make sure that the data is synced with the other nodes in the cluster. You can use `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ to run the repair.
 
     .. note:: 
        When :doc:`Repair Based Node Operations (RBNO) <repair-based-node-operation>` for **replace** is enabled, there is no need to rerun repair.
@@ -166,7 +166,7 @@ In case you need to to restart (stop + start, not reboot) an instance with ephem
 
 In this case, the node's data will be cleaned after restart. To remedy this, you need to recreate the RAID again.
 
-#. Stop the Scylla server on the node you restarted. The rest of the commands will run on this node as well.
+#. Stop the ScyllaDB server on the node you restarted. The rest of the commands will run on this node as well.
 
    .. include:: /rst_include/scylla-commands-stop-index.rst
 
@@ -188,7 +188,7 @@ In this case, the node's data will be cleaned after restart. To remedy this, you
 
       sudo /opt/scylladb/scylla-machine-image/scylla_create_devices
 
-#. Start Scylla Server
+#. Start ScyllaDB Server
 
    .. include:: /rst_include/scylla-commands-start-index.rst
 

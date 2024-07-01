@@ -48,8 +48,8 @@ Getting Started
   :id: "getting-started"
   :class: my-panel
   
-  * :doc:`Migrate to ScyllaDB </using-scylla/migrate-scylla>` - How to migrate your current database to Scylla
-  * :doc:`Integrate with ScyllaDB </using-scylla/integrations/index>` - Integration solutions with Scylla
+  * :doc:`Migrate to ScyllaDB </using-scylla/migrate-scylla>` - How to migrate your current database to ScyllaDB
+  * :doc:`Integrate with ScyllaDB </using-scylla/integrations/index>` - Integration solutions with ScyllaDB
   
 
 .. panel-box::

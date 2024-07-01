@@ -20,7 +20,7 @@ We recommend using ScyllaDB drivers. All ScyllaDB drivers are shard-aware and pr
 benefits over third-party drivers.
 
 ScyllaDB supports the CQL binary protocol version 3, so any Apache Cassandra/CQL driver that implements 
-the same version works with Scylla.
+the same version works with ScyllaDB.
 
 The following table lists the available ScyllaDB drivers, specifying which support
 `ScyllaDB Cloud Serversless <https://cloud.docs.scylladb.com/stable/serverless/index.html>`_ 

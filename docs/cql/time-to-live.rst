@@ -7,7 +7,7 @@
 Expiring Data with Time to Live (TTL)
 -------------------------------------
 
-Scylla (as well as Apache Cassandra) provides the functionality to automatically delete expired data according to the Time to Live (or TTL) value.
+ScyllaDB (as well as Apache Cassandra) provides the functionality to automatically delete expired data according to the Time to Live (or TTL) value.
 TTL is measured in seconds. If the field is not updated within the TTL it is deleted.
 The TTL can be set when defining a Table (CREATE), or when using the INSERT and UPDATE  queries.
 The expiration works at the individual column level, which provides a lot of flexibility.
@@ -91,7 +91,7 @@ Notes
 * Notice that setting the TTL on a column using UPDATE or INSERT overrides the default_time_to_live set at the Table level. 
 * The TTL is determined by the coordinator node. When using TTL, make sure that all the nodes in the cluster have synchronized clocks. 
 * When using TTL for a table, consider using the TWCS compaction strategy. 
-* Scylla defines TTL on a per column basis, for non-primary key columns. It’s impossible to set the TTL for the entire row after an initial insert; instead, you can reinsert the row (which is actually an upsert). 
+* ScyllaDB defines TTL on a per column basis, for non-primary key columns. It’s impossible to set the TTL for the entire row after an initial insert; instead, you can reinsert the row (which is actually an upsert). 
 * TTL can not be defined for counter columns. 
 * To remove the TTL, set it to 0.
 
@@ -100,7 +100,7 @@ Notes
 Additional Information
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-To learn more about TTL, and see a hands-on example, check out `this lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_ on Scylla University.
+To learn more about TTL, and see a hands-on example, check out `this lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_ on ScyllaDB University.
 
 * :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 * :doc:`KB Article:How to Change gc_grace_seconds for a Table </kb/gc-grace-seconds/>`

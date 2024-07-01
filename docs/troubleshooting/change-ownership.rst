@@ -1,14 +1,14 @@
 ScyllaDB Fails to Start Due to Wrong Ownership Problems
 ========================================================
 
-In cases where a Scylla node fails to start because there is improper ownership, the following steps will help.
+In cases where a ScyllaDB node fails to start because there is improper ownership, the following steps will help.
 
 Phenomena
 ^^^^^^^^^
 
-Scylla node fails to start.
+ScyllaDB node fails to start.
 
-In cases where the Scylla node fails to start, check Scylla :doc:`logs </getting-started/logging/>`. If you see the following error message:
+In cases where the ScyllaDB node fails to start, check ScyllaDB :doc:`logs </getting-started/logging/>`. If you see the following error message:
 Could not access ``<PATH>: Permission denied std::system_error (error system:13, Permission denied)``.
 
 For example:
@@ -22,7 +22,7 @@ For example:
 Problem
 ^^^^^^^
 
-The data directories ``/var/lib/scylla/data`` and ``/var/lib/scylla/commitlog`` exist but are not owned by the Scylla user.
+The data directories ``/var/lib/scylla/data`` and ``/var/lib/scylla/commitlog`` exist but are not owned by the ScyllaDB user.
 
 For example:
 
@@ -58,11 +58,11 @@ Solution
    drwxr-xr-x 2 scylla scylla 4096 Jun 18 09:37 commitlog
    drwxr-xr-x 7 scylla scylla   97 Jun 18 09:37 data
 
-3. Start Scylla node.
+3. Start ScyllaDB node.
 
 .. include:: /rst_include/scylla-commands-start-index.rst
 
-4. Verify Scylla node is working 
+4. Verify ScyllaDB node is working 
 
 .. include:: /rst_include/scylla-commands-status-index.rst
 

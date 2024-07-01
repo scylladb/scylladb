@@ -17,7 +17,7 @@ Example 1
 ^^^^^^^^^^
 
 * 16 CPUs system.
-* You want to run Scylla on CPUs 3, 4, 5, and have IRQs handled on the same CPUs, while allowing other apps on the same machine to benefit 
+* You want to run ScyllaDB on CPUs 3, 4, 5, and have IRQs handled on the same CPUs, while allowing other apps on the same machine to benefit 
   from XFS/RFS/RPS from ``eth5``.
 
 **cpuset.conf:**
@@ -45,7 +45,7 @@ Example 2
 ^^^^^^^^^^
 
 * 16 CPUs system.
-* You want to run Scylla on CPUs 3, 4, 5, and have IRQs handled on the same CPUs, and Scylla is going to be the only application 
+* You want to run ScyllaDB on CPUs 3, 4, 5, and have IRQs handled on the same CPUs, and ScyllaDB is going to be the only application 
   that will use ``eth5``.
 
 **cpuset.conf:**
@@ -73,7 +73,7 @@ Example 3
 ^^^^^^^^^^
 
 * 16 CPUs system.
-* You want to run Scylla on CPUs 3, 4, 5, and IRQs handled on CPUs 6,7,8, while allowing other apps on the same machine to benefit 
+* You want to run ScyllaDB on CPUs 3, 4, 5, and IRQs handled on CPUs 6,7,8, while allowing other apps on the same machine to benefit 
   from XFS/RFS/RPS from ``eth5``.
 
 

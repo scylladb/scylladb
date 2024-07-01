@@ -146,7 +146,7 @@ valid ``timestamp`` values for  Mar 2, 2011, at 04:05:00 AM, GMT:
 
 The ``+0000`` above is an RFC 822 4-digit time zone specification; ``+0000`` refers to GMT. US Pacific Standard Time is
 ``-0800``. The time zone may be omitted if desired (``'2011-02-03 04:05:00'``), and if so, the date will be interpreted
-as being in the time zone under which the coordinating Scylla node is configured. However, there are difficulties
+as being in the time zone under which the coordinating ScyllaDB node is configured. However, there are difficulties
 inherent in relying on the time zone configuration as expected, so it is recommended that the time zone always be
 specified for timestamps when feasible.
 
@@ -317,7 +317,7 @@ old content, if any::
 
     UPDATE users SET favs = { 'fruit' : 'Banana' } WHERE id = 'jsmith';
 
-Note that Scylla does not distinguish an empty map from a missing value,
+Note that ScyllaDB does not distinguish an empty map from a missing value,
 thus assigning an empty map (``{}``) to a map is the same as deleting it.
 
 Further, maps support:
@@ -363,7 +363,7 @@ old content, if any::
 
     UPDATE images SET tags = { 'kitten', 'cat', 'lol' } WHERE name = 'cat.jpg';
 
-Note that Scylla does not distinguish an empty set from a missing value,
+Note that ScyllaDB does not distinguish an empty set from a missing value,
 thus assigning an empty set (``{}``) to a set is the same as deleting it.
 
 Further, sets support:
@@ -406,7 +406,7 @@ old content, if any::
 
     UPDATE plays SET scores = [ 3, 9, 4] WHERE id = '123-afde';
 
-Note that Scylla does not distinguish an empty list from a missing value,
+Note that ScyllaDB does not distinguish an empty list from a missing value,
 thus assigning an empty list (``[]``) to a list is the same as deleting it.
 
 Further, lists support:
@@ -469,7 +469,7 @@ Creating a new user-defined type is done using a ``CREATE TYPE`` statement defin
    field_definition: `identifier` `cql_type`
 
 A UDT has a name (``udt_name``), which is used to declare columns of that type and is a set of named and typed fields. The ``udt_name`` can be any
-type, including collections or other UDTs. UDTs and collections inside collections must always be frozen (no matter which version of Scylla you are using). 
+type, including collections or other UDTs. UDTs and collections inside collections must always be frozen (no matter which version of ScyllaDB you are using). 
 
 For example::
 
@@ -501,10 +501,10 @@ For example::
 
    - Attempting to create an already existing type will result in an error unless the ``IF NOT EXISTS`` option is used. If it is used, the statement will be a no-op if the type already exists.
    - A type is intrinsically bound to the keyspace in which it is created and can only be used in that keyspace. At creation, if the type name is prefixed by a keyspace name, it is created in that keyspace. Otherwise, it is created in the current keyspace.
-   - As of Scylla Open Source 3.2, UDTs not inside collections do not have to be frozen, but in all versions prior to Scylla Open Source 3.2, and in all Scylla Enterprise versions, UDTs **must** be frozen. 
+   - As of ScyllaDB Open Source 3.2, UDTs not inside collections do not have to be frozen, but in all versions prior to ScyllaDB Open Source 3.2, and in all ScyllaDB Enterprise versions, UDTs **must** be frozen. 
 
 
-A non-frozen UDT example with Scylla Open Source 3.2 and higher::
+A non-frozen UDT example with ScyllaDB Open Source 3.2 and higher::
 
    CREATE TYPE ut (a int, b int);
    CREATE TABLE cf (a int primary key, b ut);

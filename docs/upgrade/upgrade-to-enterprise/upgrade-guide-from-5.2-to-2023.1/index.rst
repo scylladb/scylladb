@@ -17,4 +17,4 @@ Upgrade - ScyllaDB 5.2 to ScyllaDB Enterprise 2023.1
 
 
   * :doc:`Upgrade ScyllaDB from 5.2.x to 2023.1.y <upgrade-guide-from-5.2-to-2023.1-generic>`
-  * :doc:`ScyllaDB Metrics Update - Scylla 5.2 to 2023.1 <metric-update-5.2-to-2023.1>`
+  * :doc:`ScyllaDB Metrics Update - ScyllaDB 5.2 to 2023.1 <metric-update-5.2-to-2023.1>`

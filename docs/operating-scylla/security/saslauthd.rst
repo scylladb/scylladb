@@ -1,10 +1,10 @@
 Configure SaslauthdAuthenticator
 --------------------------------
 
-Scylla can outsource authentication to a third-party utility named `saslauthd <https://linux.die.net/man/8/saslauthd>`_, which, in turn,supports many different authentication mechanisms.
-Scylla accomplishes this by providing a custom authenticator named SaslauthdAuthenticator.
+ScyllaDB can outsource authentication to a third-party utility named `saslauthd <https://linux.die.net/man/8/saslauthd>`_, which, in turn,supports many different authentication mechanisms.
+ScyllaDB accomplishes this by providing a custom authenticator named SaslauthdAuthenticator.
 This procedure explains how to install and configure it.
-Once configured, any login to Scylla is authenticated with the SaslauthdAuthenticator.
+Once configured, any login to ScyllaDB is authenticated with the SaslauthdAuthenticator.
 
 **Procedure**
 
@@ -56,8 +56,8 @@ Once configured, any login to Scylla is authenticated with the SaslauthdAuthenti
    * ``authenticator: com.scylladb.auth.SaslauthdAuthenticator``
    * ``saslauthd_socket_path: /path/to/the/mux``
 
-#. Restart the Scylla server.  From now on, Scylla will authenticate all login attempts via saslauthd.
+#. Restart the ScyllaDB server.  From now on, ScyllaDB will authenticate all login attempts via saslauthd.
 
    .. include:: /rst_include/scylla-commands-restart-index.rst
 
-#. Create Scylla roles which **match** the same roles in the LDAP server. To create a role, refer to the :ref:`CQL Reference <cql-security>` and the :doc:`RBAC example <rbac-usecase>`.
+#. Create ScyllaDB roles which **match** the same roles in the LDAP server. To create a role, refer to the :ref:`CQL Reference <cql-security>` and the :doc:`RBAC example <rbac-usecase>`.

@@ -1,6 +1,6 @@
-================
-Scylla Snapshots
-================
+==================
+ScyllaDB Snapshots
+==================
 
 .. your title should be something customers will search for.
 
@@ -8,30 +8,30 @@ Scylla Snapshots
 
 .. Give a subtopic for the title (User Management, Security, Drivers, Automation, Optimization, Schema management, Data Modeling, etc.)
 
-**Learn: What are Scylla snapshots? What are they used for? How do they get created and removed?**
+**Learn: What are ScyllaDB snapshots? What are they used for? How do they get created and removed?**
 
 
-**Audience: Scylla administrators**
+**Audience: ScyllaDB administrators**
 
-.. Choose (Application Developer, Scylla Administrator, Internal, All)
+.. Choose (Application Developer, ScyllaDB Administrator, Internal, All)
 
 Synopsis
 --------
 
-Snapshots in Scylla are an essential part of the :doc:`backup and restore mechanism </operating-scylla/procedures/backup-restore/index>`. Whereas in other databases a backup starts with creating a copy of a data file (cold backup, hot backup, shadow copy backup), in Scylla the process starts with creating a table or keyspace snapshot. The snapshots are created either automatically (this is described further in this article) or by invoking the :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>` command. 
+Snapshots in ScyllaDB are an essential part of the :doc:`backup and restore mechanism </operating-scylla/procedures/backup-restore/index>`. Whereas in other databases a backup starts with creating a copy of a data file (cold backup, hot backup, shadow copy backup), in ScyllaDB the process starts with creating a table or keyspace snapshot. The snapshots are created either automatically (this is described further in this article) or by invoking the :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>` command. 
 To prevent any issues with restoring your data, the backup strategy must include saving copies of the snapshots on a secondary storage. This makes sure the snapshot is available to restore if the primary storage fails.
 
-.. note:: If you come from RDBMS background you should not confuse snapshots with the notion of materialized views (as they are sometimes called snapshots in that area of technology). With Scylla, snapshots are `hard links <https://en.wikipedia.org/wiki/Hard_link>`_ to data files. :doc:`Materialized views </using-scylla/materialized-views>` do exist in Scylla but they are not called snapshots.
+.. note:: If you come from RDBMS background you should not confuse snapshots with the notion of materialized views (as they are sometimes called snapshots in that area of technology). With ScyllaDB, snapshots are `hard links <https://en.wikipedia.org/wiki/Hard_link>`_ to data files. :doc:`Materialized views </using-scylla/materialized-views>` do exist in ScyllaDB but they are not called snapshots.
 
 
 How Snapshots Work
 ------------------
 
-Scylla, like Cassandra, requires `Unix-like storage <https://en.wikipedia.org/wiki/Unix_filesystem?>`_ (such is also a file system supported by Linux). As mentioned above, snapshots are hard links to SSTables on disk. It is important to understand that SSTables are immutable and as such are not re-written in the same file. When data in database changes and data is written to disk, it is written as a new file. The new files are consolidated following compaction, which merges table’s data into one or more SSTable files (depending on the compaction strategy).
+ScyllaDB, like Cassandra, requires `Unix-like storage <https://en.wikipedia.org/wiki/Unix_filesystem?>`_ (such is also a file system supported by Linux). As mentioned above, snapshots are hard links to SSTables on disk. It is important to understand that SSTables are immutable and as such are not re-written in the same file. When data in database changes and data is written to disk, it is written as a new file. The new files are consolidated following compaction, which merges table’s data into one or more SSTable files (depending on the compaction strategy).
 
 If snapshots (hard links) were created to existing SSTables on disk they are preserved even if table data is eventually stored in one or more of the new SSTables. The :doc:`compaction process </cql/compaction>` removes files in the data directory, but the snapshot hard links **will still** be pointing to the **old files**. Only after all of the pointers are removed, the actual file is removed. If even one pointer exists, the file will remain. Therefore, even as the database is moving on, once the snapshot hard links are created, the content of the data files can be copied off to another storage and serve as the foundation for a table, keyspace, or entire database restore (on that node, as this backup and restore process is node specific). 
 
-Apart from *planned backup* procedure described above, and as a safeguard from *accidental* loss of data, the Scylla database includes an optional creation of an automatic snapshot every time a table is dropped or truncated.  As dropping a keyspace involves dropping tables within that keyspace, these actions will invoke auto snapshots as well. This option is enabled out of the box and is controlled by the auto_snapshot flag in the ``/etc/scylla/scylla.yaml`` configuration file. Note that a keyspace cannot be truncated. It can only be dropped. A table, on the other hand, can  be either truncated or dropped. The data in a table can also be deleted, which is different from being truncated.
+Apart from *planned backup* procedure described above, and as a safeguard from *accidental* loss of data, the ScyllaDB database includes an optional creation of an automatic snapshot every time a table is dropped or truncated.  As dropping a keyspace involves dropping tables within that keyspace, these actions will invoke auto snapshots as well. This option is enabled out of the box and is controlled by the auto_snapshot flag in the ``/etc/scylla/scylla.yaml`` configuration file. Note that a keyspace cannot be truncated. It can only be dropped. A table, on the other hand, can  be either truncated or dropped. The data in a table can also be deleted, which is different from being truncated.
 
 The default setting for the ``auto_snapshot`` flag in ``/etc/scylla/scylla.yaml`` file is ``true``. It is **not** recommended to set it to ``false``, unless there is a good backup and recovery strategy in place.
 

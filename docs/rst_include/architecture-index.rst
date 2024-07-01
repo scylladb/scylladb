@@ -1,1 +1,1 @@
-:doc:`Scylla Architecture </architecture/index/>`
+:doc:`ScyllaDB Architecture </architecture/index/>`

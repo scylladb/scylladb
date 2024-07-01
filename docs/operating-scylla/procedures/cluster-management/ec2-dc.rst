@@ -1,15 +1,15 @@
 Create a ScyllaDB Cluster on EC2 (Single or Multi Data Center)
 ===============================================================
 
-The easiest way to run a Scylla cluster on EC2 is by using `Scylla AMI <https://www.scylladb.com/download/?platform=aws>`_, which is Ubuntu-based. 
-To use a different OS or your own `AMI <https://en.wikipedia.org/wiki/Amazon_Machine_Image>`_ (Amazon Machine Image) or set up a multi DC Scylla cluster,
-you need to configure the Scylla cluster on your own. This page guides you through this process.
+The easiest way to run a ScyllaDB cluster on EC2 is by using `ScyllaDB AMI <https://www.scylladb.com/download/?platform=aws>`_, which is Ubuntu-based. 
+To use a different OS or your own `AMI <https://en.wikipedia.org/wiki/Amazon_Machine_Image>`_ (Amazon Machine Image) or set up a multi DC ScyllaDB cluster,
+you need to configure the ScyllaDB cluster on your own. This page guides you through this process.
 
-A Scylla cluster on EC2 can be deployed as a single-DC cluster or a multi-DC cluster. The table below describes how to configure parameters in the ``scylla.yaml`` file for each node in your cluster for both cluster types.
+A ScyllaDB cluster on EC2 can be deployed as a single-DC cluster or a multi-DC cluster. The table below describes how to configure parameters in the ``scylla.yaml`` file for each node in your cluster for both cluster types.
 
-For more information on Scylla AMI and the configuration of parameters in ``scylla.yaml`` from the EC2 user data, see `Scylla Machine Image <https://github.com/scylladb/scylla-machine-image>`_.
+For more information on ScyllaDB AMI and the configuration of parameters in ``scylla.yaml`` from the EC2 user data, see `ScyllaDB Machine Image <https://github.com/scylladb/scylla-machine-image>`_.
 
-The best practice is to use each EC2 region as a Scylla DC. In such a case, nodes communicate using Internal (Private) IPs inside the region and using External (Public) IPs between regions (Data Centers).
+The best practice is to use each EC2 region as a ScyllaDB DC. In such a case, nodes communicate using Internal (Private) IPs inside the region and using External (Public) IPs between regions (Data Centers).
 
 For further information, see `AWS instance addressing <http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-instance-addressing.html>`_.
 
@@ -52,17 +52,17 @@ Procedure
 #. Install ScyllaDB on the nodes you want to add to the cluster. See :doc:`Getting Started</getting-started/index>` for installation instructions and
    follow the procedure up to  the ``scylla.yaml`` configuration phase.
 
-   If the Scylla service is already running (for example, if you are using `Scylla AMI`_), stop it before moving to the next step by using :doc:`these instructions </operating-scylla/procedures/cluster-management/clear-data>`.
+   If the ScyllaDB service is already running (for example, if you are using `ScyllaDB AMI`_), stop it before moving to the next step by using :doc:`these instructions </operating-scylla/procedures/cluster-management/clear-data>`.
 
 #. On each node, edit the ``scylla.yaml`` file in ``/etc/scylla/`` to configure the parameters listed below. See the :ref:`table` above on how to configure your cluster.
 
      * **cluster_name** - Set the selected cluster_name.
-     * **seeds** - Specify the IP of the node you chose to be a seed node. See :doc:`Scylla Seed Nodes </kb/seed-nodes/>` for details.
-     * **listen_address** - IP address that Scylla used to connect to other Scylla nodes in the cluster.
+     * **seeds** - Specify the IP of the node you chose to be a seed node. See :doc:`ScyllaDB Seed Nodes </kb/seed-nodes/>` for details.
+     * **listen_address** - IP address that ScyllaDB used to connect to other ScyllaDB nodes in the cluster.
      * **endpoint_snitch** - Set the selected snitch.
      * **rpc_address** - Address for CQL client connection.
      * **broadcast_address** - The IP address a node tells other nodes in the cluster to contact it by.
-     * **broadcast_rpc_address** - Default: unset. The RPC address to broadcast to drivers and other Scylla nodes. It cannot be set to 0.0.0.0. If left blank, it will be set to the value of ``rpc_address``. If ``rpc_address`` is set to 0.0.0.0, ``broadcast_rpc_address`` must be explicitly configured.
+     * **broadcast_rpc_address** - Default: unset. The RPC address to broadcast to drivers and other ScyllaDB nodes. It cannot be set to 0.0.0.0. If left blank, it will be set to the value of ``rpc_address``. If ``rpc_address`` is set to 0.0.0.0, ``broadcast_rpc_address`` must be explicitly configured.
 
 #. Start the nodes.
 

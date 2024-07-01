@@ -13,7 +13,7 @@ Trying to count all rows in a table using
 may fail with the **ReadTimeout** error.
 
 COUNT() runs a full-scan query on all nodes, which might take a long time to finish. As a result, the count time may be greater than the ScyllaDB query timeout. 
-One way to prevent that issue in Scylla 4.4 or later is to increase the timeout for the query using the :ref:`USING TIMEOUT <using-timeout>` directive, for example:
+One way to prevent that issue in ScyllaDB 4.4 or later is to increase the timeout for the query using the :ref:`USING TIMEOUT <using-timeout>` directive, for example:
 
 
 .. code-block:: cql

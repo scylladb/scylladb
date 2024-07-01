@@ -1,14 +1,14 @@
-Scylla Memory Usage
-===================
+ScyllaDB Memory Usage
+=====================
 
-Scylla memory usage might be larger than the data set used.
+ScyllaDB memory usage might be larger than the data set used.
 
 For example:
 
-``The data size is 19GB, but Scylla uses 220G memory.``
+``The data size is 19GB, but ScyllaDB uses 220G memory.``
 
 
-Scylla uses available memory to cache your data. Scylla knows how to dynamically manage memory for optimal performance, for example, if many clients connect to Scylla, it will evict some data from the cache to make room for these connections, when the connection count drops again, this memory is returned to the cache.
+ScyllaDB uses available memory to cache your data. ScyllaDB knows how to dynamically manage memory for optimal performance, for example, if many clients connect to ScyllaDB, it will evict some data from the cache to make room for these connections, when the connection count drops again, this memory is returned to the cache.
 
 To limit the memory usage you can start scylla with ``--memory`` parameter.
 Alternatively, you can specify the amount of memory ScyllaDB should leave to the OS with ``--reserve-memory`` parameter. Keep in mind that the amount of memory left to the operating system needs to suffice external scylla modules, such as ``scylla-jmx``, which runs on top of JVM.

@@ -17,7 +17,7 @@ For example
 Problem
 ^^^^^^^
 
-One or more Scylla nodes have a schema mismatch.
+One or more ScyllaDB nodes have a schema mismatch.
 
 How to Verify
 ^^^^^^^^^^^^^

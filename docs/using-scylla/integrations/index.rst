@@ -1,6 +1,6 @@
-==================================
-Scylla Integrations and Connectors
-==================================
+====================================
+ScyllaDB Integrations and Connectors
+====================================
 
 
 .. toctree::
@@ -23,36 +23,36 @@ Scylla Integrations and Connectors
    integration-mindsdb
 
 .. panel-box::
-  :title: Scylla Integrations
+  :title: ScyllaDB Integrations
   :id: "getting-started"
   :class: my-panel
 
 
-  Scylla is Apache Cassandra compatible at the CQL binary protocol level, and any driver which uses CQL will work with Scylla (more :doc:`here </using-scylla/drivers/index>`). 
-  Any application which uses a CQL driver will work with Scylla.
+  ScyllaDB is Apache Cassandra compatible at the CQL binary protocol level, and any driver which uses CQL will work with ScyllaDB (more :doc:`here </using-scylla/drivers/index>`). 
+  Any application which uses a CQL driver will work with ScyllaDB.
 
-  The list below contains links to integration projects using Scylla with third-party projects. 
-  If you have tested your application with Scylla and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
+  The list below contains links to integration projects using ScyllaDB with third-party projects. 
+  If you have tested your application with ScyllaDB and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
 
 
-  * :doc:`Integrate Scylla with Spark <integration-spark>`
-  * :doc:`Integrate Scylla with KairosDB <integration-kairos>`
-  * :doc:`Integrate Scylla with Presto <integration-presto>`
-  * :doc:`Integrate Scylla with Elasticsearch <integration-elasticsearch>`
-  * :doc:`Integrate Scylla with Kubernetes <integration-k8>`
-  * :doc:`Integrate Scylla with JanusGraph <integration-janus>`
-  * :doc:`Integrate Scylla with DataDog <integration-datadog>`
-  * :doc:`Integrate Scylla with Apache Kafka <integration-kafka>`
-  * :doc:`Integrate Scylla with IOTA <integration-iota>`
-  * :doc:`Integrate Scylla with Spring <integration-spring>`
-  * :doc:`Install Scylla with Ansible <integration-ansible>`
-  * :doc:`Integrate Scylla with Databricks <integration-databricks>`
-  * :doc:`Integrate Scylla with Jaeger Server <integration-jaeger>`
-  * :doc:`Integrate Scylla with MindsDB <integration-mindsdb>`
+  * :doc:`Integrate ScyllaDB with Spark <integration-spark>`
+  * :doc:`Integrate ScyllaDB with KairosDB <integration-kairos>`
+  * :doc:`Integrate ScyllaDB with Presto <integration-presto>`
+  * :doc:`Integrate ScyllaDB with Elasticsearch <integration-elasticsearch>`
+  * :doc:`Integrate ScyllaDB with Kubernetes <integration-k8>`
+  * :doc:`Integrate ScyllaDB with JanusGraph <integration-janus>`
+  * :doc:`Integrate ScyllaDB with DataDog <integration-datadog>`
+  * :doc:`Integrate ScyllaDB with Apache Kafka <integration-kafka>`
+  * :doc:`Integrate ScyllaDB with IOTA <integration-iota>`
+  * :doc:`Integrate ScyllaDB with Spring <integration-spring>`
+  * :doc:`Install ScyllaDB with Ansible <integration-ansible>`
+  * :doc:`Integrate ScyllaDB with Databricks <integration-databricks>`
+  * :doc:`Integrate ScyllaDB with Jaeger Server <integration-jaeger>`
+  * :doc:`Integrate ScyllaDB with MindsDB <integration-mindsdb>`
 
 .. panel-box::
-  :title: Scylla Connectors
+  :title: ScyllaDB Connectors
   :id: "getting-started"
   :class: my-panel
 
-  * :doc:`Scylla Kafka Sink Connector </using-scylla/integrations/sink-kafka-connector/>`
+  * :doc:`ScyllaDB Kafka Sink Connector </using-scylla/integrations/sink-kafka-connector/>`

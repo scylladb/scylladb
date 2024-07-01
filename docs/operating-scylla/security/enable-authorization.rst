@@ -3,19 +3,19 @@ Enable Authorization
 ====================
 
 
-Authorization is the process by where users are granted permissions, which entitle them to access or change data on specific keyspaces, tables, or an entire datacenter. Authorization for Scylla is done internally within Scylla and is not done with a third party such as LDAP or OAuth. Granting permissions to users requires the use of a role such as Database Administrator and requires a user who has been :doc:`authenticated </operating-scylla/security/authentication>`. 
+Authorization is the process by where users are granted permissions, which entitle them to access or change data on specific keyspaces, tables, or an entire datacenter. Authorization for ScyllaDB is done internally within ScyllaDB and is not done with a third party such as LDAP or OAuth. Granting permissions to users requires the use of a role such as Database Administrator and requires a user who has been :doc:`authenticated </operating-scylla/security/authentication>`. 
 
-Authorization is enabled using the authorizer setting in scylla.yaml. Scylla has two authorizers available:
+Authorization is enabled using the authorizer setting in scylla.yaml. ScyllaDB has two authorizers available:
 
 * ``AllowAllAuthorizer`` (default setting) - which performs no checking and so effectively grants all permissions to all roles. This must be used if AllowAllAuthenticator is the configured :doc:`authenticator </operating-scylla/security/authentication>`.
 
-* ``CassandraAuthorizer`` - which implements permission management functionality and stores its data in Scylla system tables.
+* ``CassandraAuthorizer`` - which implements permission management functionality and stores its data in ScyllaDB system tables.
 
 
 .. note:: Once Authorization is enabled, **all users must**:
 
    * Have :ref:`roles <roles>` and permissions (set by a DBA with :ref:`superuser <superuser>` credentials) configured.
-   * Use a user/password to :ref:`connect <access>` to Scylla.
+   * Use a user/password to :ref:`connect <access>` to ScyllaDB.
 
 Enabling Authorization
 ----------------------
@@ -100,7 +100,7 @@ In this example, you are creating a user (``db_user``) who can access with passw
 Clients Resume Access with New Permissions
 ..........................................
 
-1. Restart Scylla. As each node restarts and clients reconnect, the enforcement of the granted permissions will begin.
+1. Restart ScyllaDB. As each node restarts and clients reconnect, the enforcement of the granted permissions will begin.
 
 .. include:: /rst_include/scylla-commands-restart-index.rst
 

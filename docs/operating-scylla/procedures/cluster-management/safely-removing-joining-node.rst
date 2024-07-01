@@ -4,7 +4,7 @@ Safely Remove a Joining Node
 
 Sometimes when adding a node to the cluster, it gets stuck in a JOINING state (UJ) and never completes the process to an Up-Normal (UN) state. The only solution is to remove the node. As long as the node did not join the cluster, meaning it never went into UN state, you can stop this node, clean its data, and try again.
 
-1. Run the :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>` command (Scylla stops listening to its connections from the client and other nodes).
+1. Run the :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>` command (ScyllaDB stops listening to its connections from the client and other nodes).
 
 2. Stop the node
 

@@ -18,8 +18,8 @@ ScyllaDB Architecture
 * :doc:`ScyllaDB Ring Architecture </architecture/ringarchitecture/index/>` - High-Level view of ScyllaDB Ring Architecture
 * :doc:`ScyllaDB Fault Tolerance </architecture/architecture-fault-tolerance>` - Deep dive into ScyllaDB Fault Tolerance
 * :doc:`Consistency Level Console Demo </architecture/console-CL-full-demo>` - Console Demos of Consistency Level Settings
-* :doc:`Scylla Anti-Entropy </architecture/anti-entropy/index/>` - High-Level view of Scylla Anti-Entropy
-* :doc:`SSTable </architecture/sstable/index/>` - Scylla SSTable 2.0 and 3.0 Format Information
+* :doc:`ScyllaDB Anti-Entropy </architecture/anti-entropy/index/>` - High-Level view of ScyllaDB Anti-Entropy
+* :doc:`SSTable </architecture/sstable/index/>` - ScyllaDB SSTable 2.0 and 3.0 Format Information
 * :doc:`Compaction Strategies </architecture/compaction/compaction-strategies>` - High-level analysis of different compaction strategies
 * :doc:`Raft Consensus Algorithm in ScyllaDB </architecture/raft>` - Overview of how Raft is implemented in ScyllaDB.
 

@@ -1,4 +1,4 @@
-* :doc:`How to Report a Scylla Problem </troubleshooting/report-scylla-problem/>`
+* :doc:`How to Report a ScyllaDB Problem </troubleshooting/report-scylla-problem/>`
 
 * :doc:`SSTable Corruption Problem </troubleshooting/sstable-corruption/>`
 
@@ -10,13 +10,13 @@
 
 * :doc:`Toubelshoot Monitoring </operating-scylla/monitoring/index/>`
 
-* :doc:`Troubleshooting guide for Scylla Manager and Scylla Monitoring integration </troubleshooting/manager-monitoring-integration/>`
+* :doc:`Troubleshooting guide for ScyllaDB Manager and ScyllaDB Monitoring integration </troubleshooting/manager-monitoring-integration/>`
 
-* :doc:`Scylla Fails to Start Due to Wrong Ownership Problems </troubleshooting/change-ownership/>`
+* :doc:`ScyllaDB Fails to Start Due to Wrong Ownership Problems </troubleshooting/change-ownership/>`
 
-* :doc:`Scylla Large Partitions Table </troubleshooting/large-partition-table/>`
+* :doc:`ScyllaDB Large Partitions Table </troubleshooting/large-partition-table/>`
 
-* :doc:`Scylla Large Rows and Cells Tables </troubleshooting/large-rows-large-cells-tables/>`  
+* :doc:`ScyllaDB Large Rows and Cells Tables </troubleshooting/large-rows-large-cells-tables/>`  
 
 * :doc:`Large Partitions Hunting </troubleshooting/debugging-large-partition/>`
 
@@ -32,14 +32,14 @@
 
 * :doc:`How to Change Log Level in Runtime </troubleshooting/log-level/>`
 
-* :doc:`Scylla will not Start </troubleshooting/scylla-wont-start/>`
+* :doc:`ScyllaDB will not Start </troubleshooting/scylla-wont-start/>`
 
 * :doc:`Cluster Timeouts </troubleshooting/timeouts>`
 
 * :doc:`Time Range Queries Do Not Return Some or All of the Data </troubleshooting/time-zone>`
 
-* :doc:`A change in EPEL broke Scylla Python Script </troubleshooting/python-error-no-module-named-yaml>`
+* :doc:`A change in EPEL broke ScyllaDB Python Script </troubleshooting/python-error-no-module-named-yaml>`
 
 * :doc:`Node Joined With No Data </troubleshooting/node-joined-without-any-data>`
 
-* :doc:`Scylla Manager is reporting REST API status of healthy nodes as down </troubleshooting/reverse-dns-sshd>`
+* :doc:`ScyllaDB Manager is reporting REST API status of healthy nodes as down </troubleshooting/reverse-dns-sshd>`

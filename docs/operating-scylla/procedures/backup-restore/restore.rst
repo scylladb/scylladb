@@ -53,7 +53,7 @@ Repeat the following steps for each node in the cluster:
 
    ``sudo rm -rf /var/lib/scylla/commitlog/*``
 
-#. Delete all the files in the keyspace_name_table. Note that by default the snapshots are created under Scylla data directory ``/var/lib/scylla/data/keyspace_name/table_name-UUID/``.
+#. Delete all the files in the keyspace_name_table. Note that by default the snapshots are created under ScyllaDB data directory ``/var/lib/scylla/data/keyspace_name/table_name-UUID/``.
 
    Make sure NOT to delete the existing snapshots in the process.
 
@@ -68,7 +68,7 @@ Repeat the following steps for each node in the cluster:
       -rw-r--r-- 4 scylla   scylla     10 Mar  5 08:46 nba-team_players-ka-1-Digest.sha1
       -rw-r--r-- 1 scylla   scylla     24 Mar  5 09:19 nba-team_players-ka-1-Filter.db
       -rw-r--r-- 1 scylla   scylla    218 Mar  5 09:19 nba-team_players-ka-1-Index.db
-      -rw-r--r-- 1 scylla   scylla     38 Mar  5 09:19 nba-team_players-ka-1-Scylla.db
+      -rw-r--r-- 1 scylla   scylla     38 Mar  5 09:19 nba-team_players-ka-1-ScyllaDB.db
       -rw-r--r-- 1 scylla   scylla   4446 Mar  5 09:19 nba-team_players-ka-1-Statistics.db
       -rw-r--r-- 1 scylla   scylla     89 Mar  5 09:19 nba-team_players-ka-1-Summary.db
       -rw-r--r-- 4 scylla   scylla    101 Mar  5 08:46 nba-team_players-ka-1-TOC.txt

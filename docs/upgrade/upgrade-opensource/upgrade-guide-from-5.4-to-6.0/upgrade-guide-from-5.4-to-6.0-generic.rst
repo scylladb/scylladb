@@ -28,7 +28,7 @@
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: Scylla Metrics Update - Scylla 5.4 to 6.0
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 5.4 to 6.0
 .. _SCYLLA_METRICS: ../metric-update-5.4-to-6.0
 
 =============================================================================
@@ -315,7 +315,7 @@ ScyllaDB rollback is a rolling procedure that does **not** require full cluster 
 For each of the nodes you rollback to |SRC_VERSION|, serially (i.e., one node 
 at a time), you will:
 
-* Drain the node and stop Scylla
+* Drain the node and stop ScyllaDB
 * Retrieve the old ScyllaDB packages
 * Restore the configuration file
 * Reload systemd configuration

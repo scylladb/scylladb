@@ -1,10 +1,10 @@
-Scylla consistency quiz for administrators
-==========================================
+ScyllaDB consistency quiz for administrators
+============================================
 **Topic: Architecture and development**
 
-**Learn: Understanding consistency in Scylla: a quiz**
+**Learn: Understanding consistency in ScyllaDB: a quiz**
 
-**Audience: Scylla administrators**
+**Audience: ScyllaDB administrators**
 
 Q: When you run ``nodetool decommission`` to remove a node…
 

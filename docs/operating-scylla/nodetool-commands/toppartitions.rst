@@ -19,7 +19,7 @@ table      The table name
 duration   The duration in milliseconds
 =========  ============================
 
-Additional parameters from Scylla 4.6
+Additional parameters from ScyllaDB 4.6
 
 ==========  ===================================
 Parameter   Description
@@ -37,7 +37,7 @@ For example:
 
    nodetool toppartitions nba team_roster 5000
 
-For Example (Starting from Scylla 4.6):
+For Example (Starting from ScyllaDB 4.6):
 
 * listing the top partitions from *all* tables in *all* keyspaces ``nodetool toppartitions``
 * listing the top partitions for the last 1000 ms ``nodetool toppartitions -d 1000``
@@ -47,7 +47,7 @@ For Example (Starting from Scylla 4.6):
 
 .. note::
 
-   In Scylla 4.6, **duration** parameter requires a *-d* prefix
+   In ScyllaDB 4.6, **duration** parameter requires a *-d* prefix
   
 
 Example output:
@@ -88,7 +88,7 @@ Output
 =============  =============================================================================================
 Parameter      Description
 =============  =============================================================================================
-Partition      The Partition Key, prefixed by the Keyspace and table (ks:cf) for Scylla 4.6 and later
+Partition      The Partition Key, prefixed by the Keyspace and table (ks:cf) for ScyllaDB 4.6 and later
 -------------  ---------------------------------------------------------------------------------------------
 Count          The number of operations of the specified type that occurred during the specified time period
 -------------  ---------------------------------------------------------------------------------------------

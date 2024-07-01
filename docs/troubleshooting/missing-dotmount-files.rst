@@ -54,7 +54,7 @@ To restore ``/etc/systemd/system/var-lib-scylla.mount``, run the following (spec
    $ UUID=`blkid -s UUID -o value <specify your data disk, eg: /dev/md0>`
    $ cat << EOS | sudo tee /etc/systemd/system/var-lib-scylla.mount
    [Unit]
-   Description=Scylla data directory
+   Description=ScyllaDB data directory
    Before=scylla-server.service
    After=local-fs.target
    DefaultDependencies=no

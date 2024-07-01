@@ -1,14 +1,14 @@
-================================
-Integrate Scylla with Databricks
-================================
+==================================
+Integrate ScyllaDB with Databricks
+==================================
 
-Scylla is Apache Cassandra compatible at the CQL binary protocol level, and any driver which uses CQL will work with Scylla (more :doc:`here </using-scylla/drivers/index>`). Any application which uses a CQL driver will work with Scylla, for example, Databricks Spark cluster. 
+ScyllaDB is Apache Cassandra compatible at the CQL binary protocol level, and any driver which uses CQL will work with ScyllaDB (more :doc:`here </using-scylla/drivers/index>`). Any application which uses a CQL driver will work with ScyllaDB, for example, Databricks Spark cluster. 
 
 Resource list
 -------------
 Although your requirements may be different, this example uses the following resources:
 
-* Scylla cluster
+* ScyllaDB cluster
 * Databricks account
 
 Integration instructions
@@ -16,7 +16,7 @@ Integration instructions
 
 **Before you begin** 
 
-Verify that you have installed Scylla and know the Scylla server IP address. 
+Verify that you have installed ScyllaDB and know the ScyllaDB server IP address. 
 Make sure you have a connection on port 9042:
 
 .. code-block:: none
@@ -52,7 +52,7 @@ Spark config:
 
 **Test case**
 
-1. Prepare test data [Scylla]: 
+1. Prepare test data [ScyllaDB]: 
 
 .. code-block:: none
 

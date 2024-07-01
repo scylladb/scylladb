@@ -116,7 +116,7 @@ You can read more about the ``TIMESTAMP`` retrieved by ``WRITETIME`` in the :ref
 
 - ``TTL`` retrieves the remaining time to live (in *seconds*) for the value of the column, if it set to expire, or ``null`` otherwise.
 
-You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this Scylla University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_. 
+You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this ScyllaDB University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_. 
 
 .. _where-clause:
 
@@ -240,7 +240,7 @@ Limiting results
 ~~~~~~~~~~~~~~~~
 
 The ``LIMIT`` option to a ``SELECT`` statement limits the number of rows returned by a query, while the ``PER PARTITION
-LIMIT``  option (introduced in Scylla 3.1) limits the number of rows returned for a given **partition** by the query. Note that both types of limit can be
+LIMIT``  option (introduced in ScyllaDB 3.1) limits the number of rows returned for a given **partition** by the query. Note that both types of limit can be
 used in the same statement.
 
 Examples:
@@ -359,7 +359,7 @@ Then the following queries are valid::
     SELECT * FROM users;
     SELECT * FROM users WHERE birth_year = 1981;
 
-because in both cases, Scylla guarantees that these queries' performance will be proportional to the amount of data
+because in both cases, ScyllaDB guarantees that these queries' performance will be proportional to the amount of data
 returned. In particular, if no users were born in 1981, then the second query performance will not depend on the number
 of user profiles stored in the database (not directly at least: due to secondary index implementation consideration, this
 query may still depend on the number of nodes in the cluster, which indirectly depends on the amount of data stored.
@@ -371,7 +371,7 @@ However, the following query will be rejected::
 
     SELECT * FROM users WHERE birth_year = 1981 AND country = 'FR';
 
-because Scylla cannot guarantee that it won't have to scan a large amount of data even if the result of those queries is
+because ScyllaDB cannot guarantee that it won't have to scan a large amount of data even if the result of those queries is
 small. Typically, it will scan all the index entries for users born in 1981 even if only a handful are actually from
 France. However, if you “know what you are doing”, you can force the execution of this query by using ``ALLOW
 FILTERING`` and so the following query is valid::
@@ -409,7 +409,7 @@ Bypass Cache
 The ``BYPASS CACHE`` clause on SELECT statements informs the database that the data being read is unlikely to be read again in the near future, and also was unlikely to have been read in the near past; therefore, no attempt should be made to read it from the cache or to populate the cache with the data. This is mostly useful for range scans; these typically process large amounts of data with no temporal locality and do not benefit from the cache.
 The clause is placed immediately after the optional ALLOW FILTERING clause.
 
-``BYPASS CACHE`` is a Scylla CQL extension and not part of Apache Cassandra CQL.
+``BYPASS CACHE`` is a ScyllaDB CQL extension and not part of Apache Cassandra CQL.
 
 For example::
   
@@ -429,14 +429,14 @@ For example::
   SELECT * FROM users USING TIMEOUT 5s;
   SELECT name, occupation FROM users WHERE userid IN (199, 200, 207) BYPASS CACHE USING TIMEOUT 200ms;
 
-``USING TIMEOUT`` is a Scylla CQL extension and not part of Apache Cassandra CQL.
+``USING TIMEOUT`` is a ScyllaDB CQL extension and not part of Apache Cassandra CQL.
 
 .. _like-operator:
 
 LIKE Operator
 ~~~~~~~~~~~~~
 
-The ``LIKE`` operation on ``SELECT`` statements informs Scylla that you are looking for a pattern match. The expression ‘column LIKE pattern’ yields true only if the entire column value matches the pattern.   
+The ``LIKE`` operation on ``SELECT`` statements informs ScyllaDB that you are looking for a pattern match. The expression ‘column LIKE pattern’ yields true only if the entire column value matches the pattern.   
  
 The search pattern is a string of characters with two wildcards, as shown:
 
@@ -454,15 +454,15 @@ For example, consider the search pattern 'M%n' - this will match ``Martin``, but
  
 A query can find all values containing some text fragment by matching to an appropriate ``LIKE`` pattern.
 
-**Differences Between Scylla and Cassandra LIKE Operators**
+**Differences Between ScyllaDB and Cassandra LIKE Operators**
 
-* In Apache Cassandra, you must create a SASI index to use LIKE. Scylla supports LIKE as a regular filter.
-* Consequently, Scylla LIKE will be less performant than Apache Cassandra LIKE for some workloads.
-* Scylla treats underscore (_) as a wildcard; Cassandra doesn't.
-* Scylla treats percent (%) as a wildcard anywhere in the pattern; Cassandra only at the beginning/end
-* Scylla interprets backslash (\\) as an escape character; Cassandra doesn't.
-* Cassandra allows case-insensitive LIKE; Scylla doesn't (see `#4911 <https://github.com/scylladb/scylla/issues/4911>`_).
-* Scylla allows empty LIKE pattern; Cassandra doesn't.
+* In Apache Cassandra, you must create a SASI index to use LIKE. ScyllaDB supports LIKE as a regular filter.
+* Consequently, ScyllaDB LIKE will be less performant than Apache Cassandra LIKE for some workloads.
+* ScyllaDB treats underscore (_) as a wildcard; Cassandra doesn't.
+* ScyllaDB treats percent (%) as a wildcard anywhere in the pattern; Cassandra only at the beginning/end
+* ScyllaDB interprets backslash (\\) as an escape character; Cassandra doesn't.
+* Cassandra allows case-insensitive LIKE; ScyllaDB doesn't (see `#4911 <https://github.com/scylladb/scylla/issues/4911>`_).
+* ScyllaDB allows empty LIKE pattern; Cassandra doesn't.
 
 **Example A**
  

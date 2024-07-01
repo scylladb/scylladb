@@ -43,9 +43,9 @@ of eventual consistency on an event of a timestamp collision:
 nodes proceed without coordination. Eventually cell values
 supplied by a statement with the highest timestamp will prevail (see :ref:`update ordering <update-ordering>`).
 
-Unless a timestamp is provided by the client, Scylla will automatically
+Unless a timestamp is provided by the client, ScyllaDB will automatically
 generate a timestamp with microsecond precision for each
-column assigned by ``INSERT``. Scylla ensures timestamps created
+column assigned by ``INSERT``. ScyllaDB ensures timestamps created
 by the same node are unique. Timestamps assigned at different
 nodes are not guaranteed to be globally unique.
 With a steadily high write rate timestamp collision

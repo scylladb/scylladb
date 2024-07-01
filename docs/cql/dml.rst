@@ -29,7 +29,7 @@ parameters:
   :ref:`INSERT <insert-statement>`, :ref:`UPDATE <update-statement>`, :ref:`DELETE <delete_statement>`, or :ref:`BATCH <batch_statement>`
   statements ``USING TIMESTAMP`` should provide a unique timestamp value, similar to the one
   implicitly set by the coordinator by default, when the `USING TIMESTAMP` update parameter is absent.
-  Scylla ensures that query timestamps created by the same coordinator node are unique (even across different shards
+  ScyllaDB ensures that query timestamps created by the same coordinator node are unique (even across different shards
   on the same node). However, timestamps assigned at different nodes are not guaranteed to be globally unique.
   Note that with a steadily high write rate, timestamp collision is not unlikely. If it happens, e.g. two INSERTS
   have the same timestamp, a conflict resolution algorithm determines which of the inserted cells prevails (see :ref:`update ordering <update-ordering>` for more information):
@@ -38,7 +38,7 @@ parameters:
   the columns themselves. This means that any subsequent update of the column will also reset the TTL (to whatever TTL
   is specified in that update). By default, values never expire. A TTL of 0 is equivalent to no TTL. If the table has a
   default_time_to_live, a TTL of 0 will remove the TTL for the inserted or updated values. A TTL of ``null`` is equivalent
-  to inserting with a TTL of 0. You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this Scylla University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_.
+  to inserting with a TTL of 0. You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this ScyllaDB University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_.
 - ``TIMEOUT``: specifies a timeout duration for the specific request.
   Please refer to the :ref:`SELECT <using-timeout>` section for more information.
 
@@ -76,7 +76,7 @@ reach different results, reading from different replicas would detect the incons
 read-repair that will generate yet another cell that would still conflict with the existing cells,
 with no guarantee for convergence.
 
-Therefore, Scylla implements an internal, consistent conflict-resolution algorithm
+Therefore, ScyllaDB implements an internal, consistent conflict-resolution algorithm
 that orders cells with conflicting ``TIMESTAMP`` values based on other properties, like:
 
 * whether the cell is a tombstone or a live cell,
@@ -84,7 +84,7 @@ that orders cells with conflicting ``TIMESTAMP`` values based on other propertie
 * the cell ``TTL``,
 * and finally, what value the cell carries.
 
-The conflict-resolution algorithm is documented in `Scylla's internal documentation <https://github.com/scylladb/scylladb/blob/master/docs/dev/timestamp-conflict-resolution.md>`_
+The conflict-resolution algorithm is documented in `ScyllaDB's internal documentation <https://github.com/scylladb/scylladb/blob/master/docs/dev/timestamp-conflict-resolution.md>`_
 and it may be subject to change.
 
 Reliable serialization can be achieved using unique write ``TIMESTAMP``

@@ -4,7 +4,7 @@ Encryption: Data in Transit Node to Node
 Communication between all or some nodes can be encrypted. The controlling parameter is :code:`server_encryption_options`.
 
 Once enabled, all communication between the nodes is transmitted over TLS/SSL.
-The libraries used by Scylla for OpenSSL are FIPS 140-2 certified.
+The libraries used by ScyllaDB for OpenSSL are FIPS 140-2 certified.
 
 To build a self-signed certificate chain, see :doc:`generating a self-signed certificate chain using openssl </operating-scylla/security/generate-certificate/>`.
 
@@ -23,7 +23,7 @@ To build a self-signed certificate chain, see :doc:`generating a self-signed cer
 
    * ``certificate`` - A PEM format certificate, either self-signed, or provided by a certificate authority (CA).
    * ``keyfile`` - The corresponding PEM format key for the certificate.
-   * ``truststore`` - Optional path to a PEM format certificate store of trusted CAs. If not provided, Scylla will attempt to use the system trust store to authenticate certificates.
+   * ``truststore`` - Optional path to a PEM format certificate store of trusted CAs. If not provided, ScyllaDB will attempt to use the system trust store to authenticate certificates.
    * ``certficate_revocation_list`` - The path to a PEM-encoded certificate revocation list (CRL) - a list of issued certificates that have been revoked before their expiration date.
    * ``require_client_auth`` - Set to ``True`` to require client side authorization. ``False`` by default.
    * ``priority_string`` - Specifies session's handshake algorithms and options to use. By default there are none.
@@ -41,7 +41,7 @@ To build a self-signed certificate chain, see :doc:`generating a self-signed cer
           certficate_revocation_list: <path to a PEM-encoded CRL file> (optional)
 
 
-#. Restart Scylla node to apply the changes.
+#. Restart ScyllaDB node to apply the changes.
 
    .. include:: /rst_include/scylla-commands-restart-index.rst
 

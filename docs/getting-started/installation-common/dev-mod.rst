@@ -1,7 +1,7 @@
 ScyllaDB Developer Mode
 ========================
 
-If you want to use Scylla in developer mode you need to use the command below (using root privileges)
+If you want to use ScyllaDB in developer mode you need to use the command below (using root privileges)
 
 ``sudo scylla_dev_mode_setup --developer-mode 1``
 

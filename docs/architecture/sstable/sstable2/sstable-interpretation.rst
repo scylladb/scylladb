@@ -10,8 +10,8 @@ SSTable Interpretation
 **Audience: Devops professionals, architects**
 
 The SSTables Data File contains rows of data. This document discusses
-how to interpret the various fields described in :doc:`SSTables Data File </architecture/sstable/sstable2/sstable-data-file/>` in the context of Scylla, and how to
-convert this data into Scylla's native data structure:
+how to interpret the various fields described in :doc:`SSTables Data File </architecture/sstable/sstable2/sstable-data-file/>` in the context of ScyllaDB, and how to
+convert this data into ScyllaDB's native data structure:
 **mutation\_partition**.
 
 SSTable Rows
@@ -28,7 +28,7 @@ As we'll explain below when discussing clustering columns, the best term
 for what we read from one row in the SSTable isn't a "row", but rather a
 **partition**.
 
-For these reasons, Scylla's internal representation for a row we read
+For these reasons, ScyllaDB's internal representation for a row we read
 from the SSTable is called ``class mutation_partition``.
 
 Column Names
@@ -38,8 +38,8 @@ As explained in :doc:`SSTables Data File </architecture/sstable/sstable2/sstable
 sstable row (a mutation partition) is a list of *cells* (column values).
 Each cell is preceded by the full column name. This was considered a
 good idea when Apache Cassandra was designed to support rows with many and
-arbitrary columns, but Scylla is more oriented toward the CQL use case
-with a known schema. So Scylla's rows do not store the full column name,
+arbitrary columns, but ScyllaDB is more oriented toward the CQL use case
+with a known schema. So ScyllaDB's rows do not store the full column name,
 but rather store a numeric ID which points to the known list of columns
 from the schema. So as we read column names from the SSTable in form of IDs, 
 we need to translate the IDs into names by looking them up in the schema.
@@ -103,7 +103,7 @@ is not actually an empty string, but a composite with one empty
 component, **()** (serialized on disk as ``'\000 \000 \000'``).
 
 I hope we can simply ignore these CQL Row Marker cells, and not
-duplicate them in Scylla's internal format. We just need a different way
+duplicate them in ScyllaDB's internal format. We just need a different way
 to allow empty rows (a row with only a key, but no data columns) to
 exist, to circumvent the problems mentioned in CASSANDRA-4361 and the
 comment in UpdateStatement.Java.
@@ -152,7 +152,7 @@ column names, but rather the *value* of the clustering column nick, and
 only the last component, "age", is an actual name of a field from the
 CQL schema.
 
-In Scylla nomenclature, this single **partition** (with key
+In ScyllaDB nomenclature, this single **partition** (with key
 name="nadav") has multiple **rows**, each with a different value of the
 clustering key (nick). Each of these rows has, as usual, columns whose
 names are the fields from the CQL schema (and as explained above, are
@@ -220,7 +220,7 @@ So sstables have static columns specially marked by an empty first
 component of the composite cell name. We need to verify that each such
 cell actually corresponds to a known static column from the table's
 schema, and collect all these static columns into one row
-(``_static_row``) stored in Scylla's ``mutation_partition``.
+(``_static_row``) stored in ScyllaDB's ``mutation_partition``.
 
 TODO: CompositeType.java explains that static columns do not really have
 an empty first component (size 0), but rather the first component has
@@ -436,7 +436,7 @@ operations, and negative for prepend operations. This ensures that, for
 example, a later append always sorts after an earlier append - without
 the append having to know which items already exist in the list.
 
-Scylla's internal storage of a collection in a mutation is the
+ScyllaDB's internal storage of a collection in a mutation is the
 ``class collection_mutation``, and we need to convert the above
 described representation into that class. TODO: I still can't figure out
 exactly what is the internal structure of our collection\_mutation

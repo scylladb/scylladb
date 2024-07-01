@@ -1,4 +1,4 @@
-* :doc:`Scylla Security Checklist </operating-scylla/security/security-checklist/>`
+* :doc:`ScyllaDB Security Checklist </operating-scylla/security/security-checklist/>`
 * :doc:`Enable Authentication </operating-scylla/security/authentication/>`
 * :doc:`Enable and Disable Authentication Without Downtime </operating-scylla/security/runtime-authentication/>`
 * :doc:`Reset Authenticator Password </troubleshooting/password-reset/>`

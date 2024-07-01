@@ -30,7 +30,7 @@ Login to one of the nodes in the cluster with (UN) status, collect the following
 * cluster_name - ``cat /etc/scylla/scylla.yaml | grep cluster_name``
 * seeds - ``cat /etc/scylla/scylla.yaml | grep seeds:``
 * endpoint_snitch - ``cat /etc/scylla/scylla.yaml | grep endpoint_snitch``
-* Scylla version - ``scylla --version``
+* ScyllaDB version - ``scylla --version``
 
 Procedure
 ---------

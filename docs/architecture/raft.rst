@@ -67,7 +67,7 @@ version. Please consult the upgrade guide.
 The Raft upgrade procedure requires **full cluster availability** to correctly setup the Raft algorithm; after the setup finishes, Raft can proceed with only a majority of nodes, but this initial setup is an exception.
 An unlucky event, such as a hardware failure, may cause one of your nodes to fail. If this happens before the Raft upgrade procedure finishes, the procedure will get stuck and your intervention will be required.
 
-To verify that the procedure finishes, look at the log of every Scylla node (using ``journalctl _COMM=scylla``). Search for the following patterns:
+To verify that the procedure finishes, look at the log of every ScyllaDB node (using ``journalctl _COMM=scylla``). Search for the following patterns:
 
 * ``Starting internal upgrade-to-raft procedure`` denotes the start of the procedure,
 * ``Raft upgrade finished`` denotes the end.
@@ -252,6 +252,6 @@ Learn More About Raft
 ----------------------
 * `The Raft Consensus Algorithm <https://raft.github.io/>`_
 * `Achieving NoSQL Database Consistency with Raft in ScyllaDB <https://www.scylladb.com/tech-talk/achieving-nosql-database-consistency-with-raft-in-scylla/>`_ - A tech talk by Konstantin Osipov
-* `Making Schema Changes Safe with Raft <https://www.scylladb.com/presentations/making-schema-changes-safe-with-raft/>`_ - A Scylla Summit talk by Konstantin Osipov (register for access)
-* `The Future of Consensus in ScyllaDB 5.0 and Beyond <https://www.scylladb.com/presentations/the-future-of-consensus-in-scylladb-5-0-and-beyond/>`_ - A Scylla Summit talk by Tomasz Grabiec (register for access)
+* `Making Schema Changes Safe with Raft <https://www.scylladb.com/presentations/making-schema-changes-safe-with-raft/>`_ - A ScyllaDB Summit talk by Konstantin Osipov (register for access)
+* `The Future of Consensus in ScyllaDB 5.0 and Beyond <https://www.scylladb.com/presentations/the-future-of-consensus-in-scylladb-5-0-and-beyond/>`_ - A ScyllaDB Summit talk by Tomasz Grabiec (register for access)
 

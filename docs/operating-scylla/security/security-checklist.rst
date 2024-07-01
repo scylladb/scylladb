@@ -1,18 +1,18 @@
 ScyllaDB Security Checklist
 =============================
-The Scylla Security checklist is a list of security recommendations that should be implemented to protect your Scylla cluster.
+The ScyllaDB Security checklist is a list of security recommendations that should be implemented to protect your ScyllaDB cluster.
 
 
 Enable Authentication
 ~~~~~~~~~~~~~~~~~~~~~
 
-:doc:`Authentication </operating-scylla/security/authentication/>` is a security step to verify the identity of a client. When enabled, Scylla requires all clients to authenticate themselves to determine their access to the cluster.
+:doc:`Authentication </operating-scylla/security/authentication/>` is a security step to verify the identity of a client. When enabled, ScyllaDB requires all clients to authenticate themselves to determine their access to the cluster.
 
 
 Enable Authorization
 ~~~~~~~~~~~~~~~~~~~~~
 
-:doc:`Authorization </operating-scylla/security/enable-authorization/>` is a security step to verify the granted permissions of a client. When enabled, Scylla will check all clients for their access permissions to the cluster objects(keyspaces, tables).
+:doc:`Authorization </operating-scylla/security/enable-authorization/>` is a security step to verify the granted permissions of a client. When enabled, ScyllaDB will check all clients for their access permissions to the cluster objects(keyspaces, tables).
 
 
 Role Base Access
@@ -29,7 +29,7 @@ Role-Based Access Control (:doc:`RBAC</operating-scylla/security/rbac-usecase/>`
 Encryption on Transit, Client to Node and Node to Node
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Encryption on Transit protects your communication against a 3rd interception on the network connection.
-Configure Scylla to use TLS/SSL for all the connections. Use TLS/SSL to encrypt communication between Scylla nodes and client applications.
+Configure ScyllaDB to use TLS/SSL for all the connections. Use TLS/SSL to encrypt communication between ScyllaDB nodes and client applications.
 
 .. only:: enterprise
 
@@ -52,15 +52,15 @@ See `Encryption at Rest <https://enterprise.docs.scylladb.com/stable/operating-s
 
 Reduce the Network Exposure
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Ensure that Scylla runs in a trusted network environment.
-A best practice is to maintain a list of ports used by Scylla and to monitor them to ensure that only trusted clients access those network interfaces and ports.
+Ensure that ScyllaDB runs in a trusted network environment.
+A best practice is to maintain a list of ports used by ScyllaDB and to monitor them to ensure that only trusted clients access those network interfaces and ports.
 The diagram below shows a single datacenter cluster deployment, with the list of ports used for each connection type. You should periodically check to make sure that only these ports are open and that they are open to relevant IPs only.
 Most of the ports' settings are configurable in the scylla.yaml file.
-Also, see the list of ports used by Scylla.
+Also, see the list of ports used by ScyllaDB.
 
 .. image:: Scylla-Ports2.png
 
-The Scylla ports are detailed in the table below. For Scylla Manager ports, see the `Scylla Manager Documentation <https://manager.docs.scylladb.com>`_.
+The ScyllaDB ports are detailed in the table below. For ScyllaDB Manager ports, see the `ScyllaDB Manager Documentation <https://manager.docs.scylladb.com>`_.
 
 .. include:: /operating-scylla/_common/networking-ports.rst
 
@@ -72,10 +72,10 @@ Audit System Activity
 
 Auditing is available in `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_.
 
-Using the `auditing feature <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/auditing.html>`_ allows the administrator to know “who did / looked at / changed what and when.” It also allows logging some or all the activities a user performs on the Scylla cluster.
+Using the `auditing feature <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/auditing.html>`_ allows the administrator to know “who did / looked at / changed what and when.” It also allows logging some or all the activities a user performs on the ScyllaDB cluster.
 
 General Recommendations
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-* Update your cluster with the latest Scylla version.
+* Update your cluster with the latest ScyllaDB version.
 * Make sure to update your Operating System, and libraries are up to date.

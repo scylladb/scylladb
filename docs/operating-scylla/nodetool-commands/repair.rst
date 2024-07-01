@@ -16,7 +16,7 @@ To repair **all** of the data in the cluster, you need to run a repair on **all*
   It is strongly recommended to **not** do **any** maintenance operations (add/remove/decommission/replace/rebuild) **or** schema changes (CREATE/DROP/TRUNCATE/ALTER CQL commands) while repairs are running. Repairs running during any of these operations are likely ro result in an error.
 
 
-Scylla nodetool repair command supports the following options:
+ScyllaDB nodetool repair command supports the following options:
                                                                                                          
 
 - ``-dc`` ``--in-dc`` syncs the **repair master** data subset between all nodes in one Data Center (DC). 
