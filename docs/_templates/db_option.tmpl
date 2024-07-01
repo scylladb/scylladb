@@ -2,5 +2,5 @@
 {{ description | readable_desc_rst }}
 
    {% if type %}* **Type:** ``{{ type }}``{% endif %}
-   {% if default %}* **Default value:** ``{{ default }}``{% endif %}
+   {% if default %}* **Default value:** ``{{ default | readable_default(type) }}``{% endif %}
    {% if liveness %}* :term:`Liveness <Liveness>`: ``{{ liveness }}``{% endif %}
