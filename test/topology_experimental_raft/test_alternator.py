@@ -19,6 +19,10 @@ import logging
 import time
 import boto3
 import botocore
+import threading
+import random
+
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
@@ -180,3 +184,82 @@ async def test_alternator_ttl_scheduling_group(alternator3):
     assert ratio < 0.1
 
     table.delete()
+
+# Since boto3 doesn't support asyncio, we end up using threads in the
+# test below. Unfortunately by default Python threads print their exceptions
+# (e.g., assertion failures) but don't propagate them to the join(), so the
+# overall test doesn't fail. The following Thread wrapper causes join() to
+# rethrow the exception, so the test will fail.
+class ThreadWrapper(threading.Thread):
+    def run(self):
+        try:
+            self.ret = self._target(*self._args, **self._kwargs)
+        except BaseException as e:
+            self.exception = e
+    def join(self, timeout=None):
+        super().join(timeout)
+        if hasattr(self, 'exception'):
+            raise self.exception
+        return self.ret
+
+@pytest.mark.xfail(reason="#16261")
+async def test_alternator_concurrent_rmw_same_partition_different_server(alternator3):
+    """A reproducer for issue #16261: When sending RMW (read-modify-write)
+       operations to the same partition (different item) on different server
+       nodes (coordinators), our LWT implementation can reach an
+       "uncertainty" situation where it doesn't know whether the update
+       succceeded or passed, and returns a failure (InternalServerError)
+       almost immediately, not after a cas_contention_timeout_in_ms timeout
+       (1 second).
+    """
+    manager, alternator, *_ = alternator3
+    ips = [server.ip_addr for server in await manager.running_servers()]
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH' },
+            {'AttributeName': 'c', 'KeyType': 'RANGE' },
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'N' },
+            {'AttributeName': 'c', 'AttributeType': 'N' },
+        ])
+
+    # All threads write to one partition 1, each to a different item
+    # in that partition (its clustering key is the thread's number).
+    # Each update gets sent to a random node (we have 3 nodes in ips).
+    nthreads = 3
+    def run_rmw(i):
+        rand = random.Random()
+        rand.seed(i)
+        alternators = [get_alternator(ip) for ip in ips]
+        # In about 1/10 runs, just one write from each thread is enough
+        # to elicit the error. But if I want to get the error in almost
+        # every run, I need to repeat the write more times, until two
+        # of the writes collide and cause the bug.
+        for n in range(150):
+            alternator_i = rand.randrange(len(alternators))
+            alternator = alternators[alternator_i]
+            tbl = alternator.Table(table.name)
+            start = time.time()
+            try:
+                tbl.update_item(Key={'p': 1, 'c': i},
+                    UpdateExpression='SET v = if_not_exists(v, :init) + :incr',
+                    ExpressionAttributeValues={':init': 0, ':incr': 1})
+            except ClientError:
+                # The "raise" will cause this thread to fail, and eventually
+                # the join() and therefore the whole test will fail. We also
+                # print the time it took for the failure, because it
+                # demonstrates that issue #16261 involves an immediate
+                # error (in less than 20ms), NOT a normal timeout.
+                print(f"In incrementing 1,{i} on node {alternator_i}: error after {time.time()-start}")
+                raise
+
+    threads = [ThreadWrapper(target=run_rmw, args=(i,)) for i in range(nthreads)]
+    for t in threads:
+        t.start()
+    try:
+        for t in threads:
+            t.join()
+    finally:
+        table.delete()
