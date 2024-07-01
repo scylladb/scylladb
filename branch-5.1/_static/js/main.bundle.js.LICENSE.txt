@@ -1,0 +1,348 @@
+/*!
+   * Sizzle CSS Selector Engine v2.3.6
+   * https://sizzlejs.com/
+   *
+   * Copyright JS Foundation and other contributors
+   * Released under the MIT license
+   * https://js.foundation/
+   *
+   * Date: 2021-02-16
+   */
+
+/*!
+ * jQuery JavaScript Library v3.6.0
+ * https://jquery.com/
+ *
+ * Includes Sizzle.js
+ * https://sizzlejs.com/
+ *
+ * Copyright OpenJS Foundation and other contributors
+ * Released under the MIT license
+ * https://jquery.org/license
+ *
+ * Date: 2021-03-02T17:08Z
+ */
+
+/*! ../foundation.abide */
+
+/*! ../foundation.accordion */
+
+/*! ../foundation.accordionMenu */
+
+/*! ../foundation.core */
+
+/*! ../foundation.core.utils */
+
+/*! ../foundation.drilldown */
+
+/*! ../foundation.dropdown */
+
+/*! ../foundation.dropdownMenu */
+
+/*! ../foundation.equalizer */
+
+/*! ../foundation.interchange */
+
+/*! ../foundation.magellan */
+
+/*! ../foundation.offcanvas */
+
+/*! ../foundation.orbit */
+
+/*! ../foundation.responsiveAccordionTabs */
+
+/*! ../foundation.responsiveMenu */
+
+/*! ../foundation.responsiveToggle */
+
+/*! ../foundation.reveal */
+
+/*! ../foundation.slider */
+
+/*! ../foundation.smoothScroll */
+
+/*! ../foundation.sticky */
+
+/*! ../foundation.tabs */
+
+/*! ../foundation.toggler */
+
+/*! ../foundation.tooltip */
+
+/*! ../foundation.util.box */
+
+/*! ../foundation.util.imageLoader */
+
+/*! ../foundation.util.keyboard */
+
+/*! ../foundation.util.mediaQuery */
+
+/*! ../foundation.util.motion */
+
+/*! ../foundation.util.nest */
+
+/*! ../foundation.util.timer */
+
+/*! ../foundation.util.touch */
+
+/*! ../foundation.util.triggers */
+
+/*! ./foundation.accordion */
+
+/*! ./foundation.accordionMenu */
+
+/*! ./foundation.core.plugin */
+
+/*! ./foundation.core.utils */
+
+/*! ./foundation.drilldown */
+
+/*! ./foundation.dropdownMenu */
+
+/*! ./foundation.positionable */
+
+/*! ./foundation.smoothScroll */
+
+/*! ./foundation.tabs */
+
+/*! ./foundation.util.box */
+
+/*! ./foundation.util.imageLoader */
+
+/*! ./foundation.util.keyboard */
+
+/*! ./foundation.util.mediaQuery */
+
+/*! ./foundation.util.motion */
+
+/*! ./foundation.util.nest */
+
+/*! ./foundation.util.timer */
+
+/*! ./foundation.util.touch */
+
+/*! ./foundation.util.triggers */
+
+/*! /Users/joeworkman/Development/foundation-sites/js/entries/foundation.js */
+
+/*! exports provided: Abide */
+
+/*! exports provided: Accordion */
+
+/*! exports provided: AccordionMenu */
+
+/*! exports provided: Box */
+
+/*! exports provided: Drilldown */
+
+/*! exports provided: Dropdown */
+
+/*! exports provided: DropdownMenu */
+
+/*! exports provided: Equalizer */
+
+/*! exports provided: Foundation */
+
+/*! exports provided: Foundation, CoreUtils, Box, onImagesLoaded, Keyboard, MediaQuery, Motion, Nest, Timer, Touch, Triggers, Abide, Accordion, AccordionMenu, Drilldown, Dropdown, DropdownMenu, Equalizer, Interchange, Magellan, OffCanvas, Orbit, ResponsiveMenu, ResponsiveToggle, Reveal, Slider, SmoothScroll, Sticky, Tabs, Toggler, Tooltip, ResponsiveAccordionTabs, default */
+
+/*! exports provided: Interchange */
+
+/*! exports provided: Keyboard */
+
+/*! exports provided: Magellan */
+
+/*! exports provided: MediaQuery */
+
+/*! exports provided: Move, Motion */
+
+/*! exports provided: Nest */
+
+/*! exports provided: OffCanvas */
+
+/*! exports provided: Orbit */
+
+/*! exports provided: Plugin */
+
+/*! exports provided: Positionable */
+
+/*! exports provided: ResponsiveAccordionTabs */
+
+/*! exports provided: ResponsiveMenu */
+
+/*! exports provided: ResponsiveToggle */
+
+/*! exports provided: Reveal */
+
+/*! exports provided: Slider */
+
+/*! exports provided: SmoothScroll */
+
+/*! exports provided: Sticky */
+
+/*! exports provided: Tabs */
+
+/*! exports provided: Timer */
+
+/*! exports provided: Toggler */
+
+/*! exports provided: Tooltip */
+
+/*! exports provided: Touch */
+
+/*! exports provided: Triggers */
+
+/*! exports provided: onImagesLoaded */
+
+/*! exports provided: rtl, GetYoDigits, RegExpEscape, transitionend, onLoad, ignoreMousedisappear */
+
+/*! jquery */
+
+/*! no static exports found */
+
+/*!*******************************!*\
+  !*** ./js/foundation.core.js ***!
+  \*******************************/
+
+/*!*******************************!*\
+  !*** ./js/foundation.tabs.js ***!
+  \*******************************/
+
+/*!********************************!*\
+  !*** ./js/foundation.abide.js ***!
+  \********************************/
+
+/*!********************************!*\
+  !*** ./js/foundation.orbit.js ***!
+  \********************************/
+
+/*!*********************************!*\
+  !*** ./js/foundation.reveal.js ***!
+  \*********************************/
+
+/*!*********************************!*\
+  !*** ./js/foundation.slider.js ***!
+  \*********************************/
+
+/*!*********************************!*\
+  !*** ./js/foundation.sticky.js ***!
+  \*********************************/
+
+/*!**********************************!*\
+  !*** ./js/entries/foundation.js ***!
+  \**********************************/
+
+/*!**********************************!*\
+  !*** ./js/foundation.toggler.js ***!
+  \**********************************/
+
+/*!**********************************!*\
+  !*** ./js/foundation.tooltip.js ***!
+  \**********************************/
+
+/*!***********************************!*\
+  !*** ./js/foundation.dropdown.js ***!
+  \***********************************/
+
+/*!***********************************!*\
+  !*** ./js/foundation.magellan.js ***!
+  \***********************************/
+
+/*!***********************************!*\
+  !*** ./js/foundation.util.box.js ***!
+  \***********************************/
+
+/*!************************************!*\
+  !*** ./js/foundation.accordion.js ***!
+  \************************************/
+
+/*!************************************!*\
+  !*** ./js/foundation.drilldown.js ***!
+  \************************************/
+
+/*!************************************!*\
+  !*** ./js/foundation.equalizer.js ***!
+  \************************************/
+
+/*!************************************!*\
+  !*** ./js/foundation.offcanvas.js ***!
+  \************************************/
+
+/*!************************************!*\
+  !*** ./js/foundation.util.nest.js ***!
+  \************************************/
+
+/*!*************************************!*\
+  !*** ./js/foundation.core.utils.js ***!
+  \*************************************/
+
+/*!*************************************!*\
+  !*** ./js/foundation.util.timer.js ***!
+  \*************************************/
+
+/*!*************************************!*\
+  !*** ./js/foundation.util.touch.js ***!
+  \*************************************/
+
+/*!**************************************!*\
+  !*** ./js/foundation.core.plugin.js ***!
+  \**************************************/
+
+/*!**************************************!*\
+  !*** ./js/foundation.interchange.js ***!
+  \**************************************/
+
+/*!**************************************!*\
+  !*** ./js/foundation.util.motion.js ***!
+  \**************************************/
+
+/*!***************************************!*\
+  !*** ./js/foundation.dropdownMenu.js ***!
+  \***************************************/
+
+/*!***************************************!*\
+  !*** ./js/foundation.positionable.js ***!
+  \***************************************/
+
+/*!***************************************!*\
+  !*** ./js/foundation.smoothScroll.js ***!
+  \***************************************/
+
+/*!****************************************!*\
+  !*** ./js/foundation.accordionMenu.js ***!
+  \****************************************/
+
+/*!****************************************!*\
+  !*** ./js/foundation.util.keyboard.js ***!
+  \****************************************/
+
+/*!****************************************!*\
+  !*** ./js/foundation.util.triggers.js ***!
+  \****************************************/
+
+/*!****************************************!*\
+  !*** multi ./js/entries/foundation.js ***!
+  \****************************************/
+
+/*!*****************************************!*\
+  !*** ./js/foundation.responsiveMenu.js ***!
+  \*****************************************/
+
+/*!******************************************!*\
+  !*** ./js/foundation.util.mediaQuery.js ***!
+  \******************************************/
+
+/*!*******************************************!*\
+  !*** ./js/foundation.responsiveToggle.js ***!
+  \*******************************************/
+
+/*!*******************************************!*\
+  !*** ./js/foundation.util.imageLoader.js ***!
+  \*******************************************/
+
+/*!**************************************************!*\
+  !*** ./js/foundation.responsiveAccordionTabs.js ***!
+  \**************************************************/
+
+/*!********************************************************************************************!*\
+  !*** external {"root":["jQuery"],"amd":"jquery","commonjs":"jquery","commonjs2":"jquery"} ***!
+  \********************************************************************************************/
