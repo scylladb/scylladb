@@ -892,6 +892,7 @@ public:
     virtual sstables::shared_sstable make_sstable() const override { return do_make_sstable(); }
     virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return do_configure_writer(std::move(origin)); }
     virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
+    virtual bool memtable_has_key(const dht::decorated_key& key) const override { return false; }
     virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override { return make_ready_future<>(); }
     virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
