@@ -30,6 +30,9 @@ namespace db {
 namespace cql3 {
     class query_processor;
 }
+namespace service {
+    class storage_service;
+}
 
 namespace qos {
 /**
@@ -144,14 +147,25 @@ public:
     void abort_group0_operations();
 
     /**
-     * Check the distributed data for changes in a constant interval and updates
+     * Start legacy update loop if RAFT_SERVICE_LEVELS_CHANGE feature is not enabled yet 
+     * or the cluster is in recovery mode
+     * or the cluster hasn't been migrated to raft topology.
+     *
+     * The update loop check the distributed data 
+     * for changes in a constant interval and updates
      * the service_levels configuration in accordance (adds, removes, or updates
      * service levels as necessary).
      * @param interval_f - lambda function which returns a interval in milliseconds.
                            The interval is time to check the distributed data.
      * @return a future that is resolved when the update loop stops.
      */
-    void update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f);
+    void maybe_start_legacy_update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f, service::storage_service& storage_service, service::raft_group0_client& group0_client);
+
+    /**
+     * Request abort of update loop.
+     * Must be called on shard 0.
+     */
+    void stop_legacy_update_from_distributed_data();
 
     /**
      * Updates the service level data from the distributed data store.
