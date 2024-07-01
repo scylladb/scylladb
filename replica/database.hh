@@ -600,9 +600,11 @@ private:
     // Select a compaction group from a given sstable based on its token range.
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept;
     // Returns a list of all compaction groups.
-    compaction_group_list& compaction_groups() const noexcept;
+    utils::chunked_vector<compaction_group*> compaction_groups() const;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
+    void for_each_compaction_group(std::function<void(compaction_group&)> action);
+    void for_each_const_compaction_group(std::function<void(const compaction_group&)> action) const;
 
     // Safely iterate through SSTables, with deletion guard taken to make sure they're not
     // removed during iteration.

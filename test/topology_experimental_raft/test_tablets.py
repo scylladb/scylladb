@@ -714,9 +714,10 @@ async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_
                                        f"table_id = {table_id}", host=host)
     return rows[0].tablet_count
 
+@pytest.mark.parametrize("injection_error", ["foreach_compaction_group_wait", "major_compaction_wait"])
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-async def test_tablet_split(manager: ManagerClient):
+async def test_tablet_split(manager: ManagerClient, injection_error: str):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -762,6 +763,10 @@ async def test_tablet_split(manager: ManagerClient):
     s1_log = await manager.server_open_log(servers[0].server_id)
     s1_mark = await s1_log.mark()
 
+    await manager.api.enable_injection(servers[0].ip_addr, injection_error, one_shot=True)
+    compaction_task = asyncio.create_task(manager.api.keyspace_compaction(servers[0].ip_addr, "test"))
+    await s1_log.wait_for(f"{injection_error}: waiting", from_mark=s1_mark)
+
     # Now there's a split and migration need, so they'll potentially run concurrently.
     await manager.api.enable_tablet_balancing(servers[0].ip_addr)
 
@@ -774,6 +779,67 @@ async def test_tablet_split(manager: ManagerClient):
 
     tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
     assert tablet_count > 1
+
+    await manager.api.message_injection(servers[0].ip_addr, injection_error)
+    await s1_log.wait_for(f"{injection_error}: released", from_mark=s1_mark)
+    await compaction_task
+
+@pytest.mark.parametrize("injection_error", ["foreach_compaction_group_wait", "major_compaction_wait"])
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_concurrent_tablet_migration_and_major(manager: ManagerClient, injection_error):
+    logger.info("Bootstrapping cluster")
+    cmdline = []
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    async def check():
+        logger.info("Checking table")
+        cql = manager.get_cql()
+        rows = await cql.run_async("SELECT * FROM test.test;")
+        assert len(rows) == len(keys)
+        for r in rows:
+            assert r.c == r.pk
+
+    await check()
+
+    await manager.api.flush_keyspace(servers[0].ip_addr, "test")
+
+    logger.info("Adding new server")
+    servers.append(await manager.server_add(cmdline=cmdline))
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    s1_log = await manager.server_open_log(servers[0].server_id)
+    s1_mark = await s1_log.mark()
+
+    await manager.api.enable_injection(servers[0].ip_addr, injection_error, one_shot=True)
+    logger.info("Started major compaction")
+    compaction_task = asyncio.create_task(manager.api.keyspace_compaction(servers[0].ip_addr, "test"))
+    await s1_log.wait_for(f"{injection_error}: waiting", from_mark=s1_mark)
+
+    tablet_replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+
+    t = tablet_replicas[0]
+    logger.info("Migrating tablet")
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", *t.replicas[0], *(s1_host_id, 0), t.last_token)
+
+    await manager.api.message_injection(servers[0].ip_addr, injection_error)
+    await s1_log.wait_for(f"{injection_error}: released", from_mark=s1_mark)
+    await compaction_task
+
+    if injection_error == "major_compaction_wait":
+        logger.info("Check that major was successfully aborted on migration")
+        await s1_log.wait_for(f"Compaction for test/test was stopped due to: table removal", from_mark=s1_mark)
+
+    await check()
 
 async def assert_tablet_count_metric_value_for_shards(manager: ManagerClient, server: ServerInfo, expected_count_per_shard: list[int]):
     tablet_count_metric_name = "scylla_tablets_count"
