@@ -16,11 +16,7 @@ set(scylla_build_mode_RelWithDebInfo "release")
 add_compile_definitions(
     $<$<CONFIG:RelWithDebInfo>:SCYLLA_BUILD_MODE=${scylla_build_mode_RelWithDebInfo}>)
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-  set(clang_inline_threshold 300)
-else()
-  set(clang_inline_threshold 2500)
-endif()
+set(clang_inline_threshold 2500)
 add_compile_options(
   "$<$<AND:$<CONFIG:RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:--param;inline-unit-growth=300>"
   "$<$<AND:$<CONFIG:RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-mllvm;-inline-threshold=${clang_inline_threshold}>")

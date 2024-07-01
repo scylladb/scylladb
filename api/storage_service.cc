@@ -36,6 +36,7 @@
 #include <seastar/http/exception.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/exception.hh>
 #include "repair/row_level.hh"
 #include "locator/snitch_base.hh"
 #include "column_family.hh"
@@ -1661,32 +1662,41 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto result = co_await snap_ctl.local().get_snapshot_details();
         co_return std::function([res = std::move(result)] (output_stream<char>&& o) -> future<> {
-            auto result = std::move(res);
+            std::exception_ptr ex;
             output_stream<char> out = std::move(o);
-            bool first = true;
+            try {
+                auto result = std::move(res);
+                bool first = true;
 
-            co_await out.write("[");
-            for (auto& [name, details] : result) {
-                if (!first) {
-                    co_await out.write(", ");
+                co_await out.write("[");
+                for (auto& [name, details] : result) {
+                    if (!first) {
+                        co_await out.write(", ");
+                    }
+                    std::vector<ss::snapshot> snapshot;
+                    for (auto& cf : details) {
+                        ss::snapshot snp;
+                        snp.ks = cf.ks;
+                        snp.cf = cf.cf;
+                        snp.live = cf.details.live;
+                        snp.total = cf.details.total;
+                        snapshot.push_back(std::move(snp));
+                    }
+                    ss::snapshots all_snapshots;
+                    all_snapshots.key = name;
+                    all_snapshots.value = std::move(snapshot);
+                    co_await all_snapshots.write(out);
+                    first = false;
                 }
-                std::vector<ss::snapshot> snapshot;
-                for (auto& cf : details) {
-                    ss::snapshot snp;
-                    snp.ks = cf.ks;
-                    snp.cf = cf.cf;
-                    snp.live = cf.details.live;
-                    snp.total = cf.details.total;
-                    snapshot.push_back(std::move(snp));
-                }
-                ss::snapshots all_snapshots;
-                all_snapshots.key = name;
-                all_snapshots.value = std::move(snapshot);
-                co_await all_snapshots.write(out);
-                first = false;
+                co_await out.write("]");
+                co_await out.flush();
+            } catch (...) {
+              ex = std::current_exception();
             }
-            co_await out.write("]");
             co_await out.close();
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
         });
     });
 

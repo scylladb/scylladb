@@ -105,6 +105,8 @@ public:
             std::unique_ptr<attributes> attrs_,
             cql_stats& stats_);
 
+    virtual ~modification_statement() override;
+
     virtual bool require_full_clustering_key() const = 0;
 
     virtual bool allow_clustering_key_slices() const = 0;

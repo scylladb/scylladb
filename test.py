@@ -90,8 +90,14 @@ def path_to(mode, *components):
     build_dir = 'build'
     if os.path.exists(os.path.join(build_dir, 'build.ninja')):
         *dir_components, basename = components
-        return os.path.join(build_dir, *dir_components, all_modes[mode], basename)
-    return os.path.join(build_dir, mode, *components)
+        exe_path = os.path.join(build_dir, *dir_components, all_modes[mode], basename)
+    else:
+        exe_path = os.path.join(build_dir, mode, *components)
+    if not os.access(exe_path, os.F_OK):
+        raise FileNotFoundError(f"{exe_path} does not exist.")
+    elif not os.access(exe_path, os.X_OK):
+        raise PermissionError(f"{exe_path} is not executable.")
+    return exe_path
 
 
 def ninja(target):
@@ -334,6 +340,7 @@ class UnitTestSuite(TestSuite):
         # Default seastar arguments, if not provided in custom test options,
         # are two cores and 2G of RAM
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
+        args = merge_cmdline_options(args, self.options.extra_scylla_cmdline_options)
         for a in args:
             await self.create_test(shortname, casename, self, a)
 
@@ -431,7 +438,7 @@ class PythonTestSuite(TestSuite):
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
             cmdline_options = merge_cmdline_options(cmdline_options, create_cfg.cmdline_from_test)
-
+            cmdline_options = merge_cmdline_options(cmdline_options, options.extra_scylla_cmdline_options)
             # There are multiple sources of config options, with increasing priority
             # (if two sources provide the same config option, the higher priority one wins):
             # 1. the defaults
@@ -1345,6 +1352,9 @@ def parse_cmd_line() -> argparse.Namespace:
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
                              help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
+    scylla_additional_options.add_argument('--extra-scylla-cmdline-options', action="store", default=[], type=str,
+                                           help="Passing extra scylla cmdline options for all tests. Options should be space separated:"
+                                                "'--logger-log-level raft=trace --default-log-level error'")
 
     boost_group = parser.add_argument_group('boost suite options')
     boost_group.add_argument('--random-seed', action="store",
@@ -1418,6 +1428,9 @@ def parse_cmd_line() -> argparse.Namespace:
     except Exception:
         print(palette.fail("Failed to read output of `ninja unit_test_list`: please run ./configure.py first"))
         raise
+
+    if args.extra_scylla_cmdline_options:
+        args.extra_scylla_cmdline_options = args.extra_scylla_cmdline_options.split()
 
     return args
 

@@ -371,8 +371,7 @@ modes = {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*40,
-        # -fasan -Og breaks some coroutines on aarch64, use -O0 instead
-        'optimization-level': ('0' if platform.machine() == 'aarch64' else 'g'),
+        'optimization-level': 'g',
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'Debug',
         'can_have_debug_info': True,
@@ -1543,10 +1542,6 @@ def get_warning_options(cxx):
 def get_clang_inline_threshold():
     if args.clang_inline_threshold != -1:
         return args.clang_inline_threshold
-    elif platform.machine() == 'aarch64':
-        # we see miscompiles with 1200 and above with format("{}", uuid)
-        # also coroutine miscompiles with 600
-        return 300
     else:
         return 2500
 
@@ -1689,10 +1684,10 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
-        '-DCMAKE_CXX_STANDARD=20',
+        '-DCMAKE_CXX_STANDARD=23',
         '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags']),
         '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], seastar_cxx_ld_flags)),
-        '-DSeastar_CXX_DIALECT=gnu++20',
+        '-DSeastar_CXX_DIALECT=gnu++23',
         '-DSeastar_API_LEVEL=7',
         '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
@@ -1755,7 +1750,7 @@ def configure_abseil(build_dir, mode, mode_config):
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), cxx_flags),
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
-        '-DCMAKE_CXX_STANDARD=20',
+        '-DCMAKE_CXX_STANDARD=23',
         '-DABSL_PROPAGATE_CXX_STD=ON',
     ]
 
@@ -1890,7 +1885,7 @@ def write_build_file(f,
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = -std=gnu++20 {user_cflags} {warnings} {defines}
+        cxxflags = -std=gnu++23 {user_cflags} {warnings} {defines}
         ldflags = {linker_flags} {user_ldflags}
         ldflags_build = {linker_flags}
         libs = {libs}

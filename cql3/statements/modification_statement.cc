@@ -67,6 +67,8 @@ modification_statement::modification_statement(statement_type type_, uint32_t bo
     , _ks_sel(::is_internal_keyspace(schema_->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
 { }
 
+modification_statement::~modification_statement() = default;
+
 uint32_t modification_statement::get_bound_terms() const {
     return _bound_terms;
 }

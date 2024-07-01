@@ -5385,9 +5385,11 @@ public:
                 auto send_request = [&] (bool has_data) {
                     if (has_data) {
                         _proxy->get_stats().speculative_digest_reads++;
+                        tracing::trace(_trace_state, "Launching speculative retry for digest");
                         make_digest_requests(resolver, _targets.end() - 1, _targets.end(), timeout);
                     } else {
                         _proxy->get_stats().speculative_data_reads++;
+                        tracing::trace(_trace_state, "Launching speculative retry for data");
                         make_data_requests(resolver, _targets.end() - 1, _targets.end(), timeout, true);
                     }
                 };
@@ -6440,6 +6442,7 @@ void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, 
 }
 
 future<> storage_proxy::stop_remote() {
+    co_await drain_on_shutdown();
     co_await _remote->stop();
     _remote = nullptr;
 }

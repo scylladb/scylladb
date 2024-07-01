@@ -648,7 +648,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     init("list-tools", bpo::bool_switch(), "list included tools and exit");
 
     bpo::options_description deprecated_options("Deprecated options - ignored");
-    cfg->add_deprecated_options(deprecated_options.add_options());
+    auto deprecated_options_easy_init = deprecated_options.add_options();
+    cfg->add_deprecated_options(deprecated_options_easy_init);
     app.get_options_description().add(deprecated_options);
 
     // TODO : default, always read?
@@ -1700,11 +1701,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 lifecycle_notifier.local().register_subscriber(&local_proxy);
             }).get();
 
-            auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy, &lifecycle_notifier] {
+            auto unsubscribe_proxy = defer_verbose_shutdown("unsubscribe storage proxy", [&proxy, &lifecycle_notifier] {
                 proxy.invoke_on_all([&lifecycle_notifier] (service::storage_proxy& local_proxy) mutable {
-                    return lifecycle_notifier.local().unregister_subscriber(&local_proxy).finally([&local_proxy] {
-                        return local_proxy.drain_on_shutdown();
-                    });
+                    return lifecycle_notifier.local().unregister_subscriber(&local_proxy);
                 }).get();
             });
 

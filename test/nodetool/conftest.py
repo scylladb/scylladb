@@ -207,7 +207,9 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
                 jmx_ip, jmx_port = jmx
                 cmd = [nodetool_path, "-h", jmx_ip, "-p", str(jmx_port), method]
             cmd += list(args)
-            res = subprocess.run(cmd, capture_output=True, text=True)
+            env = {'UBSAN_OPTIONS': f'halt_on_error=1:abort_on_error=1:suppressions={os.getcwd()}/ubsan-suppressions.supp',
+                   'ASAN_OPTIONS': f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'}
+            res = subprocess.run(cmd, capture_output=True, text=True, env=env)
             sys.stdout.write(res.stdout)
             sys.stderr.write(res.stderr)
 

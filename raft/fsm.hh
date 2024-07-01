@@ -359,6 +359,9 @@ public:
     bool is_prevote_candidate() const {
         return is_candidate() && std::get<candidate>(_state).is_prevote;
     }
+    size_t state_to_metric() const {
+        return _state.index();
+    }
     index_t log_last_idx() const {
         return _log.last_idx();
     }

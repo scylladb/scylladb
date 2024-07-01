@@ -1775,6 +1775,20 @@ void server_impl::register_metrics() {
                        sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
         sm::make_gauge("log_memory_usage", [this] { return _fsm->log_memory_usage(); },
                        sm::description("memory usage of in-memory part of the log in bytes"), {server_id_label(_id)}),
+        sm::make_gauge("log_last_index", [this] { return _fsm->log_last_idx(); },
+                       sm::description("term of the last log entry"), {server_id_label(_id)}),
+        sm::make_gauge("log_last_term", [this] { return _fsm->log_last_term(); },
+                       sm::description("index of the last log entry"), {server_id_label(_id)}),
+        sm::make_gauge("snapshot_last_index", [this] { return _fsm->log_last_snapshot_idx(); },
+                       sm::description("term of the snapshot"), {server_id_label(_id)}),
+        sm::make_gauge("snapshot_last_term", [this] { return _fsm->log_term_for(_fsm->log_last_snapshot_idx()).value(); },
+                       sm::description("index of the snapshot"), {server_id_label(_id)}),
+        sm::make_gauge("state", [this] { return _fsm->state_to_metric(); },
+                       sm::description("current state: 0 - follower, 1 - candidate, 2 - leader"), {server_id_label(_id)}),
+        sm::make_gauge("commit_index", [this] { return _fsm->commit_idx(); },
+                       sm::description("commit index"), {server_id_label(_id)}),
+        sm::make_gauge("apply_index",  _applied_idx,
+                       sm::description("applied index"), {server_id_label(_id)}),
     });
 }
 
