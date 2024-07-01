@@ -27,18 +27,29 @@ system requirements, configuration, and tuning. The collected information is
 output as a ``.vitals.json`` file and an archive file with ScyllaDB logs. 
 You need to run the tool **on every node in the cluster**. 
 
-#. Download the Scylla Doctor executable ``scylla_doctor.pyz`` from 
-   https://downloads.scylladb.com/downloads/scylla-doctor/latest/. 
-#. Copy ``scylla_doctor.pyz`` file to all nodes in the cluster.
-#. Execute the following command from the directory where you copied 
-   ``scylla_doctor.pyz`` on each node in your cluster:
+#. Download Scylla Doctor as a Linux package or a generic tarball:
 
-   .. code:: shell
+   * Ubuntu/Debian (DEB): https://downloads.scylladb.com/downloads/scylla-doctor/deb/
+   * RHEL/Rocky (RPM): https://downloads.scylladb.com/downloads/scylla-doctor/rpm/
+   * Tarball: https://downloads.scylladb.com/downloads/scylla-doctor/tar/
 
-      sudo ./scylla_doctor.pyz --save-vitals <unique-host-id>.vitals.json
+#. Run Scylla Doctor on every node in the cluster.
+
+   * If you installed Scylla Doctor with DEB or RPM, you can run it with 
+     the ``scylla-doctor`` command.
+
+   * If you downloaded the tarball, extract the ``scylla_doctor.pyz`` file and
+     copy the file to all nodes in the cluster. Next, execute the following
+     command from the directory where you copied ``scylla_doctor.pyz`` on each node:
+
+     .. code:: shell
+
+        sudo ./scylla_doctor.pyz --save-vitals <unique-host-id>.vitals.json
  
-   Make sure you provide a unique host identifier in the filename, such as 
-   the host IP. Scylla Doctor will generate:
+     Make sure you provide a unique host identifier in the filename, such as 
+     the host IP.
+     
+   Running Scylla Doctor will generate:
    
    * ``<unique-host-id>.vitals.json`` - Scylla Doctor vitals
    * ``scylla_logs_<timestamp>.tar.gz`` - ScyllaDB logs
