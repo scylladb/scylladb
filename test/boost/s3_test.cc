@@ -10,6 +10,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
+#include <limits>
 #include <seastar/core/thread.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/file.hh>
@@ -17,6 +18,7 @@
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/core/units.hh>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
@@ -24,6 +26,7 @@
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
 #include "utils/exceptions.hh"
+#include "sstables/checksum_utils.hh"
 #include "gc_clock.hh"
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
@@ -190,6 +193,75 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_fallback) {
     testlog.info("Get object content");
     temporary_buffer<char> res = cln->get_object_contiguous(name).get();
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(res)), to_sstring(std::move(data)));
+}
+
+using with_remainder_t = bool_class<class with_remainder_tag>;
+
+future<> test_client_multipart_upload_ranged(with_remainder_t with_remainder,
+                                             std::string_view test_name) {
+    const auto object_name = fmt::format("/{}/{}-{}",
+                                         tests::getenv_safe("S3_BUCKET_FOR_TEST"),
+                                         test_name,
+                                         ::getpid());
+    size_t part_size = 5_MiB;
+    semaphore mem{2 * part_size};
+    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"),
+                                make_minio_config(),
+                                mem);
+
+    const size_t remainder_size = with_remainder ? part_size / 2 : 0;
+    const size_t total_size = 4 * part_size + remainder_size;
+    auto output = output_stream<char>(client->make_upload_ranged(object_name,
+                                                                 total_size));
+    std::string_view pattern = "1234567890ABCDEF";
+    // so we can test !with_remainder case properly with multiple writes
+    assert(total_size % pattern.size() == 0);
+    temporary_buffer<char> data(4_KiB);
+    for (char* p = data.get_write(); p != data.end(); p += pattern.size()) {
+        std::memcpy(p, pattern.data(), pattern.size());
+    }
+    assert(part_size / data.size() <= std::numeric_limits<uint16_t>::max());
+
+    uint32_t expected_checksum = crc32_utils::init_checksum();
+    for (size_t bytes_written = 0;
+         bytes_written < total_size;
+         bytes_written += data.size()) {
+        co_await output.write(data.share());
+        uint32_t chunk_checksum = crc32_utils::checksum(data.get(), data.size());
+        expected_checksum = checksum_combine_or_feed<crc32_utils>(
+            expected_checksum, chunk_checksum, data.get(), data.size());
+    }
+    co_await output.close();
+    // retrieve the object from S3 and compare it with the pattern
+    uint32_t actual_checksum = crc32_utils::init_checksum();
+    auto readable_file = client->make_readable_file(object_name);
+    auto input = make_file_input_stream(readable_file);
+    for (;;) {
+        auto buf = co_await input.read();
+        if (buf.empty()) {
+            // empty() signifies the end of stream
+            break;
+        }
+        uint32_t chunk_checksum = crc32_utils::checksum(buf.get(), buf.size());
+        actual_checksum = checksum_combine_or_feed<crc32_utils>(
+            actual_checksum, chunk_checksum, buf.get(), buf.size());
+    }
+    BOOST_CHECK_EQUAL(expected_checksum, actual_checksum);
+
+    co_await readable_file.close();
+    co_await input.close();
+
+    co_await client->close();
+}
+
+SEASTAR_TEST_CASE(test_client_multipart_upload_ranged_without_remainder) {
+    co_await test_client_multipart_upload_ranged(with_remainder_t::no,
+                                                 seastar_test::get_name());
+}
+
+SEASTAR_TEST_CASE(test_client_multipart_upload_ranged_with_remainder) {
+    co_await test_client_multipart_upload_ranged(with_remainder_t::yes,
+                                                 seastar_test::get_name());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
