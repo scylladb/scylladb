@@ -1546,8 +1546,10 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                         });
                     }).then([&s] {
                         return s.write("]").then([&s] {
-                            return s.close();
+                            return s.flush();
                         });
+                    }).finally([&s] {
+                        return s.close();
                     });
                 });
             };
