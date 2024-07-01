@@ -101,6 +101,7 @@ find_package(libxcrypt REQUIRED)
 find_package(Snappy REQUIRED)
 find_package(RapidJSON REQUIRED)
 find_package(xxHash REQUIRED)
+find_package(zstd REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
@@ -158,6 +159,7 @@ target_link_libraries(scylla-main
     Seastar::seastar
     Snappy::snappy
     systemd
+    zstd::libzstd
     ZLIB::ZLIB)
 
 option(Scylla_CHECK_HEADERS
