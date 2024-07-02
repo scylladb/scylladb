@@ -2004,7 +2004,10 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             )
             && !restrictions->need_filtering()  // No filtering
             && group_by_cell_indices->empty()   // No GROUP BY
-            && db.get_config().enable_parallelized_aggregation();
+            && db.get_config().enable_parallelized_aggregation()
+            && !( // Do not parallelize the request if it's single partition read
+                restrictions->partition_key_restrictions_is_all_eq() 
+                && restrictions->partition_key_restrictions_size() == schema->partition_key_size());
     };
 
     if (_parameters->is_prune_materialized_view()) {
