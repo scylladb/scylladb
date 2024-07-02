@@ -400,8 +400,6 @@ public:
     }
 
     future<> send_truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) {
-        slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
-
         if (!_gossiper.get_unreachable_token_owners().empty()) {
             slogger.info("Cannot perform truncate, some hosts are down");
             // Since the truncate operation is so aggressive and is typically only
@@ -6571,6 +6569,12 @@ db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
 }
 
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) {
+    slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
+
+    if (local_db().find_keyspace(keyspace).get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
+        return replica::database::truncate_table_on_all_shards(_db, remote().system_keyspace().container(), keyspace, cfname);
+    }
+
     return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
 }
 
