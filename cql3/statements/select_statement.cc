@@ -287,14 +287,8 @@ select_statement::make_partition_slice(const query_options& options) const
         std::move(static_columns), std::move(regular_columns), _opts, nullptr, get_per_partition_limit(options));
 }
 
-uint64_t select_statement::do_get_limit(const query_options& options,
-                                        const std::optional<expr::expression>& limit,
-                                        const expr::unset_bind_variable_guard& limit_unset_guard,
-                                        uint64_t default_limit) const {
-    if (!limit.has_value() || limit_unset_guard.is_unset(options) || _selection->is_aggregate()) {
-        return default_limit;
-    }
-
+namespace {
+uint64_t get_limit_impl(const query_options& options, const std::optional<expr::expression>& limit) {
     auto val = expr::evaluate(*limit, options);
     if (val.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of limit");
@@ -308,6 +302,18 @@ uint64_t select_statement::do_get_limit(const query_options& options,
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid limit value");
     }
+}
+}
+
+uint64_t select_statement::do_get_limit(const query_options& options,
+                                        const std::optional<expr::expression>& limit,
+                                        const expr::unset_bind_variable_guard& limit_unset_guard,
+                                        uint64_t default_limit) const {
+    if (!limit.has_value() || limit_unset_guard.is_unset(options) || _selection->is_aggregate()) {
+        return default_limit;
+    }
+
+    return get_limit_impl(options, limit);
 }
 
 bool select_statement::needs_post_query_ordering() const {
@@ -462,8 +468,15 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
             state, options, command, std::move(key_ranges), _restrictions_need_filtering ? _restrictions : nullptr);
 
     if (aggregate || nonpaged_filtering) {
-        auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices);
-        coordinator_result<void> result_void = co_await utils::result_do_until([&p] {return p->is_exhausted();},
+        std::optional<uint64_t> limit;
+        if (_limit) {
+            limit = get_limit_impl(options, _limit);
+        }
+        auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices, limit);
+        coordinator_result<void> result_void = co_await utils::result_do_until(
+                [&p, &builder, limit] {
+                    return p->is_exhausted() || (limit && *limit < builder.result_set_size());
+                },
                 [&p, &builder, page_size, now, timeout] {
                     return p->fetch_page_result(builder, page_size, now, timeout);
                 }
