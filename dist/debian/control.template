@@ -47,6 +47,14 @@ Conflicts: prometheus-node-exporter
 Description: Prometheus exporter for machine metrics
  Prometheus exporter for machine metrics, written in Go with pluggable metric collectors.
 
+Package: %{product}-jmx
+Depends: ${misc:Depends}
+Architecture: all
+Priority: optional
+Section: oldlibs
+Description: transitional package
+ This is a transitional package. It can safely be removed.
+
 Package: %{product}
 Section: metapackages
 Architecture: any

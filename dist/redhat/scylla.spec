@@ -13,7 +13,7 @@ Requires:       %{product}-python3 = %{version}-%{release}
 Requires:       %{product}-kernel-conf = %{version}-%{release}
 Requires:       %{product}-node-exporter = %{version}-%{release}
 Requires:       %{product}-cqlsh = %{version}-%{release}
-Obsoletes:      scylla-server < 1.1
+Obsoletes:      %{product}-jmx < 6.1
 
 %global _debugsource_template %{nil}
 %global _debuginfo_subpackages %{nil}
