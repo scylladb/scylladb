@@ -10,7 +10,6 @@
 
 #include <unordered_set>
 #include <memory>
-#include <seastar/core/shared_ptr.hh>
 #include "sstables/shared_sstable.hh"
 #include "timestamp.hh"
 

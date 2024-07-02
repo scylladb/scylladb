@@ -69,6 +69,7 @@
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/combined.hh"
+#include "utils/pretty_printers.hh"
 
 namespace fs = std::filesystem;
 

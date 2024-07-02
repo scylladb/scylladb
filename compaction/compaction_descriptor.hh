@@ -12,8 +12,6 @@
 #include <functional>
 #include <optional>
 #include <variant>
-#include <seastar/core/smp.hh>
-#include <seastar/core/file.hh>
 #include "sstables/types_fwd.hh"
 #include "sstables/sstable_set.hh"
 #include "compaction_fwd.hh"

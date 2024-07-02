@@ -8,10 +8,6 @@
 
 #pragma once
 
-#include <seastar/core/future.hh>
-#include <seastar/util/noncopyable_function.hh>
-#include <seastar/core/file.hh>
-
 #include "schema/schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
 #include "exceptions/exceptions.hh"

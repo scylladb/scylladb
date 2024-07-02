@@ -12,11 +12,8 @@
 #include "sstables/shared_sstable.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "gc_clock.hh"
-#include "compaction_weight_registration.hh"
 #include "utils/UUID.hh"
-#include "utils/pretty_printers.hh"
 #include "table_state.hh"
-#include <seastar/core/thread.hh>
 #include <seastar/core/abort_source.hh>
 
 using namespace compaction;
