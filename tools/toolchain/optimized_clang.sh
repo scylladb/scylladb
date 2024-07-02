@@ -110,10 +110,5 @@ elif [[ "${CLANG_BUILD}" = "INSTALL_FROM" ]]; then
 fi
 
 cd "${CLANG_BUILD_DIR}"
-mv /usr/bin/clang-"${CLANG_SUFFIX}" /usr/bin/clang-"${CLANG_SUFFIX}".orig
-mv /usr/bin/lld /usr/bin/lld.orig
-mv /usr/lib64/libLTO.so."${CLANG_SUFFIX}" /usr/lib64/libLTO.so."${CLANG_SUFFIX}".orig
-install -Z -m755 "${CLANG_BUILD_DIR}"/build/bin/clang-"${CLANG_SUFFIX}" /usr/bin/clang-"${CLANG_SUFFIX}"
-install -Z -m755 "${CLANG_BUILD_DIR}"/build/bin/lld /usr/bin/lld
-install -Z -m755 "${CLANG_BUILD_DIR}"/build/lib64/libLTO.so."${CLANG_SUFFIX}" /usr/lib64/libLTO.so."${CLANG_SUFFIX}"
-rm -rf "${CLANG_BUILD_DIR}" "${SCYLLA_BUILD_DIR_FULLPATH}" "${SCYLLA_NINJA_FILE_FULLPATH}"
+ninja -C build install
+dnf remove -y clang clang-libs
