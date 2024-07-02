@@ -22,6 +22,7 @@
 #include "auth.hh"
 #include <cctype>
 #include <string_view>
+#include <utility>
 #include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
 #include "utils/overloaded_functor.hh"
@@ -633,7 +634,7 @@ future<> server::json_parser::stop() {
 
 const char* api_error::what() const noexcept {
     if (_what_string.empty()) {
-        _what_string = format("{} {}: {}", static_cast<int>(_http_code), _type, _msg);
+        _what_string = format("{} {}: {}", std::to_underlying(_http_code), _type, _msg);
     }
     return _what_string.c_str();
 }
