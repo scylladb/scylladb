@@ -24,6 +24,10 @@ class view_info final {
     mutable std::optional<query::partition_slice> _partition_slice;
     db::view::base_info_ptr _base_info;
     mutable bool _has_computed_column_depending_on_base_non_primary_key;
+
+    // True if the partition key columns of the view are the same as the
+    // partition key columns of the base, maybe in a different order.
+    mutable bool _is_partition_key_permutation_of_base_partition_key;
 public:
     view_info(const schema& schema, const raw_view_info& raw_view_info);
 
@@ -54,6 +58,10 @@ public:
     bool has_base_non_pk_columns_in_view_pk() const;
     bool has_computed_column_depending_on_base_non_primary_key() const {
         return _has_computed_column_depending_on_base_non_primary_key;
+    }
+
+    bool is_partition_key_permutation_of_base_partition_key() const {
+        return _is_partition_key_permutation_of_base_partition_key;
     }
 
     /// Returns a pointer to the base_dependent_view_info which matches the current
