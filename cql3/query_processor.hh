@@ -21,6 +21,7 @@
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/cql_statement.hh"
+#include "cql3/dialect.hh"
 #include "exceptions/exceptions.hh"
 #include "service/migration_listener.hh"
 #include "timestamp.hh"
@@ -139,8 +140,8 @@ public:
             std::string_view query_string,
             std::string_view keyspace);
 
-    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
-    static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
+    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query, dialect d);
+    static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries, dialect d);
 
     query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm);
 
@@ -169,6 +170,8 @@ public:
     cql_stats& get_cql_stats() {
         return _cql_stats;
     }
+
+    dialect get_dialect() const;
 
     lang::manager& lang() { return _lang_manager; }
 

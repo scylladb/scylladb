@@ -5731,6 +5731,26 @@ SEASTAR_TEST_CASE(test_bind_variable_type_checking) {
     });
 }
 
+SEASTAR_TEST_CASE(test_bind_variable_type_checking_disabled) {
+    auto db_config = make_shared<db::config>();
+    db_config->cql_duplicate_bind_variable_names_refer_to_same_variable(false);
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tab1 (p int primary key, a int, b text, c int)").get();
+
+        // Test :var needing to have two conflicting types; will fail without
+        // cql_duplicate_bind_variable_names_refer_to_same_variable = false
+        auto prepared = e.prepare("INSERT INTO tab1 (p, a, b) VALUES (0, :var, :var)").get();
+
+        // Verify that the parameters passed positionally work (non-positional won't make sense)
+        auto a = int32_type->decompose(1);
+        auto b = utf8_type->decompose("abc");
+        e.execute_prepared(prepared, {cql3::raw_value::make_value(a), cql3::raw_value::make_value(b)}).get();
+
+        auto msg = e.execute_cql("SELECT a, b FROM tab1 WHERE p = 0").get();
+        assert_that(msg).is_rows().with_rows({{a, b}});
+    }, cql_test_config{db_config});
+}
+
 SEASTAR_TEST_CASE(test_setting_synchronous_updates_property) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create table base (k int, v int, primary key (k));").get();
