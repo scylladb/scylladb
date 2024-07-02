@@ -13,6 +13,7 @@ version="$(sed 's/-/~/' <build/SCYLLA-VERSION-FILE)"
 release="$(<build/SCYLLA-RELEASE-FILE)"
 
 mode="release"
+type="ubuntu"
 
 if uname -m | grep x86_64 ; then
   arch="amd64"
@@ -24,7 +25,7 @@ fi
 
 
 print_usage() {
-    echo "usage: $0 [--mode mode]"
+    echo "usage: $0 [--mode mode] [--type ubuntu|pro, default: ubuntu]"
     exit 1
 }
 
@@ -32,6 +33,10 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --mode)
             mode="$2"
+            shift 2
+            ;;
+        --type)
+            type="$2"
             shift 2
             ;;
         *)
@@ -61,7 +66,19 @@ if [ -f build/build.ninja ]; then
    esac
 fi
 
-container="$(buildah from docker.io/ubuntu:24.04)"
+bcp() { buildah copy "$container" "$@"; }
+run() { buildah run "$container" "$@"; }
+bconfig() { buildah config "$@" "$container"; }
+
+if [ "$type" == "pro" ]; then
+  container="$(buildah from docker.io/ubuntu:20.04)"
+  bcp dist/docker/pro-attach-config.yaml /pro-attach-config.yaml
+elif [ "$type" == "ubuntu" ]; then
+  container="$(buildah from docker.io/ubuntu:24.04)"
+else
+  echo "$type is not a valid option. supported values: ubuntu|pro"
+  exit 1
+fi
 
 packages=(
     "build/dist/$config/debian/${product}_$version-$release-1_$arch.deb"
@@ -72,11 +89,6 @@ packages=(
     "tools/cqlsh/build/debian/$product-cqlsh_$version-$release-1_$arch.deb"
     "tools/python3/build/debian/$product-python3_$version-$release-1_$arch.deb"
 )
-
-bcp() { buildah copy "$container" "$@"; }
-run() { buildah run "$container" "$@"; }
-bconfig() { buildah config "$@" "$container"; }
-
 
 bcp "${packages[@]}" packages/
 
