@@ -987,8 +987,8 @@ public:
                 auto end = nodes_by_load_dst.end();
                 while (true) {
                     if (nodes_by_load_dst.begin() == end) {
-                        throw std::runtime_error(format("Unable to find new replica for tablet {} on {} when draining {}",
-                                                        source_tablet, src, nodes_to_drain));
+                        throw std::runtime_error(format("Unable to find new replica for tablet {} on {} when draining {} (nodes {}, replicas {})",
+                                                        source_tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
                     }
 
                     pop_heap(nodes_by_load_dst.begin(), end, nodes_dst_cmp);
