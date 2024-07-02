@@ -19,10 +19,10 @@ For example:
 
 .. code-block:: none
 
-   ScyllaDB version 4.2.3-0.20210104.24346215c2 with build-id 0c8faf8bb8a3a0eda9337aad98ed3a6d814a4fa9 starting ...
+   scylla version 4.2.3-0.20210104.24346215c2 with build-id 0c8faf8bb8a3a0eda9337aad98ed3a6d814a4fa9 starting ...
    command used: "scylla --help"
    parsed command line options: [help]
-   ScyllaDB options:
+   scylla options:
      -h [ --help ]                         show help message
      --version                             print version number and exit
      --options-file arg                    configuration file (i.e.
