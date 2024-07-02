@@ -4071,6 +4071,12 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
     auto& global_stats = handler._proxy->_global_stats;
+
+    if (handler.get_targets().size() == 0) {
+        remove_response_handler(response_id);
+        return;
+    }
+
     if (handler.get_targets().size() != 1 || !is_me(handler.get_targets()[0])) {
         auto& topology = handler_ptr->_effective_replication_map_ptr->get_topology();
         auto local_dc = topology.get_datacenter();
