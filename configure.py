@@ -544,6 +544,7 @@ scylla_tests = set([
     'test/boost/schema_registry_test',
     'test/boost/secondary_index_test',
     'test/boost/tracing_test',
+    'test/boost/index_reader_test',
     'test/boost/index_with_paging_test',
     'test/boost/serialization_test',
     'test/boost/serialized_action_test',
