@@ -6246,7 +6246,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
             }
         });
 
-        paxos::paxos_state::guard l = co_await paxos::paxos_state::get_cas_lock(token, write_timeout);
+        auto l = co_await paxos::paxos_state::get_cas_lock(token, write_timeout);
 
         while (true) {
             // Finish the previous PAXOS round, if any, and, as a side effect, compute
