@@ -15,7 +15,7 @@ class cql
 class cdc
 class view
 class alternator
-class forward_service
+class mapreduce_service
 class storage_service
 class gossiper
 class db_config
@@ -29,9 +29,9 @@ storage_proxy ..> view : update
 cql ..> cdc : configure
 cql ..> view : configure
 alternator ..> cdc : configure
-cql ..> forward_service : data path for autopar aggregations
-forward_service ..> storage_proxy : read
-forward_service ..> messaging_service : rpc
+cql ..> mapreduce_service : data path for autopar aggregations
+mapreduce_service ..> storage_proxy : read
+mapreduce_service ..> messaging_service : rpc
 cql ..> storage_proxy : data path
 alternator ..> storage_proxy : data path
 database --* db_commitlog : commit

@@ -17,7 +17,7 @@
 #include "service/storage_proxy.hh"
 #include "service/topology_mutation.hh"
 #include "service/migration_manager.hh"
-#include "service/forward_service.hh"
+#include "service/mapreduce_service.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
 #include "cql3/CqlParser.hpp"
@@ -45,12 +45,12 @@ const sstring query_processor::CQL_VERSION = "3.3.1";
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
 struct query_processor::remote {
-    remote(service::migration_manager& mm, service::forward_service& fwd,
+    remote(service::migration_manager& mm, service::mapreduce_service& fwd,
            service::storage_service& ss, service::raft_group0_client& group0_client)
-            : mm(mm), forwarder(fwd), ss(ss), group0_client(group0_client) {}
+            : mm(mm), mapreducer(fwd), ss(ss), group0_client(group0_client) {}
 
     service::migration_manager& mm;
-    service::forward_service& forwarder;
+    service::mapreduce_service& mapreducer;
     service::storage_service& ss;
     service::raft_group0_client& group0_client;
 
@@ -506,9 +506,9 @@ query_processor::~query_processor() {
     }
 }
 
-void query_processor::start_remote(service::migration_manager& mm, service::forward_service& forwarder,
+void query_processor::start_remote(service::migration_manager& mm, service::mapreduce_service& mapreducer,
                                    service::storage_service& ss, service::raft_group0_client& group0_client) {
-    _remote = std::make_unique<struct remote>(mm, forwarder, ss, group0_client);
+    _remote = std::make_unique<struct remote>(mm, mapreducer, ss, group0_client);
 }
 
 future<> query_processor::stop_remote() {
@@ -988,10 +988,10 @@ query_processor::execute_broadcast_table_query(const service::broadcast_tables::
     co_return co_await service::broadcast_tables::execute(remote_.get().group0_client, query);
 }
 
-future<query::forward_result>
-query_processor::forward(query::forward_request req, tracing::trace_state_ptr tr_state) {
+future<query::mapreduce_result>
+query_processor::mapreduce(query::mapreduce_request req, tracing::trace_state_ptr tr_state) {
     auto [remote_, holder] = remote();
-    co_return co_await remote_.get().forwarder.dispatch(std::move(req), std::move(tr_state));
+    co_return co_await remote_.get().mapreducer.dispatch(std::move(req), std::move(tr_state));
 }
 
 future<::shared_ptr<messages::result_message>>

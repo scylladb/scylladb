@@ -154,7 +154,7 @@ public:
 
     virtual bool is_reducible() const {return false;}
 
-    virtual query::forward_request::reductions_info get_reductions() const {return {{}, {}};}
+    virtual query::mapreduce_request::reductions_info get_reductions() const {return {{}, {}};}
 
     /**
      * Returns true if the selection is trivial, i.e. there are no function

@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "service/forward_service.hh"
+#include "service/mapreduce_service.hh"
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <seastar/core/coroutine.hh>
@@ -18,7 +18,7 @@
 #include "db/consistency_level.hh"
 #include "dht/sharder.hh"
 #include "gms/gossiper.hh"
-#include "idl/forward_request.dist.hh"
+#include "idl/mapreduce_request.dist.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "log.hh"
 #include "message/messaging_service.hh"
@@ -50,18 +50,18 @@
 namespace service {
 
 static constexpr int DEFAULT_INTERNAL_PAGING_SIZE = 10000;
-static logging::logger flogger("forward_service");
+static logging::logger flogger("forward_service"); // not "mapreduce", for compatibility with dtest
 
-static std::vector<::shared_ptr<db::functions::aggregate_function>> get_functions(const query::forward_request& request);
+static std::vector<::shared_ptr<db::functions::aggregate_function>> get_functions(const query::mapreduce_request& request);
 
-class forward_aggregates {
+class mapreduce_aggregates {
 private:
     std::vector<::shared_ptr<db::functions::aggregate_function>> _funcs;
     std::vector<db::functions::stateless_aggregate_function> _aggrs;
 public:
-    forward_aggregates(const query::forward_request& request);
-    void merge(query::forward_result& result, query::forward_result&& other);
-    void finalize(query::forward_result& result);
+    mapreduce_aggregates(const query::mapreduce_request& request);
+    void merge(query::mapreduce_result& result, query::mapreduce_result&& other);
+    void finalize(query::mapreduce_result& result);
 
     template<typename Func>
     auto with_thread_if_needed(Func&& func) const {
@@ -79,7 +79,7 @@ public:
     }
 };
 
-forward_aggregates::forward_aggregates(const query::forward_request& request) {
+mapreduce_aggregates::mapreduce_aggregates(const query::mapreduce_request& request) {
     _funcs = get_functions(request);
     std::vector<db::functions::stateless_aggregate_function> aggrs;
 
@@ -89,7 +89,7 @@ forward_aggregates::forward_aggregates(const query::forward_request& request) {
     _aggrs = std::move(aggrs);
 }
 
-void forward_aggregates::merge(query::forward_result &result, query::forward_result&& other) {
+void mapreduce_aggregates::merge(query::mapreduce_result &result, query::mapreduce_result&& other) {
     if (result.query_results.empty()) {
         result.query_results = std::move(other.query_results);
         return;
@@ -100,7 +100,7 @@ void forward_aggregates::merge(query::forward_result &result, query::forward_res
     if (result.query_results.size() != other.query_results.size() || result.query_results.size() != _aggrs.size()) {
         on_internal_error(
             flogger,
-            format("forward_aggregates::merge(): operation cannot be completed due to invalid argument sizes. "
+            format("mapreduce_aggregates::merge(): operation cannot be completed due to invalid argument sizes. "
                     "this.aggrs.size(): {} "
                     "result.query_result.size(): {} "
                     "other.query_results.size(): {} ",
@@ -113,7 +113,7 @@ void forward_aggregates::merge(query::forward_result &result, query::forward_res
     }
 }
 
-void forward_aggregates::finalize(query::forward_result &result) {
+void mapreduce_aggregates::finalize(query::mapreduce_result &result) {
     if (result.query_results.empty()) {
         // An empty result means that we didn't send the aggregation request
         // to any node. I.e., it was a query that matched no partition, such
@@ -129,7 +129,7 @@ void forward_aggregates::finalize(query::forward_result &result) {
     if (result.query_results.size() != _aggrs.size()) {
         on_internal_error(
             flogger,
-            format("forward_aggregates::finalize(): operation cannot be completed due to invalid argument sizes. "
+            format("mapreduce_aggregates::finalize(): operation cannot be completed due to invalid argument sizes. "
                     "this.aggrs.size(): {} "
                     "result.query_result.size(): {} ",
                     _aggrs.size(), result.query_results.size())
@@ -143,7 +143,7 @@ void forward_aggregates::finalize(query::forward_result &result) {
     }
 }
 
-static std::vector<::shared_ptr<db::functions::aggregate_function>> get_functions(const query::forward_request& request) {
+static std::vector<::shared_ptr<db::functions::aggregate_function>> get_functions(const query::mapreduce_request& request) {
     
     schema_ptr schema = local_schema_registry().get(request.cmd.schema_version);
     std::vector<::shared_ptr<db::functions::aggregate_function>> aggrs;
@@ -161,7 +161,7 @@ static std::vector<::shared_ptr<db::functions::aggregate_function>> get_function
         ::shared_ptr<db::functions::aggregate_function> aggr;
 
         if (!request.aggregation_infos) {
-            if (request.reduction_types[i] == query::forward_request::reduction_type::aggregate) {
+            if (request.reduction_types[i] == query::mapreduce_request::reduction_type::aggregate) {
                 throw std::runtime_error("No aggregation info for reduction type aggregation.");
             }
 
@@ -250,70 +250,70 @@ public:
     }
 };
 
-// `retrying_dispatcher` is a class that dispatches forward_requests to other
+// `retrying_dispatcher` is a class that dispatches mapreduce_requests to other
 // nodes. In case of a failure, local retries are available - request being
 // retried is executed on the super-coordinator.
 class retrying_dispatcher {
-    forward_service& _forwarder;
+    mapreduce_service& _mapreducer;
     tracing::trace_state_ptr _tr_state;
     std::optional<tracing::trace_info> _tr_info;
 public:
-    retrying_dispatcher(forward_service& forwarder, tracing::trace_state_ptr tr_state)
-        : _forwarder(forwarder),
+    retrying_dispatcher(mapreduce_service& mapreducer, tracing::trace_state_ptr tr_state)
+        : _mapreducer(mapreducer),
         _tr_state(tr_state),
         _tr_info(tracing::make_trace_info(tr_state))
     {}
 
-    future<query::forward_result> dispatch_to_node(netw::msg_addr id, query::forward_request req) {
-        auto my_address = _forwarder._messaging.broadcast_address();
+    future<query::mapreduce_result> dispatch_to_node(netw::msg_addr id, query::mapreduce_request req) {
+        auto my_address = _mapreducer._messaging.broadcast_address();
         if (id.addr == my_address) {
-            return _forwarder.dispatch_to_shards(req, _tr_info);
+            return _mapreducer.dispatch_to_shards(req, _tr_info);
         }
 
-        _forwarder._stats.requests_dispatched_to_other_nodes += 1;
+        _mapreducer._stats.requests_dispatched_to_other_nodes += 1;
 
-        // Check for a shutdown request before sending a forward_request to
+        // Check for a shutdown request before sending a mapreduce_request to
         // another node. During the drain process, the messaging service is shut
-        // down early (but not earlier than the forward_service::shutdown
+        // down early (but not earlier than the mapreduce_service::shutdown
         // invocation), so by performing this check, we can prevent hanging on
         // the RPC call.
-        if (_forwarder._shutdown) {
-            return make_exception_future<query::forward_result>(std::runtime_error("forward_service is shutting down"));
+        if (_mapreducer._shutdown) {
+            return make_exception_future<query::mapreduce_result>(std::runtime_error("mapreduce_service is shutting down"));
         }
 
-        // Try to send this forward_request to another node.
-        return do_with(id, req, [this] (netw::msg_addr& id, query::forward_request& req) -> future<query::forward_result> {
-            return ser::forward_request_rpc_verbs::send_forward_request(
-                &_forwarder._messaging, id, req, _tr_info
-            ).handle_exception_type([this, &req, &id] (rpc::closed_error& e) -> future<query::forward_result> {
-                if (_forwarder._shutdown) {
+        // Try to send this mapreduce_request to another node.
+        return do_with(id, req, [this] (netw::msg_addr& id, query::mapreduce_request& req) -> future<query::mapreduce_result> {
+            return ser::mapreduce_request_rpc_verbs::send_mapreduce_request(
+                &_mapreducer._messaging, id, req, _tr_info
+            ).handle_exception_type([this, &req, &id] (rpc::closed_error& e) -> future<query::mapreduce_result> {
+                if (_mapreducer._shutdown) {
                     // Do not retry if shutting down.
-                    return make_exception_future<query::forward_result>(e);
+                    return make_exception_future<query::mapreduce_result>(e);
                 }
 
-                // In case of forwarding failure, retry using super-coordinator as a coordinator
-                flogger.warn("retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
-                tracing::trace(_tr_state, "retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
+                // In case of mapreduce failure, retry using super-coordinator as a coordinator
+                flogger.warn("retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
+                tracing::trace(_tr_state, "retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
 
-                return _forwarder.dispatch_to_shards(req, _tr_info);
+                return _mapreducer.dispatch_to_shards(req, _tr_info);
             });
         });
     }
 };
 
-locator::token_metadata_ptr forward_service::get_token_metadata_ptr() const noexcept {
+locator::token_metadata_ptr mapreduce_service::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
 }
 
-future<> forward_service::stop() {
+future<> mapreduce_service::stop() {
     return uninit_messaging_service();
 }
 
 // Due to `cql3::selection::selection` not being serializable, it cannot be
-// stored in `forward_request`. It has to mocked on the receiving node,
+// stored in `mapreduce_request`. It has to mocked on the receiving node,
 // based on requested reduction types.
 static shared_ptr<cql3::selection::selection> mock_selection(
-    query::forward_request& request,
+    query::mapreduce_request& request,
     schema_ptr schema,
     replica::database& db
 ) {
@@ -323,8 +323,8 @@ static shared_ptr<cql3::selection::selection> mock_selection(
 
     auto mock_singular_selection = [&] (
         const ::shared_ptr<db::functions::aggregate_function>& aggr_function,
-        const query::forward_request::reduction_type& reduction, 
-        const std::optional<query::forward_request::aggregation_info>& info
+        const query::mapreduce_request::reduction_type& reduction,
+        const std::optional<query::mapreduce_request::aggregation_info>& info
     ) {
         auto name_as_expression = [] (const sstring& name) -> cql3::expr::expression {
             constexpr bool keep_case = true;
@@ -333,7 +333,7 @@ static shared_ptr<cql3::selection::selection> mock_selection(
             };
         };
 
-        if (reduction == query::forward_request::reduction_type::count) {
+        if (reduction == query::mapreduce_request::reduction_type::count) {
             auto count_expr = cql3::expr::function_call{
                 .func = cql3::functions::aggregate_fcts::make_count_rows_function(),
                 .args = {},
@@ -362,13 +362,13 @@ static shared_ptr<cql3::selection::selection> mock_selection(
     return cql3::selection::selection::from_selectors(db.as_data_dictionary(), schema, schema->ks_name(), std::move(prepared_selectors));
 }
 
-future<query::forward_result> forward_service::dispatch_to_shards(
-    query::forward_request req,
+future<query::mapreduce_result> mapreduce_service::dispatch_to_shards(
+    query::mapreduce_request req,
     std::optional<tracing::trace_info> tr_info
 ) {
     _stats.requests_dispatched_to_own_shards += 1;
-    std::optional<query::forward_result> result;
-    std::vector<future<query::forward_result>> futures;
+    std::optional<query::mapreduce_result> result;
+    std::vector<future<query::mapreduce_result>> futures;
 
     for (const auto& s : smp::all_cpus()) {
         futures.push_back(container().invoke_on(s, [req, tr_info] (auto& fs) {
@@ -377,7 +377,7 @@ future<query::forward_result> forward_service::dispatch_to_shards(
     }
     auto results = co_await when_all_succeed(futures.begin(), futures.end());
 
-    forward_aggregates aggrs(req);
+    mapreduce_aggregates aggrs(req);
     co_return co_await aggrs.with_thread_if_needed([&aggrs, req, results = std::move(results), result = std::move(result)] () mutable {
         for (auto&& r : results) {
             if (result) {
@@ -389,7 +389,7 @@ future<query::forward_result> forward_service::dispatch_to_shards(
         }
 
         flogger.debug("on node execution result is {}", seastar::value_of([&req, &result] {
-            return query::forward_result::printer {
+            return query::mapreduce_result::printer {
                 .functions = get_functions(req),
                 .res = *result
             };})
@@ -399,18 +399,18 @@ future<query::forward_result> forward_service::dispatch_to_shards(
     });
 }
 
-static lowres_clock::time_point compute_timeout(const query::forward_request& req) {
+static lowres_clock::time_point compute_timeout(const query::mapreduce_request& req) {
     lowres_system_clock::duration time_left = req.timeout - lowres_system_clock::now();
     lowres_clock::time_point timeout_point = lowres_clock::now() + time_left;
 
     return timeout_point;
 }
 
-// This function executes forward_request on a shard.
+// This function executes mapreduce_request on a shard.
 // It retains partition ranges owned by this shard from requested partition
 // ranges vector, so that only owned ones are queried.
-future<query::forward_result> forward_service::execute_on_this_shard(
-    query::forward_request req,
+future<query::mapreduce_result> mapreduce_service::execute_on_this_shard(
+    query::mapreduce_request req,
     std::optional<tracing::trace_info> tr_info
 ) {
     tracing::trace_state_ptr tr_state;
@@ -419,7 +419,7 @@ future<query::forward_result> forward_service::execute_on_this_shard(
         tracing::begin(tr_state);
     }
 
-    tracing::trace(tr_state, "Executing forward_request");
+    tracing::trace(tr_state, "Executing mapreduce_request");
     _stats.requests_executed += 1;
 
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
@@ -483,11 +483,11 @@ future<query::forward_result> forward_service::execute_on_this_shard(
             // It is necessary to check for a shutdown request before each
             // fetch_page operation. During the drain process, the messaging
             // service is shut down early (but not earlier than the
-            // forward_service::shutdown invocation), so by performing this
+            // mapreduce_service::shutdown invocation), so by performing this
             // check, we can prevent hanging on the RPC call (which can be made
             // during fetching a page).
             if (_shutdown) {
-                throw std::runtime_error("forward_service is shutting down");
+                throw std::runtime_error("mapreduce_service is shutting down");
             }
 
             co_await pager->fetch_page(rs_builder, DEFAULT_INTERNAL_PAGING_SIZE, now, timeout);
@@ -507,10 +507,10 @@ future<query::forward_result> forward_service::execute_on_this_shard(
             flogger.error("aggregation result column count does not match requested column count");
             throw std::runtime_error("aggregation result column count does not match requested column count");
         }
-        query::forward_result res = { .query_results = boost::copy_range<std::vector<bytes_opt>>(rows[0] | boost::adaptors::transformed([] (const managed_bytes_opt& x) { return to_bytes_opt(x); })) };
+        query::mapreduce_result res = { .query_results = boost::copy_range<std::vector<bytes_opt>>(rows[0] | boost::adaptors::transformed([] (const managed_bytes_opt& x) { return to_bytes_opt(x); })) };
 
         auto printer = seastar::value_of([&req, &res] {
-            return query::forward_result::printer {
+            return query::mapreduce_result::printer {
                 .functions = get_functions(req),
                 .res = res
             };
@@ -522,20 +522,20 @@ future<query::forward_result> forward_service::execute_on_this_shard(
     });
 }
 
-void forward_service::init_messaging_service() {
-    ser::forward_request_rpc_verbs::register_forward_request(
+void mapreduce_service::init_messaging_service() {
+    ser::mapreduce_request_rpc_verbs::register_mapreduce_request(
         &_messaging,
-        [this](query::forward_request req, std::optional<tracing::trace_info> tr_info) -> future<query::forward_result> {
+        [this](query::mapreduce_request req, std::optional<tracing::trace_info> tr_info) -> future<query::mapreduce_result> {
             return dispatch_to_shards(req, tr_info);
         }
     );
 }
 
-future<> forward_service::uninit_messaging_service() {
-    return ser::forward_request_rpc_verbs::unregister(&_messaging);
+future<> mapreduce_service::uninit_messaging_service() {
+    return ser::mapreduce_request_rpc_verbs::unregister(&_messaging);
 }
 
-future<query::forward_result> forward_service::dispatch(query::forward_request req, tracing::trace_state_ptr tr_state) {
+future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_request req, tracing::trace_state_ptr tr_state) {
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
     replica::table& cf = _db.local().find_column_family(schema);
     auto erm = cf.get_effective_replication_map();
@@ -570,41 +570,41 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
         co_await coroutine::maybe_yield();
     }
 
-    tracing::trace(tr_state, "Dispatching forward_request to {} endpoints", vnodes_per_addr.size());
-    flogger.debug("dispatching forward_request to {} endpoints", vnodes_per_addr.size());
+    tracing::trace(tr_state, "Dispatching mapreduce_request to {} endpoints", vnodes_per_addr.size());
+    flogger.debug("dispatching mapreduce_request to {} endpoints", vnodes_per_addr.size());
 
     retrying_dispatcher dispatcher(*this, tr_state);
-    query::forward_result result;
+    query::mapreduce_result result;
 
     co_await coroutine::parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
         [&req, &result, &tr_state, &dispatcher] (
             std::pair<const netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_with_addr
         ) -> future<> {
             netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
-            query::forward_result& result_ = result;
+            query::mapreduce_result& result_ = result;
             tracing::trace_state_ptr& tr_state_ = tr_state;
             retrying_dispatcher& dispatcher_ = dispatcher;
 
-            query::forward_request req_with_modified_pr = req;
+            query::mapreduce_request req_with_modified_pr = req;
             req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
 
-            tracing::trace(tr_state_, "Sending forward_request to {}", addr);
-            flogger.debug("dispatching forward_request={} to address={}", req_with_modified_pr, addr);
+            tracing::trace(tr_state_, "Sending mapreduce_request to {}", addr);
+            flogger.debug("dispatching mapreduce_request={} to address={}", req_with_modified_pr, addr);
 
             return dispatcher_.dispatch_to_node(addr, std::move(req_with_modified_pr)).then(
                 [&req, addr = std::move(addr), &result_, tr_state_ = std::move(tr_state_)] (
-                    query::forward_result partial_result
+                    query::mapreduce_result partial_result
                 ) mutable {
                     auto partial_printer = seastar::value_of([&req, &partial_result] {
-                        return query::forward_result::printer {
+                        return query::mapreduce_result::printer {
                             .functions = get_functions(req),
                             .res = partial_result
                         };
                     });
-                    tracing::trace(tr_state_, "Received forward_result={} from {}", partial_printer, addr);
-                    flogger.debug("received forward_result={} from {}", partial_printer, addr);
+                    tracing::trace(tr_state_, "Received mapreduce_result={} from {}", partial_printer, addr);
+                    flogger.debug("received mapreduce_result={} from {}", partial_printer, addr);
 
-                    return do_with(forward_aggregates(req), [&result_, partial_result = std::move(partial_result)] (forward_aggregates& aggrs) mutable {
+                    return do_with(mapreduce_aggregates(req), [&result_, partial_result = std::move(partial_result)] (mapreduce_aggregates& aggrs) mutable {
                         return aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
                             aggrs.merge(result_, std::move(partial_result));
                         });
@@ -612,12 +612,12 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
             });
         });
 
-        forward_aggregates aggrs(req);
+        mapreduce_aggregates aggrs(req);
         const bool requires_thread = aggrs.requires_thread();
 
         auto merge_result = [&result, &req, &tr_state, aggrs = std::move(aggrs)] () mutable {
             auto printer = seastar::value_of([&req, &result] {
-                return query::forward_result::printer {
+                return query::mapreduce_result::printer {
                     .functions = get_functions(req),
                     .res = result
                 };
@@ -635,15 +635,15 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
         }
 }
 
-void forward_service::register_metrics() {
+void mapreduce_service::register_metrics() {
     namespace sm = seastar::metrics;
-    _metrics.add_group("forward_service", {
+    _metrics.add_group("mapreduce_service", {
         sm::make_total_operations("requests_dispatched_to_other_nodes", _stats.requests_dispatched_to_other_nodes,
-             sm::description("how many forward requests were dispatched to other nodes"), {}),
+             sm::description("how many mapreduce requests were dispatched to other nodes"), {}),
         sm::make_total_operations("requests_dispatched_to_own_shards", _stats.requests_dispatched_to_own_shards,
-             sm::description("how many forward requests were dispatched to local shards"), {}),
+             sm::description("how many mapreduce requests were dispatched to local shards"), {}),
         sm::make_total_operations("requests_executed", _stats.requests_executed,
-             sm::description("how many forward requests were executed"), {}),
+             sm::description("how many mapreduce requests were executed"), {}),
     });
 }
 

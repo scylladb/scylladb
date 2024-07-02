@@ -3,7 +3,7 @@ target_sources(service
   PRIVATE
     broadcast_tables/experimental/lang.cc
     client_state.cc
-    forward_service.cc
+    mapreduce_service.cc
     migration_manager.cc
     misc_services.cc
     pager/paging_state.cc

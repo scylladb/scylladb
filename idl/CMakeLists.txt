@@ -54,7 +54,7 @@ set(idl_headers
   storage_proxy.idl.hh
   storage_service.idl.hh
   group0_state_machine.idl.hh
-  forward_request.idl.hh
+  mapreduce_request.idl.hh
   replica_exception.idl.hh
   per_partition_rate_limit_info.idl.hh
   position_in_partition.idl.hh

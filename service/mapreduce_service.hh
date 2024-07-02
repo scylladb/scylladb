@@ -26,11 +26,11 @@ namespace service {
 
 class storage_proxy;
 
-// `forward_service` is a sharded service responsible for distributing and
+// `mapreduce_service` is a sharded service responsible for distributing and
 // executing aggregation requests across a cluster.
 //
 // To use this service, one needs to express its aggregation query using
-// `query::forward_request` struct, and call the `dispatch` method with the
+// `query::mapreduce_request` struct, and call the `dispatch` method with the
 // previously mentioned struct acting as an argument. What will happen after
 // calling it, is as follows:
 //   1. `dispatch` splits aggregation query into sub-queries. The caller of
@@ -57,7 +57,7 @@ class storage_proxy;
 //      recipient is the endpoint that holds all vnodes in the set.
 //
 // Query splitting example (3 node cluster with num_tokens set to 3):
-//   Original query: forward_request{
+//   Original query: mapreduce_request{
 //       reduction_types=[reduction_type{count}],
 //       cmd=read_command{contents omitted},
 //       pr={(-inf, +inf)},
@@ -81,7 +81,7 @@ class storage_proxy;
 //
 //   Created sub-queries:
 //
-//       forward_request{
+//       mapreduce_request{
 //           reduction_types=[reduction_type{count}],
 //           cmd=read_command{contents omitted},
 //           pr={
@@ -94,7 +94,7 @@ class storage_proxy;
 //           timeout(ms)=4865767688
 //       } for 127.0.0.1
 //
-//       forward_request{
+//       mapreduce_request{
 //           reduction_types=[reduction_type{count}],
 //           cmd=read_command{contents omitted},
 //           pr={
@@ -106,7 +106,7 @@ class storage_proxy;
 //           timeout(ms)=4865767688
 //       } for 127.0.0.2
 //
-//       forward_request{
+//       mapreduce_request{
 //           reduction_types=[reduction_type{count}],
 //           cmd=read_command{contents omitted},
 //           pr={
@@ -118,7 +118,7 @@ class storage_proxy;
 //           timeout(ms)=4865767688
 //       } for 127.0.0.3
 //
-class forward_service : public seastar::peering_sharded_service<forward_service> {
+class mapreduce_service : public seastar::peering_sharded_service<mapreduce_service> {
     netw::messaging_service& _messaging;
     service::storage_proxy& _proxy;
     distributed<replica::database>& _db;
@@ -135,7 +135,7 @@ class forward_service : public seastar::peering_sharded_service<forward_service>
     bool _shutdown = false;
 
 public:
-    forward_service(netw::messaging_service& ms, service::storage_proxy& p, distributed<replica::database> &db,
+    mapreduce_service(netw::messaging_service& ms, service::storage_proxy& p, distributed<replica::database> &db,
         const locator::shared_token_metadata& stm, abort_source& as)
         : _messaging(ms)
         , _proxy(p)
@@ -149,15 +149,15 @@ public:
 
     future<> stop();
 
-    // Splits given `forward_request` and distributes execution of resulting
+    // Splits given `mapreduce_request` and distributes execution of resulting
     // subrequests across a cluster.
-    future<query::forward_result> dispatch(query::forward_request req, tracing::trace_state_ptr tr_state);
+    future<query::mapreduce_result> dispatch(query::mapreduce_request req, tracing::trace_state_ptr tr_state);
 
 private:
-    // Used to distribute given `forward_request` across shards.
-    future<query::forward_result> dispatch_to_shards(query::forward_request req, std::optional<tracing::trace_info> tr_info);
-    // Used to execute a `forward_request` on a shard.
-    future<query::forward_result> execute_on_this_shard(query::forward_request req, std::optional<tracing::trace_info> tr_info);
+    // Used to distribute given `mapreduce_request` across shards.
+    future<query::mapreduce_result> dispatch_to_shards(query::mapreduce_request req, std::optional<tracing::trace_info> tr_info);
+    // Used to execute a `mapreduce_request` on a shard.
+    future<query::mapreduce_result> execute_on_this_shard(query::mapreduce_request req, std::optional<tracing::trace_info> tr_info);
 
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
