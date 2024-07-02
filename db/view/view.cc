@@ -1681,6 +1681,9 @@ static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator
             std::move(tr_state),
             allow_hints,
             service::is_cancellable::yes);
+    while (utils::get_local_injector().enter("never_finish_remote_view_updates")) {
+        co_await seastar::sleep(100ms);
+    }
 }
 
 static bool should_update_synchronously(const schema& s) {
@@ -2646,7 +2649,7 @@ update_backlog node_update_backlog::fetch() {
         _max.store(new_max, std::memory_order_relaxed);
         return new_max;
     }
-    return std::max(fetch_shard(this_shard_id()), _max.load(std::memory_order_relaxed));
+    return _max.load(std::memory_order_relaxed);
 }
 
 future<std::optional<update_backlog>> node_update_backlog::fetch_if_changed() {
