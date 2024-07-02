@@ -76,6 +76,6 @@ public:
         return false;
     }
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const;
+    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const;
 };
 }

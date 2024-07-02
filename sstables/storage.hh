@@ -64,6 +64,8 @@ public:
     virtual future<> destroy(const sstable& sst) = 0;
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const = 0;
     virtual future<> remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) = 0;
+    // Free space available in the underlying storage.
+    virtual future<uint64_t> free_space() const = 0;
 
     virtual sstring prefix() const  = 0;
 };
