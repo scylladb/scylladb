@@ -393,14 +393,13 @@ select_statement::do_execute(query_processor& qp,
 
     _stats.unpaged_select_queries(_ks_sel) += page_size <= 0;
 
-    // An aggregation query will never be paged for the user, but we always page it internally to avoid OOM.
-    // If we user provided a page_size we'll use that to page internally (because why not), otherwise we use our default
-    // Note that if there are some nodes in the cluster with a version less than 2.0, we can't use paging (CASSANDRA-6707).
+    // An aggregation query may not be paged for the user, but we always page it internally to avoid OOM.
+    // If the user provided a page_size we'll use that to page internally (because why not), otherwise we use our default
     // Also note: all GROUP BY queries are considered aggregation.
     const bool aggregate = _selection->is_aggregate() || has_group_by();
     const bool nonpaged_filtering = _restrictions_need_filtering && page_size <= 0;
     if (aggregate || nonpaged_filtering) {
-        page_size = internal_paging_size;
+        page_size = page_size <= 0 ? internal_paging_size : std::min(page_size, internal_paging_size);
     }
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
