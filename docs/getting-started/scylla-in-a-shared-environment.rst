@@ -65,6 +65,30 @@ On Red Hat / CentOS  edit ``/etc/sysconfig/scylla-server``, and add
 If starting ScyllaDB from the command line, simply append
 ``--smp 2 --overprovisioned`` to your command line.
 
+Overprovisioning at the Hypervisor level
+----------------------------------------
+
+Sometimes, you can dedicate the entire node to ScyllaDB, but the node itself
+is running on a hypervisor that overcommits the CPU (this is not true for most
+public cloud instance types). You can tune ScyllaDB to
+this configuration by using the command line flags ``--idle-poll-time-us 0 --poll-aio 0``.
+These settings tell ScyllaDB to never poll while waiting for a network or disk event,
+and instead relinquish the CPU quickly. This lets the hypervisor schedule other
+virtual machines, and in turns avoids penalizing the ScyllaDB node for overconsumption.
+
+These settings are a subset of the `--overprovisioned` flag (omitting memory and affinity settings).
+
+On Ubuntu edit ``/etc/default/scylla-server``, and add
+``--idle-poll-time-us 0 --poll-aio 0`` to tune ScyllaDB for an overcommitted hypervisor.
+
+On Red Hat / CentOS  edit ``/etc/sysconfig/scylla-server``, and add
+``--idle-poll-time-us 0 --poll-aio 0`` to tune ScyllaDB for an overcommitted hypervisor.
+
+If starting ScyllaDB from the command line, simply append
+``--idle-poll-time-us 0 --poll-aio 0`` to your command line.
+
+
+
 Other Restrictions
 ------------------
 
