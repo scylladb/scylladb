@@ -79,6 +79,10 @@ namespace cdc {
     class topology_description;
 }
 
+namespace cql3 {
+    class untyped_result_set_row;
+}
+
 bool is_system_keyspace(std::string_view ks_name);
 
 namespace db {
@@ -392,6 +396,18 @@ public:
         int64_t range_end;
     };
 
+    struct topology_requests_entry {
+        utils::UUID id;
+        utils::UUID initiating_host;
+        std::optional<service::topology_request> request_type;
+        db_clock::time_point start_time;
+        bool done;
+        sstring error;
+        db_clock::time_point end_time;
+        db_clock::time_point ts;
+    };
+    using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;
+
     future<> update_repair_history(repair_history_entry);
     using repair_history_consumer = noncopyable_function<future<>(const repair_history_entry&)>;
     future<> get_repair_history(table_id, repair_history_consumer f);
@@ -614,7 +630,10 @@ public:
     future<bool> get_must_synchronize_topology();
     future<> set_must_synchronize_topology(bool);
 
-    future<service::topology_request_state> get_topology_request_state(utils::UUID id);
+    future<service::topology_request_state> get_topology_request_state(utils::UUID id, bool require_entry);
+    topology_requests_entry topology_request_row_to_entry(utils::UUID id, const cql3::untyped_result_set_row& row);
+    future<topology_requests_entry> get_topology_request_entry(utils::UUID id, bool require_entry);
+    future<topology_requests_entries> get_topology_request_entries(db_clock::time_point end_time_limit);
 
 public:
     future<std::optional<int8_t>> get_service_levels_version();

@@ -24,6 +24,7 @@
 #include "locator/host_id.hh"
 #include "service/session.hh"
 #include "service/maintenance_mode.hh"
+#include "tasks/types.hh"
 
 #include <list>
 #include <vector>
@@ -112,6 +113,11 @@ class group0_peer_exchange;
 
 }
 
+namespace tasks {
+using get_children_request = task_id;
+using get_children_response = std::vector<task_id>;
+}
+
 namespace netw {
 
 /* All verb handler identifiers */
@@ -194,7 +200,8 @@ enum class messaging_verb : int32_t {
     STREAM_BLOB = 71,
     TABLE_LOAD_STATS = 72,
     JOIN_NODE_QUERY = 73,
-    LAST = 74,
+    TASKS_GET_CHILDREN = 74,
+    LAST = 75,
 };
 
 } // namespace netw
@@ -494,6 +501,11 @@ public:
     future<> unregister_schema_check();
     future<table_schema_version> send_schema_check(msg_addr);
     future<table_schema_version> send_schema_check(msg_addr, abort_source&);
+
+    // Wrapper for TASKS_GET_CHILDREN
+    void register_tasks_get_children(std::function<future<tasks::get_children_response> (const rpc::client_info& cinfo, tasks::get_children_request)>&& func);
+    future<> unregister_tasks_get_children();
+    future<tasks::get_children_response> send_tasks_get_children(msg_addr id, tasks::get_children_request);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 

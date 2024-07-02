@@ -98,6 +98,7 @@
 #include "idl/join_node.dist.hh"
 #include "protocol_server.hh"
 #include "node_ops/node_ops_ctl.hh"
+#include "node_ops/task_manager_module.hh"
 #include "service/topology_mutation.hh"
 #include "service/topology_coordinator.hh"
 #include "cql3/query_processor.hh"
@@ -143,7 +144,8 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<db::view::view_builder>& view_builder,
     cql3::query_processor& qp,
     sharded<qos::service_level_controller>& sl_controller,
-    topology_state_machine& topology_state_machine)
+    topology_state_machine& topology_state_machine,
+    tasks::task_manager& tm)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -157,6 +159,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _sl_controller(sl_controller)
         , _group0(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
+        , _task_manager_module(make_shared<node_ops::task_manager_module>(tm, *this))
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
         , _lifecycle_notifier(elc_notif)
@@ -173,6 +176,10 @@ storage_service::storage_service(abort_source& abort_source,
         , _view_builder(view_builder)
         , _topology_state_machine(topology_state_machine)
 {
+    tm.register_module(_task_manager_module->get_name(), _task_manager_module);
+    if (this_shard_id() == 0) {
+        _task_manager_module->make_virtual_task<node_ops::node_ops_virtual_task>(*this);
+    }
     register_metrics();
 
     _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
@@ -185,6 +192,10 @@ storage_service::storage_service(abort_source& abort_source,
     }
 
     init_messaging_service();
+}
+
+node_ops::task_manager_module& storage_service::get_task_manager_module() noexcept {
+    return *_task_manager_module;
 }
 
 enum class node_external_status {
@@ -1199,6 +1210,9 @@ std::vector<canonical_mutation> storage_service::build_mutation_from_join_params
     topology_request_tracking_mutation_builder rtbuilder(params.request_id);
     rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
              .set("done", false);
+    if (_db.local().features().topology_requests_type_column) {
+        rtbuilder.set("request_type", params.replaced_id ? topology_request::replace : topology_request::join);
+    }
 
     return {builder.build(), rtbuilder.build()};
 }
@@ -3130,6 +3144,7 @@ future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_signal_abort(std::nullopt);
     _listeners.clear();
+    co_await _task_manager_module->stop();
     co_await _async_gate.close();
     co_await std::move(_node_ops_abort_thread);
     _tablet_split_monitor_event.signal();
@@ -3576,6 +3591,9 @@ future<> storage_service::raft_decommission() {
         topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id());
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
+        if (_db.local().features().topology_requests_type_column) {
+            rtbuilder.set("request_type", topology_request::leave);
+        }
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("decommission: request decommission for {}", raft_server.id()));
 
@@ -3934,6 +3952,9 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id());
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
+        if (_db.local().features().topology_requests_type_column) {
+            rtbuilder.set("request_type", topology_request::remove);
+        }
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("removenode: request remove for {}", id));
 
@@ -4560,9 +4581,9 @@ future<> storage_service::do_cluster_cleanup() {
     rtlogger.info("cluster cleanup done");
 }
 
-future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id) {
+future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
     while (true) {
-        auto [done, error] = co_await  _sys_ks.local().get_topology_request_state(id);
+        auto [done, error] = co_await  _sys_ks.local().get_topology_request_state(id, require_entry);
         if (done) {
             co_return error;
         }
@@ -4613,6 +4634,9 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
         topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id());
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
+        if (_db.local().features().topology_requests_type_column) {
+            rtbuilder.set("request_type", topology_request::rebuild);
+        }
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("rebuild: request rebuild for {} ({})", raft_server.id(), source_dc));
 
@@ -5318,26 +5342,6 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
     raft_topology_cmd_result result;
     rtlogger.debug("topology cmd rpc {} is called", cmd.cmd);
 
-    // The retrier does:
-    // If no operation was previously started - start it now
-    // If previous operation still running - wait for it an return its result
-    // If previous operation completed successfully - return immediately
-    // If previous operation failed - restart it
-    auto retrier = [] (std::optional<shared_future<>>& f, auto&& func) -> future<> {
-        if (!f || f->failed()) {
-            if (f) {
-                rtlogger.info("retry streaming after previous attempt failed with {}", f->get_future().get_exception());
-            } else {
-                rtlogger.info("start streaming");
-            }
-            f = func();
-        } else {
-            rtlogger.debug("already streaming");
-        }
-        co_await f.value().get_future();
-        rtlogger.info("streaming completed");
-    };
-
     try {
         auto& raft_server = _group0->group0_server();
         // do barrier to make sure we always see the latest topology
@@ -5479,44 +5483,16 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 cf->notify_bootstrap_or_replace_start();
                             }
                         });
+                        tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
                         if (rs.state == node_state::bootstrapping) {
                             if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
-                                co_await retrier(_bootstrap_result, coroutine::lambda([&] () -> future<> {
-                                    if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
-                                        co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens);
-                                    } else {
-                                        dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
-                                            locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                        co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, _topology_state_machine._topology.session);
-                                    }
-                                }));
+                                auto task = co_await get_task_manager_module().make_and_start_task<node_ops::bootstrap_streaming_task_impl>(parent_info, parent_info.id, *this, rs);
+                                co_await task->done();
                             }
                             // Bootstrap did not complete yet, but streaming did
                         } else {
-                            co_await retrier(_bootstrap_result, coroutine::lambda([&] () ->future<> {
-                                if (!_topology_state_machine._topology.req_param.contains(raft_server.id())) {
-                                    on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", raft_server.id()));
-                                }
-                                if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
-                                    // FIXME: we should not need to translate ids to IPs here. See #6403.
-                                    std::unordered_set<gms::inet_address> ignored_ips;
-                                    for (const auto& id : _topology_state_machine._topology.ignored_nodes) {
-                                        auto ip = _group0->address_map().find(id);
-                                        if (!ip) {
-                                            on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", id));
-                                        }
-                                        ignored_ips.insert(*ip);
-                                    }
-                                    co_await _repair.local().replace_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, std::move(ignored_ips));
-                                } else {
-                                    dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
-                                                          locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                    auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
-                                    auto existing_ip = _group0->address_map().find(replaced_id);
-                                    assert(existing_ip);
-                                    co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, *existing_ip);
-                                }
-                            }));
+                            auto task = co_await get_task_manager_module().make_and_start_task<node_ops::replace_streaming_task_impl>(parent_info, parent_info.id, *this, rs);
+                            co_await task->done();
                         }
                         co_await _db.invoke_on_all([] (replica::database& db) {
                             for (auto& cf : db.get_non_system_column_families()) {
@@ -5526,9 +5502,12 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         result.status = raft_topology_cmd_result::command_status::success;
                     }
                     break;
-                    case node_state::decommissioning:
-                        co_await retrier(_decommission_result, coroutine::lambda([&] () { return unbootstrap(); }));
+                    case node_state::decommissioning: {
+                        tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
+                        auto task = co_await get_task_manager_module().make_and_start_task<node_ops::decommission_streaming_task_impl>(parent_info, parent_info.id, *this);
+                        co_await task->done();
                         result.status = raft_topology_cmd_result::command_status::success;
+                    }
                     break;
                     case node_state::normal: {
                         // If asked to stream a node in normal state it means that remove operation is running
@@ -5543,61 +5522,18 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         const auto& am = _group0->address_map();
                         auto ip = am.find(id); // map node id to ip
                         assert (ip); // what to do if address is unknown?
-                        co_await retrier(_remove_result[id], coroutine::lambda([&] () {
-                            auto as = make_shared<abort_source>();
-                            auto sub = _abort_source.subscribe([as] () noexcept {
-                                if (!as->abort_requested()) {
-                                    as->request_abort();
-                                }
-                            });
-                            if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
-                                // FIXME: we should not need to translate ids to IPs here. See #6403.
-                                std::list<gms::inet_address> ignored_ips;
-                                for (const auto& ignored_id : _topology_state_machine._topology.ignored_nodes) {
-                                    auto ip = _group0->address_map().find(ignored_id);
-                                    if (!ip) {
-                                        on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", ignored_id));
-                                    }
-                                    ignored_ips.push_back(*ip);
-                                }
-                                auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
-                                return _repair.local().removenode_with_repair(get_token_metadata_ptr(), *ip, ops);
-                            } else {
-                                return removenode_with_stream(*ip, _topology_state_machine._topology.session, as);
-                            }
-                        }));
+                        tasks::task_info parent_info{tasks::task_id{it->second.request_id}, 0};
+                        auto task = co_await get_task_manager_module().make_and_start_task<node_ops::remove_streaming_task_impl>(parent_info, parent_info.id, *this, *ip, id);
+                        co_await task->done();
                         result.status = raft_topology_cmd_result::command_status::success;
                     }
                     break;
                     case node_state::rebuilding: {
                         auto source_dc = std::get<rebuild_param>(_topology_state_machine._topology.req_param[raft_server.id()]).source_dc;
                         rtlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-                        co_await retrier(_rebuild_result, [&] () -> future<> {
-                            auto tmptr = get_token_metadata_ptr();
-                            if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
-                                co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
-                            } else {
-                                auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
-                                        tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
-                                streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
-                                if (source_dc != "") {
-                                    streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
-                                }
-                                auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
-                                for (const auto& [keyspace_name, erm] : ks_erms) {
-                                    co_await streamer->add_ranges(keyspace_name, erm, get_ranges_for_endpoint(erm, get_broadcast_address()), _gossiper, false);
-                                }
-                                try {
-                                    co_await streamer->stream_async();
-                                    rtlogger.info("streaming for rebuild successful");
-                                } catch (...) {
-                                    auto ep = std::current_exception();
-                                    // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-                                    rtlogger.warn("error while rebuilding node: {}", ep);
-                                    std::rethrow_exception(std::move(ep));
-                                }
-                            }
-                        });
+                        tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
+                        auto task = co_await get_task_manager_module().make_and_start_task<node_ops::rebuild_streaming_task_impl>(parent_info, parent_info.id, *this, source_dc);
+                        co_await task->done();
                         _rebuild_result.reset();
                         result.status = raft_topology_cmd_result::command_status::success;
                     }

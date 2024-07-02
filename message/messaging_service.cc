@@ -578,6 +578,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::JOIN_NODE_REQUEST:
     case messaging_verb::JOIN_NODE_RESPONSE:
     case messaging_verb::JOIN_NODE_QUERY:
+    case messaging_verb::TASKS_GET_CHILDREN:
         // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
         // DO NOT put any 'hot' (e.g. data path) verbs in this group,
         // only verbs which are 'rare' and 'cheap'.
@@ -1323,6 +1324,17 @@ future<> messaging_service::unregister_node_ops_cmd() {
 }
 future<node_ops_cmd_response> messaging_service::send_node_ops_cmd(msg_addr id, node_ops_cmd_request req) {
     return send_message<future<node_ops_cmd_response>>(this, messaging_verb::NODE_OPS_CMD, std::move(id), std::move(req));
+}
+
+// Wrapper for TASKS_CHILDREN_REQUEST
+void messaging_service::register_tasks_get_children(std::function<future<tasks::get_children_response> (const rpc::client_info& cinfo, tasks::get_children_request)>&& func) {
+    register_handler(this, messaging_verb::TASKS_GET_CHILDREN, std::move(func));
+}
+future<> messaging_service::unregister_tasks_get_children() {
+    return unregister_handler(messaging_verb::TASKS_GET_CHILDREN);
+}
+future<tasks::get_children_response> messaging_service::send_tasks_get_children(msg_addr id, tasks::get_children_request req) {
+    return send_message<future<tasks::get_children_response>>(this, messaging_verb::TASKS_GET_CHILDREN, std::move(id), std::move(req));
 }
 
 } // namespace net

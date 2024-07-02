@@ -13,6 +13,7 @@
 #include "task_manager_test.hh"
 #include "api/api-doc/task_manager_test.json.hh"
 #include "tasks/test_module.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace api {
 
@@ -61,8 +62,8 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
         auto module = tms.local().find_module("test");
         id = co_await module->make_task<tasks::test_task_impl>(shard, id, keyspace, table, entity, data);
         co_await tms.invoke_on(shard, [id] (tasks::task_manager& tm) {
-            auto it = tm.get_all_tasks().find(id);
-            if (it != tm.get_all_tasks().end()) {
+            auto it = tm.get_local_tasks().find(id);
+            if (it != tm.get_local_tasks().end()) {
                 it->second->start();
             }
         });
@@ -72,9 +73,16 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
     tmt::unregister_test_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->query_parameters["task_id"]}};
         try {
-            co_await tasks::task_manager::invoke_on_task(tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
-                tasks::test_task test_task{task};
-                co_await test_task.unregister_task();
+            co_await tasks::task_manager::invoke_on_task(tm, id, [] (tasks::task_manager::task_variant task_v) -> future<> {
+                return std::visit(overloaded_functor{
+                    [] (tasks::task_manager::task_ptr task) -> future<> {
+                        tasks::test_task test_task{task};
+                        co_await test_task.unregister_task();
+                    },
+                    [] (tasks::task_manager::virtual_task_ptr task) {
+                        return make_ready_future();
+                    }
+                }, task_v);
             });
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
@@ -89,13 +97,20 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
         std::string error = fail ? it->second : "";
 
         try {
-            co_await tasks::task_manager::invoke_on_task(tm, id, [fail, error = std::move(error)] (tasks::task_manager::task_ptr task) -> future<> {
-                tasks::test_task test_task{task};
-                if (fail) {
-                    co_await test_task.finish_failed(std::make_exception_ptr(std::runtime_error(error)));
-                } else {
-                    co_await test_task.finish();
-                }
+            co_await tasks::task_manager::invoke_on_task(tm, id, [fail, error = std::move(error)] (tasks::task_manager::task_variant task_v) -> future<> {
+                return std::visit(overloaded_functor{
+                    [fail, error = std::move(error)] (tasks::task_manager::task_ptr task) -> future<> {
+                        tasks::test_task test_task{task};
+                        if (fail) {
+                            co_await test_task.finish_failed(std::make_exception_ptr(std::runtime_error(error)));
+                        } else {
+                            co_await test_task.finish();
+                        }
+                    },
+                    [] (tasks::task_manager::virtual_task_ptr task) {
+                        return make_ready_future();
+                    }
+                }, task_v);
             });
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
