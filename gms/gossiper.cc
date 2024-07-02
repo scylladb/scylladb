@@ -1636,11 +1636,9 @@ generation_type::value_type gossiper::compare_endpoint_startup(inet_address addr
 }
 
 sstring gossiper::get_rpc_address(const inet_address& endpoint) const {
-    if (endpoint != get_broadcast_address()) {
-        auto* v = get_application_state_ptr(endpoint, gms::application_state::RPC_ADDRESS);
-        if (v) {
-            return v->value();
-        }
+    auto* v = get_application_state_ptr(endpoint, gms::application_state::RPC_ADDRESS);
+    if (v) {
+        return v->value();
     }
     return fmt::to_string(endpoint);
 }
