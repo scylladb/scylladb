@@ -90,33 +90,6 @@ private:
             std::optional<const std::string_view> receiver_cf);
 
     static bool type_equals(const std::vector<data_type>& t1, const std::vector<data_type>& t2);
-
-#if 0
-    private static class FunctionsMigrationListener implements IMigrationListener
-    {
-        public void onCreateKeyspace(String ksName) { }
-        public void onCreateColumnFamily(String ksName, String cfName) { }
-        public void onCreateUserType(String ksName, String typeName) { }
-        public void onCreateFunction(String ksName, String functionName) { }
-        public void onCreateAggregate(String ksName, String aggregateName) { }
-
-        public void onUpdateKeyspace(String ksName) { }
-        public void onUpdateColumnFamily(String ksName, String cfName) { }
-        public void onUpdateUserType(String ksName, String typeName) {
-            for (Function function : all())
-                if (function instanceof UDFunction)
-                    ((UDFunction)function).userTypeUpdated(ksName, typeName);
-        }
-        public void onUpdateFunction(String ksName, String functionName) { }
-        public void onUpdateAggregate(String ksName, String aggregateName) { }
-
-        public void onDropKeyspace(String ksName) { }
-        public void onDropColumnFamily(String ksName, String cfName) { }
-        public void onDropUserType(String ksName, String typeName) { }
-        public void onDropFunction(String ksName, String functionName) { }
-        public void onDropAggregate(String ksName, String aggregateName) { }
-    }
-#endif
 };
 
 }
