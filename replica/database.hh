@@ -579,6 +579,7 @@ public:
     // If split is required, then the compaction group of the given tablet is guaranteed to
     // be split once it returns.
     future<> maybe_split_compaction_group_of(locator::tablet_id);
+    future<> maybe_split_compaction_group_of(const sstables::shared_sstable&);
 private:
     // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
     // each tablet split into two, so this replica will remap all of its compaction groups

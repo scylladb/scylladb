@@ -550,9 +550,27 @@ void table::enable_off_strategy_trigger() {
 
 storage_group_manager::~storage_group_manager() = default;
 
+future<> storage_group_manager::parallel_foreach_storage_group(std::function<future<>(storage_group&)> f) {
+    auto storage_groups = _storage_groups;
+    co_await coroutine::parallel_for_each(storage_groups, [&] (std::pair<size_t, storage_group_ptr> p) -> future<> {
+        auto& sg = p.second;
+        // if table wide op (e.g. split) finds group that was closed by migration cleanup, it will be skipped.
+        if (sg->async_gate().is_closed()) {
+            co_return;
+        }
+        auto holder = sg->async_gate().hold();
+        co_await f(*sg);
+    });
+    co_return;
+}
+
 future<> storage_group_manager::for_each_storage_group_gently(std::function<future<>(size_t, storage_group&)> f) {
-    rwlock::holder shared_lock = co_await get_rwlock().hold_read_lock();
-    for (auto& [id, sg]: _storage_groups) {
+    auto storage_groups = _storage_groups;
+    for (auto& [id, sg]: storage_groups) {
+        if (sg->async_gate().is_closed()) {
+            continue;
+        }
+        auto holder = sg->async_gate().hold();
         co_await f(id, *sg);
     }
 }
@@ -592,7 +610,7 @@ public:
     {
         storage_group_map r;
         auto cg = std::make_unique<compaction_group>(_t, size_t(0), dht::token_range::make_open_ended_both_sides());
-        auto sg = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
+        auto sg = make_lw_shared<storage_group>(std::move(cg), &_compaction_groups);
         _single_sg = sg.get();
         r[0] = std::move(sg);
         _storage_groups = std::move(r);
@@ -706,7 +724,7 @@ public:
             if (tmap.has_replica(tid, local_replica)) {
                 tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
                 auto cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
-                ret[tid.value()] = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
+                ret[tid.value()] = make_lw_shared<storage_group>(std::move(cg), &_compaction_groups);
             }
         }
         _storage_groups = std::move(ret);
@@ -803,7 +821,13 @@ future<> storage_group::split(compaction_group_list& list, sstables::compaction_
         co_return;
     }
 
+    if (_main_cg->empty()) {
+        co_return;
+    }
+    auto holder = _main_cg->async_gate().hold();
     co_await _main_cg->flush();
+    // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
+    co_await _main_cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), std::nullopt);
     co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt));
 }
 
@@ -883,6 +907,11 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
 future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
     auto holder = async_gate().hold();
     co_await _sg_manager->maybe_split_compaction_group_of(tablet_id.value());
+}
+
+future<> table::maybe_split_compaction_group_of(const sstables::shared_sstable& sst) {
+    auto& cg = compaction_group_for_sstable(sst);
+    return maybe_split_compaction_group_of(locator::tablet_id(cg.group_id()));
 }
 
 std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
@@ -979,9 +1008,10 @@ compaction_group_list& table::compaction_groups() const noexcept {
 }
 
 future<> table::parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) {
-    rwlock::holder shared_lock = co_await _sg_manager->get_rwlock().hold_read_lock();
-    co_await coroutine::parallel_for_each(compaction_groups(), [&] (compaction_group& cg) {
-        return action(cg);
+    co_await _sg_manager->parallel_foreach_storage_group([&] (storage_group& sg) -> future<> {
+        for (auto& cg : sg.compaction_groups()) {
+            co_await action(*cg);
+        }
     });
 }
 
@@ -2218,7 +2248,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
         for (unsigned i = 0; i < split_size; i++) {
             auto group_id = first_new_id + i;
             split_ready_groups[i]->update_id_and_range(group_id, new_tmap.get_token_range(locator::tablet_id(group_id)));
-            new_storage_groups[group_id] = std::make_unique<storage_group>(std::move(split_ready_groups[i]), nullptr);
+            new_storage_groups[group_id] = make_lw_shared<storage_group>(std::move(split_ready_groups[i]), nullptr);
         }
 
         tlogger.debug("Remapping tablet {} of table {} into new tablets [{}].",
@@ -2258,7 +2288,7 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
         if (!_storage_groups.contains(tid.value()) && tablet_migrates_in(transition_info)) {
             auto range = new_tablet_map->get_token_range(tid);
             auto cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
-            _storage_groups[tid.value()] = std::make_unique<storage_group>(std::move(cg), &_compaction_groups);
+            _storage_groups[tid.value()] = make_lw_shared<storage_group>(std::move(cg), &_compaction_groups);
             tablet_migrating_in = true;
         }
     }
@@ -2274,10 +2304,6 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
 }
 
 future<> table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
-    // Exclusive lock is meant to protect storage groups, but we hold it here to prevent preemption
-    // between erm and storage groups updates as they need to be consistent.
-    rwlock::holder exclusive_lock = co_await _sg_manager->get_rwlock().hold_write_lock();
-
     auto old_erm = std::exchange(_erm, std::move(erm));
 
     auto refresh_mutation_source = [this] {
@@ -3517,11 +3543,20 @@ future<> table::clear_inactive_reads_for_tablet(database& db, storage_group& sg)
     }
 }
 
-future<> table::stop_compaction_groups(storage_group& sg) {
+future<> storage_group::stop() {
+    if (_async_gate.is_closed()) {
+        co_return;
+    }
     // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
-    for (auto& cg_ptr : sg.compaction_groups()) {
+    for (auto& cg_ptr : compaction_groups()) {
         co_await cg_ptr->stop();
     }
+    // carefully closed after stopping individual groups, such that cleanup won't be blocked on ongoing compaction.
+    co_await _async_gate.close();
+}
+
+future<> table::stop_compaction_groups(storage_group& sg) {
+    return sg.stop();
 }
 
 future<> table::flush_compaction_groups(storage_group& sg) {
@@ -3553,7 +3588,6 @@ future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys
 
 future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
     auto holder = async_gate().hold();
-    rwlock::holder exclusive_lock = co_await _sg_manager->get_rwlock().hold_write_lock();
     auto& sg = storage_group_for_id(tid.value());
 
     co_await clear_inactive_reads_for_tablet(db, sg);
@@ -3565,8 +3599,6 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
 
 future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
     auto holder = async_gate().hold();
-    // Hold shared lock to keep storage group alive.
-    rwlock::holder shared_lock = co_await _sg_manager->get_rwlock().hold_read_lock();
     auto& sg = storage_group_for_id(tid.value());
 
     co_await clear_inactive_reads_for_tablet(db, sg);
