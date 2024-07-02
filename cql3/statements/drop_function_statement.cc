@@ -33,7 +33,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_w
         if (!user_func) {
             throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", func));
         }
-        if (auto aggregate = functions::functions::used_by_user_aggregate(user_func)) {
+        if (auto aggregate = functions::instance().used_by_user_aggregate(user_func)) {
             throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", func, *aggregate));
         }
         auto muts = co_await service::prepare_function_drop_announcement(qp.proxy(), user_func, mc.write_timestamp());

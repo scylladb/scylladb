@@ -38,7 +38,7 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
     auto&& db = qp.db();
     std::vector<data_type> acc_types{state_type};
     acc_types.insert(acc_types.end(), _arg_types.begin(), _arg_types.end());
-    auto state_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _sfunc}, acc_types));
+    auto state_func = dynamic_pointer_cast<functions::scalar_function>(functions::instance().find(functions::function_name{_name.keyspace, _sfunc}, acc_types));
     if (!state_func) {
         auto acc_type_names = acc_types | boost::adaptors::transformed([] (auto&& t) { return t->cql3_type_name(); });
         throw exceptions::invalid_request_exception(format("State function {}({}) not found", _sfunc, fmt::join(acc_type_names, ", ")));
@@ -53,14 +53,14 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
             throw exceptions::invalid_request_exception("Cluster does not support reduction function for user-defined aggregates, upgrade the whole cluster in order to define REDUCEFUNC for UDA");
         }
 
-        reduce_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _rfunc.value()}, {state_type, state_type}));
+        reduce_func = dynamic_pointer_cast<functions::scalar_function>(functions::instance().find(functions::function_name{_name.keyspace, _rfunc.value()}, {state_type, state_type}));
         if (!reduce_func) {
             throw exceptions::invalid_request_exception(format("Scalar reduce function {} for state type {} not found.", _rfunc.value(), state_type->name()));
         }
     }
     ::shared_ptr<cql3::functions::scalar_function> final_func = nullptr;
     if (_ffunc) {
-        final_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _ffunc.value()}, {state_type}));
+        final_func = dynamic_pointer_cast<functions::scalar_function>(functions::instance().find(functions::function_name{_name.keyspace, _ffunc.value()}, {state_type}));
         if (!final_func) {
             throw exceptions::invalid_request_exception(format("Final function {}({}) not found", _ffunc.value(), state_type->cql3_type_name()));
         }

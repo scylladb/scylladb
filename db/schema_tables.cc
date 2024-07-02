@@ -1905,7 +1905,7 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     std::vector<data_type> acc_types{state_type};
     acc_types.insert(acc_types.end(), arg_types.begin(), arg_types.end());
     auto state_func = dynamic_pointer_cast<cql3::functions::scalar_function>(
-            cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, sfunc}, acc_types));
+            cql3::functions::instance().find(cql3::functions::function_name{name.keyspace, sfunc}, acc_types));
     if (!state_func) {
         throw std::runtime_error(format("State function {} needed by aggregate {} not found", sfunc, name.name));
     }
@@ -1916,7 +1916,7 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     ::shared_ptr<cql3::functions::scalar_function> reduce_func = nullptr;
     if (scylla_row) {
         auto rfunc_name = scylla_row->get<sstring>("reduce_func");
-        auto rfunc = cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, rfunc_name.value()}, {state_type, state_type});
+        auto rfunc = cql3::functions::instance().find(cql3::functions::function_name{name.keyspace, rfunc_name.value()}, {state_type, state_type});
         if (!rfunc) {
             throw std::runtime_error(format("Reduce function {} needed by aggregate {} not found", rfunc_name.value(), name.name));
         }
@@ -1929,7 +1929,7 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     ::shared_ptr<cql3::functions::scalar_function> final_func = nullptr;
     if (ffunc) {
         final_func = dynamic_pointer_cast<cql3::functions::scalar_function>(
-            cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, ffunc.value()}, {state_type}));
+            cql3::functions::instance().find(cql3::functions::function_name{name.keyspace, ffunc.value()}, {state_type}));
         if (!final_func) {
             throw std::runtime_error(format("Final function {} needed by aggregate {} not found", ffunc.value(), name.name));
         }
@@ -1961,19 +1961,19 @@ static future<> merge_functions(distributed<service::storage_proxy>& proxy, sche
 
     co_await proxy.local().get_db().invoke_on_all(coroutine::lambda([&] (replica::database& db) -> future<> {
         for (const auto& val : diff.created) {
-            cql3::functions::functions::add_function(co_await create_func(db, *val));
+            cql3::functions::instance().add_function(co_await create_func(db, *val));
         }
         for (const auto& val : diff.dropped) {
             cql3::functions::function_name name{
                 val->get_nonnull<sstring>("keyspace_name"), val->get_nonnull<sstring>("function_name")};
             auto arg_types = read_arg_types(db, *val, name.keyspace);
             drop_cached_func(db, *val);
-            cql3::functions::functions::remove_function(name, arg_types);
+            cql3::functions::instance().remove_function(name, arg_types);
             co_await db.get_notifier().drop_function(name, arg_types);
         }
         for (const auto& val : diff.altered) {
             drop_cached_func(db, *val);
-            cql3::functions::functions::replace_function(co_await create_func(db, *val));
+            cql3::functions::instance().replace_function(co_await create_func(db, *val));
         }
     }));
 }
@@ -1984,13 +1984,13 @@ static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, sch
 
     co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db)-> future<> {
         for (const auto& val : diff.created) {
-            cql3::functions::functions::add_function(create_aggregate(db, *val.first, val.second));
+            cql3::functions::instance().add_function(create_aggregate(db, *val.first, val.second));
         }
         for (const auto& val : diff.dropped) {
             cql3::functions::function_name name{
                 val.first->get_nonnull<sstring>("keyspace_name"), val.first->get_nonnull<sstring>("aggregate_name")};
             auto arg_types = read_arg_types(db, *val.first, name.keyspace);
-            cql3::functions::functions::remove_function(name, arg_types);
+            cql3::functions::instance().remove_function(name, arg_types);
             co_await db.get_notifier().drop_aggregate(name, arg_types);
         }
     });

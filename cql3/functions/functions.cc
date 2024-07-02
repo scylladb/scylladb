@@ -54,10 +54,8 @@ static bool same_signature(const shared_ptr<function>& f1, const shared_ptr<func
     return f1->name() == f2->name() && f1->arg_types() == f2->arg_types();
 }
 
-thread_local std::unordered_multimap<function_name, shared_ptr<function>> functions::_declared = init();
-
 void functions::clear_functions() noexcept {
-    functions::_declared = init();
+    _declared = init();
 }
 
 std::unordered_multimap<function_name, shared_ptr<function>>
@@ -160,7 +158,7 @@ void functions::replace_function(shared_ptr<function> func) {
 }
 
 void functions::remove_function(const function_name& name, const std::vector<data_type>& arg_types) {
-    with_udf_iter(name, arg_types, [] (functions::declared_t::iterator i) { _declared.erase(i); });
+    with_udf_iter(name, arg_types, [this] (functions::declared_t::iterator i) { _declared.erase(i); });
 }
 
 std::optional<function_name> functions::used_by_user_aggregate(shared_ptr<user_function> func) {
@@ -567,6 +565,11 @@ functions::match_arguments(data_dictionary::database db, const sstring& keyspace
 bool
 functions::type_equals(const std::vector<data_type>& t1, const std::vector<data_type>& t2) {
     return t1 == t2;
+}
+
+functions& instance() {
+    static thread_local functions f;
+    return f;
 }
 
 }

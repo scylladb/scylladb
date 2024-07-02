@@ -700,7 +700,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     co_await do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, coroutine::lambda([&] (schema_result_value_type& v) -> future<> {
         auto&& user_functions = co_await create_functions_from_schema_partition(*this, v.second);
         for (auto&& func : user_functions) {
-            cql3::functions::functions::add_function(func);
+            cql3::functions::instance().add_function(func);
         }
         co_return;
     }));
@@ -708,7 +708,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         auto v2 = co_await read_schema_partition_for_keyspace(proxy, db::schema_tables::SCYLLA_AGGREGATES, v.first);
         auto&& user_aggregates = create_aggregates_from_schema_partition(*this, v.second, v2.second);
         for (auto&& agg : user_aggregates) {
-            cql3::functions::functions::add_function(agg);
+            cql3::functions::instance().add_function(agg);
         }
         co_return;
     }));
