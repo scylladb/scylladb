@@ -544,6 +544,7 @@ private:
     std::optional<key> _first_key, _last_key;
     index_sampling_state _index_sampling_state;
     bytes_ostream _tmp_bufs;
+    uint64_t _num_partitions_consumed = 0;
 
     const sstable_schema _sst_schema;
 
@@ -924,6 +925,7 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
 
     _sst._components->filter->add(bytes_view(*_partition_key));
     _collector.add_key(bytes_view(*_partition_key));
+    _num_partitions_consumed++;
 
     auto p_key = disk_string_view<uint16_t>();
     p_key.value = bytes_view(*_partition_key);
@@ -1468,6 +1470,7 @@ void writer::consume_end_of_stream() {
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
     close_data_writer();
     _sst.write_summary();
+    _sst.maybe_rebuild_filter_from_index(_num_partitions_consumed);
     _sst.write_filter();
     _sst.write_statistics();
     _sst.write_compression();
