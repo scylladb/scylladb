@@ -186,6 +186,25 @@ protected:
     token_metadata_ptr _tmptr;
     size_t _replication_factor;
     std::unique_ptr<abort_source> _validity_abort_source;
+
+    template <std::ranges::range ResultSet, std::ranges::range SourceSet>
+    requires (std::same_as<std::ranges::range_value_t<ResultSet>, gms::inet_address> && std::same_as<std::ranges::range_value_t<SourceSet>, host_id>)
+    static ResultSet resolve_endpoints(const SourceSet& host_ids, const token_metadata& tm) {
+        ResultSet result{};
+        result.reserve(host_ids.size());
+        for (const auto& host_id: host_ids) {
+            result.push_back(resolve_endpoint(host_id, tm));
+        }
+        return result;
+    }
+
+    template <std::ranges::range ResultSet, std::ranges::range SourceSet>
+    requires (std::same_as<std::ranges::range_value_t<ResultSet>, gms::inet_address> && std::same_as<std::ranges::range_value_t<SourceSet>, host_id>)
+    ResultSet resolve_endpoints(const SourceSet& host_ids) const {
+        return resolve_endpoints<ResultSet>(host_ids, *_tmptr);
+    }
+
+    friend class abstract_replication_strategy;
 public:
     effective_replication_map(replication_strategy_ptr, token_metadata_ptr, size_t replication_factor) noexcept;
     effective_replication_map(effective_replication_map&&) noexcept = default;
@@ -221,18 +240,23 @@ public:
     /// new replica.
     ///
     /// The returned addresses are present in the topology object associated with this instance.
-    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const = 0;
+    inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const;
 
     /// Returns a subset of replicas returned by get_natural_endpoints() without the pending replica.
-    virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_natural_hosts_without_node_being_replaced(const token& search_token) const = 0;
+    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const {
+        return resolve_endpoints<inet_address_vector_replica_set>(get_natural_hosts_without_node_being_replaced(search_token));
+    }
 
     /// Returns the set of pending replicas for a given token.
     /// Pending replica is a replica which gains ownership of data.
     /// Non-empty only during topology change.
-    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const = 0;
+    virtual host_id_vector_topology_change get_pending_hosts(const token& search_token) const  = 0;
+    inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const;
 
     /// Returns a list of nodes to which a read request should be directed.
-    virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_hosts_for_reading(const token& search_token) const = 0;
+    inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const;
 
     /// Returns replicas for a given token.
     /// During topology change returns replicas which should be targets for writes, excluding the pending replica.
@@ -270,6 +294,17 @@ public:
 
     dht::shard_replica_set shard_for_writes(const schema& s, dht::token t) const {
         return get_sharder(s).shard_for_writes(t);
+    }
+
+    static gms::inet_address resolve_endpoint(const locator::host_id& host_id, const token_metadata& tm) {
+        // Empty host_id is used as a marker for local address.
+        // The reason for this hack is that we need local_strategy to
+        // work before the local host_id is loaded from the system.local table.
+        return host_id ? tm.get_endpoint_for_host_id(host_id) : tm.get_topology().my_address();
+    }
+
+    gms::inet_address resolve_endpoint(const locator::host_id& host_id) const {
+        return resolve_endpoint(host_id, *_tmptr);
     }
 };
 
@@ -325,10 +360,9 @@ private:
     friend class abstract_replication_strategy;
     friend class effective_replication_map_factory;
 public: // effective_replication_map
-    inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override;
-    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
-    inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
-    inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override;
+    host_id_vector_replica_set get_natural_hosts_without_node_being_replaced(const token& search_token) const override;
+    host_id_vector_topology_change get_pending_hosts(const token& search_token) const override;
+    host_id_vector_replica_set get_hosts_for_reading(const token& search_token) const override;
     host_id_vector_replica_set get_replicas(const token& search_token) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
@@ -390,7 +424,7 @@ public:
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
     inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
-    host_id_vector_replica_set do_get_replicas(const token& tok, bool is_vnode) const;
+    const host_id_vector_replica_set& do_get_replicas(const token& tok, bool is_vnode) const;
     stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
 
 public:
@@ -536,6 +570,6 @@ private:
 
 void maybe_remove_node_being_replaced(const token_metadata&,
                                       const abstract_replication_strategy&,
-                                      inet_address_vector_replica_set& natural_endpoints);
+                                      host_id_vector_replica_set& natural_endpoints);
 
 }

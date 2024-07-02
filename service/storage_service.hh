@@ -200,7 +200,6 @@ public:
         gms::feature_service& feature_service,
         sharded<service::migration_manager>& mm,
         locator::shared_token_metadata& stm,
-        locator::effective_replication_map_factory& erm_factory,
         sharded<netw::messaging_service>& ms,
         sharded<repair_service>& repair,
         sharded<streaming::stream_manager>& stream_manager,
@@ -276,14 +275,6 @@ public:
         return _gossiper;
     };
 
-    locator::effective_replication_map_factory& get_erm_factory() noexcept {
-        return _erm_factory;
-    }
-
-    const locator::effective_replication_map_factory& get_erm_factory() const noexcept {
-        return _erm_factory;
-    }
-
     token_metadata_ptr get_token_metadata_ptr() const noexcept {
         return _shared_token_metadata.get();
     }
@@ -308,7 +299,6 @@ private:
 
     /* This abstraction maintains the token/endpoint metadata information */
     shared_token_metadata& _shared_token_metadata;
-    locator::effective_replication_map_factory& _erm_factory;
 
 public:
     std::chrono::milliseconds get_ring_delay();

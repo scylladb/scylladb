@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <boost/range/adaptors.hpp>
+
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -94,13 +96,16 @@ future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_nodes);
 }
 
-topology::topology(config cfg)
+topology::topology(config cfg, create_this_node do_create_this_node)
         : _shard(this_shard_id())
         , _cfg(cfg)
         , _sort_by_proximity(!cfg.disable_proximity_sorting)
 {
-    tlogger.trace("topology[{}]: constructing using config: endpoint={} dc={} rack={}", fmt::ptr(this),
-            cfg.this_endpoint, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
+    tlogger.trace("topology[{}]: constructing using config: endpoint={} host_id={} dc={} rack={} create_this_node={}", fmt::ptr(this),
+            cfg.this_endpoint, cfg.this_host_id, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack, do_create_this_node);
+    if (do_create_this_node && (cfg.this_host_id || cfg.this_endpoint != gms::inet_address{})) {
+        add_node(node::make(this, cfg.this_host_id, cfg.this_endpoint, cfg.local_dc_rack, node::state::none, smp::count, node::this_node::yes));
+    }
 }
 
 topology::topology(topology&& o) noexcept
@@ -136,7 +141,7 @@ topology& topology::operator=(topology&& o) noexcept {
 }
 
 future<topology> topology::clone_gently() const {
-    topology ret(_cfg);
+    topology ret(_cfg, create_this_node::no);
     tlogger.debug("topology[{}]: clone_gently to {} from shard {}", fmt::ptr(this), fmt::ptr(&ret), _shard);
     for (const auto& nptr : _nodes) {
         if (nptr) {
@@ -334,10 +339,22 @@ void topology::index_node(const node* node) {
             } else if (eit->second->is_leaving() || eit->second->left()) {
                 _nodes_by_endpoint.erase(node->endpoint());
             } else if (!node->is_leaving() && !node->left()) {
-                if (node->host_id()) {
-                    _nodes_by_host_id.erase(node->host_id());
+                if (eit->second->is_this_node()) {
+                    if (node->is_this_node()) {
+                        if (node->host_id()) {
+                            _nodes_by_host_id.erase(node->host_id());
+                        }
+                        on_internal_error(tlogger, format("topology[{}]: {}: this node endpoint already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(eit->second)));
+                    }
+                    // Silently allow indexing of the node we're replacing using the same ip address by its host_id
+                    // But otherwise this_node keeps owning the endpoint inet_address, as well as being present on the dc/rack lists
+                    return;
+                } else {
+                    if (node->host_id()) {
+                        _nodes_by_host_id.erase(node->host_id());
+                    }
+                    on_internal_error(tlogger, format("topology[{}]: {}: node endpoint already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(eit->second)));
                 }
-                on_internal_error(tlogger, format("topology[{}]: {}: node endpoint already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(eit->second)));
             }
         }
         if (node->get_state() != node::state::left) {
@@ -404,15 +421,16 @@ void topology::unindex_node(const node* node) {
     if (ep_it != _nodes_by_endpoint.end() && ep_it->second == node) {
         _nodes_by_endpoint.erase(ep_it);
     }
-    if (_this_node == node) {
-        _this_node = nullptr;
-    }
 }
 
-node_holder topology::pop_node(const node* node) {
+void topology::pop_node(const node* node) {
     tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
 
     unindex_node(node);
+
+    if (_this_node == node) {
+        return;
+    }
 
     auto nh = std::exchange(_nodes[node->idx()], {});
 
@@ -421,8 +439,6 @@ node_holder topology::pop_node(const node* node) {
     if (std::cmp_equal(node->idx(), _nodes.size() - 1)) {
         _nodes.resize(node->idx());
     }
-
-    return nh;
 }
 
 // Finds a node by its host_id
@@ -431,6 +447,9 @@ const node* topology::find_node(host_id id) const noexcept {
     auto it = _nodes_by_host_id.find(id);
     if (it != _nodes_by_host_id.end()) {
         return it->second;
+    }
+    if (id == _cfg.this_host_id) {
+        return this_node();
     }
     return nullptr;
 }
@@ -465,6 +484,10 @@ const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_addr
     tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
         id, opt_ep, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
         lazy_backtrace());
+
+    if (_cfg.this_host_id == id) {
+        return update_node(const_cast<node*>(_this_node), id, opt_ep, opt_dr, opt_st, shard_count);
+    }
 
     const auto* n = find_node(id);
     if (n) {
@@ -527,17 +550,62 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
 }
 
 void topology::sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const {
-    if (_sort_by_proximity) {
-        std::sort(addresses.begin(), addresses.end(), [this, &address](inet_address& a1, inet_address& a2) {
-            return compare_endpoints(address, a1, a2) < 0;
-        });
+    if (!_sort_by_proximity) {
+        return;
     }
+    auto get_node = [this] (const inet_address& ep) {
+        if (auto node = find_node(ep)) {
+            return node;
+        } else {
+            throw std::runtime_error(format("Requested location for node {} not in topology. backtrace {}", ep, lazy_backtrace()));
+        }
+    };
+    auto n = get_node(address);
+    auto nodes = boost::copy_range<utils::small_vector<const node*, 3>>(addresses | boost::adaptors::transformed([&] (const inet_address& ep) {
+        return get_node(ep);
+    }));
+    std::sort(nodes.begin(), nodes.end(), [this, n] (const node* n1, const node* n2) {
+        return compare_nodes_proximity(n, n1, n2) < 0;
+    });
+    addresses.clear();
+    addresses = boost::copy_range<inet_address_vector_replica_set>(nodes | boost::adaptors::transformed([&] (const node* n) {
+        return n->endpoint();
+    }));
 }
 
-std::weak_ordering topology::compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
-    const auto& loc = get_location(address);
-    const auto& loc1 = get_location(a1);
-    const auto& loc2 = get_location(a2);
+void topology::sort_by_proximity(const host_id& hid, host_id_vector_replica_set& hosts) const {
+    if (!_sort_by_proximity) {
+        return;
+    }
+    auto get_node = [&] (const host_id& ep) {
+        if (auto node = find_node(ep)) {
+            return node;
+        } else if (!ep || ep == _cfg.this_host_id) {
+            if (!this_node()) {
+                on_internal_error(tlogger, format("topology[{}]: this_node is null when resolving node {}. this_host_id={}", fmt::ptr(this), ep, _cfg.this_host_id));
+            }
+            return this_node();
+        } else {
+            throw std::runtime_error(format("Requested location for node {} not in topology. this_host_id={} backtrace {}", ep, _cfg.this_host_id, lazy_backtrace()));
+        }
+    };
+    auto n = get_node(hid);
+    auto nodes = boost::copy_range<utils::small_vector<const node*, 3>>(hosts | boost::adaptors::transformed([&] (const host_id& ep) {
+        return get_node(ep);
+    }));
+    std::sort(nodes.begin(), nodes.end(), [this, n] (const node* n1, const node* n2) {
+        return compare_nodes_proximity(n, n1, n2) < 0;
+    });
+    hosts.clear();
+    hosts = boost::copy_range<host_id_vector_replica_set>(nodes | boost::adaptors::transformed([&] (const node* n) {
+        return n->host_id();
+    }));
+}
+
+std::weak_ordering topology::compare_nodes_proximity(const node* address, const node* a1, const node* a2) const {
+    const auto& loc = address->dc_rack();
+    const auto& loc1 = a1->dc_rack();
+    const auto& loc2 = a2->dc_rack();
 
     // The farthest nodes from a given node are:
     // 1. Nodes in other DCs then the reference node

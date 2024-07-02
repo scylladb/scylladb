@@ -17,7 +17,7 @@
 #include "query-request.hh"
 #include "db/read_repair_decision.hh"
 #include "mutation/position_in_partition.hh"
-#include "locator/host_id.hh"
+#include "inet_address_vectors.hh"
 
 namespace service {
 
@@ -25,7 +25,7 @@ namespace pager {
 
 class paging_state final {
 public:
-    using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
+    using replicas_per_token_range = std::unordered_map<dht::token_range, host_id_vector_replica_set>;
 
 private:
     partition_key _partition_key;

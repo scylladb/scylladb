@@ -1508,7 +1508,8 @@ private:
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
     std::vector<std::any> _listeners;
-    const locator::shared_token_metadata& _shared_token_metadata;
+    locator::shared_token_metadata& _shared_token_metadata;
+    locator::effective_replication_map_factory& _erm_factory;
     lang::manager& _lang_manager;
 
     utils::cross_shard_barrier _stop_barrier;
@@ -1547,7 +1548,7 @@ private:
     future<> flush_system_column_families();
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
-    future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
@@ -1561,13 +1562,18 @@ private:
     template<typename Future>
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
-    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, system_keyspace system);
     future<> remove(table&) noexcept;
     void drop_keyspace(const sstring& name);
     future<> update_keyspace(const keyspace_metadata& tmp_ksm);
     static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func, std::function<future<>(replica::database&)> notifier);
 
     future<> foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func);
+
+    static future<> replicate_to_all_cores(sharded<database>& sharded_db, locator::mutable_token_metadata_ptr tmptr,
+            std::function<future<>(const database&)> per_shard_cb = [] (auto&) { return make_ready_future(); }) noexcept;
+
+    friend class service::storage_service;
 public:
     static table_schema_version empty_version;
 
@@ -1584,7 +1590,7 @@ public:
     // (keyspace/table definitions, column mappings etc.)
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory,
             compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
@@ -1618,6 +1624,14 @@ public:
 
     const locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
     const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
+    locator::effective_replication_map_factory& get_erm_factory() noexcept { return _erm_factory; }
+    const locator::effective_replication_map_factory& get_erm_factory() const noexcept { return _erm_factory; }
+
+    static future<> mutate_token_metadata(sharded<database>& db, std::function<future<>(locator::token_metadata&)> func);
+    static future<> set_this_node(sharded<database>& db, const locator::host_id& host_id, const gms::inet_address& endpoint,
+            std::optional<locator::endpoint_dc_rack> opt_dr = std::nullopt,
+            std::optional<locator::node::state> opt_st = std::nullopt,
+            std::optional<shard_id> opt_shard_count = std::nullopt);
 
     lang::manager& lang() noexcept { return _lang_manager; }
     const lang::manager& lang() const noexcept { return _lang_manager; }
@@ -1630,8 +1644,7 @@ public:
     //
     // Note: 'system table' does not necessarily mean it sits in `system` keyspace, it could also be `system_schema`;
     // in general we mean local tables created by the system (not the user).
-    future<> create_local_system_table(
-            schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory&);
+    future<> create_local_system_table(schema_ptr table, bool write_in_user_memory);
 
     void init_schema_commitlog();
     using is_new_cf = bool_class<struct is_new_cf_tag>;
@@ -1646,7 +1659,7 @@ public:
      *
      * @return ready future when the operation is complete
      */
-    static future<> create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm);
+    static future<> create_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm);
     /* below, find_keyspace throws no_such_<type> on fail */
     keyspace& find_keyspace(std::string_view name);
     const keyspace& find_keyspace(std::string_view name) const;

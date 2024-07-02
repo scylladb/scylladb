@@ -1650,7 +1650,9 @@ get_view_natural_endpoint(
         }
     }
 
-    assert(base_endpoints.size() == view_endpoints.size());
+    if (base_endpoints.size() != view_endpoints.size()) {
+        on_internal_error(vlogger, format("base and view endpoints are not the same size. base_endpoints={} view_endpoints={}", base_endpoints, view_endpoints));
+    }
     auto base_it = std::find(base_endpoints.begin(), base_endpoints.end(), me);
     if (base_it == base_endpoints.end()) {
         // This node is not a base replica of this key, so we return empty

@@ -264,6 +264,7 @@ locator::endpoint_dc_rack make_endpoint_dc_rack(gms::inet_address endpoint) {
 // Run in a seastar thread.
 void simple_test() {
     auto my_address = gms::inet_address("localhost");
+    auto my_host_id = host_id::create_random_id();
 
     // Create the RackInferringSnitch
     snitch_config cfg;
@@ -277,6 +278,7 @@ void simple_test() {
 
     locator::token_metadata::config tm_cfg;
     tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.this_host_id = my_host_id;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
 
@@ -430,6 +432,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_heavy) {
 
 SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     auto my_address = gms::inet_address("localhost");
+    auto my_host_id = host_id::create_random_id();
 
     // Create the RackInferringSnitch
     snitch_config cfg;
@@ -443,6 +446,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
 
     locator::token_metadata::config tm_cfg;
     tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.this_host_id = my_host_id;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
 
     // Generate a random cluster
@@ -526,13 +530,14 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
 }
 
 // Called in a seastar thread
-static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address my_address) {
+static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address my_address, locator::host_id my_host_id) {
     auto seed = tests::random::get_int<int64_t>();
     testlog.info("test_random_balancing: seed={}", seed);
     std::default_random_engine rand(seed);
 
     locator::token_metadata::config tm_cfg;
     tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.this_host_id = my_host_id;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
 
     // Generate a random cluster
@@ -637,6 +642,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
 
 SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablet_allocation_balancing_test) {
     auto my_address = gms::inet_address("localhost");
+    auto my_host_id = host_id::create_random_id();
 
     // Create the RackInferringSnitch
     snitch_config cfg;
@@ -649,7 +655,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablet_allocation_balancing_tes
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     for (auto i = 0; i < 100; ++i) {
-        test_random_balancing(snitch, my_address);
+        test_random_balancing(snitch, my_address, my_host_id);
     }
 }
 
@@ -865,15 +871,22 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo.add_node(node, inet_address((127u << 24) | ++i), {dc, to_sstring(r)}, locator::node::state::normal);
+        auto ep = inet_address((127u << 24) | ++i);
+        if (node != topo.my_host_id()) {
+            topo.add_node(node, ep, {dc, to_sstring(r)}, locator::node::state::normal);
+        } else {
+            topo.update_node(const_cast<locator::node*>(topo.this_node()), node, ep, std::make_optional<endpoint_dc_rack>(dc, to_sstring(r)), locator::node::state::normal);
+        }
     }
 }
 
 SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     locator::token_metadata::config tm_cfg;
     auto my_address = gms::inet_address("localhost");
+
     tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.this_cql_address = my_address;
+    tm_cfg.topo_cfg.this_host_id = host_id(utils::UUID(0, 1));
 
     constexpr size_t NODES = 100;
     constexpr size_t VNODES = 64;
@@ -967,7 +980,10 @@ void topology::test_compare_endpoints(const inet_address& address, const inet_ad
             }
         }
     }
-    auto res = compare_endpoints(address, a1, a2);
+    auto n = find_node(address);
+    auto n1 = find_node(a1);
+    auto n2 = find_node(a2);
+    auto res = compare_nodes_proximity(n, n1, n2);
     testlog.debug("compare_endpoint: address={} [{}/{}] a1={} [{}/{}] a2={} [{}/{}]: res={} expected={} expected_value={}",
             address, loc.dc, loc.rack,
             a1, loc1.dc, loc1.rack,
@@ -985,6 +1001,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
     auto my_address = gms::inet_address("localhost");
     tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.this_cql_address = my_address;
+    tm_cfg.topo_cfg.this_host_id = host_id(utils::UUID(0, 1));
 
     constexpr size_t NODES = 10;
 
@@ -1003,7 +1020,6 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
     std::generate_n(std::back_inserter(nodes), NODES, [&, i = 0u]() mutable {
         return make_address(++i);
     });
-    auto bogus_address = inet_address((127u << 24) | static_cast<int>(NODES + 1));
 
     semaphore sem(1);
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
@@ -1021,11 +1037,6 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
         topo.test_compare_endpoints(address, a1, a1);
         topo.test_compare_endpoints(address, a1, a2);
         topo.test_compare_endpoints(address, a2, a1);
-
-        topo.test_compare_endpoints(bogus_address, bogus_address, bogus_address);
-        topo.test_compare_endpoints(address, bogus_address, bogus_address);
-        topo.test_compare_endpoints(address, a1, bogus_address);
-        topo.test_compare_endpoints(address, bogus_address, a2);
         return make_ready_future<>();
     }).get();
 }

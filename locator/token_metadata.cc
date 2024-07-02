@@ -1203,15 +1203,20 @@ void shared_token_metadata::update_fence_version(token_metadata::version_t versi
     tlogger.debug("new fence_version is set, version {}", _fence_version);
 }
 
-future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func) {
+future<std::tuple<token_metadata_lock, mutable_token_metadata_ptr>> shared_token_metadata::get_mutable_token_metadata_ptr() {
     auto lk = co_await get_lock();
     auto tm = co_await _shared->clone_async();
     // bump the token_metadata ring_version
     // to invalidate cached token/replication mappings
     // when the modified token_metadata is committed.
     tm.invalidate_cached_rings();
-    co_await func(tm);
-    set(make_token_metadata_ptr(std::move(tm)));
+    co_return std::make_tuple(std::move(lk), make_token_metadata_ptr(std::move(tm)));
+}
+
+future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func) {
+    auto [lk, tmptr] = co_await get_mutable_token_metadata_ptr();
+    co_await func(*tmptr);
+    set(std::move(tmptr));
 }
 
 future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func) {
