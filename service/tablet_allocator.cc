@@ -538,10 +538,13 @@ public:
         cluster_resize_load resize_load;
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
-
             const auto* table_stats = load_stats_for_table(table);
             if (!table_stats) {
+                continue;
+            }
+
+            auto& tmap = tmap_;
+            if (!tmap.balancing_enabled()) {
                 continue;
             }
 
@@ -1364,7 +1367,7 @@ public:
                         node_load_info.shards_by_load.push_back(replica.shard);
                     }
                     shard_load_info.tablet_count += 1;
-                    if (!trinfo) { // migrating tablets are not candidates
+                    if (tmap.balancing_enabled() && !trinfo) { // migrating tablets are not candidates
                         add_candidate(shard_load_info, global_tablet_id {table, tid});
                     }
                 }

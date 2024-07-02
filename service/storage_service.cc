@@ -17,6 +17,7 @@
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "locator/token_metadata.hh"
+#include "service/raft/raft_group_registry.hh"
 #include "service/topology_guard.hh"
 #include "service/session.hh"
 #include "dht/boot_strapper.hh"
@@ -6250,6 +6251,37 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     while (_topology_state_machine._topology.is_busy()) {
         rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
         co_await _topology_state_machine.event.wait();
+    }
+}
+
+future<> storage_service::set_tablet_balancing_enabled(table_id table,
+                                                       bool enabled) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.set_tablet_balancing_enabled(table, enabled);
+        });
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+        auto user_schema = _db.local().find_schema(table);
+        std::vector<canonical_mutation> updates;
+        updates.emplace_back(
+            replica::tablet_mutation_builder(guard.write_timestamp(), table)
+            .set_balancing_enabled(enabled)
+            .build());
+        topology_change change{std::move(updates)};
+        auto reason = format("set tablet_balancing of {} to {}", table, enabled);
+        auto g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        try {
+            co_return co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
+        } catch (group0_concurrent_modification&) {
+            rtlogger.info("set_tablet_balancing_enabled: "
+                          "concurrent operation is detected, retrying.");
+        }
     }
 }
 

@@ -57,6 +57,7 @@ schema_ptr make_tablets_schema() {
             .with_column("session", uuid_type)
             .with_column("resize_type", utf8_type, column_kind::static_column)
             .with_column("resize_seq_number", long_type, column_kind::static_column)
+            .with_column("balancing_enabled", boolean_type, column_kind::static_column)
             .with_version(db::system_keyspace::generate_schema_version(id))
             .build();
 }
@@ -89,6 +90,7 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
     m.set_static_cell("table_name", data_value(table_name), ts);
     m.set_static_cell("resize_type", data_value(tablets.resize_decision().type_name()), ts);
     m.set_static_cell("resize_seq_number", data_value(int64_t(tablets.resize_decision().sequence_number)), ts);
+    m.set_static_cell("balancing_enabled", data_value(tablets.balancing_enabled()), ts);
 
     tablet_id tid = tablets.first_tablet();
     for (auto&& tablet : tablets.tablets()) {
@@ -164,6 +166,12 @@ tablet_mutation_builder&
 tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_decision) {
     _m.set_static_cell("resize_type", data_value(resize_decision.type_name()), _ts);
     _m.set_static_cell("resize_seq_number", data_value(int64_t(resize_decision.sequence_number)), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_balancing_enabled(bool enabled) {
+    _m.set_static_cell("balancing_enabled", data_value(enabled), _ts);
     return *this;
 }
 
@@ -269,6 +277,11 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             }
             current->map.set_tablet_transition_info(current->tid, tablet_transition_info{stage, transition,
                     std::move(new_tablet_replicas), pending_replica, session_id});
+        }
+
+        if (row.has("balancing_enabled")) {
+            bool balancing_enabled = row.get_as<bool>("balancing_enabled");
+            current->map.set_balancing_enabled(balancing_enabled);
         }
 
         current->map.set_tablet(current->tid, tablet_info{std::move(tablet_replicas)});
