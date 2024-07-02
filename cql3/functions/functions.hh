@@ -30,12 +30,10 @@ namespace functions {
 class functions {
     using declared_t = cql3::functions::declared_t;
     static thread_local declared_t _declared;
-private:
     static std::unordered_multimap<function_name, shared_ptr<function>> init() noexcept;
 public:
     static lw_shared_ptr<column_specification> make_arg_spec(const sstring& receiver_ks, std::optional<const std::string_view> receiver_cf,
             const function& fun, size_t i);
-public:
     static shared_ptr<function> get(data_dictionary::database db,
                                     const sstring& keyspace,
                                     const function_name& name,
