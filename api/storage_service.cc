@@ -1142,6 +1142,12 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (auto source_dc_str = req->get_query_param("source_dc"); !source_dc_str.empty()) {
             source_dc.emplace(std::move(source_dc_str)).set_user_provided();
         }
+        if (auto force_str = req->get_query_param("force"); !force_str.empty() && service::loosen_constraints(validate_bool(force_str))) {
+            if (!source_dc) {
+                throw bad_param_exception("The `source_dc` option must be provided for using the `force` option");
+            }
+            source_dc.set_force();
+        }
         apilog.info("rebuild: source_dc={}", source_dc);
         return ss.local().rebuild(std::move(source_dc)).then([] {
             return make_ready_future<json::json_return_type>(json_void());

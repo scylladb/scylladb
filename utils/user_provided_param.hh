@@ -21,10 +21,12 @@ namespace utils {
 
 enum class optional_param_flag {
     user_provided,
+    force
 };
 
 using optional_param_flags_set = enum_set<super_enum<optional_param_flag,
-    optional_param_flag::user_provided
+    optional_param_flag::user_provided,
+    optional_param_flag::force
 >>;
 
 template <class T = sstring>
@@ -90,6 +92,19 @@ public:
             _flags.set(flag::user_provided);
         } else {
             _flags.remove(flag::user_provided);
+        }
+        return *this;
+    }
+
+    constexpr bool force() const noexcept {
+        return _flags.contains(flag::force);
+    }
+
+    optional_param_base& set_force(bool value = true) {
+        if (value) {
+            _flags.set(flag::force);
+        } else {
+            _flags.remove(flag::force);
         }
         return *this;
     }
