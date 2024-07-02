@@ -186,6 +186,12 @@ public:
     }
 
     processing_result process_state(temporary_buffer<char>& data) {
+        if (_abort.abort_requested()) {
+            auto ex = _abort.abort_requested_exception_ptr();
+            sstlog.warn("aborting index_consume_entry_context::process_state() : {}", ex);
+            std::rethrow_exception(ex);
+        }
+
         auto current_pos = [&] { return this->position() - data.size(); };
         auto read_vint_or_uint64 = [this] (temporary_buffer<char>& data) {
             return is_mc_format() ? this->read_unsigned_vint(data) : this->read_64(data);
