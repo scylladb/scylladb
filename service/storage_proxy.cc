@@ -1453,6 +1453,17 @@ public:
             timeout_cb();
         }
     }
+    void no_targets() {
+        // We don't have any live targets and we should complete the handler now.
+        // Either we already stored sufficient hints to achieve CL and the handler
+        // is completed successfully (see hint_to_dead_endpoints), or we don't achieve
+        // CL because we didn't store sufficient hints and we don't have live targets,
+        // so the handler is completed with error.
+        if (!_cl_achieved) {
+            _error = error::FAILURE;
+        }
+        _proxy->remove_response_handler(_id);
+    }
     void expire_at(storage_proxy::clock_type::time_point timeout) {
         _expire_timer.arm(timeout);
     }
@@ -3939,6 +3950,16 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
     auto& global_stats = handler._proxy->_global_stats;
+
+    if (handler.get_targets().size() == 0) {
+        // Usually we remove the response handler when receiving responses from all targets.
+        // Here we don't have any live targets to get responses from, so we should complete
+        // the write response handler immediately. Otherwise, it will remain active
+        // until it timeouts.
+        handler.no_targets();
+        return;
+    }
+
     if (handler.get_targets().size() != 1 || !fbu::is_me(handler.get_targets()[0])) {
         auto& topology = handler_ptr->_effective_replication_map_ptr->get_topology();
         auto local_dc = topology.get_datacenter();
