@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include <vector>
 #include "gms/inet_address.hh"
 #include "repair/repair.hh"
@@ -144,6 +146,11 @@ public:
 
     future<int> do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
+    struct source_dc_param {
+        sstring name;
+        bool user_provided;   // or implicitly picked as default by scylla
+    };
+
     // The tokens are the tokens assigned to the bootstrap node.
     // all repair-based node operation entry points must be called on shard 0
     future<> bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens);
@@ -153,7 +160,8 @@ public:
     future<> replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<gms::inet_address> ignore_nodes);
 private:
     future<> do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
-    future<> do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::unordered_set<gms::inet_address> ignore_nodes);
+
+    future<> do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, std::optional<source_dc_param> source_dc, streaming::stream_reason reason, std::unordered_set<gms::inet_address> ignore_nodes);
 
     // Must be called on shard 0
     future<> sync_data_using_repair(sstring keyspace,
@@ -264,3 +272,8 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm = {}, bool small_table_optimization = false);
+
+template<>
+struct fmt::formatter<repair_service::source_dc_param> : fmt::formatter<string_view> {
+    auto format(const repair_service::source_dc_param&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
