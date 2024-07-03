@@ -69,15 +69,9 @@ public:
     shared_ptr<function> mock_get(const function_name& name, const std::vector<data_type>& arg_types);
     // Used only by unittest.
     void clear_functions() noexcept;
-    void add_function(shared_ptr<function>);
-    void replace_function(shared_ptr<function>);
-    void remove_function(const function_name& name, const std::vector<data_type>& arg_types);
     std::optional<function_name> used_by_user_aggregate(shared_ptr<user_function>);
     std::optional<function_name> used_by_user_function(const ut_name& user_type);
 private:
-    template <typename F>
-    void with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f);
-
     template <typename F>
     std::vector<shared_ptr<F>> get_filtered_transformed(const sstring& keyspace);
 
@@ -103,10 +97,23 @@ private:
 // Getter for static functions object.
 functions& instance();
 
-class change_batch : public functions {
+// This class should be used via change_batch
+class functions_changer : public functions {
+public:
+    void add_function(shared_ptr<function>);
+    void replace_function(shared_ptr<function>);
+    void remove_function(const function_name& name, const std::vector<data_type>& arg_types);
+protected:
+    functions_changer(skip_init) : functions(skip_init{}) {}
+private:
+    template <typename F>
+    void with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f);
+};
+
+class change_batch : public functions_changer {
 public:
     // Skip init as we copy data from static instance.
-    change_batch() : functions(skip_init{}) {
+    change_batch() : functions_changer(skip_init{}) {
         _declared = instance()._declared;
     }
 
