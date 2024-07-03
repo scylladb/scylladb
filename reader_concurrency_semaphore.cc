@@ -938,12 +938,15 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
                 e.pr.set_exception(std::current_exception());
             }
 
+            // We now possibly have >= CPU concurrency, so even if the above read
+            // didn't release any resources, just dequeueing it from the
+            // _ready_list could allow us to admit new reads.
+            maybe_admit_waiters();
+
             if (need_preempt()) {
                 co_await coroutine::maybe_yield();
             }
         }
-
-        maybe_admit_waiters();
     }
 }
 
