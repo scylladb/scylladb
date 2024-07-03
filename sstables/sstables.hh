@@ -658,7 +658,7 @@ private:
     // partitions, if the partition estimate provided during bloom
     // filter initialisation was not good.
     // This should be called only before an sstable is sealed.
-    void maybe_rebuild_filter_from_index(uint64_t num_partitions);
+    void maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring origin);
 
     future<> read_summary() noexcept;
 
