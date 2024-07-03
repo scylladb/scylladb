@@ -1407,7 +1407,7 @@ void sstable::write_filter() {
     write_simple<component_type::Filter>(filter_ref);
 }
 
-void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
+void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring origin) {
     if (!has_component(component_type::Filter)) {
         return;
     }
@@ -1437,8 +1437,8 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
     // Replace the existing filter with a new one that can optimally represent the given num_partitions.
     // The rebuilding is done in-place as this method is only called before the sstable is sealed.
     _components->filter = utils::i_filter::get_filter(num_partitions, _schema->bloom_filter_fp_chance(), get_filter_format(_version));
-    sstlog.info("Rebuilding bloom filter {}: resizing bitset from {} bytes to {} bytes.", filename(component_type::Filter), curr_bitset_size,
-                static_cast<utils::filter::bloom_filter*>(_components->filter.get())->bits().memory_size());
+    sstlog.info("Rebuilding bloom filter {}: resizing bitset from {} bytes to {} bytes. sstable origin: {}", filename(component_type::Filter), curr_bitset_size,
+                static_cast<utils::filter::bloom_filter*>(_components->filter.get())->bits().memory_size(), origin);
 
     auto index_file = open_file(component_type::Index, open_flags::ro).get();
     auto index_file_closer = deferred_action([&index_file] {
