@@ -221,6 +221,12 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
     alloc_strategy_unique_ptr<rows_entry> p_sentinel;
     alloc_strategy_unique_ptr<rows_entry> this_sentinel;
     auto insert_sentinel_back = defer([&] {
+        // Note: this lambda will be run by a destructor (of the `defer` guard),
+        // so it mustn't throw, or else it will crash the node.
+        //
+        // To prevent a `bad_alloc` during the tree insertion, we have to preallocate
+        // some memory for the new tree nodes. This is done by the `hold_reserve`
+        // constructed after the lambda.
         if (this_sentinel) {
             assert(p_i != p._rows.end());
             auto rt = this_sentinel->range_tombstone();
@@ -253,6 +259,15 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
             }
         }
     });
+
+    // This guard will ensure that LSA reserves one free segment more than it
+    // needs for internal reasons.
+    //
+    // It will be destroyed immediately before the sentinel-inserting `defer`
+    // happens, ensuring that the sentinel insertion has at least one free LSA segment
+    // to work with. This should be enough, since we only need to allocate a few
+    // B-tree nodes.
+    auto memory_reserve_for_sentinel_inserts = hold_reserve(logalloc::segment_size);
 
     while (p_i != p._rows.end()) {
         rows_entry& src_e = *p_i;
