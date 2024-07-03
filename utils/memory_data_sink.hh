@@ -23,6 +23,7 @@ class memory_data_sink_buffers {
 public:
     size_t size() const { return _size; }
     buffers_type& buffers() { return _bufs; }
+    const buffers_type& buffers() const { return _bufs; }
 
     // Strong exception guarantees
     void put(temporary_buffer<char>&& buf) {
