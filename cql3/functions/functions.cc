@@ -572,6 +572,13 @@ functions& instance() {
     return f;
 }
 
+void change_batch::commit() {
+    if (_declared.empty()) {
+        return;
+    }
+    instance()._declared = std::move(_declared);
+}
+
 }
 }
 

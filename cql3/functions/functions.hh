@@ -23,14 +23,20 @@ namespace functions {
 //forward declarations
     class user_function;
     class user_aggregate;
+    class change_batch;
 
     using declared_t = std::unordered_multimap<function_name, shared_ptr<function>>;
     void add_agg_functions(declared_t& funcs);
 
 class functions {
+    friend class change_batch;
+    std::unordered_multimap<function_name, shared_ptr<function>> init() noexcept;
+protected:
     using declared_t = cql3::functions::declared_t;
     declared_t _declared;
-    std::unordered_multimap<function_name, shared_ptr<function>> init() noexcept;
+
+    struct skip_init {};
+    functions(skip_init) {};
 public:
     lw_shared_ptr<column_specification> make_arg_spec(const sstring& receiver_ks, std::optional<const std::string_view> receiver_cf,
             const function& fun, size_t i);
@@ -61,6 +67,7 @@ public:
     declared_t::iterator find_iter(const function_name& name, const std::vector<data_type>& arg_types);
     shared_ptr<function> find(const function_name& name, const std::vector<data_type>& arg_types);
     shared_ptr<function> mock_get(const function_name& name, const std::vector<data_type>& arg_types);
+    // Used only by unittest.
     void clear_functions() noexcept;
     void add_function(shared_ptr<function>);
     void replace_function(shared_ptr<function>);
@@ -95,6 +102,17 @@ private:
 
 // Getter for static functions object.
 functions& instance();
+
+class change_batch : public functions {
+public:
+    // Skip init as we copy data from static instance.
+    change_batch() : functions(skip_init{}) {
+        _declared = instance()._declared;
+    }
+
+    // Commit allows to atomically apply changes to main functions instance.
+    void commit();
+};
 
 }
 }
