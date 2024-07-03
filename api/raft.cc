@@ -83,12 +83,40 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
             return json_return_type(srv.current_leader().to_sstring());
         });
     });
+    r::read_barrier.set(r, [&raft_gr] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+        auto timeout = get_request_timeout(*req);
+
+        if (!req->query_parameters.contains("group_id")) {
+            // Read barrier on group 0 by default
+            co_await raft_gr.invoke_on(0, [timeout] (service::raft_group_registry& raft_gr) {
+                return raft_gr.group0_with_timeouts().read_barrier(nullptr, timeout);
+            });
+            co_return json_void{};
+        }
+
+        raft::group_id gid{utils::UUID{req->get_query_param("group_id")}};
+
+        std::atomic<bool> found_srv{false};
+        co_await raft_gr.invoke_on_all([gid, timeout, &found_srv] (service::raft_group_registry& raft_gr) {
+            if (!raft_gr.find_server(gid)) {
+                return make_ready_future<>();
+            }
+            found_srv = true;
+            return raft_gr.get_server_with_timeouts(gid).read_barrier(nullptr, timeout);
+        });
+
+        if (!found_srv) {
+            throw bad_param_exception{fmt::format("Server for group ID {} not found", gid)};
+        }
+
+        co_return json_void{};
+    });
 }
 
 void unset_raft(http_context&, httpd::routes& r) {
     r::trigger_snapshot.unset(r);
     r::get_leader_host.unset(r);
+    r::read_barrier.unset(r);
 }
 
 }
-
