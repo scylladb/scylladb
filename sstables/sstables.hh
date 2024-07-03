@@ -651,6 +651,14 @@ private:
     future<> read_filter(sstable_open_config cfg = {});
 
     void write_filter();
+<<<<<<< HEAD
+=======
+    // Rebuild a bloom filter from the index with the given number of
+    // partitions, if the partition estimate provided during bloom
+    // filter initialisation was not good.
+    // This should be called only before an sstable is sealed.
+    void maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring origin);
+>>>>>>> 23973f344e (sstables::maybe_rebuild_filter_from_index: log sstable origin)
 
     future<> read_summary() noexcept;
 
