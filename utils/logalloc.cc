@@ -1088,6 +1088,7 @@ public:
     void clear_allocation_failure_flag() noexcept { _allocation_failure_flag = false; }
     bool allocation_failure_flag() const noexcept { return _allocation_failure_flag; }
     void refill_emergency_reserve();
+    void ensure_free_segments(size_t n_segments);
     void add_non_lsa_memory_in_use(size_t n) noexcept {
         _non_lsa_memory_in_use += n;
     }
@@ -1330,10 +1331,18 @@ void segment_pool::deallocate_segment(segment* seg) noexcept
 }
 
 void segment_pool::refill_emergency_reserve() {
-    while (_free_segments < _emergency_reserve_max) {
-        auto seg = allocate_segment(_emergency_reserve_max);
+    try {
+        ensure_free_segments(_emergency_reserve_max);
+    } catch (const std::bad_alloc&) {
+        throw bad_alloc(format("failed to refill emergency reserve of {} (have {} free segments)", _emergency_reserve_max, _free_segments));
+    }
+}
+
+void segment_pool::ensure_free_segments(size_t n_segments) {
+    while (_free_segments < n_segments) {
+        auto seg = allocate_segment(n_segments);
         if (!seg) {
-            throw bad_alloc(format("failed to refill emergency reserve of {} (have {} free segments)", _emergency_reserve_max, _free_segments));
+            throw std::bad_alloc();
         }
         ++_segments_in_use;
         free_segment(seg);
