@@ -3845,7 +3845,10 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             slogger.info("replace[{}]: Using repair based node ops to sync data", uuid);
             auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
             auto tmptr = get_token_metadata_ptr();
-            _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), bootstrap_tokens, ctl.ignore_nodes).get();
+            auto ignore_nodes = boost::copy_range<std::unordered_set<locator::host_id>>(replace_info.ignore_nodes | boost::adaptors::transformed([] (const auto& x) {
+                return x.first;
+            }));
+            _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), bootstrap_tokens, std::move(ignore_nodes)).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
@@ -5487,18 +5490,12 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                     on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", raft_server.id()));
                                 }
                                 if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
-                                    // FIXME: we should not need to translate ids to IPs here. See #6403.
-                                    std::unordered_set<gms::inet_address> ignored_ips;
-                                    for (const auto& id : _topology_state_machine._topology.ignored_nodes) {
-                                        auto ip = _group0->address_map().find(id);
-                                        if (!ip) {
-                                            on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", id));
-                                        }
-                                        ignored_ips.insert(*ip);
-                                    }
+                                    auto ignored_nodes = boost::copy_range<std::unordered_set<locator::host_id>>(_topology_state_machine._topology.ignored_nodes | boost::adaptors::transformed([] (const auto& id) {
+                                        return locator::host_id(id.uuid());
+                                    }));
                                     auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                                     auto tmptr = get_token_metadata_ptr();
-                                    co_await _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), rs.ring.value().tokens, std::move(ignored_ips));
+                                    co_await _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), rs.ring.value().tokens, std::move(ignored_nodes));
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                                           locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
