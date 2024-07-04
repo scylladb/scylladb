@@ -10,6 +10,7 @@
 #include <cctype>
 #include <chrono>
 #include <concepts>
+#include <future>
 #include <limits>
 #include <iterator>
 #include <numeric>
@@ -124,7 +125,13 @@ struct operation_failed_with_status : public std::runtime_error {
 };
 
 struct api_request_failed : public std::runtime_error {
+    http::reply::status_type status;
+
     using std::runtime_error::runtime_error;
+    api_request_failed(http::reply::status_type s, sstring message)
+        : std::runtime_error(std::move(message))
+        , status(s)
+    {}
 };
 
 class scylla_rest_client {
@@ -156,7 +163,7 @@ class scylla_rest_client {
             } catch (...) {
                 message = res;
             }
-            throw api_request_failed(fmt::format("error executing {} request to {} with parameters {}: remote replied with status code {}:\n{}",
+            throw api_request_failed(status, fmt::format("error executing {} request to {} with parameters {}: remote replied with status code {}:\n{}",
                     type, url, params, status, message));
         }
 
@@ -2680,6 +2687,267 @@ void table_stats_operation(scylla_rest_client& client, const bpo::variables_map&
     }
 }
 
+void tasks_print_status(const rjson::value& res) {
+    auto status = res.GetObject();
+    for (const auto& x: status) {
+        if (x.value.IsString()) {
+            fmt::print("{}: {}\n", x.name.GetString(), x.value.GetString());
+        } else if (x.value.IsArray()) {
+            fmt::print("{}: [", x.name.GetString());
+            sstring delim = "";
+            for (const auto& el : x.value.GetArray()) {
+                fmt::print("{}{{", delim);
+                sstring ident_delim = "";
+                for (const auto& child_info : el.GetObject()) {
+                    fmt::print("{}{}: {}", ident_delim, child_info.name.GetString(), child_info.value.GetString());
+                    ident_delim = ", ";
+                }
+                fmt::print(" }}");
+                delim = ", ";
+            }
+            fmt::print("]\n");
+        } else {
+            fmt::print("{}: {}\n", x.name.GetString(), x.value);
+        }
+    }
+}
+
+void tasks_add_tree_to_statuses_lists(Tabulate& table, const rjson::value& res) {
+    auto statuses = res.GetArray();
+    for (auto& element : statuses) {
+        const auto& status = element.GetObject();
+
+        sstring children_ids = "[";
+        sstring delim = "";
+        if (status.HasMember("children_ids")) {
+            for (const auto& el : status["children_ids"].GetArray()) {
+                children_ids += format("{}{{", delim);
+                sstring ident_delim = "";
+                for (const auto& child_info : el.GetObject()) {
+                    children_ids += format("{}{}: {}", ident_delim, child_info.name.GetString(), child_info.value.GetString());
+                    ident_delim = ", ";
+                }
+                children_ids += format(" }}");
+                delim = ", ";
+            }
+        }
+        children_ids += "]";
+
+        table.add(rjson::to_string_view(status["id"]),
+                rjson::to_string_view(status["type"]),
+                rjson::to_string_view(status["kind"]),
+                rjson::to_string_view(status["scope"]),
+                rjson::to_string_view(status["state"]),
+                status["is_abortable"].GetBool(),
+                rjson::to_string_view(status["start_time"]),
+                rjson::to_string_view(status["end_time"]),
+                rjson::to_string_view(status["error"]),
+                rjson::to_string_view(status["parent_id"]),
+                status["sequence_number"].GetUint64(),
+                status["shard"].GetUint(),
+                rjson::to_string_view(status["keyspace"]),
+                rjson::to_string_view(status["table"]),
+                rjson::to_string_view(status["entity"]),
+                rjson::to_string_view(status["progress_units"]),
+                status["progress_total"].GetDouble(),
+                status["progress_completed"].GetDouble(),
+                children_ids);
+    }
+}
+
+void tasks_print_trees(const std::vector<rjson::value>& res) {
+    Tabulate table;
+    table.add("id", "type", "kind", "scope", "state",
+        "is_abortable", "start_time", "end_time", "error", "parent_id",
+        "sequence_number", "shard", "keyspace", "table", "entity",
+        "progress_units", "total", "completed", "children_ids");
+
+    for (const auto& res_el : res) {
+        tasks_add_tree_to_statuses_lists(table, res_el);
+    }
+
+    table.print();
+}
+
+void tasks_print_stats_list(const rjson::value& res) {
+    auto stats = res.GetArray();
+    Tabulate table;
+    table.add("task_id", "type", "kind", "scope", "state", "sequence_number", "keyspace", "table", "entity");
+    for (auto& element : stats) {
+        const auto& s = element.GetObject();
+
+        table.add(rjson::to_string_view(s["task_id"]),
+                rjson::to_string_view(s["type"]),
+                rjson::to_string_view(s["kind"]),
+                rjson::to_string_view(s["scope"]),
+                rjson::to_string_view(s["state"]),
+                s["sequence_number"].GetUint64(),
+                rjson::to_string_view(s["keyspace"]),
+                rjson::to_string_view(s["table"]),
+                rjson::to_string_view(s["entity"]));
+    }
+    table.print();
+}
+
+void tasks_abort_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.contains("id")) {
+        throw std::invalid_argument("required parameter is missing: id");
+    }
+    auto id = vm["id"].as<sstring>();
+
+    try {
+        auto res = client.post(format("/task_manager/abort_task/{}", id));
+    } catch (const api_request_failed& e) {
+        if (e.status != http::reply::status_type::forbidden) {
+            throw;
+        }
+
+        fmt::print("Task with id {} is not abortable\n", id);
+    }
+}
+
+void tasks_list_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.contains("module")) {
+        throw std::invalid_argument("required parameter is missing: module");
+    }
+    auto module = vm["module"].as<sstring>();
+    std::unordered_map<sstring, sstring> params;
+    if (vm.contains("keyspace")) {
+        params["keyspace"] = vm["keyspace"].as<sstring>();
+    }
+    if (vm.contains("table")) {
+        params["table"] = vm["table"].as<sstring>();
+    }
+    if (vm.contains("internal")) {
+        params["internal"] = "true";
+    }
+    int interval = vm["interval"].as<int>();
+    int iterations = vm["iterations"].as<int>();
+
+    auto res = client.get(format("/task_manager/list_module_tasks/{}", module), params);
+    tasks_print_stats_list(res);
+
+    for (auto i = 0; i < iterations; ++i) {
+        sleep(interval);
+        auto res = client.get(format("/task_manager/list_module_tasks/{}", module), params);
+        fmt::print("\n\n");
+        tasks_print_stats_list(res);
+    }
+}
+
+void tasks_modules_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto res = client.get("/task_manager/list_modules");
+
+    for (auto& x: res.GetArray()) {
+        fmt::print("{}\n", rjson::to_string_view(x));
+    }
+}
+
+void tasks_status_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.contains("id")) {
+        throw std::invalid_argument("required parameter is missing: id");
+    }
+    auto id = vm["id"].as<sstring>();
+
+    auto res = client.get(format("/task_manager/task_status/{}", id));
+
+    tasks_print_status(res);
+}
+
+void tasks_tree_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::vector<rjson::value> res;
+    if (vm.contains("id")) {
+        auto id = vm["id"].as<sstring>();
+
+        res.push_back(client.get(format("/task_manager/task_status_recursive/{}", id)));
+
+        tasks_print_trees(res);
+        return;
+    }
+
+    auto module_res = client.get("/task_manager/list_modules");
+    for (const auto& module : module_res.GetArray()) {
+        auto list_res = client.get(format("/task_manager/list_module_tasks/{}", module.GetString()));
+        for (const auto& stats : list_res.GetArray()) {
+            try {
+                res.push_back(client.get(format("/task_manager/task_status_recursive/{}", stats.GetObject()["task_id"].GetString())));
+            } catch (const api_request_failed& e) {
+                if (e.status == http::reply::status_type::bad_request) {
+                    // Task has already been unregistered.
+                    continue;
+                }
+                throw;
+            }
+        }
+    }
+    tasks_print_trees(res);
+}
+
+void tasks_ttl_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.contains("set")) {
+        auto res = client.get("/task_manager/ttl");
+        fmt::print("Current ttl: {}\n", res);
+        return;
+    }
+    auto new_ttl = vm["set"].as<uint32_t>();
+    std::unordered_map<sstring, sstring> params = {{ "ttl", fmt::to_string(new_ttl) }};
+
+    auto res = client.post("/task_manager/ttl", std::move(params));
+}
+
+enum class tasks_exit_code {
+    ok = 0,
+    failed = 123,
+    timeout = 124,
+    request_error = 125
+};
+
+void tasks_wait_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("id")) {
+        throw std::invalid_argument("required parameter is missing: id");
+    }
+    std::unordered_map<sstring, sstring> params;
+    auto id = vm["id"].as<sstring>();
+    bool quiet = vm.count("quiet");
+    if (vm.count("timeout")) {
+        params["timeout"] = fmt::format("{}", vm["timeout"].as<uint32_t>());
+    }
+
+    std::exception_ptr ex = nullptr;
+    tasks_exit_code exit_code = tasks_exit_code::ok;
+    try {
+        auto res = client.get(format("/task_manager/wait_task/{}", id), params);
+        if (!quiet) {
+            tasks_print_status(res);
+            return;
+        }
+        exit_code = res.GetObject()["state"] == "failed" ? tasks_exit_code::failed : tasks_exit_code::ok;
+    } catch (const api_request_failed& e) {
+        if (e.status == http::reply::status_type::request_timeout) {
+            if (!quiet) {
+                fmt::print("Operation timed out");
+                return;
+            }
+            exit_code = tasks_exit_code::timeout;
+        } else {
+            exit_code = tasks_exit_code::request_error;
+            ex = std::current_exception();
+        }
+    } catch (...) {
+        exit_code = tasks_exit_code::request_error;
+        ex = std::current_exception();
+    }
+
+    if (quiet) {
+        if (exit_code == tasks_exit_code::ok) {
+            return;
+        }
+        throw operation_failed_with_status(int(exit_code));
+    } else if (ex) {
+        std::rethrow_exception(ex);
+    }
+}
+
 void toppartitions_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     // sanity check the arguments
     sstring table_filters;
@@ -3795,6 +4063,151 @@ For more information, see: {}"
             },
             {
                 table_stats_operation
+            }
+        },
+        {
+            {
+                "tasks",
+                "Manages task manager tasks",
+                "",
+                { },
+                {
+                    typed_option<sstring>("command", "The uuid of a task", 1),
+                },
+                {
+                        {
+                            "abort",
+                            "Aborts the task",
+fmt::format(R"(
+Aborts a task with given id. If the task is not abortable, appropriate message
+will be printed, depending on why the abort failed.
+
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/tasks/abort.html")),
+                            { },
+                            {
+                                typed_option<sstring>("id", "The uuid of a task", 1),
+                            },
+                        },
+                        {
+                            "list",
+                            "Gets a list of tasks in a given module",
+fmt::format(R"(
+Lists short stats (including id, type, kind, scope, state, sequence_number,
+keyspace, table, and entity) of tasks in a specified module.
+
+Allows to monitor tasks for extended time.
+
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/tasks/list.html")),
+                            {
+                                typed_option<>("internal", "Show internal tasks"),
+                                typed_option<sstring>("keyspace,ks", "The keyspace name; if specified only the tasks for this keyspace are shown"),
+                                typed_option<sstring>("table,t", "The table name; if specified only the tasks for this table are shown"),
+                                typed_option<int>("interval", 10, "Re-print the task list after interval seconds. Can be used to monitor the task-list for extended period of time"),
+                                typed_option<int>("iterations,i", 0, "The number of times the task list will be re-printed. Use interval to control the frequency of re-printing the list"),
+                            },
+                            {
+                                typed_option<sstring>("module", "The module to query about", 1),
+                            },
+                        },
+                        {
+                            "modules",
+                            "Gets a list of modules supported by task manager",
+fmt::format(R"(
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/tasks/modules.html")),
+                            { },
+                            { },
+                        },
+                        {
+                            "status",
+                            "Gets a status of the task",
+fmt::format(R"(
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/tasks/status.html")),
+                            { },
+                            {
+                                typed_option<sstring>("id", "The uuid of a task", 1),
+                            },
+                        },
+                        {
+                            "tree",
+                            "Gets statuses of the task tree with a given root",
+fmt::format(R"(
+Lists statuses of a specified task and all its descendants in BFS order.
+If id param isn't specified, trees of all non-internal tasks are listed.
+
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/tasks/tree.html")),
+                            { },
+                            {
+                                typed_option<sstring>("id", "The uuid of a root task", -1),
+                            },
+                        },
+                        {
+                            "ttl",
+                            "Gets or sets task ttl",
+fmt::format(R"(
+Gets or sets the time in seconds for which tasks will be kept in task manager after
+they are finished.
+
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/tasks/ttl.html")),
+                            {
+                                typed_option<uint32_t>("set", "New task_ttl value", -1),
+                            },
+                            { },
+                        },
+                        {
+                            "wait",
+                            "Waits for the task to finish and returns its status",
+fmt::format(R"(
+Waits until task is finished and returns it status. If task does not finish before
+timeout, the appropriate message with failure reason will be printed.
+
+If quiet flag is set, nothing is printed. Instead the right exit code is returned:
+- 0, if the task finished successfully;
+- 123, if the task failed;
+- 124, if the operation timed out;
+- 125, if there was an error.
+
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/tasks/wait.html")),
+                            {
+                                typed_option<>("quiet,q", "If set, status isn't printed"),
+                                typed_option<uint32_t>("timeout", "Timeout in seconds"),
+                            },
+                            {
+                                typed_option<sstring>("id", "The uuid of a root task", 1),
+                            },
+                        }
+                }
+            },
+            {
+                {
+                    {
+                        "abort", { tasks_abort_operation }
+                    },
+                    {
+                        "list", { tasks_list_operation }
+                    },
+                    {
+                        "modules", { tasks_modules_operation }
+                    },
+                    {
+                        "status", { tasks_status_operation }
+                    },
+                    {
+                        "tree", { tasks_tree_operation }
+                    },
+                    {
+                        "ttl", { tasks_ttl_operation }
+                    },
+                    {
+                        "wait", { tasks_wait_operation }
+                    },
+                }
             }
         },
         {

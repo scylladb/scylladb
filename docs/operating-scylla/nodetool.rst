@@ -54,6 +54,7 @@ Nodetool
    nodetool-commands/status
    Nodetool stop compaction <nodetool-commands/stop>
    nodetool-commands/tablestats
+   nodetool-commands/tasks/index
    nodetool-commands/toppartitions
    nodetool-commands/upgradesstables
    nodetool-commands/viewbuildstatus
@@ -136,6 +137,7 @@ Operations that are not listed below are currently not available.
 * :doc:`stop </operating-scylla/nodetool-commands/stop/>` - Stop compaction operation.
 * **tablehistograms** see :doc:`cfhistograms <nodetool-commands/cfhistograms/>`
 * :doc:`tablestats </operating-scylla/nodetool-commands/tablestats/>` - Provides in-depth diagnostics regard table. 
+* :doc:`tasks </operating-scylla/nodetool-commands/tasks/index>` - Manage tasks manager tasks.
 * :doc:`toppartitions </operating-scylla/nodetool-commands/toppartitions/>` - Samples cluster writes and reads and reports the most active partitions in a specified table and time frame.
 * :doc:`upgradesstables </operating-scylla/nodetool-commands/upgradesstables>` - Upgrades each table that is not running the latest ScyllaDB version, by rewriting SSTables.
 * :doc:`viewbuildstatus </operating-scylla/nodetool-commands/viewbuildstatus/>` - Shows the progress of a materialized view build.
