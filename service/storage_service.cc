@@ -3843,7 +3843,9 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
         // Step 7: Sync data for replace
         if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
             slogger.info("replace[{}]: Using repair based node ops to sync data", uuid);
-            _repair.local().replace_with_repair(get_token_metadata_ptr(), bootstrap_tokens, ctl.ignore_nodes).get();
+            auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
+            auto tmptr = get_token_metadata_ptr();
+            _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), bootstrap_tokens, ctl.ignore_nodes).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
@@ -4677,8 +4679,9 @@ future<> storage_service::rebuild(utils::optional_param source_dc) {
         } else {
             slogger.info("rebuild from dc: {}", source_dc);
             auto tmptr = ss.get_token_metadata_ptr();
+            auto ks_erms = ss._db.local().get_non_local_strategy_keyspaces_erms();
             if (ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
-                co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
+                co_await ss._repair.local().rebuild_with_repair(std::move(ks_erms), tmptr, std::move(source_dc));
             } else {
                 auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
                         tmptr->get_my_id(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, null_topology_guard);
@@ -4686,7 +4689,6 @@ future<> storage_service::rebuild(utils::optional_param source_dc) {
                 if (source_dc) {
                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(*source_dc));
                 }
-                auto ks_erms = ss._db.local().get_non_local_strategy_keyspaces_erms();
                 for (const auto& [keyspace_name, erm] : ks_erms) {
                     co_await streamer->add_ranges(keyspace_name, erm, ss.get_ranges_for_endpoint(erm, ss.get_broadcast_address()), ss._gossiper, false);
                 }
@@ -5494,7 +5496,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                         }
                                         ignored_ips.insert(*ip);
                                     }
-                                    co_await _repair.local().replace_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, std::move(ignored_ips));
+                                    auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
+                                    auto tmptr = get_token_metadata_ptr();
+                                    co_await _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), rs.ring.value().tokens, std::move(ignored_ips));
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                                           locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
@@ -5561,12 +5565,13 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         rtlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
                         co_await retrier(_rebuild_result, [&] () -> future<> {
                             auto tmptr = get_token_metadata_ptr();
+                            auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
                                 utils::optional_param sdc_param;
                                 if (!source_dc.empty()) {
                                     sdc_param.emplace(source_dc).set_user_provided();
                                 }
-                                co_await _repair.local().rebuild_with_repair(tmptr, std::move(sdc_param));
+                                co_await _repair.local().rebuild_with_repair(std::move(ks_erms), tmptr, std::move(sdc_param));
                             } else {
                                 auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
                                         tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
@@ -5574,7 +5579,6 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 if (source_dc != "") {
                                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
                                 }
-                                auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                                 for (const auto& [keyspace_name, erm] : ks_erms) {
                                     co_await streamer->add_ranges(keyspace_name, erm, get_ranges_for_endpoint(erm, get_broadcast_address()), _gossiper, false);
                                 }
