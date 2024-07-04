@@ -232,6 +232,8 @@ async def run_server(ip, port):
         aiohttp.web.route("*", "/stream_manager/", wrap_handler(server.handle_generic_request)),
         aiohttp.web.route("*", "/system/{part1}", wrap_handler(server.handle_generic_request)),
         aiohttp.web.route("*", "/system/{part1}/{part2}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/task_manager/{part1}", wrap_handler(server.handle_generic_request)),
+        aiohttp.web.route("*", "/task_manager/{part1}/{part2}", wrap_handler(server.handle_generic_request)),
     ])
 
     logger.info("start serving")
