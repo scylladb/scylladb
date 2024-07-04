@@ -4485,10 +4485,10 @@ future<> storage_service::do_drain() {
         return bm.drain();
     });
 
+    co_await _view_builder.invoke_on_all(&db::view::view_builder::drain);
     co_await _db.invoke_on_all(&replica::database::drain);
     co_await _sys_ks.invoke_on_all(&db::system_keyspace::shutdown);
     co_await _repair.invoke_on_all(&repair_service::shutdown);
-    co_await _view_builder.invoke_on_all(&db::view::view_builder::drain);
 }
 
 future<> storage_service::do_cluster_cleanup() {
