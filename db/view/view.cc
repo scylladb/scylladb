@@ -1695,6 +1695,9 @@ static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator
             std::move(tr_state),
             allow_hints,
             service::is_cancellable::yes);
+    while (utils::get_local_injector().enter("never_finish_remote_view_updates")) {
+        co_await seastar::sleep(100ms);
+    }
 }
 
 static bool should_update_synchronously(const schema& s) {
@@ -2660,6 +2663,10 @@ update_backlog node_update_backlog::fetch() {
         _max.store(new_max, std::memory_order_relaxed);
         return new_max;
     }
+    // If we perform a shard-aware write, we can read the backlog of the current shard,
+    // which was just updated.
+    // We still need to compare it to the max, aggregated from all shards, which might
+    // still be higher despite being most likely slightly outdated.
     return std::max(fetch_shard(this_shard_id()), _max.load(std::memory_order_relaxed));
 }
 

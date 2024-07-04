@@ -476,6 +476,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
         }
     }
     co_await builder.close();
+    _proxy.local().update_view_update_backlog();
     if (err) {
         std::rethrow_exception(err);
     }

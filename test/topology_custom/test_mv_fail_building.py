@@ -8,21 +8,10 @@ import pytest
 import time
 from test.topology.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
+from test.pylib.util import wait_for_view
 
 from cassandra.cluster import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
-
-
-async def wait_for_view(cql, name, node_count):
-    deadline = time.time() + 120
-    while time.time() < deadline:
-        done = await cql.run_async(f"SELECT COUNT(*) FROM system_distributed.view_build_status WHERE status = 'SUCCESS' AND view_name = '{name}' ALLOW FILTERING")
-        if done[0][0] == node_count:
-            return
-        else:
-            time.sleep(0.2)
-    raise Exception("Timeout waiting for views to build")
-
 
 # This test makes sure that even if the view building encounter errors, the view building is eventually finished
 # and the view is consistent with the base table.

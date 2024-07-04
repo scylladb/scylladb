@@ -10,6 +10,7 @@ import pytest
 import time
 import logging
 from test.topology.conftest import skip_mode
+from test.pylib.util import wait_for_view
 from cassandra.cqltypes import Int32Type
 
 logger = logging.getLogger(__name__)
@@ -41,17 +42,6 @@ async def insert_with_concurrency(cql, value_count, concurrency):
     await asyncio.gather(*tasks)
     logger.info(f"Finished writes with concurrency {concurrency}")
 
-async def wait_for_views(cql, mvs_count, node_count):
-    deadline = time.time() + 120
-    while time.time() < deadline:
-        done = await cql.run_async(f"SELECT COUNT(*) FROM system_distributed.view_build_status WHERE status = 'SUCCESS' ALLOW FILTERING")
-        logger.info(f"Views built: {done[0][0]}")
-        if done[0][0] == node_count * mvs_count:
-            return
-        else:
-            time.sleep(0.2)
-    raise Exception("Timeout waiting for views to build")
-
 # This test reproduces issue #12379
 # To quickly exceed the view update backlog limit, the test uses a minimal, 2 node
 # cluster and lowers the limit using the "view_update_limit" error injection.
@@ -78,7 +68,7 @@ async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) 
     await cql.run_async(f"CREATE MATERIALIZED VIEW ks.mv_cf_view AS SELECT * FROM ks.tab "
                     "WHERE c IS NOT NULL and key IS NOT NULL PRIMARY KEY (c, key) ")
 
-    await wait_for_views(cql, 1, node_count)
+    await wait_for_view(cql, "mv_cf_view", node_count)
 
     logger.info(f"Deleting all rows from partition with key 0")
     await cql.run_async(f"DELETE FROM ks.tab WHERE key = 0", timeout=300)

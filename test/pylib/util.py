@@ -241,3 +241,10 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
         return 0
 
     return finish
+
+async def wait_for_view(cql: Session, name: str, node_count: int, timeout: int = 120):
+    async def view_is_built():
+        done = await cql.run_async(f"SELECT COUNT(*) FROM system_distributed.view_build_status WHERE status = 'SUCCESS' AND view_name = '{name}' ALLOW FILTERING")
+        return done[0][0] == node_count or None
+    deadline = time.time() + timeout
+    await wait_for(view_is_built, deadline)
