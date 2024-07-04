@@ -166,7 +166,7 @@ static std::vector<::shared_ptr<db::functions::aggregate_function>> get_function
             }
 
             auto name = db::functions::function_name::native_function("countRows");
-            auto func = cql3::functions::functions::find(name, {});
+            auto func = cql3::functions::instance().find(name, {});
             aggr = dynamic_pointer_cast<db::functions::aggregate_function>(func);
             if (!aggr) {
                 throw std::runtime_error("Count function not found.");
@@ -175,7 +175,7 @@ static std::vector<::shared_ptr<db::functions::aggregate_function>> get_function
             auto& info = request.aggregation_infos.value()[i];
             auto types = boost::copy_range<std::vector<data_type>>(info.column_names | boost::adaptors::transformed(name_as_type));
             
-            auto func = cql3::functions::functions::mock_get(info.name, types);
+            auto func = cql3::functions::instance().mock_get(info.name, types);
             if (!func) {
                 throw std::runtime_error(format("Cannot mock aggregate function {}", info.name));    
             }

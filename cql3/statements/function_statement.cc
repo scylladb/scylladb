@@ -34,12 +34,12 @@ future<> drop_function_statement_base::check_access(query_processor& qp, const s
     create_arg_types(qp);
     shared_ptr<functions::function> func;
     if (_args_present) {
-        func = functions::functions::find(_name, _arg_types);
+        func = functions::instance().find(_name, _arg_types);
         if (!func) {
             return make_ready_future<>();
         }
     } else {
-        auto funcs = functions::functions::find(_name);
+        auto funcs = functions::instance().find(_name);
         if (!funcs.empty()) {
             auto b = funcs.begin();
             auto i = b;
@@ -121,7 +121,7 @@ create_function_statement_base::create_function_statement_base(functions::functi
 
 seastar::future<shared_ptr<functions::function>> create_function_statement_base::validate_while_executing(query_processor& qp) const {
     create_arg_types(qp);
-    auto old = functions::functions::find(_name, _arg_types);
+    auto old = functions::instance().find(_name, _arg_types);
     if (!old || _or_replace) {
         co_return co_await create(qp, old.get());
     }
@@ -139,12 +139,12 @@ seastar::future<shared_ptr<db::functions::function>> drop_function_statement_bas
     create_arg_types(qp);
     shared_ptr<functions::function> func;
     if (_args_present) {
-        func = functions::functions::find(_name, _arg_types);
+        func = functions::instance().find(_name, _arg_types);
         if (!func && !_if_exists) {
             throw exceptions::invalid_request_exception(format("User function {}({}) doesn't exist", _name, _arg_types));
         }
     } else {
-        auto funcs = functions::functions::find(_name);
+        auto funcs = functions::instance().find(_name);
         if (!funcs.empty()) {
             auto b = funcs.begin();
             auto i = b;

@@ -49,6 +49,7 @@
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/future.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -1893,7 +1894,7 @@ static seastar::future<shared_ptr<cql3::functions::user_function>> create_func(r
             row.get_nonnull<bool>("called_on_null_input"), std::move(*ctx));
 }
 
-static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row) {
+static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row, cql3::functions::change_batch& batch) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("aggregate_name")};
     auto arg_types = read_arg_types(db, row, name.keyspace);
@@ -1902,10 +1903,20 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     auto ffunc = row.get<sstring>("final_func");
     auto initcond_str = row.get<sstring>("initcond");
 
+    auto find_func = [&batch] (sstring ks, sstring name, const std::vector<data_type>& arg_types) {
+        // first search current batch because aggregate may depend on functions
+        // we're currently adding
+        auto fname = cql3::functions::function_name{std::move(ks), std::move(name)};
+        auto func = batch.find(fname, arg_types);
+        if (!func) {
+            func = cql3::functions::instance().find(fname, arg_types);
+        }
+        return func;
+    };
+
     std::vector<data_type> acc_types{state_type};
     acc_types.insert(acc_types.end(), arg_types.begin(), arg_types.end());
-    auto state_func = dynamic_pointer_cast<cql3::functions::scalar_function>(
-            cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, sfunc}, acc_types));
+    auto state_func = dynamic_pointer_cast<cql3::functions::scalar_function>(find_func(name.keyspace, sfunc, acc_types));
     if (!state_func) {
         throw std::runtime_error(format("State function {} needed by aggregate {} not found", sfunc, name.name));
     }
@@ -1916,7 +1927,7 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     ::shared_ptr<cql3::functions::scalar_function> reduce_func = nullptr;
     if (scylla_row) {
         auto rfunc_name = scylla_row->get<sstring>("reduce_func");
-        auto rfunc = cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, rfunc_name.value()}, {state_type, state_type});
+        auto rfunc = find_func(name.keyspace, rfunc_name.value(), {state_type, state_type});
         if (!rfunc) {
             throw std::runtime_error(format("Reduce function {} needed by aggregate {} not found", rfunc_name.value(), name.name));
         }
@@ -1929,7 +1940,7 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
     ::shared_ptr<cql3::functions::scalar_function> final_func = nullptr;
     if (ffunc) {
         final_func = dynamic_pointer_cast<cql3::functions::scalar_function>(
-            cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, ffunc.value()}, {state_type}));
+                find_func(name.keyspace, ffunc.value(), {state_type}));
         if (!final_func) {
             throw std::runtime_error(format("Final function {} needed by aggregate {} not found", ffunc.value(), name.name));
         }
@@ -1960,21 +1971,29 @@ static future<> merge_functions(distributed<service::storage_proxy>& proxy, sche
     auto diff = diff_rows(before, after);
 
     co_await proxy.local().get_db().invoke_on_all(coroutine::lambda([&] (replica::database& db) -> future<> {
+        cql3::functions::change_batch batch;
         for (const auto& val : diff.created) {
-            cql3::functions::functions::add_function(co_await create_func(db, *val));
+            batch.add_function(co_await create_func(db, *val));
         }
+        auto events = make_ready_future<>();
         for (const auto& val : diff.dropped) {
             cql3::functions::function_name name{
                 val->get_nonnull<sstring>("keyspace_name"), val->get_nonnull<sstring>("function_name")};
             auto arg_types = read_arg_types(db, *val, name.keyspace);
+            // as we don't yield between dropping cache and committing batch
+            // change there is no window between cache removal and declaration removal
             drop_cached_func(db, *val);
-            cql3::functions::functions::remove_function(name, arg_types);
-            co_await db.get_notifier().drop_function(name, arg_types);
+            batch.remove_function(name, arg_types);
+            events = events.then([&db, name, arg_types] () {
+                return db.get_notifier().drop_function(std::move(name), std::move(arg_types));
+            });
         }
         for (const auto& val : diff.altered) {
             drop_cached_func(db, *val);
-            cql3::functions::functions::replace_function(co_await create_func(db, *val));
+            batch.replace_function(co_await create_func(db, *val));
         }
+        batch.commit();
+        co_await std::move(events);
     }));
 }
 
@@ -1983,16 +2002,22 @@ static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, sch
     auto diff = diff_aggregates_rows(before, after, scylla_before, scylla_after);
 
     co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db)-> future<> {
+        cql3::functions::change_batch batch;
         for (const auto& val : diff.created) {
-            cql3::functions::functions::add_function(create_aggregate(db, *val.first, val.second));
+            batch.add_function(create_aggregate(db, *val.first, val.second, batch));
         }
+        auto events = make_ready_future<>();
         for (const auto& val : diff.dropped) {
             cql3::functions::function_name name{
                 val.first->get_nonnull<sstring>("keyspace_name"), val.first->get_nonnull<sstring>("aggregate_name")};
             auto arg_types = read_arg_types(db, *val.first, name.keyspace);
-            cql3::functions::functions::remove_function(name, arg_types);
-            co_await db.get_notifier().drop_aggregate(name, arg_types);
+            batch.remove_function(name, arg_types);
+            events = events.then([&db, name, arg_types] () {
+                return db.get_notifier().drop_aggregate(std::move(name), std::move(arg_types));
+            });
         }
+        batch.commit();
+        co_await std::move(events);
     });
 }
 
@@ -2192,7 +2217,7 @@ seastar::future<std::vector<shared_ptr<cql3::functions::user_function>>> create_
 }
 
 std::vector<shared_ptr<cql3::functions::user_aggregate>> create_aggregates_from_schema_partition(
-        replica::database& db, lw_shared_ptr<query::result_set> result, lw_shared_ptr<query::result_set> scylla_result) {
+        replica::database& db, lw_shared_ptr<query::result_set> result, lw_shared_ptr<query::result_set> scylla_result, cql3::functions::change_batch& batch) {
     std::unordered_multimap<sstring, const query::result_set_row*> scylla_aggs;
     if (scylla_result) {
         for (const auto& scylla_row : scylla_result->rows()) {
@@ -2213,7 +2238,7 @@ std::vector<shared_ptr<cql3::functions::user_aggregate>> create_aggregates_from_
                 break;
             }
         }
-        ret.emplace_back(create_aggregate(db, row, scylla_row_ptr));
+        ret.emplace_back(create_aggregate(db, row, scylla_row_ptr, batch));
     }
     return ret;
 }

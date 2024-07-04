@@ -108,7 +108,7 @@ bool drop_type_statement::validate_while_executing(query_processor& qp) const {
             }
         }
 
-        if (auto&& fun_name = functions::functions::used_by_user_function(_name)) {
+        if (auto&& fun_name = functions::instance().used_by_user_function(_name)) {
             throw exceptions::invalid_request_exception(format("Cannot drop user type {}.{} as it is still used by function {}", keyspace, type->get_name_as_string(), *fun_name));
         }
         return true;

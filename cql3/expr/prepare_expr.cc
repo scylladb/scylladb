@@ -969,7 +969,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
             return func;
         },
         [&] (const functions::function_name& name) {
-            auto fun = functions::functions::get(db, keyspace, name, partially_prepared_args, keyspace, cf_name, receiver.get());
+            auto fun = functions::instance().get(db, keyspace, name, partially_prepared_args, keyspace, cf_name, receiver.get());
             if (!fun) {
                 throw exceptions::invalid_request_exception(format("Unknown function {} called", name));
             }
@@ -995,7 +995,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
     bool all_terminal = true;
     for (size_t i = 0; i < partially_prepared_args.size(); ++i) {
         expr::expression e = prepare_expression(fc.args[i], db, keyspace, schema_opt,
-                                                functions::functions::make_arg_spec(keyspace, cf_name, *fun, i));
+                                                functions::instance().make_arg_spec(keyspace, cf_name, *fun, i));
         if (!expr::is<expr::constant>(e)) {
             all_terminal = false;
         }
@@ -1026,7 +1026,7 @@ test_assignment_function_call(const cql3::expr::function_call& fc, data_dictiona
         auto&& fun = std::visit(overloaded_functor{
             [&] (const functions::function_name& name) {
                 auto args = prepare_function_args_for_type_inference(fc.args, db, keyspace, schema_opt);
-                return functions::functions::get(db, keyspace, name, args, receiver.ks_name, receiver.cf_name, &receiver);
+                return functions::instance().get(db, keyspace, name, args, receiver.ks_name, receiver.cf_name, &receiver);
             },
             [] (const shared_ptr<functions::function>& func) {
                 return func;

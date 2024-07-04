@@ -54,10 +54,8 @@ static bool same_signature(const shared_ptr<function>& f1, const shared_ptr<func
     return f1->name() == f2->name() && f1->arg_types() == f2->arg_types();
 }
 
-thread_local std::unordered_multimap<function_name, shared_ptr<function>> functions::_declared = init();
-
 void functions::clear_functions() noexcept {
-    functions::_declared = init();
+    _declared = init();
 }
 
 std::unordered_multimap<function_name, shared_ptr<function>>
@@ -119,7 +117,7 @@ functions::init() noexcept {
     return ret;
 }
 
-void functions::add_function(shared_ptr<function> func) {
+void functions_changer::add_function(shared_ptr<function> func) {
     if (find(func->name(), func->arg_types())) {
         throw std::logic_error(format("duplicated function {}", func));
     }
@@ -127,7 +125,7 @@ void functions::add_function(shared_ptr<function> func) {
 }
 
 template <typename F>
-void functions::with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f) {
+void functions_changer::with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f) {
     auto i = find_iter(name, arg_types);
     if (i == _declared.end() || i->second->is_native()) {
         log.error("attempted to remove or alter non existent user defined function {}({})", name, arg_types);
@@ -136,7 +134,7 @@ void functions::with_udf_iter(const function_name& name, const std::vector<data_
     f(i);
 }
 
-void functions::replace_function(shared_ptr<function> func) {
+void functions_changer::replace_function(shared_ptr<function> func) {
     with_udf_iter(func->name(), func->arg_types(), [func] (functions::declared_t::iterator i) {
         i->second = std::move(func);
     });
@@ -159,8 +157,8 @@ void functions::replace_function(shared_ptr<function> func) {
     }
 }
 
-void functions::remove_function(const function_name& name, const std::vector<data_type>& arg_types) {
-    with_udf_iter(name, arg_types, [] (functions::declared_t::iterator i) { _declared.erase(i); });
+void functions_changer::remove_function(const function_name& name, const std::vector<data_type>& arg_types) {
+    with_udf_iter(name, arg_types, [this] (functions::declared_t::iterator i) { _declared.erase(i); });
 }
 
 std::optional<function_name> functions::used_by_user_aggregate(shared_ptr<user_function> func) {
@@ -567,6 +565,18 @@ functions::match_arguments(data_dictionary::database db, const sstring& keyspace
 bool
 functions::type_equals(const std::vector<data_type>& t1, const std::vector<data_type>& t2) {
     return t1 == t2;
+}
+
+functions& instance() {
+    static thread_local functions f;
+    return f;
+}
+
+void change_batch::commit() {
+    if (_declared.empty()) {
+        return;
+    }
+    instance()._declared = std::move(_declared);
 }
 
 }

@@ -199,7 +199,7 @@ future<std::vector<description>> types(replica::database& db, const lw_shared_pt
 }
     
 future<std::vector<description>> function(replica::database& db, const sstring& ks, const sstring& name) {
-    auto fs = functions::functions::find(functions::function_name(ks, name));
+    auto fs = functions::instance().find(functions::function_name(ks, name));
     if (fs.empty()) {
         throw exceptions::invalid_request_exception(format("Function '{}' not found in keyspace '{}'", name, ks));
     }
@@ -217,14 +217,14 @@ future<std::vector<description>> function(replica::database& db, const sstring& 
 }
 
 future<std::vector<description>> functions(replica::database& db,const sstring& ks, bool with_stmt = false) {
-    auto udfs = cql3::functions::functions::get_user_functions(ks);
+    auto udfs = cql3::functions::instance().get_user_functions(ks);
     auto elements = boost::copy_range<std::vector<shared_ptr<const keyspace_element>>>(udfs);
 
     co_return co_await generate_descriptions(db, elements, (with_stmt) ? std::optional(true) : std::nullopt);
 }
 
 future<std::vector<description>> aggregate(replica::database& db, const sstring& ks, const sstring& name) {
-    auto fs = functions::functions::find(functions::function_name(ks, name));
+    auto fs = functions::instance().find(functions::function_name(ks, name));
     if (fs.empty()) {
         throw exceptions::invalid_request_exception(format("Aggregate '{}' not found in keyspace '{}'", name, ks));
     }
@@ -242,7 +242,7 @@ future<std::vector<description>> aggregate(replica::database& db, const sstring&
 }
 
 future<std::vector<description>> aggregates(replica::database& db, const sstring& ks, bool with_stmt = false) {
-    auto udas = functions::functions::get_user_aggregates(ks);
+    auto udas = functions::instance().get_user_aggregates(ks);
     auto elements = boost::copy_range<std::vector<shared_ptr<const keyspace_element>>>(udas);
 
     co_return co_await generate_descriptions(db, elements, (with_stmt) ? std::optional(true) : std::nullopt);
@@ -762,7 +762,7 @@ future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe
         co_return serialize_descriptions({type(replica_db, ks_meta, _name)});
     }
 
-    auto uf = functions::functions::find(functions::function_name(ks_name, _name));
+    auto uf = functions::instance().find(functions::function_name(ks_name, _name));
     if (!uf.empty()) {
         auto udfs = boost::copy_range<std::vector<shared_ptr<const keyspace_element>>>(uf | boost::adaptors::transformed([] (const auto& f) {
             return dynamic_pointer_cast<const functions::user_function>(f.second);

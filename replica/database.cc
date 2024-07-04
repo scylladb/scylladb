@@ -697,21 +697,23 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         }
         co_return;
     }));
+    cql3::functions::change_batch batch;
     co_await do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, coroutine::lambda([&] (schema_result_value_type& v) -> future<> {
         auto&& user_functions = co_await create_functions_from_schema_partition(*this, v.second);
         for (auto&& func : user_functions) {
-            cql3::functions::functions::add_function(func);
+            batch.add_function(func);
         }
         co_return;
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::AGGREGATES, coroutine::lambda([&] (schema_result_value_type& v) -> future<> {
         auto v2 = co_await read_schema_partition_for_keyspace(proxy, db::schema_tables::SCYLLA_AGGREGATES, v.first);
-        auto&& user_aggregates = create_aggregates_from_schema_partition(*this, v.second, v2.second);
+        auto&& user_aggregates = create_aggregates_from_schema_partition(*this, v.second, v2.second, batch);
         for (auto&& agg : user_aggregates) {
-            cql3::functions::functions::add_function(agg);
+            batch.add_function(agg);
         }
         co_return;
     }));
+    batch.commit();
     co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(tables.begin(), tables.end(), [&] (auto& t) -> future<> {
