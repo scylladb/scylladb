@@ -754,6 +754,8 @@ future<> manager::initialize_endpoint_managers() {
             // If hinted handoff is host-ID-based but the directory doesn't represent a host ID,
             // it's invalid. Ignore it.
             if (!maybe_host_id_or_ep->has_host_id()) {
+                manager_logger.warn("Encountered a hint directory of invalid name while initializing endpoint managers: {}. "
+                        "Hints stored in it won't be replayed", de.name);
                 co_return;
             }
 
@@ -763,8 +765,11 @@ future<> manager::initialize_endpoint_managers() {
         }
 
         // If we have got to this line, hinted handoff is still IP-based and we need to map the IP.
+
         if (!maybe_host_id_or_ep->has_endpoint()) {
             // If the directory name doesn't represent an IP, it's invalid. We ignore it.
+            manager_logger.warn("Encountered a hint directory of invalid name while initializing endpoint managers: {}. "
+                    "Hints stored in it won't be replayed", de.name);
             co_return;
         }
 
