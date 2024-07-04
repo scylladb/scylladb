@@ -5370,9 +5370,83 @@ future<> storage_service::do_drain() {
         return bm.drain();
     });
 
+    co_await _view_builder.invoke_on_all(&db::view::view_builder::drain);
     co_await _db.invoke_on_all(&replica::database::drain);
     co_await _sys_ks.invoke_on_all(&db::system_keyspace::shutdown);
     co_await _repair.invoke_on_all(&repair_service::shutdown);
+<<<<<<< HEAD
+=======
+}
+
+future<> storage_service::do_cluster_cleanup() {
+    auto& raft_server = _group0->group0_server();
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+
+        auto curr_req = _topology_state_machine._topology.global_request;
+        if (curr_req && *curr_req != global_topology_request::cleanup) {
+            // FIXME: replace this with a queue
+            throw std::runtime_error{
+                "topology coordinator: cluster cleanup: a different topology request is already pending, try again later"};
+        }
+
+
+        auto it = _topology_state_machine._topology.find(raft_server.id());
+        if (!it) {
+            throw std::runtime_error(::format("local node {} is not a member of the cluster", raft_server.id()));
+        }
+
+        const auto& rs = it->second;
+
+        if (rs.state != node_state::normal) {
+            throw std::runtime_error(::format("local node is not in the normal state (current state: {})", rs.state));
+        }
+
+        rtlogger.info("cluster cleanup requested");
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.set_global_topology_request(global_topology_request::cleanup);
+        topology_change change{{builder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("cleanup: cluster cleanup requested"));
+
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as, raft_timeout{});
+        } catch (group0_concurrent_modification&) {
+            rtlogger.info("cleanup: concurrent operation is detected, retrying.");
+            continue;
+        }
+        break;
+    }
+
+    // Wait cleanup finishes on all nodes
+    co_await _topology_state_machine.event.when([this] {
+        return std::all_of(_topology_state_machine._topology.normal_nodes.begin(), _topology_state_machine._topology.normal_nodes.end(), [] (auto& n) {
+            return n.second.cleanup == cleanup_status::clean;
+        });
+    });
+    rtlogger.info("cluster cleanup done");
+}
+
+future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id) {
+    while (true) {
+        auto [done, error] = co_await  _sys_ks.local().get_topology_request_state(id);
+        if (done) {
+            co_return error;
+        }
+        co_await _topology_state_machine.event.when();
+    }
+
+    co_return sstring();
+}
+
+future<> storage_service::wait_for_topology_not_busy() {
+    auto guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+    while (_topology_state_machine._topology.is_busy()) {
+        release_guard(std::move(guard));
+        co_await _topology_state_machine.event.wait();
+        guard = co_await _group0->client().start_operation(&_group0_as, raft_timeout{});
+    }
+>>>>>>> 9d9318c564 (view: drain view builder before database)
 }
 
 future<> storage_service::raft_rebuild(sstring source_dc) {
