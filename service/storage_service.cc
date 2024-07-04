@@ -3848,7 +3848,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             auto ignore_nodes = boost::copy_range<std::unordered_set<locator::host_id>>(replace_info.ignore_nodes | boost::adaptors::transformed([] (const auto& x) {
                 return x.first;
             }));
-            _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), bootstrap_tokens, std::move(ignore_nodes)).get();
+            _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), bootstrap_tokens, std::move(ignore_nodes), replace_info.host_id).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
@@ -5489,17 +5489,18 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 if (!_topology_state_machine._topology.req_param.contains(raft_server.id())) {
                                     on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", raft_server.id()));
                                 }
+                                auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
                                 if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
                                     auto ignored_nodes = boost::copy_range<std::unordered_set<locator::host_id>>(_topology_state_machine._topology.ignored_nodes | boost::adaptors::transformed([] (const auto& id) {
                                         return locator::host_id(id.uuid());
                                     }));
                                     auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                                     auto tmptr = get_token_metadata_ptr();
-                                    co_await _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), rs.ring.value().tokens, std::move(ignored_nodes));
+                                    auto replaced_node = locator::host_id(replaced_id.uuid());
+                                    co_await _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), rs.ring.value().tokens, std::move(ignored_nodes), replaced_node);
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                                           locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                    auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
                                     auto existing_ip = _group0->address_map().find(replaced_id);
                                     assert(existing_ip);
                                     co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, *existing_ip);
