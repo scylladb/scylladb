@@ -169,6 +169,7 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
                 auto status = task_status{
                     .task_id = task.task_status.id,
                     .type = task.type,
+                    .kind = task_kind::node,
                     .scope = task.task_status.scope,
                     .state = task.task_status.state,
                     .is_abortable = task.abortable,
