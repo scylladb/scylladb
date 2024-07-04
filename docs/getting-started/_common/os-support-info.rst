@@ -1,5 +1,6 @@
 You can `build ScyllaDB from source <https://github.com/scylladb/scylladb#build-prerequisites>`_ on other x86_64 or aarch64 platforms, without any guarantees.
 
+<<<<<<< HEAD
 +----------------------------+-------------+---------------+---------+---------------+
 | Linux Distributions        |Ubuntu       | Debian        | CentOS /| Rocky /       |
 |                            |             |               | RHEL    | RHEL          |
@@ -10,6 +11,18 @@ You can `build ScyllaDB from source <https://github.com/scylladb/scylladb#build-
 +----------------------------+------+------+-------+-------+---------+-------+-------+
 |   5.2                      | |v|  | |v|  | |v|   | |v|   | |v|     | |v|   | |x|   |
 +----------------------------+------+------+-------+-------+---------+-------+-------+
+=======
++----------------------------+--------------------+-------+---------------+
+| Linux Distributions        |Ubuntu              | Debian| Rocky /       |
+|                            |                    |       | RHEL          |
++----------------------------+------+------+------+-------+-------+-------+
+| ScyllaDB Version / Version |20.04 |22.04 |24.04 |  11   |   8   |   9   |
++============================+======+======+======+=======+=======+=======+
+|   6.0                      | |v|  | |v|  | |v|  | |v|   | |v|   | |v|   |
++----------------------------+------+------+------+-------+-------+-------+
+|   5.4                      | |v|  | |v|  | |x|  | |v|   | |v|   | |v|   |
++----------------------------+------+------+------+-------+-------+-------+
+>>>>>>> 1f340428ea (doc: remove support for Debian 10)
 
 * The recommended OS for ScyllaDB Open Source is Ubuntu 22.04.
 * All releases are available as a Docker container and EC2 AMI, GCP, and Azure images. 
