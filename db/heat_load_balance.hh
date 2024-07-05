@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#pragma once
+
 /*
  * Given a vector of cache hit ratio (hits per request) for each of N nodes,
  * and knowing which of them is the current node, our goal is to return a

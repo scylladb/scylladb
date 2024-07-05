@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#pragma once
+
 namespace tools {
 
 int scylla_types_main(int argc, char** argv);

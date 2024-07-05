@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#pragma once
+
 #include <boost/program_options.hpp>
 #include <seastar/core/app-template.hh>
 #include "seastarx.hh"

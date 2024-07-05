@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#pragma once
+
 #include "sstables/sstable_set.hh"
 #include "streaming/stream_reason.hh"
 #include "service/topology_guard.hh"

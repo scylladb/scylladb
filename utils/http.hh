@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#pragma once
+
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_future.hh>

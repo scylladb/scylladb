@@ -4,6 +4,8 @@
 
 /* Copyright 2022-present ScyllaDB */
 
+#pragma once
+
 #include "query-result-reader.hh"
 #include "replica/database_fwd.hh"
 #include "db/timeout_clock.hh"

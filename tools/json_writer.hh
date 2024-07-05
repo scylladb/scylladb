@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#pragma once
+
 #include "mutation/json.hh"
 #include "sstables/sstables.hh"
 

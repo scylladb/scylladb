@@ -8,6 +8,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#pragma once
+
 #include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
 #include "db/system_keyspace.hh"
