@@ -6243,7 +6243,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     db::consistency_level cl = cl_for_paxos == db::consistency_level::LOCAL_SERIAL ?
         db::consistency_level::LOCAL_QUORUM : db::consistency_level::QUORUM;
 
-    unsigned contentions;
+    unsigned contentions = 0;
 
     dht::token token = partition_ranges[0].start()->value().as_decorated_key().token();
     utils::latency_counter lc;
