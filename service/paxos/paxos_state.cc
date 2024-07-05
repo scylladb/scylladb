@@ -60,8 +60,10 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
     lc.start();
 
     auto stats_updater = defer([&sp, schema, lc] () mutable {
-        auto& stats = sp.get_db().local().find_column_family(schema).get_stats();
-        stats.cas_prepare.mark(lc.stop().latency());
+        if (auto table = sp.get_db().local().get_tables_metadata().get_table_if_exists(schema->id())) {
+            auto& stats = table->get_stats();
+            stats.cas_prepare.mark(lc.stop().latency());
+        }
     });
 
     auto guard = co_await get_replica_lock(token, timeout);
@@ -150,8 +152,10 @@ future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks,
     lc.start();
 
     auto stats_updater = defer([&sp, schema, lc] () mutable {
-        auto& stats = sp.get_db().local().find_column_family(schema).get_stats();
-        stats.cas_accept.mark(lc.stop().latency());
+        if (auto table = sp.get_db().local().get_tables_metadata().get_table_if_exists(schema->id())) {
+            auto& stats = table->get_stats();
+            stats.cas_accept.mark(lc.stop().latency());
+        }
     });
 
     // FIXME: Handle tablet intra-node migration: #16594.
@@ -194,8 +198,10 @@ future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, sche
     lc.start();
 
     auto stats_updater = defer([&sp, schema, lc] () mutable {
-        auto& stats = sp.get_db().local().find_column_family(schema).get_stats();
-        stats.cas_learn.mark(lc.stop().latency());
+        if (auto table = sp.get_db().local().get_tables_metadata().get_table_if_exists(schema->id())) {
+            auto& stats = table->get_stats();
+            stats.cas_learn.mark(lc.stop().latency());
+        }
     });
 
     co_await utils::get_local_injector().inject("paxos_state_learn_timeout", timeout);
