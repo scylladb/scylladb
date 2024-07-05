@@ -417,7 +417,9 @@ public:
             // FIXME: make the function storage non static
             auto clear_funcs = defer([] {
                 smp::invoke_on_all([] () {
-                    cql3::functions::instance().clear_functions();
+                    cql3::functions::change_batch batch;
+                    batch.clear_functions();
+                    batch.commit();
                 }).get();
             });
 

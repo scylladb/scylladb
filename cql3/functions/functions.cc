@@ -54,10 +54,6 @@ static bool same_signature(const shared_ptr<function>& f1, const shared_ptr<func
     return f1->name() == f2->name() && f1->arg_types() == f2->arg_types();
 }
 
-void functions::clear_functions() noexcept {
-    _declared = init();
-}
-
 std::unordered_multimap<function_name, shared_ptr<function>>
 functions::init() noexcept {
     // It is possible that this function will fail with a
@@ -126,17 +122,19 @@ void functions::add_function(shared_ptr<function> func) {
 
 template <typename F>
 void functions::with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f) {
-    auto i = find_iter(name, arg_types);
-    if (i == _declared.end() || i->second->is_native()) {
+    auto cit = find_iter(name, arg_types);
+    if (cit == _declared.end() || cit->second->is_native()) {
         log.error("attempted to remove or alter non existent user defined function {}({})", name, arg_types);
         return;
     }
-    f(i);
+    // erase here is only to convert from const_iterator to iterator
+    auto it = _declared.erase(cit, cit);
+    f(it);
 }
 
 void functions::replace_function(shared_ptr<function> func) {
-    with_udf_iter(func->name(), func->arg_types(), [func] (functions::declared_t::iterator i) {
-        i->second = std::move(func);
+    with_udf_iter(func->name(), func->arg_types(), [func] (declared_t::iterator it) {
+        it->second = std::move(func);
     });
     auto scalar_func = dynamic_pointer_cast<scalar_function>(func);
     if (!scalar_func) {
@@ -158,10 +156,10 @@ void functions::replace_function(shared_ptr<function> func) {
 }
 
 void functions::remove_function(const function_name& name, const std::vector<data_type>& arg_types) {
-    with_udf_iter(name, arg_types, [this] (functions::declared_t::iterator i) { _declared.erase(i); });
+    with_udf_iter(name, arg_types, [this] (declared_t::iterator it) { _declared.erase(it); });
 }
 
-std::optional<function_name> functions::used_by_user_aggregate(shared_ptr<user_function> func) {
+std::optional<function_name> functions::used_by_user_aggregate(shared_ptr<user_function> func) const {
     for (const shared_ptr<function>& fptr : _declared | boost::adaptors::map_values) {
         auto aggregate = dynamic_pointer_cast<user_aggregate>(fptr);
         if (aggregate && (same_signature(aggregate->sfunc(), func)
@@ -174,7 +172,7 @@ std::optional<function_name> functions::used_by_user_aggregate(shared_ptr<user_f
     return {};
 }
 
-std::optional<function_name> functions::used_by_user_function(const ut_name& user_type) {
+std::optional<function_name> functions::used_by_user_function(const ut_name& user_type) const {
     for (const shared_ptr<function>& fptr : _declared | boost::adaptors::map_values) {
         for (auto& arg_type : fptr->arg_types()) {
             if (arg_type->references_user_type(user_type.get_keyspace(), user_type.get_user_type_name())) {
@@ -190,7 +188,7 @@ std::optional<function_name> functions::used_by_user_function(const ut_name& use
 
 lw_shared_ptr<column_specification>
 functions::make_arg_spec(const sstring& receiver_ks, std::optional<const std::string_view> receiver_cf_opt,
-        const function& fun, size_t i) {
+        const function& fun, size_t i) const {
     auto&& name = fmt::to_string(fun.name());
     const std::string_view receiver_cf = receiver_cf_opt.has_value() ? *receiver_cf_opt : "<unknown_col_family>";
     std::transform(name.begin(), name.end(), name.begin(), ::tolower);
@@ -309,7 +307,7 @@ functions::get(data_dictionary::database db,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
         std::optional<const std::string_view> receiver_cf,
-        const column_specification* receiver) {
+        const column_specification* receiver) const {
 
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
@@ -426,7 +424,7 @@ functions::get(data_dictionary::database db,
 }
 
 template<typename F>
-std::vector<shared_ptr<F>> functions::get_filtered_transformed(const sstring& keyspace) {
+std::vector<shared_ptr<F>> functions::get_filtered_transformed(const sstring& keyspace) const {
     auto filter = [&] (const std::pair<const function_name, shared_ptr<function>>& d) -> bool {
         return d.first.keyspace == keyspace && dynamic_cast<F*>(d.second.get());
     };
@@ -442,24 +440,24 @@ std::vector<shared_ptr<F>> functions::get_filtered_transformed(const sstring& ke
 }
 
 std::vector<shared_ptr<user_function>>
-functions::get_user_functions(const sstring& keyspace) {
+functions::get_user_functions(const sstring& keyspace) const {
     return get_filtered_transformed<user_function>(keyspace);
 }
 
 std::vector<shared_ptr<user_aggregate>>
-functions::get_user_aggregates(const sstring& keyspace) {
+functions::get_user_aggregates(const sstring& keyspace) const {
     return get_filtered_transformed<user_aggregate>(keyspace);
 }
 
-boost::iterator_range<functions::declared_t::iterator>
-functions::find(const function_name& name) {
+boost::iterator_range<functions::declared_t::const_iterator>
+functions::find(const function_name& name) const {
     assert(name.has_keyspace()); // : "function name not fully qualified";
     auto pair = _declared.equal_range(name);
     return boost::make_iterator_range(pair.first, pair.second);
 }
 
-functions::declared_t::iterator
-functions::find_iter(const function_name& name, const std::vector<data_type>& arg_types) {
+functions::declared_t::const_iterator
+functions::find_iter(const function_name& name, const std::vector<data_type>& arg_types) const {
     auto range = find(name);
     auto i = std::find_if(range.begin(), range.end(), [&] (const std::pair<const function_name, shared_ptr<function>>& d) {
         return type_equals(d.second->arg_types(), arg_types);
@@ -471,7 +469,7 @@ functions::find_iter(const function_name& name, const std::vector<data_type>& ar
 }
 
 shared_ptr<function>
-functions::find(const function_name& name, const std::vector<data_type>& arg_types) {
+functions::find(const function_name& name, const std::vector<data_type>& arg_types) const {
     auto i = find_iter(name, arg_types);
     if (i != _declared.end()) {
         return i->second;
@@ -489,7 +487,7 @@ functions::find(const function_name& name, const std::vector<data_type>& arg_typ
 // mock or serialize expressions and `functions::find()` is not enough,
 // because it does not search for dynamic aggregate functions
 shared_ptr<function>
-functions::mock_get(const function_name &name, const std::vector<data_type>& arg_types) {
+functions::mock_get(const function_name &name, const std::vector<data_type>& arg_types) const {
     auto func = find(name, arg_types);
     if (!func) {
         func = get_dynamic_aggregate(name, arg_types);
@@ -506,7 +504,7 @@ functions::validate_types(data_dictionary::database db,
                           shared_ptr<function> fun,
                           const std::vector<shared_ptr<assignment_testable>>& provided_args,
                           const sstring& receiver_ks,
-                          std::optional<const std::string_view> receiver_cf) {
+                          std::optional<const std::string_view> receiver_cf) const {
     if (provided_args.size() != fun->arg_types().size()) {
         throw exceptions::invalid_request_exception(
                 format("Invalid number of arguments in call to function {}: {:d} required but {:d} provided",
@@ -537,7 +535,7 @@ functions::match_arguments(data_dictionary::database db, const sstring& keyspace
         shared_ptr<function> fun,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
-        std::optional<const std::string_view> receiver_cf) {
+        std::optional<const std::string_view> receiver_cf) const {
     if (provided_args.size() != fun->arg_types().size()) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
@@ -563,12 +561,13 @@ functions::match_arguments(data_dictionary::database db, const sstring& keyspace
 }
 
 bool
-functions::type_equals(const std::vector<data_type>& t1, const std::vector<data_type>& t2) {
+functions::type_equals(const std::vector<data_type>& t1, const std::vector<data_type>& t2) const {
     return t1 == t2;
 }
 
-functions& instance() {
-    static thread_local functions f;
+static thread_local functions f;
+
+const functions& instance() {
     return f;
 }
 
@@ -576,7 +575,11 @@ void change_batch::commit() {
     if (_declared.empty()) {
         return;
     }
-    instance()._declared = std::move(_declared);
+    f._declared = std::move(_declared);
+}
+
+void change_batch::clear_functions() noexcept {
+    _declared = init();
 }
 
 }
