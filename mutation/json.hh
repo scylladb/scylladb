@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#pragma once
+
 #include "dht/token.hh"
 #include "schema/schema.hh"
 #include "utils/rjson.hh"

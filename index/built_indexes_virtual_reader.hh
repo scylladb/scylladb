@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#pragma once
+
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "readers/mutation_reader.hh"
