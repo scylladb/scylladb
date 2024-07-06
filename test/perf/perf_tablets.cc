@@ -42,7 +42,7 @@ cql_test_config tablet_cql_test_config() {
 
 static
 future<table_id> add_table(cql_test_env& e) {
-    auto id = table_id(utils::UUID_gen::get_time_UUID_v1());
+    auto id = table_id(utils::UUID_gen::get_time_UUID());
     co_await e.create_table([id] (std::string_view ks_name) {
         return *schema_builder(ks_name, id.to_sstring(), id)
                 .with_column("p1", utf8_type, column_kind::partition_key)
@@ -56,7 +56,7 @@ static future<> test_basic_operations(app_template& app) {
     return do_with_cql_env_thread([&] (cql_test_env& e) {
         tablet_metadata tm;
 
-        auto h1 = host_id(utils::UUID_gen::get_time_UUID_v1());
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
 
         int nr_tables = app.configuration()["tables"].as<int>();
         int tablets_per_table = app.configuration()["tablets-per-table"].as<int>();

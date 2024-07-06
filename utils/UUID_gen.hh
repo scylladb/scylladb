@@ -143,6 +143,18 @@ public:
     // We have only 17 timeuuid bits available to store this
     // value.
     static constexpr int SUBMICRO_LIMIT = (1<<17);
+
+    /**
+     * Creates an unqualified, time-based UUID.
+     * Currently it returns type 7 UUID, but this may be subject to change.
+     *
+     * @return a UUID instance
+     */
+    static UUID get_time_UUID()
+    {
+        return get_time_UUID_v7();
+    }
+
     /**
      * Creates a type 1 UUID (time-based UUID).
      *
@@ -225,8 +237,23 @@ public:
     static UUID get_time_UUID_v1_raw(decimicroseconds when, int64_t clock_seq_and_node)
     {
         auto uuid = UUID(create_time_v1(when), clock_seq_and_node);
+#ifndef SCYLLA_BUILD_MODE_RELEASE
         assert(uuid.is_timestamp_v1());
+#endif
         return uuid;
+    }
+
+    static UUID get_time_UUID_v7_raw(decimicroseconds when, int64_t clock_seq_and_node)
+    {
+        auto uuid = UUID(create_time_v7(when), clock_seq_and_node);
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+        assert(uuid.is_timestamp_v7());
+#endif
+        return uuid;
+    }
+
+    static UUID get_time_UUID_raw(decimicroseconds when, int64_t clock_seq_and_node) {
+        return get_time_UUID_v7_raw(when, clock_seq_and_node);
     }
 
     /**

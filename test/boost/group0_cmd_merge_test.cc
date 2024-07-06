@@ -79,7 +79,7 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         auto& group0 = env.get_raft_group_registry().local().group0();
         auto& mm = env.migration_manager().local();
-        auto id = utils::UUID_gen::get_time_UUID_v1();
+        auto id = utils::UUID_gen::get_time_UUID();
         service::group0_command group0_cmd {
             .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
                             id, gc_clock::duration{0}, "test")},

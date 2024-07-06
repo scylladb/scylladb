@@ -115,7 +115,7 @@ public:
 
 sstables::compaction_data compaction_manager::create_compaction_data() {
     sstables::compaction_data cdata = {};
-    cdata.compaction_uuid = utils::UUID_gen::get_time_UUID_v1();
+    cdata.compaction_uuid = utils::UUID_gen::get_time_UUID();
     return cdata;
 }
 

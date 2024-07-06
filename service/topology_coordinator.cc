@@ -1141,7 +1141,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             .set_stage(last_token, locator::tablet_transition_stage::write_both_read_old)
                             // Create session a bit earlier to avoid adding barrier
                             // to the streaming stage to create sessions on replicas.
-                            .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID_v1()))
+                            .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()))
                             .build());
                     }
                     break;

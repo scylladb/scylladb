@@ -75,7 +75,7 @@ static future<> cl_test(noncopyable_function<future<> (commitlog&)> f) {
 }
 
 static table_id make_table_id() {
-    return table_id(utils::UUID_gen::get_time_UUID_v1());
+    return table_id(utils::UUID_gen::get_time_UUID());
 }
 
 // just write in-memory...

@@ -139,7 +139,7 @@ struct commitlog_service {
 };
 
 static std::vector<clperf_result> do_commitlog_test(distributed<commitlog_service>& cls, test_config& cfg) {
-    auto uuid = table_id(utils::UUID_gen::get_time_UUID_v1());
+    auto uuid = table_id(utils::UUID_gen::get_time_UUID());
 
     return time_parallel_ex<clperf_result>([&] {
         auto& log = cls.local();

@@ -170,6 +170,8 @@ public:
     }
     generation_type operator()(uuid_identifiers use_uuid = uuid_identifiers::no) {
         if (use_uuid) {
+            // Use UUID_v1 since the generation may be stored as a data_value
+            // in SSTABLES_REGISTRY, which has a timeuuid_type.
             return generation_type(utils::UUID_gen::get_time_UUID_v1());
         }
         // each shard has its own "namespace" so we increment the generation id
