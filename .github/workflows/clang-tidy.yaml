@@ -15,8 +15,6 @@ on:
     - cron: '0 5 * * SAT'
 
 env:
-  # use the stable branch
-  CLANG_VERSION: 18
   BUILD_TYPE: RelWithDebInfo
   BUILD_DIR: build
   CLANG_TIDY_CHECKS: '-*,bugprone-use-after-move'
@@ -32,24 +30,23 @@ jobs:
   clang-tidy:
     name: Run clang-tidy
     runs-on: ubuntu-latest
+    # be consistent with tools/toolchain/image
+    container: scylladb/scylla-toolchain:fedora-40-20240621
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - uses: ./.github/actions/setup-build
-        with:
-          install_clang_tidy: true
+      - run: |
+          sudo dnf -y install clang-tools-extra
       - name: Generate the building system
         run: |
           cmake                                         \
             -DCMAKE_BUILD_TYPE=$BUILD_TYPE              \
-            -DCMAKE_C_COMPILER=clang-$CLANG_VERSION     \
-            -DScylla_USE_LINKER=ld.lld-$CLANG_VERSION   \
-            -DCMAKE_CXX_COMPILER=clang++-$CLANG_VERSION \
+            -DCMAKE_C_COMPILER=clang                    \
+            -DScylla_USE_LINKER=ld.lld                  \
+            -DCMAKE_CXX_COMPILER=clang++                \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON          \
-            -DCMAKE_CXX_CLANG_TIDY="clang-tidy-$CLANG_VERSION;--checks=$CLANG_TIDY_CHECKS" \
-            -DCMAKE_CXX_FLAGS=-DFMT_HEADER_ONLY         \
-            -DCMAKE_PREFIX_PATH=$PWD/cooking            \
+            -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--checks=$CLANG_TIDY_CHECKS" \
             -G Ninja                                    \
             -B $BUILD_DIR                               \
             -S .
