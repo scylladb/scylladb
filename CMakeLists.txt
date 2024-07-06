@@ -95,7 +95,7 @@ target_link_libraries(Boost::regex
 find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc i18n REQUIRED)
-find_package(fmt 9.0.0 REQUIRED)
+find_package(fmt 10.0.0 REQUIRED)
 find_package(libdeflate REQUIRED)
 find_package(libxcrypt REQUIRED)
 find_package(Snappy REQUIRED)
