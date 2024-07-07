@@ -182,6 +182,7 @@ public:
     static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
     static constexpr auto TABLETS = "tablets";
     static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
+    static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -275,6 +276,7 @@ public:
     static schema_ptr cdc_generations_v3();
     static schema_ptr tablets();
     static schema_ptr service_levels_v2();
+    static schema_ptr view_build_status_v2();
 
     // auth
     static schema_ptr roles();
