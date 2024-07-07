@@ -237,6 +237,11 @@ private:
     future<> mark_as_built(view_ptr);
     void setup_metrics();
 
+    future<> mark_view_build_started(sstring ks_name, sstring view_name);
+    future<> mark_view_build_success(sstring ks_name, sstring view_name);
+    future<> remove_view_build_status(sstring ks_name, sstring view_name);
+    future<std::unordered_map<locator::host_id, sstring>> view_status(sstring ks_name, sstring view_name) const;
+
     struct consumer;
 };
 

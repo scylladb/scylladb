@@ -2207,7 +2207,7 @@ void view_builder::setup_shard_build_step(
             // Fall-through
         }
         if (this_shard_id() == 0) {
-            vbi.bookkeeping_ops.push_back(_sys_dist_ks.remove_view(name.first, name.second));
+            vbi.bookkeeping_ops.push_back(remove_view_build_status(name.first, name.second));
             vbi.bookkeeping_ops.push_back(_sys_ks.remove_built_view(name.first, name.second));
             vbi.bookkeeping_ops.push_back(
                     _sys_ks.remove_view_build_progress_across_all_shards(
@@ -2226,7 +2226,7 @@ void view_builder::setup_shard_build_step(
         if (auto view = maybe_fetch_view(view_name)) {
             if (vbi.built_views.contains(view->id())) {
                 if (this_shard_id() == 0) {
-                    auto f = _sys_dist_ks.finish_view_build(std::move(view_name.first), std::move(view_name.second)).then([this, view = std::move(view)] {
+                    auto f = mark_view_build_success(std::move(view_name.first), std::move(view_name.second)).then([this, view = std::move(view)] {
                         return _sys_ks.remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
                     });
                     vbi.bookkeeping_ops.push_back(std::move(f));
@@ -2282,9 +2282,25 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
     });
 }
 
+future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_name) {
+    return _sys_dist_ks.start_view_build(std::move(ks_name), std::move(view_name));
+}
+
+future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_name) {
+    return _sys_dist_ks.finish_view_build(std::move(ks_name), std::move(view_name));
+}
+
+future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_name) {
+    return _sys_dist_ks.remove_view(std::move(ks_name), std::move(view_name));
+}
+
+future<std::unordered_map<locator::host_id, sstring>> view_builder::view_status(sstring ks_name, sstring view_name) const {
+    return _sys_dist_ks.view_status(std::move(ks_name), std::move(view_name));
+}
+
 future<std::unordered_map<sstring, sstring>>
 view_builder::view_build_statuses(sstring keyspace, sstring view_name) const {
-    std::unordered_map<locator::host_id, sstring> status = co_await _sys_dist_ks.view_status(std::move(keyspace), std::move(view_name));
+    std::unordered_map<locator::host_id, sstring> status = co_await view_status(std::move(keyspace), std::move(view_name));
     std::unordered_map<sstring, sstring> status_map;
     const auto& topo = _db.get_token_metadata().get_topology();
     topo.for_each_node([&] (const locator::node *node) {
@@ -2298,7 +2314,7 @@ view_builder::view_build_statuses(sstring keyspace, sstring view_name) const {
 future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     vlogger.info0("Building view {}.{}, starting at token {}", view->ks_name(), view->cf_name(), step.current_token());
     step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});
-    auto f = this_shard_id() == 0 ? _sys_dist_ks.start_view_build(view->ks_name(), view->cf_name()) : make_ready_future<>();
+    auto f = this_shard_id() == 0 ? mark_view_build_started(view->ks_name(), view->cf_name()) : make_ready_future<>();
     return when_all_succeed(
             std::move(f),
             _sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), step.current_token())).discard_result();
@@ -2388,7 +2404,7 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
         return when_all_succeed(
                     _sys_ks.remove_view_build_progress(ks_name, view_name),
                     _sys_ks.remove_built_view(ks_name, view_name),
-                    _sys_dist_ks.remove_view(ks_name, view_name))
+                    remove_view_build_status(ks_name, view_name))
                         .discard_result()
                         .handle_exception([ks_name, view_name] (std::exception_ptr ep) {
             vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, ep);
@@ -2679,7 +2695,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
 future<> view_builder::mark_as_built(view_ptr view) {
     return seastar::when_all_succeed(
             _sys_ks.mark_view_as_built(view->ks_name(), view->cf_name()),
-            _sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name())).discard_result();
+            mark_view_build_success(view->ks_name(), view->cf_name())).discard_result();
 }
 
 future<> view_builder::mark_existing_views_as_built() {
@@ -2780,7 +2796,7 @@ update_backlog node_update_backlog::fetch_shard(unsigned shard) {
 
 future<bool> view_builder::check_view_build_ongoing(const locator::token_metadata& tm, const sstring& ks_name, const sstring& cf_name) {
     using view_statuses_type = std::unordered_map<locator::host_id, sstring>;
-    return _sys_dist_ks.view_status(ks_name, cf_name).then([&tm] (view_statuses_type&& view_statuses) {
+    return view_status(ks_name, cf_name).then([&tm] (view_statuses_type&& view_statuses) {
         return boost::algorithm::any_of(view_statuses, [&tm] (const view_statuses_type::value_type& view_status) {
             // Only consider status of known hosts.
             return view_status.second == "STARTED" && tm.get_endpoint_for_host_id_if_known(view_status.first);
