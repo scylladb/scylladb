@@ -314,7 +314,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
             sstdir.invoke_on_all([&] (sstables::sstable_directory& sstdir) {
                 return seastar::async([&] {
                     sstdir.do_for_each_sstable([&] (const shared_sstable& sst) {
-                        THREADSAFE_BOOST_REQUIRE(sst->generation() == sst1->generation());
+                        THREADSAFE_BOOST_REQUIRE_EQUAL(sst->generation(), sst1->generation());
                         THREADSAFE_BOOST_REQUIRE(!gen1_seen[this_shard_id()]);
                         gen1_seen[this_shard_id()] = true;
                         return make_ready_future<>();
