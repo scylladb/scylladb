@@ -65,9 +65,9 @@ public:
     int64_t timestamp() const noexcept {
         switch (version()) {
         case 1:
-        return ((most_sig_bits & 0xFFF) << 48) |
-               (((most_sig_bits >> 16) & 0xFFFF) << 32) |
-               (((uint64_t)most_sig_bits) >> 32);
+            return ((most_sig_bits & 0xFFF) << 48) |
+                (((most_sig_bits >> 16) & 0xFFFF) << 32) |
+                (((uint64_t)most_sig_bits) >> 32);
         case 7:
             // The UUIDv7 msb format as defined in https://datatracker.ietf.org/doc/html/rfc9562#name-uuid-version-7
             // 48 bits - milliseconds since unix epoch of 1970-01-01 GMT (unsigned)
