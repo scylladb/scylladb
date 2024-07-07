@@ -130,6 +130,7 @@ private:
         if (_caught) {
             return;
         }
+        startlog.info("caught stop signal");
         _caught = true;
         _cond.broadcast();
         _broadcasts_to_abort_sources_done = _broadcasts_to_abort_sources_done.then([this] {
@@ -155,8 +156,17 @@ public:
     bool stopping() const {
         return _caught;
     }
-    abort_source& as_local_abort_source() { return _abort_sources.local(); }
-    sharded<abort_source>& as_sharded_abort_source() { return _abort_sources; }
+    void check() const {
+        _abort_sources.local().check();
+    }
+    abort_source& as_local_abort_source() {
+        check();
+        return _abort_sources.local();
+    }
+    sharded<abort_source>& as_sharded_abort_source() {
+        check();
+        return _abort_sources;
+    }
 };
 
 struct object_storage_endpoint_param {
