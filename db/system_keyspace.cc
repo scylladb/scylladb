@@ -89,6 +89,7 @@ namespace {
             system_keyspace::SCYLLA_LOCAL,
             system_keyspace::COMMITLOG_CLEANUPS,
             system_keyspace::SERVICE_LEVELS_V2,
+            system_keyspace::VIEW_BUILD_STATUS_V2,
             system_keyspace::ROLES,
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
@@ -1143,6 +1144,20 @@ schema_ptr system_keyspace::service_levels_v2() {
                 .with_column("service_level", utf8_type, column_kind::partition_key)
                 .with_column("timeout", duration_type)
                 .with_column("workload_type", utf8_type)
+                .with_version(db::system_keyspace::generate_schema_version(id))
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::view_build_status_v2() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, VIEW_BUILD_STATUS_V2);
+        return schema_builder(NAME, VIEW_BUILD_STATUS_V2, id)
+                .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+                .with_column("view_name", utf8_type, column_kind::partition_key)
+                .with_column("host_id", uuid_type, column_kind::clustering_key)
+                .with_column("status", utf8_type)
                 .with_version(db::system_keyspace::generate_schema_version(id))
                 .build();
     }();
@@ -2249,7 +2264,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::commitlog_cleanups(),
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
-                    topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(),
+                    topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
