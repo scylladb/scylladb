@@ -10,6 +10,7 @@
 
 #include "query-request.hh"
 #include "service/migration_listener.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "utils/serialized_action.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "replica/database.hh"
@@ -151,6 +152,8 @@ class view_builder final : public service::migration_listener::only_view_notific
     replica::database& _db;
     db::system_keyspace& _sys_ks;
     db::system_distributed_keyspace& _sys_dist_ks;
+    service::raft_group0_client& _group0_client;
+    cql3::query_processor& _qp;
     service::migration_notifier& _mnotifier;
     view_update_generator&  _vug;
     reader_permit _permit;
@@ -189,7 +192,8 @@ public:
     replica::database& get_db() noexcept { return _db; }
 
 public:
-    view_builder(replica::database&, db::system_keyspace&, db::system_distributed_keyspace&, service::migration_notifier&, view_update_generator& vug);
+    view_builder(replica::database&, db::system_keyspace&, db::system_distributed_keyspace&, service::migration_notifier&, view_update_generator& vug,
+            service::raft_group0_client& group0_client, cql3::query_processor& qp);
     view_builder(view_builder&&) = delete;
 
     /**

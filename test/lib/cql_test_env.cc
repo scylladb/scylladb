@@ -886,7 +886,7 @@ private:
 
             _sys_dist_ks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy)).get();
 
-            _view_builder.start(std::ref(_db), std::ref(_sys_ks), std::ref(_sys_dist_ks), std::ref(_mnotifier), std::ref(_view_update_generator)).get();
+            _view_builder.start(std::ref(_db), std::ref(_sys_ks), std::ref(_sys_dist_ks), std::ref(_mnotifier), std::ref(_view_update_generator), std::ref(group0_client), std::ref(_qp)).get();
             auto stop_view_builder = defer([this] {
                 _view_builder.stop().get();
             });

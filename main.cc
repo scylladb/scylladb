@@ -1649,7 +1649,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("starting the view builder");
-            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator)).get();
+            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
             auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
                 view_builder.stop().get();
             });
