@@ -625,6 +625,9 @@ private:
             unsigned shard, storage_proxy::response_id_type response_id,
             rpc::optional<std::optional<tracing::trace_info>> trace_info,
             rpc::optional<fencing_token> fence) {
+        ++_sp.get_stats().received_hints_total;
+        _sp.get_stats().received_hints_bytes_total += in.representation().size();
+
         return receive_mutation_handler(_sp._hints_write_smp_service_group, cinfo, t, std::move(in),
             std::move(forward), std::move(reply_to), shard, response_id, std::move(trace_info),
             std::monostate(), fence);
@@ -2805,6 +2808,14 @@ void storage_proxy_stats::stats::register_stats() {
         sm::make_total_operations("cas_dropped_prune", cas_replica_dropped_prune,
                        sm::description("how many times a coordinator did not perform prune after cas"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
+        sm::make_counter("received_hints_total", received_hints_total,
+                        sm::description("number of hints and MV hints received by this node"),
+                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
+        sm::make_counter("received_hints_bytes_total", received_hints_bytes_total,
+                        sm::description("total size of hints and MV hints received by this node"),
+                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
     });
     _metrics = std::exchange(new_metrics, {});
 }

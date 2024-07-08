@@ -191,6 +191,10 @@ struct stats : public write_stats {
     split_stats mutation_data_read_completed;
     split_stats mutation_data_read_errors;
 
+    // Received hints
+    uint64_t received_hints_total = 0;
+    uint64_t received_hints_bytes_total = 0;
+
 public:
     stats();
     void register_stats();
