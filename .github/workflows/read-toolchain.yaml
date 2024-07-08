@@ -1,0 +1,23 @@
+name: Read Toolchain
+
+on:
+  workflow_call:
+    outputs:
+      image:
+        description: "the toolchain docker image"
+        value: ${{ jobs.read-toolchain.outputs.image }}
+
+jobs:
+  read-toolchain:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.read.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/toolchain/image
+          sparse-checkout-cone-mode: false
+      - id: read
+        run: |
+          image=$(cat tools/toolchain/image)
+          echo "image=$image" >> $GITHUB_OUTPUT
