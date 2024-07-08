@@ -648,8 +648,7 @@ private:
     void write_scylla_metadata(shard_id shard,
                                sstable_enabled_features features,
                                run_identifier identifier,
-                               std::optional<scylla_metadata::large_data_stats> ld_stats,
-                               sstring origin);
+                               std::optional<scylla_metadata::large_data_stats> ld_stats);
 
     future<> read_filter(sstable_open_config cfg = {});
 
@@ -658,7 +657,7 @@ private:
     // partitions, if the partition estimate provided during bloom
     // filter initialisation was not good.
     // This should be called only before an sstable is sealed.
-    void maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring origin);
+    void maybe_rebuild_filter_from_index(uint64_t num_partitions);
 
     future<> read_summary() noexcept;
 

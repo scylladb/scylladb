@@ -1430,7 +1430,7 @@ void sstable::write_filter() {
     write_simple<component_type::Filter>(filter_ref);
 }
 
-void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring origin) {
+void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
     if (!has_component(component_type::Filter)) {
         return;
     }
@@ -1461,7 +1461,7 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring o
     // The rebuilding is done in-place as this method is only called before the sstable is sealed.
     _components->filter = utils::i_filter::get_filter(num_partitions, _schema->bloom_filter_fp_chance(), get_filter_format(_version));
     sstlog.info("Rebuilding bloom filter {}: resizing bitset from {} bytes to {} bytes. sstable origin: {}", filename(component_type::Filter), curr_bitset_size,
-                downcast_ptr<utils::filter::bloom_filter>(_components->filter.get())->bits().memory_size(), origin);
+                downcast_ptr<utils::filter::bloom_filter>(_components->filter.get())->bits().memory_size(), _origin);
 
     auto index_file = open_file(component_type::Index, open_flags::ro).get();
     auto index_file_closer = deferred_action([&index_file] {
@@ -1801,7 +1801,7 @@ sstable::read_scylla_metadata() noexcept {
 
 void
 sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features, struct run_identifier identifier,
-        std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin) {
+        std::optional<scylla_metadata::large_data_stats> ld_stats) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
 
@@ -1823,9 +1823,9 @@ sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features
     if (ld_stats) {
         _components->scylla_metadata->data.set<scylla_metadata_type::LargeDataStats>(std::move(*ld_stats));
     }
-    if (!origin.empty()) {
+    if (!_origin.empty()) {
         scylla_metadata::sstable_origin o;
-        o.value = bytes(to_bytes_view(sstring_view(origin)));
+        o.value = bytes(to_bytes_view(sstring_view(_origin)));
         _components->scylla_metadata->data.set<scylla_metadata_type::SSTableOrigin>(std::move(o));
     }
 
