@@ -6,7 +6,6 @@ on:
       - master
 
 env:
-  CLANG_VERSION: 18
   BUILD_TYPE: RelWithDebInfo
   BUILD_DIR: build
   CLEANER_OUTPUT_PATH: build/clang-include-cleaner.log
@@ -20,25 +19,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  read-toolchain:
+    uses: ./.github/workflows/read-toolchain.yaml
   clang-include-cleaner:
     name: "Analyze #includes in source files"
+    needs:
+      - read-toolchain
     runs-on: ubuntu-latest
+    container: ${{ needs.read-toolchain.image }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - uses: ./.github/actions/setup-build
-        with:
-          install_clang_tool: true
+      - run: |
+          sudo dnf -y install clang-tools-extra
       - name: Generate compilation database
         run: |
           cmake                                         \
             -DCMAKE_BUILD_TYPE=$BUILD_TYPE              \
-            -DCMAKE_C_COMPILER=clang-$CLANG_VERSION     \
-            -DCMAKE_CXX_COMPILER=clang++-$CLANG_VERSION \
+            -DCMAKE_C_COMPILER=clang                    \
+            -DCMAKE_CXX_COMPILER=clang++                \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON          \
-            -DCMAKE_CXX_FLAGS=-DFMT_HEADER_ONLY         \
-            -DCMAKE_PREFIX_PATH=$PWD/cooking            \
             -G Ninja                                    \
             -B $BUILD_DIR                               \
             -S .
@@ -65,7 +66,7 @@ jobs:
           for d in $CLEANER_DIRS; do
             find $d -name '*.cc' -o -name '*.hh'          \
               -exec echo {} \;                            \
-              -exec clang-include-cleaner-$CLANG_VERSION  \
+              -exec clang-include-cleaner                 \
                 --ignore-headers=seastarx.hh              \
                 --print=changes                           \
                 -p $BUILD_DIR                             \
