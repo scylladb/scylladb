@@ -9,7 +9,6 @@
 #pragma once
 
 #include "compaction_strategy_impl.hh"
-#include "compaction.hh"
 #include "sstables/shared_sstable.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 

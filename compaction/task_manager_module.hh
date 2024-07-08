@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <fmt/format.h>
-
 #include "compaction/compaction.hh"
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"

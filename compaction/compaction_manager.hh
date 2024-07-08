@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
 
 #include <seastar/core/semaphore.hh>
@@ -16,9 +15,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/shared_future.hh>
-#include <seastar/core/rwlock.hh>
 #include <seastar/core/metrics_registration.hh>
-#include <seastar/core/scheduling.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
 #include "sstables/shared_sstable.hh"
