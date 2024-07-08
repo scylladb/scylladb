@@ -325,6 +325,8 @@ WantedBy=local-fs.target
         os.chown(dpath, uid, gid)
 
     if is_debian_variant():
+        if not shutil.which('update-initramfs'):
+            pkg_install('initramfs-tools')
         run('update-initramfs -u', shell=True, check=True)
 
     if not udev_info.uuid_link:
