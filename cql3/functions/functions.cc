@@ -117,7 +117,7 @@ functions::init() noexcept {
     return ret;
 }
 
-void functions_changer::add_function(shared_ptr<function> func) {
+void functions::add_function(shared_ptr<function> func) {
     if (find(func->name(), func->arg_types())) {
         throw std::logic_error(format("duplicated function {}", func));
     }
@@ -125,7 +125,7 @@ void functions_changer::add_function(shared_ptr<function> func) {
 }
 
 template <typename F>
-void functions_changer::with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f) {
+void functions::with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f) {
     auto i = find_iter(name, arg_types);
     if (i == _declared.end() || i->second->is_native()) {
         log.error("attempted to remove or alter non existent user defined function {}({})", name, arg_types);
@@ -134,7 +134,7 @@ void functions_changer::with_udf_iter(const function_name& name, const std::vect
     f(i);
 }
 
-void functions_changer::replace_function(shared_ptr<function> func) {
+void functions::replace_function(shared_ptr<function> func) {
     with_udf_iter(func->name(), func->arg_types(), [func] (functions::declared_t::iterator i) {
         i->second = std::move(func);
     });
@@ -157,7 +157,7 @@ void functions_changer::replace_function(shared_ptr<function> func) {
     }
 }
 
-void functions_changer::remove_function(const function_name& name, const std::vector<data_type>& arg_types) {
+void functions::remove_function(const function_name& name, const std::vector<data_type>& arg_types) {
     with_udf_iter(name, arg_types, [this] (functions::declared_t::iterator i) { _declared.erase(i); });
 }
 
