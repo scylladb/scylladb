@@ -27,6 +27,11 @@ if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
+
+    if is_debian_variant() or is_suse_variant():
+        if not shutil.which('coredumpctl'):
+            pkg_install('systemd-coredump')
+
     parser = argparse.ArgumentParser(description='Optimize coredump settings for Scylla.')
     parser.add_argument('--dump-to-raiddir', action='store_true', default=False,
                         help='store coredump to /var/lib/scylla')
@@ -48,11 +53,8 @@ if __name__ == '__main__':
         run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf', shell=True, check=True)
 # Other distributions can use systemd-coredump, so setup it
     else:
-        if is_debian_variant() or is_suse_variant():
-            if not shutil.which('coredumpctl'):
-                pkg_install('systemd-coredump')
-                if is_suse_variant():
-                    systemd_unit('systemd-coredump.socket').restart()
+        if is_suse_variant():
+            systemd_unit('systemd-coredump.socket').restart()
         # Some older distribution does not have this unit
         if systemd_unit.available('systemd-coredump@.service'):
             dropin = '''
