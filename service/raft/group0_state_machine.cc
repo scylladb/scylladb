@@ -318,6 +318,9 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         }
         tables.push_back(db::system_keyspace::service_levels_v2()->id());
 
+        // TODO MICHAEL currently there's an issue that the sender may not have this table yet.
+        tables.push_back(db::system_keyspace::view_build_status_v2()->id());
+
         raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
             &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
     }
