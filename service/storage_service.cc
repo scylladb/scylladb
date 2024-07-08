@@ -6813,7 +6813,25 @@ void storage_service::init_messaging_service() {
             // FIXME: make it an rwlock, here we only need to lock for reads,
             // might be useful if multiple nodes are trying to pull concurrently.
             auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex(ss._abort_source);
-            for (const auto& table : params.tables) {
+
+            // We may need to send additional raft-based tables to the requester that
+            // are not indicated in the parameter.
+            // For example, when a node joins, it requests a snapshot before it knows
+            // which features are enabled, so it doesn't know yet if these tables exist
+            // on other nodes.
+            // In the current "legacy" mode we assume the requesting node sends 2 RPCs - one for
+            // topology tables and one for auth tables, service levels, and additional tables.
+            // When we detect it's the second RPC, we add additional tables based on our feature flags.
+            // In the future we want to deprecate this parameter, so this condition should
+            // apply only for "legacy" snapshot pull RPCs.
+            std::vector<table_id> additional_tables;
+            if (params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id()) {
+                if (ss._feature_service.view_build_status_on_group0) {
+                    additional_tables.push_back(db::system_keyspace::view_build_status_v2()->id());
+                }
+            }
+
+            for (const auto& table : boost::join(params.tables, additional_tables)) {
                 auto schema = ss._db.local().find_schema(table);
                 auto muts = co_await ss.get_system_mutations(schema);
 
@@ -6850,6 +6868,11 @@ void storage_service::init_messaging_service() {
             auto auth_version_mut = co_await ss._sys_ks.local().get_auth_version_mutation();
             if (auth_version_mut) {
                 mutations.emplace_back(*auth_version_mut);
+            }
+
+            auto view_builder_version_mut = co_await ss._sys_ks.local().get_view_builder_version_mutation();
+            if (view_builder_version_mut) {
+                mutations.emplace_back(*view_builder_version_mut);
             }
 
             co_return raft_snapshot{
