@@ -638,7 +638,7 @@ private:
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
     void generate_toc();
-    void open_sstable();
+    void open_sstable(const sstring& origin);
 
     future<> read_compression();
     void write_compression();

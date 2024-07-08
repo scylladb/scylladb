@@ -149,7 +149,7 @@ public:
         _sst->_recognized_components.erase(component_type::Index);
         _sst->_recognized_components.erase(component_type::Data);
         return seastar::async([sst = _sst] {
-            sst->open_sstable();
+            sst->open_sstable("test");
             sst->write_statistics();
             sst->write_compression();
             sst->write_filter();

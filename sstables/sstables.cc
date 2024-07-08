@@ -934,7 +934,8 @@ future<file_writer> sstable::make_component_file_writer(component_type c, file_o
     });
 }
 
-void sstable::open_sstable() {
+void sstable::open_sstable(const sstring& origin) {
+    _origin = origin;
     generate_toc();
     _storage->open(*this);
 }
