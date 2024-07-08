@@ -32,7 +32,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
             }
             auto dur = std::stoll(timeout_str);
             if (dur <= 0) {
-                throw std::runtime_error{"Timeout must be a positive number."};
+                throw bad_param_exception{"Timeout must be a positive number."};
             }
             return std::chrono::seconds{dur};
         });
@@ -56,7 +56,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         });
 
         if (!found_srv) {
-            throw std::runtime_error{fmt::format("Server for group ID {} not found", gid)};
+            throw bad_param_exception{fmt::format("Server for group ID {} not found", gid)};
         }
 
         co_return json_void{};
