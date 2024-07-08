@@ -3207,14 +3207,14 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
         // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
         // a small number of nodes causing problems, so we should avoid shutting down writes completely to
         // healthy nodes.  Any node with no hintsInProgress is considered healthy.
-        throw overloaded_exception(_hints_manager.size_of_hints_in_progress());
+        return boost::outcome_v2::failure(overloaded_exception(_hints_manager.size_of_hints_in_progress()));
     }
 
     if (should_reject_due_to_view_backlog(all, s)) {
         // A base replica won't be able to send its view updates because there's too many of them.
         // To avoid any base or view inconsistencies, the request should be retried when the replica
         // isn't overloaded
-        throw overloaded_exception("View update backlog is too high on node containing the base replica");
+        return boost::outcome_v2::failure(overloaded_exception("View update backlog is too high on node containing the base replica"));
     }
     // filter live endpoints from dead ones
     inet_address_vector_replica_set live_endpoints;
@@ -3296,7 +3296,7 @@ storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxo
         // A base replica won't be able to send its view updates because there's too many of them.
         // To avoid any base or view inconsistencies, the request should be retried when the replica
         // isn't overloaded
-        throw overloaded_exception("View update backlog is too high on node containing the base replica");
+        return boost::outcome_v2::failure(overloaded_exception("View update backlog is too high on node containing the base replica"));
     }
     slogger.trace("creating write handler for paxos repair token: {} endpoint: {}", token, endpoints);
     tracing::trace(tr_state, "Creating write handler for paxos repair token: {} endpoint: {}", token, endpoints);
