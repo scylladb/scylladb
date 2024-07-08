@@ -619,6 +619,15 @@ public:
     future<mutation> make_auth_version_mutation(api::timestamp_type ts, auth_version_t version);
     future<auth_version_t> get_auth_version();
 
+    enum class view_builder_version_t: int64_t {
+        v1 = 1,
+        v2 = 2,
+    };
+
+    future<std::optional<mutation>> get_view_builder_version_mutation();
+    future<mutation> make_view_builder_version_mutation(api::timestamp_type ts, view_builder_version_t version);
+    future<view_builder_version_t> get_view_builder_version();
+
     future<> sstables_registry_create_entry(sstring location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc);
     future<> sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status);
     future<> sstables_registry_update_entry_state(sstring location, sstables::generation_type gen, sstables::sstable_state state);

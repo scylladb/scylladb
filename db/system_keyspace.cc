@@ -2843,6 +2843,36 @@ future<mutation> system_keyspace::make_auth_version_mutation(api::timestamp_type
     co_return std::move(muts[0]);
 }
 
+static constexpr auto VIEW_BUILDER_VERSION_KEY = "view_builder_version";
+
+future<system_keyspace::view_builder_version_t> system_keyspace::get_view_builder_version() {
+    auto str_opt = co_await get_scylla_local_param(VIEW_BUILDER_VERSION_KEY);
+    if (!str_opt) {
+        co_return view_builder_version_t::v1;
+    }
+    auto& str = *str_opt;
+    if (str == "" || str == "1") {
+        co_return view_builder_version_t::v1;
+    }
+    if (str == "2") {
+        co_return view_builder_version_t::v2;
+    }
+    on_internal_error(slogger, fmt::format("unexpected view_builder_version in scylla_local got {}", str));
+}
+
+future<std::optional<mutation>> system_keyspace::get_view_builder_version_mutation() {
+    return get_scylla_local_mutation(_db, VIEW_BUILDER_VERSION_KEY);
+}
+
+future<mutation> system_keyspace::make_view_builder_version_mutation(api::timestamp_type ts, db::system_keyspace::view_builder_version_t version) {
+    static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {VIEW_BUILDER_VERSION_KEY, std::to_string(int64_t(version))});
+    if (muts.size() != 1) {
+         on_internal_error(slogger, fmt::format("expected 1 view_builder_version mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
 static constexpr auto SERVICE_LEVELS_VERSION_KEY = "service_level_version";
 
 future<std::optional<mutation>> system_keyspace::get_service_levels_version_mutation() {
