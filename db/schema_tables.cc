@@ -1858,11 +1858,6 @@ static std::vector<data_type> read_arg_types(replica::database& db, const query:
     return arg_types;
 }
 
-static std::vector<data_value> read_arg_values(const query::result_set_row& row) {
-    auto args = get_list<sstring>(row, "argument_types");
-    return std::vector<data_value>(args.begin(), args.end());
-}
-
 static seastar::future<shared_ptr<cql3::functions::user_function>> create_func(replica::database& db, const query::result_set_row& row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
