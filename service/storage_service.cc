@@ -73,6 +73,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/config.hh"
+#include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
 #include "db/view/view_builder.hh"
 #include "replica/database.hh"

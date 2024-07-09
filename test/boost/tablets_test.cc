@@ -18,7 +18,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "db/config.hh"
-#include "db/schema_tables.hh"
+#include "db/schema_applier.hh"
 #include "schema/schema_builder.hh"
 
 #include "replica/tablets.hh"

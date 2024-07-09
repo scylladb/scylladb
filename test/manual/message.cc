@@ -24,7 +24,7 @@
 #include "utils/UUID.hh"
 #include "log.hh"
 #include "locator/token_metadata.hh"
-#include "db/schema_tables.hh"
+#include "db/schema_applier.hh"
 #include "idl/gossip.dist.hh"
 
 using namespace std::chrono_literals;
