@@ -130,7 +130,6 @@ class rp_handle;
 class data_listeners;
 class large_data_handler;
 class system_keyspace;
-class table_selector;
 
 namespace view {
 class view_update_generator;
