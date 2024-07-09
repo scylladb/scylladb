@@ -766,8 +766,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             rtlogger.info("keyspace_rf_change requested");
             while (true) {
                 sstring ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
-                auto& ks = _db.find_keyspace(ks_name);
-                auto tmptr = get_token_metadata_ptr();
                 std::unordered_map<sstring, sstring> saved_ks_props = *_topo_sm._topology.new_keyspace_rf_change_data;
                 cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
 
@@ -776,6 +774,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 utils::UUID req_uuid = *_topo_sm._topology.global_request_id;
                 std::vector<canonical_mutation> updates;
                 sstring error;
+                if (_db.has_keyspace(ks_name)) {
+                auto& ks = _db.find_keyspace(ks_name);
+                auto tmptr = get_token_metadata_ptr();
                 size_t unimportant_init_tablet_count = 2; // must be a power of 2
                 locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 
@@ -805,6 +806,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         ));
                         co_await coroutine::maybe_yield();
                     });
+                }
+                } else {
+                    error = "Can't ALTER keyspace " + ks_name + ", keyspace doesn't exist";
                 }
 
                 updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
