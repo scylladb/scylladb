@@ -555,7 +555,13 @@ future<> shard_reshaping_compaction_task_impl::run() {
                 | boost::adaptors::filtered([&filter = _filter] (const auto& sst) {
             return filter(sst);
         }));
-        auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), _mode);
+        if (reshape_candidates.empty()) {
+            break;
+        }
+        // all sstables were found in the same sstable_directory instance, so they share the same underlying storage.
+        auto& storage = reshape_candidates.front()->get_storage();
+        auto cfg = co_await sstables::make_reshape_config(storage, _mode);
+        auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), cfg);
         if (desc.sstables.empty()) {
             break;
         }
