@@ -171,7 +171,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after);
 static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, schema_result scylla_before, schema_result scylla_after);
 
-static future<> do_merge_schema(distributed<service::storage_proxy>&, sharded<db::system_keyspace>& sys_ks, std::vector<mutation>, bool do_flush, bool reload);
+static future<> do_merge_schema(distributed<service::storage_proxy>&, sharded<db::system_keyspace>& sys_ks, std::vector<mutation>, bool reload);
 
 using computed_columns_map = std::unordered_map<bytes, column_computation_ptr>;
 static computed_columns_map get_computed_columns(const schema_mutations& sm);
@@ -998,8 +998,7 @@ future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service:
         co_return;
     }
     co_await with_merge_lock([&] () mutable -> future<> {
-        bool flush_schema = proxy.local().get_db().local().get_config().flush_schema_tables_after_modification();
-        co_await do_merge_schema(proxy, sys_ks, std::move(mutations), flush_schema, reload);
+        co_await do_merge_schema(proxy, sys_ks, std::move(mutations), reload);
         auto version_from_group0 = co_await get_group0_schema_version(sys_ks.local());
         co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features(), version_from_group0);
     });
@@ -1273,7 +1272,7 @@ table_selector get_affected_tables(const sstring& keyspace_name, const mutation&
     return result;
 }
 
-static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool do_flush, bool reload)
+static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool reload)
 {
     slogger.trace("do_merge_schema: {}", mutations);
     schema_ptr s = keyspaces();
