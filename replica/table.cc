@@ -287,15 +287,17 @@ sstables::shared_sstable table::make_streaming_staging_sstable() {
     return newtab;
 }
 
-static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, const compaction_manager& cm, gc_clock::time_point compaction_time, bool compaction_enabled) {
+static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, const compaction_manager& cm,
+        gc_clock::time_point compaction_time, bool compaction_enabled, bool compaction_can_gc) {
     utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_enabled", fmt::to_string(compaction_enabled));
+    utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_can_gc", fmt::to_string(compaction_can_gc));
     if (!compaction_enabled) {
         return underlying;
     }
     return make_compacting_reader(
             std::move(underlying),
             compaction_time,
-            [] (const dht::decorated_key&) { return api::min_timestamp; }, // disable tombstone purging
+            [compaction_can_gc] (const dht::decorated_key&) { return compaction_can_gc ? api::max_timestamp : api::min_timestamp; },
             cm.get_tombstone_gc_state(),
             streamed_mutation::forwarding::no);
 }
@@ -320,7 +322,8 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
             make_flat_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, nullptr, mutation_reader::forwarding::no),
             get_compaction_manager(),
             compaction_time,
-            _config.enable_compacting_data_for_streaming_and_repair());
+            _config.enable_compacting_data_for_streaming_and_repair(),
+            _config.enable_tombstone_gc_for_streaming_and_repair());
 }
 
 mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
@@ -337,7 +340,8 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
             make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr),
             get_compaction_manager(),
             compaction_time,
-            _config.enable_compacting_data_for_streaming_and_repair());
+            _config.enable_compacting_data_for_streaming_and_repair(),
+            _config.enable_tombstone_gc_for_streaming_and_repair());
 }
 
 mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
@@ -351,7 +355,8 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
                     std::move(trace_state), fwd, fwd_mr),
             get_compaction_manager(),
             compaction_time,
-            _config.enable_compacting_data_for_streaming_and_repair());
+            _config.enable_compacting_data_for_streaming_and_repair(),
+            _config.enable_tombstone_gc_for_streaming_and_repair());
 }
 
 mutation_reader table::make_nonpopulating_cache_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
