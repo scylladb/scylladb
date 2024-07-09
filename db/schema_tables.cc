@@ -132,25 +132,6 @@ logging::logger slogger("schema_tables");
 
 const sstring version = "3";
 
-struct qualified_name {
-    sstring keyspace_name;
-    sstring table_name;
-
-    qualified_name(sstring keyspace_name, sstring table_name)
-            : keyspace_name(std::move(keyspace_name))
-            , table_name(std::move(table_name))
-    { }
-
-    qualified_name(const schema_ptr& s)
-            : keyspace_name(s->ks_name())
-            , table_name(s->cf_name())
-    { }
-
-    auto operator<=>(const qualified_name&) const = default;
-};
-
-static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s);
-
 static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
     sharded<db::system_keyspace>& sys_ks,
     std::map<table_id, schema_mutations>&& tables_before,
@@ -435,10 +416,6 @@ schema_ptr view_virtual_columns() {
     return schema;
 }
 
-// Returns table ids of all schema tables which contribute to schema_mutations,
-// i.e. those which are used to define schema of a table or a view.
-// All such tables have a clustering key whose first column is the table name.
-static
 const std::unordered_set<table_id>& schema_tables_holding_schema_mutations() {
     static const std::unordered_set<table_id> table_ids = [] {
         std::unordered_set<table_id> ids;
@@ -1797,10 +1774,7 @@ template <typename T> static future<std::vector<user_type>> create_types(keyspac
     co_return co_await builder.build();
 }
 
-// Given a set of rows that is sorted by keyspace, create types for each keyspace.
-// The topological sort in each keyspace is necessary when creating types, since we can only create a type when the
-// types it reference have already been created.
-static future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows) {
+future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows) {
     std::vector<user_type> ret;
     for (auto i = rows.begin(), e = rows.end(); i != e;) {
         const auto &row = *i;
@@ -1849,7 +1823,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
     }};
 }
 
-static std::vector<data_type> read_arg_types(replica::database& db, const query::result_set_row& row, const sstring& keyspace) {
+std::vector<data_type> read_arg_types(replica::database& db, const query::result_set_row& row, const sstring& keyspace) {
     std::vector<data_type> arg_types;
     for (const auto& arg : get_list<sstring>(row, "argument_types")) {
         arg_types.push_back(db::cql_type_parser::parse(keyspace, arg, db.user_types()));
@@ -1857,7 +1831,7 @@ static std::vector<data_type> read_arg_types(replica::database& db, const query:
     return arg_types;
 }
 
-static seastar::future<shared_ptr<cql3::functions::user_function>> create_func(replica::database& db, const query::result_set_row& row) {
+future<shared_ptr<cql3::functions::user_function>> create_func(replica::database& db, const query::result_set_row& row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
     auto arg_types = read_arg_types(db, row, name.keyspace);
@@ -1883,7 +1857,7 @@ static seastar::future<shared_ptr<cql3::functions::user_function>> create_func(r
             row.get_nonnull<bool>("called_on_null_input"), std::move(*ctx));
 }
 
-static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row, cql3::functions::change_batch& batch) {
+shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row, cql3::functions::change_batch& batch) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("aggregate_name")};
     auto arg_types = read_arg_types(db, row, name.keyspace);
@@ -2848,7 +2822,7 @@ std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata>
     return mutations;
 }
 
-static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s)
+future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s)
 {
     auto&& [cf_m, col_m, vv_col_m, c_col_m, dropped_m, idx_m, st_m] = co_await coroutine::all(
         [&] { return read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name); },
