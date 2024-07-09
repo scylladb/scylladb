@@ -28,7 +28,6 @@
 #include "db/system_keyspace.hh"
 #include "cql3/expr/expression.hh"
 #include "types/types.hh"
-#include "db/schema_tables.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
@@ -50,13 +49,10 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "mutation/async_utils.hh"
-#include "db/schema_tables.hh"
 
 namespace db {
 
 namespace schema_tables {
-
-enum class table_kind { table, view };
 
 static constexpr std::initializer_list<table_kind> all_table_kinds = {
     table_kind::table,
@@ -69,6 +65,24 @@ static schema_ptr get_table_holder(table_kind k) {
         case table_kind::view: return views();
     }
     abort();
+}
+
+table_selector& table_selector::operator+=(table_selector&& o) {
+    all_in_keyspace |= o.all_in_keyspace;
+    for (auto t : all_table_kinds) {
+        tables[t].merge(std::move(o.tables[t]));
+    }
+    return *this;
+}
+
+void table_selector::add(table_kind t, sstring name) {
+    tables[t].emplace(std::move(name));
+}
+
+void table_selector::add(sstring name) {
+    for (auto t : all_table_kinds) {
+        add(t, name);
+    }
 }
 
 }
@@ -92,29 +106,6 @@ template <> struct fmt::formatter<db::schema_tables::table_kind> {
 namespace db {
 
 namespace schema_tables {
-
-struct table_selector {
-    bool all_in_keyspace = false; // If true, selects all existing tables in a keyspace plus what's in "tables";
-    std::unordered_map<table_kind, std::unordered_set<sstring>> tables;
-
-    table_selector& operator+=(table_selector&& o) {
-        all_in_keyspace |= o.all_in_keyspace;
-        for (auto t : all_table_kinds) {
-            tables[t].merge(std::move(o.tables[t]));
-        }
-        return *this;
-    }
-
-    void add(table_kind t, sstring name) {
-        tables[t].emplace(std::move(name));
-    }
-
-    void add(sstring name) {
-        for (auto t : all_table_kinds) {
-            add(t, name);
-        }
-    }
-};
 
 static std::optional<table_id> table_id_from_mutations(const schema_mutations& sm) {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
@@ -752,47 +743,50 @@ static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, con
     });
 }
 
-static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool reload)
-{
-    slogger.trace("do_merge_schema: {}", mutations);
+future<schema_persisted_state> schema_applier::get_schema_persisted_state() {
+    schema_persisted_state v{
+        .keyspaces = co_await read_schema_for_keyspaces(_proxy, KEYSPACES, _keyspaces),
+        .scylla_keyspaces = co_await read_schema_for_keyspaces(_proxy, SCYLLA_KEYSPACES, _keyspaces),
+        .tables = co_await read_tables_for_keyspaces(_proxy, _keyspaces, table_kind::table, _affected_tables),
+        .types = co_await read_schema_for_keyspaces(_proxy, TYPES, _keyspaces),
+        .views = co_await read_tables_for_keyspaces(_proxy, _keyspaces, table_kind::view, _affected_tables),
+        .functions = co_await read_schema_for_keyspaces(_proxy, FUNCTIONS, _keyspaces),
+        .aggregates = co_await read_schema_for_keyspaces(_proxy, AGGREGATES, _keyspaces),
+        .scylla_aggregates = co_await read_schema_for_keyspaces(_proxy, SCYLLA_AGGREGATES, _keyspaces),
+    };
+    co_return v;
+}
+
+future<> schema_applier::prepare(std::vector<mutation>& muts) {
     schema_ptr s = keyspaces();
-    // compare before/after schemas of the affected keyspaces only
-    std::set<sstring> keyspaces;
-    using keyspace_name = sstring;
-    std::unordered_map<keyspace_name, table_selector> affected_tables;
-    locator::tablet_metadata_change_hint tablet_hint;
-    for (auto&& mutation : mutations) {
+    for (auto& mutation : muts) {
         sstring keyspace_name = value_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0)));
 
         if (schema_tables_holding_schema_mutations().contains(mutation.schema()->id())) {
-            affected_tables[keyspace_name] += get_affected_tables(keyspace_name, mutation);
+            _affected_tables[keyspace_name] += get_affected_tables(keyspace_name, mutation);
         }
 
-        replica::update_tablet_metadata_change_hint(tablet_hint, mutation);
+        replica::update_tablet_metadata_change_hint(_tablet_hint, mutation);
 
-        keyspaces.emplace(std::move(keyspace_name));
-        // We must force recalculation of schema version after the merge, since the resulting
-        // schema may be a mix of the old and new schemas, with the exception of entries
-        // that originate from group 0.
-        maybe_delete_schema_version(mutation);
+        _keyspaces.emplace(std::move(keyspace_name));
     }
 
-    if (reload) {
-        for (auto&& ks : proxy.local().get_db().local().get_non_system_keyspaces()) {
-            keyspaces.emplace(ks);
+    if (_reload) {
+        for (auto&& ks : _proxy.local().get_db().local().get_non_system_keyspaces()) {
+            _keyspaces.emplace(ks);
             table_selector sel;
             sel.all_in_keyspace = true;
-            affected_tables[ks] = sel;
+            _affected_tables[ks] = sel;
         }
     }
 
     // Resolve sel.all_in_keyspace == true to the actual list of tables and views.
-    for (auto&& [keyspace_name, sel] : affected_tables) {
+    for (auto&& [keyspace_name, sel] : _affected_tables) {
         if (sel.all_in_keyspace) {
             // FIXME: Obtain from the database object
             slogger.trace("Reading table list for keyspace {}", keyspace_name);
             for (auto k : all_table_kinds) {
-                for (auto&& n : co_await read_table_names_of_keyspace(proxy, keyspace_name, get_table_holder(k))) {
+                for (auto&& n : co_await read_table_names_of_keyspace(_proxy, keyspace_name, get_table_holder(k))) {
                     sel.add(k, std::move(n));
                 }
             }
@@ -800,43 +794,55 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
         slogger.debug("Affected tables for keyspace {}: {}", keyspace_name, sel.tables);
     }
 
-    // current state of the schema
-    auto&& old_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
-    auto&& old_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
-    auto&& old_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
-    auto&& old_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
-    auto&& old_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
-    auto old_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
-    auto old_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
-    auto old_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
+    _before = co_await get_schema_persisted_state();
 
-    co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
+    for (auto& mut : muts) {
+        // We must force recalculation of schema version after the merge, since the resulting
+        // schema may be a mix of the old and new schemas, with the exception of entries
+        // that originate from group 0.
+        maybe_delete_schema_version(mut);
+    }
+}
 
-    // with new data applied
-    auto&& new_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
-    auto&& new_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
-    auto&& new_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
-    auto&& new_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
-    auto&& new_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
-    auto new_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
-    auto new_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
-    auto new_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
+future<> schema_applier::update() {
+    _after = co_await get_schema_persisted_state();
 
-    std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces),
-                                                                   std::move(old_scylla_keyspaces), std::move(new_scylla_keyspaces));
-    auto types_to_drop = co_await merge_types(proxy, std::move(old_types), std::move(new_types));
-    co_await merge_tables_and_views(proxy, sys_ks,
-        std::move(old_column_families), std::move(new_column_families),
-        std::move(old_views), std::move(new_views), reload, std::move(tablet_hint));
-    co_await merge_functions(proxy, std::move(old_functions), std::move(new_functions));
-    co_await merge_aggregates(proxy, std::move(old_aggregates), std::move(new_aggregates), std::move(old_scylla_aggregates), std::move(new_scylla_aggregates));
+    std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(_proxy, _before.keyspaces, _after.keyspaces, _before.scylla_keyspaces, _after.scylla_keyspaces);
+    auto types_to_drop = co_await merge_types(_proxy, _before.types, _after.types);
+    co_await merge_tables_and_views(_proxy, _sys_ks,
+            _before.tables, _after.tables,
+            _before.views, _after.views,
+            _reload, _tablet_hint);
+    co_await merge_functions(_proxy, _before.functions, _after.functions);
+    co_await merge_aggregates(_proxy, _before.aggregates, _after.aggregates,
+            _before.scylla_aggregates, _after.scylla_aggregates);
     co_await types_to_drop.drop();
 
-    auto& sharded_db = proxy.local().get_db();
+    auto& sharded_db = _proxy.local().get_db();
     // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
     for (auto keyspace_to_drop : keyspaces_to_drop) {
         co_await replica::database::drop_keyspace_on_all_shards(sharded_db, keyspace_to_drop);
     }
+}
+
+void schema_applier::commit() {
+    // TODO: add copy on write to schema changes
+}
+
+future<> schema_applier::post_commit() {
+    // TODO: pull out notifications code from update() and place here
+    co_return;
+}
+
+static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool reload)
+{
+    slogger.trace("do_merge_schema: {}", mutations);
+    schema_applier ap(proxy, sys_ks, reload);
+    co_await ap.prepare(mutations);
+    co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
+    co_await ap.update();
+    ap.commit();
+    co_await ap.post_commit();
 }
 
 /**
