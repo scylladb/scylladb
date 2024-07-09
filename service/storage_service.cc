@@ -1493,7 +1493,7 @@ future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
     slogger.info("Tablet replicas from the replaced node have been rebuilt");
 }
 
-future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspace>& sys_dist_ks,
+future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
@@ -1507,13 +1507,13 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
      * This value is nullopt only when:
      * 1. this node is being upgraded from a non-CDC version,
      * 2. this node is starting for the first time or restarting with CDC previously disabled,
-     *    in which case the value should become populated before we leave the join_token_ring procedure.
+     *    in which case the value should become populated before we leave the join_topology procedure.
      *
      * Important: this variable is using only during the startup procedure. It is moved out from
-     * at the end of `join_token_ring`; the responsibility handling of CDC generations is passed
+     * at the end of `join_topology`; the responsibility handling of CDC generations is passed
      * to cdc::generation_service.
      *
-     * DO NOT use this variable after `join_token_ring` (i.e. after we call `generation_service::after_join`
+     * DO NOT use this variable after `join_topology` (i.e. after we call `generation_service::after_join`
      * and pass it the ownership of the timestamp.
      */
     std::optional<cdc::generation_id> cdc_gen_id;
@@ -1865,7 +1865,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         set_mode(mode::NORMAL);
 
         if (get_token_metadata().sorted_tokens().empty()) {
-            auto err = ::format("join_token_ring: Sorted token in token_metadata is empty");
+            auto err = ::format("join_topology: Sorted token in token_metadata is empty");
             slogger.error("{}", err);
             throw std::runtime_error(err);
         }
@@ -2043,7 +2043,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     set_mode(mode::NORMAL);
 
     if (get_token_metadata().sorted_tokens().empty()) {
-        auto err = ::format("join_token_ring: Sorted token in token_metadata is empty");
+        auto err = ::format("join_topology: Sorted token in token_metadata is empty");
         slogger.error("{}", err);
         throw std::runtime_error(err);
     }
@@ -3013,7 +3013,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         // We must allow restarts of zero-token nodes in the gossip-based topology due to the recovery mode.
     }
 
-    co_return co_await join_token_ring(sys_dist_ks, proxy, std::move(initial_contact_nodes),
+    co_return co_await join_topology(sys_dist_ks, proxy, std::move(initial_contact_nodes),
             std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm, new_generation);
 }
 
