@@ -447,8 +447,7 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
     seastar::abort_source* as, std::optional<raft_timeout> timeout)
 {
     if (!timeout) {
-        co_await op(as);
-        co_return;
+        co_return co_await op(as);
     }
     if (!timeout->value) {
         if (!_group_server.default_op_timeout) {
@@ -528,6 +527,13 @@ future<> raft_server_with_timeouts::modify_config(std::vector<raft::config_membe
     return run_with_timeout([&](abort_source* as) {
             return _group_server.server->modify_config(std::move(add), std::move(del), as);
         }, "modify_config", as, timeout);
+}
+
+future<bool> raft_server_with_timeouts::trigger_snapshot(seastar::abort_source* as, std::optional<raft_timeout> timeout)
+{
+    return run_with_timeout([&](abort_source* as) {
+        return _group_server.server->trigger_snapshot(as);
+    }, "trigger_snapshot", as, timeout);
 }
 
 future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std::optional<raft_timeout> timeout)

@@ -184,6 +184,8 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
     slogger.trace("apply() is called with {} commands", command.size());
 
+    co_await utils::get_local_injector().inject("group0_state_machine::delay_apply", 1s);
+
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex();
 
     // max_mutation_size = 1/2 of commitlog segment size, thus max_command_size is set 1/3 of commitlog segment size to leave space for metadata.

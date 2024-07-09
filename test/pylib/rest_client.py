@@ -487,3 +487,17 @@ async def inject_error_one_shot(api: ScyllaRESTAPIClient, node_ip: IPAddress, in
     if not enabled:
         pytest.skip("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
     return InjectionHandler(api, injection, node_ip)
+
+
+async def read_barrier(api: ScyllaRESTAPIClient, node_ip: IPAddress, group_id: Optional[str] = None) -> None:
+    """ Issue a read barrier on the specific host for the group_id.
+
+        :param api: the REST API client
+        :param node_ip: the node IP address for which the read barrier will be posted
+        :param group_id: the optional group id (default=group0)
+    """
+    params = {}
+    if group_id:
+        params["group_id"] = group_id
+
+    await api.client.post("/raft/read_barrier", host=node_ip, params=params)
