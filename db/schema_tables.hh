@@ -106,6 +106,8 @@ private:
 
 namespace schema_tables {
 
+extern logging::logger slogger;
+
 using schema_result = std::map<sstring, lw_shared_ptr<query::result_set>>;
 using schema_result_value_type = std::pair<sstring, lw_shared_ptr<query::result_set>>;
 
@@ -209,17 +211,13 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
 // Calculates schema digest for all non-system keyspaces
 future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features);
 
-future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features);
-std::vector<mutation> adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features);
-
-future<schema_result_value_type>
-read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, sstring schema_table_name, sstring keyspace_name);
-future<mutation> read_keyspace_mutation(distributed<service::storage_proxy>&, const sstring& keyspace_name);
-
 // Must be called on shard 0.
 future<semaphore_units<>> hold_merge_lock() noexcept;
+future<> with_merge_lock(noncopyable_function<future<> ()> func);
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload = false);
+future<> update_schema_version_and_announce(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, schema_features features, std::optional<table_schema_version> version_from_group0);
+
+future<std::optional<table_schema_version>> get_group0_schema_version(db::system_keyspace& sys_ks);
 
 // Recalculates the local schema version.
 //
@@ -228,7 +226,12 @@ future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service:
 // of feature_service and schema tables.
 future<> recalculate_schema_version(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat);
 
-future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after);
+future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features);
+std::vector<mutation> adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features);
+
+future<schema_result_value_type>
+read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, sstring schema_table_name, sstring keyspace_name);
+future<mutation> read_keyspace_mutation(distributed<service::storage_proxy>&, const sstring& keyspace_name);
 
 std::vector<mutation> make_create_keyspace_mutations(schema_features features, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
