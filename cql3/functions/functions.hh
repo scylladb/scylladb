@@ -73,8 +73,7 @@ public:
     std::optional<function_name> used_by_user_aggregate(shared_ptr<user_function>) const;
     std::optional<function_name> used_by_user_function(const ut_name& user_type) const;
 private:
-    template <typename F>
-    void with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f);
+    void with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, std::function<void(declared_t::iterator)> f);
 
     template <typename F>
     std::vector<shared_ptr<F>> get_filtered_transformed(const sstring& keyspace) const;

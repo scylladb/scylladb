@@ -120,8 +120,7 @@ void functions::add_function(shared_ptr<function> func) {
     _declared.emplace(func->name(), func);
 }
 
-template <typename F>
-void functions::with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f) {
+void functions::with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, std::function<void(declared_t::iterator)> f) {
     auto cit = find_iter(name, arg_types);
     if (cit == _declared.end() || cit->second->is_native()) {
         log.error("attempted to remove or alter non existent user defined function {}({})", name, arg_types);
