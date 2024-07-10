@@ -73,6 +73,8 @@ future<> set_server_init(http_context& ctx) {
         set_error_injection(ctx, r);
         rb->register_function(r, "storage_proxy",
                 "The storage proxy API");
+        rb->register_function(r, "storage_service",
+                "The storage service API");
     });
 }
 
@@ -115,7 +117,7 @@ future<> unset_thrift_controller(http_context& ctx) {
 }
 
 future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
-    return register_api(ctx, "storage_service", "The storage service API", [&ss, &group0_client] (http_context& ctx, routes& r) {
+    return ctx.http_server.set_routes([&ctx, &ss, &group0_client] (routes& r) {
             set_storage_service(ctx, r, ss, group0_client);
         });
 }

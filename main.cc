@@ -985,6 +985,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //    token_metadata.stop().get();
             //});
 
+            api::set_server_token_metadata(ctx, token_metadata).get();
+            auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
+                api::unset_server_token_metadata(ctx).get();
+            });
+
+
             supervisor::notify("starting effective_replication_map factory");
             erm_factory.start().get();
             auto stop_erm_factory = deferred_stop(erm_factory);
@@ -1490,13 +1496,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
                 tablet_allocator.stop().get();
-            });
-
-            // FIXME -- this can happen next to token_metadata start, but it needs "storage_service"
-            // API register, so it comes that late for now
-            api::set_server_token_metadata(ctx, token_metadata).get();
-            auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
-                api::unset_server_token_metadata(ctx).get();
             });
 
             supervisor::notify("starting mapreduce service");
