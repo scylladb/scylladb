@@ -291,11 +291,11 @@ static future<> set_gossip_tokens(gms::gossiper& g,
     assert(!tokens.empty());
 
     // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
-    return g.add_local_application_state({
-        { gms::application_state::TOKENS, gms::versioned_value::tokens(tokens) },
-        { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(cdc_gen_id) },
-        { gms::application_state::STATUS, gms::versioned_value::normal(tokens) }
-    });
+    return g.add_local_application_state(
+        std::pair(gms::application_state::TOKENS, gms::versioned_value::tokens(tokens)),
+        std::pair(gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(cdc_gen_id)),
+        std::pair(gms::application_state::STATUS, gms::versioned_value::normal(tokens))
+    );
 }
 
 static std::unordered_map<token, gms::inet_address> get_token_to_endpoint(const locator::token_metadata& tm) {
@@ -450,11 +450,11 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         // Also ip -> id mapping is needed for address map recreation on reboot
         if (is_me(host_id)) {
             sys_ks_futures.push_back(_sys_ks.local().update_tokens(rs.ring.value().tokens));
-            co_await _gossiper.add_local_application_state({
-                { gms::application_state::TOKENS, gms::versioned_value::tokens(rs.ring.value().tokens) },
-                { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(_topology_state_machine._topology.committed_cdc_generations.back()) },
-                { gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }
-            });
+            co_await _gossiper.add_local_application_state(
+                std::pair(gms::application_state::TOKENS, gms::versioned_value::tokens(rs.ring.value().tokens)),
+                std::pair(gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(_topology_state_machine._topology.committed_cdc_generations.back())),
+                std::pair(gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens))
+            );
         } else if (ip && !is_me(*ip)) {
             // In replace-with-same-ip scenario the replaced node IP will be the same
             // as ours, we shouldn't put it into system.peers.
@@ -2176,11 +2176,11 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
             if (!bootstrap_rbno) {
                 // When is_repair_based_node_ops_enabled is true, the bootstrap node
                 // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
-                _gossiper.add_local_application_state({
-                    { gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens) },
-                    { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id) },
-                    { gms::application_state::STATUS, versioned_value::bootstrapping(bootstrap_tokens) },
-                }).get();
+                _gossiper.add_local_application_state(
+                    std::pair(gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens)),
+                    std::pair(gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id)),
+                    std::pair(gms::application_state::STATUS, versioned_value::bootstrapping(bootstrap_tokens))
+                ).get();
 
                 slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
                 _gossiper.wait_for_range_setup().get();
@@ -2189,9 +2189,9 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
                 bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, null_topology_guard).get();
             } else {
                 // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
-                _gossiper.add_local_application_state({
-                    { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id) },
-                }).get();
+                _gossiper.add_local_application_state(
+                    std::pair(gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id))
+                ).get();
                 slogger.info("Starting to bootstrap...");
                 run_bootstrap_ops(bootstrap_tokens);
             }
@@ -3593,7 +3593,7 @@ future<> storage_service::raft_decommission() {
 
     if (error.empty()) {
         // Need to set it otherwise gossiper will try to send shutdown on exit
-        co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::left({}, _gossiper.now().time_since_epoch().count()) }});
+        co_await _gossiper.add_local_application_state(std::pair(gms::application_state::STATUS, gms::versioned_value::left({}, _gossiper.now().time_since_epoch().count())));
     } else  {
         auto err = fmt::format("Decommission failed. See earlier errors ({})", error);
         rtlogger.error("{}", err);

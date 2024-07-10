@@ -26,7 +26,6 @@
 #include "gms/gossip_digest.hh"
 #include "utils/loading_shared_values.hh"
 #include "utils/updateable_value.hh"
-#include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
 #include <optional>
 #include <chrono>
@@ -635,10 +634,8 @@ public:
      */
     future<> add_local_application_state(application_state_map states);
 
-    /**
-     * Intentionally overenginered to avoid very rare string copies.
-     */
-    future<> add_local_application_state(std::initializer_list<std::pair<application_state, utils::in<versioned_value>>>);
+    // Add multiple application states
+    future<> add_local_application_state(std::convertible_to<std::pair<const application_state, versioned_value>> auto&&... states);
 
     future<> start();
     future<> shutdown();
@@ -719,6 +716,14 @@ struct gossip_get_endpoint_states_request {
 struct gossip_get_endpoint_states_response {
     std::unordered_map<gms::inet_address, gms::endpoint_state> endpoint_state_map;
 };
+
+future<>
+gossiper::add_local_application_state(std::convertible_to<std::pair<const application_state, versioned_value>> auto&&... states) {
+    application_state_map tmp;
+    (..., tmp.emplace(std::forward<decltype(states)>(states)));
+    return add_local_application_state(std::move(tmp));
+}
+
 
 } // namespace gms
 
