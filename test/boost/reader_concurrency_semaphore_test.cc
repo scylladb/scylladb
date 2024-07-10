@@ -614,6 +614,35 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits
     }
 }
 
+
+static void require_can_admit(schema_ptr schema, reader_concurrency_semaphore& semaphore, bool expected_can_admit, const char* description,
+        seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+    testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
+    const auto stats_before = semaphore.get_stats();
+
+    auto admit_fut = semaphore.obtain_permit(schema, "require_can_admit", 1024, db::timeout_clock::now(), {});
+    admit_fut.wait();
+    const bool can_admit = !admit_fut.failed();
+    if (can_admit) {
+        admit_fut.ignore_ready_future();
+    } else {
+        // Make sure we have a timeout exception, not something else
+        BOOST_REQUIRE_THROW(std::rethrow_exception(admit_fut.get_exception()), semaphore_timed_out);
+    }
+
+    const auto stats_after = semaphore.get_stats();
+    BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted + uint64_t(can_admit));
+    // Deliberately not checking `reads_enqueued_for_admission`, a read can be enqueued temporarily during the admission process.
+
+    if (can_admit == expected_can_admit) {
+        testlog.trace("admission scenario '{}' with expected_can_admit={} passed at {}:{}", description, expected_can_admit, sl.file_name(),
+                sl.line());
+    } else {
+        BOOST_FAIL(fmt::format("admission scenario '{}'  with expected_can_admit={} failed at {}:{}\ndiagnostics: {}", description,
+                expected_can_admit, sl.file_name(), sl.line(), semaphore.dump_diagnostics()));
+    }
+};
+
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     simple_schema s;
     const auto schema = s.schema();
@@ -623,30 +652,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     auto require_can_admit = [&] (bool expected_can_admit, const char* description,
             seastar::compat::source_location sl = seastar::compat::source_location::current()) {
-        testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
-        const auto stats_before = semaphore.get_stats();
-
-        auto admit_fut = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {});
-        admit_fut.wait();
-        const bool can_admit = !admit_fut.failed();
-        if (can_admit) {
-            admit_fut.ignore_ready_future();
-        } else {
-            // Make sure we have a timeout exception, not something else
-            BOOST_REQUIRE_THROW(std::rethrow_exception(admit_fut.get_exception()), semaphore_timed_out);
-        }
-
-        const auto stats_after = semaphore.get_stats();
-        BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted + uint64_t(can_admit));
-        // Deliberately not checking `reads_enqueued_for_admission`, a read can be enqueued temporarily during the admission process.
-
-        if (can_admit == expected_can_admit) {
-            testlog.trace("admission scenario '{}' with expected_can_admit={} passed at {}:{}", description, expected_can_admit, sl.file_name(),
-                    sl.line());
-        } else {
-            BOOST_FAIL(fmt::format("admission scenario '{}'  with expected_can_admit={} failed at {}:{}\ndiagnostics: {}", description,
-                    expected_can_admit, sl.file_name(), sl.line(), semaphore.dump_diagnostics()));
-        }
+        ::require_can_admit(schema, semaphore, expected_can_admit, description, sl);
     };
 
     require_can_admit(true, "semaphore in initial state");
@@ -1985,4 +1991,59 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_execution_stage_wakeu
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 2);
 
     permit2_fut.get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concurrency) {
+    simple_schema s;
+    const auto schema = s.schema();
+
+    utils::updateable_value_source<uint32_t> cpu_concurrency{2};
+    const int32_t initial_count = 4;
+    const uint32_t initial_memory = 4 * 1024;
+    const auto serialize_multiplier = std::numeric_limits<uint32_t>::max();
+    const auto kill_multiplier = std::numeric_limits<uint32_t>::max();
+
+    reader_concurrency_semaphore semaphore(
+            utils::updateable_value<int>(initial_count),
+            initial_memory,
+            get_name(),
+            100,
+            utils::updateable_value<uint32_t>(serialize_multiplier),
+            utils::updateable_value<uint32_t>(kill_multiplier),
+            utils::updateable_value(cpu_concurrency),
+            reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto require_can_admit = [&] (bool expected_can_admit, const char* description,
+            seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+        ::require_can_admit(schema, semaphore, expected_can_admit, description, sl);
+    };
+
+    auto permit1 = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+
+    require_can_admit(true, "!need_cpu");
+    {
+        reader_permit::need_cpu_guard ncpu_guard{permit1};
+
+        require_can_admit(true, "need_cpu < cpu_concurrency");
+
+        auto permit2 = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+
+        // no change
+        require_can_admit(true, "need_cpu < cpu_concurrency");
+        {
+            reader_permit::need_cpu_guard ncpu_guard{permit2};
+            require_can_admit(false, "need_cpu == cpu_concurrency");
+
+            cpu_concurrency.set(3);
+
+            require_can_admit(true, "after set(3): need_cpu < cpu_concurrency");
+
+            cpu_concurrency.set(2);
+
+            require_can_admit(false, "after set(2): need_cpu == cpu_concurrency");
+        }
+        require_can_admit(true, "need_cpu < cpu_concurrency");
+    }
+    require_can_admit(true, "!need_cpu");
 }
