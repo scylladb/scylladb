@@ -1007,7 +1007,17 @@ class segment_pool {
     utils::dynamic_bitset _lsa_owned_segments_bitmap; // owned by this
     utils::dynamic_bitset _lsa_free_segments_bitmap;  // owned by this, but not in use
     size_t _free_segments = 0;
+
+    // Invariant: _free_segments > _current_emergency_reserve_goal.
+    // Used to ensure that some critical allocations won't fail.
+    // (We grow _current_emergency_reserve_goal in advance and shrink it right
+    // before the critical allocations, which allows them to utilize the pre-reserved
+    // segments).
     size_t _current_emergency_reserve_goal = 1;
+    // Used by allocating_section to request a certain number of free segments
+    // to be prepared for usage when the section is entered.
+    // This is more of a side-channel argument to refill_emergency_reserve() than a real piece of state.
+    // Passing it via a variable makes it easier to debug.
     size_t _emergency_reserve_max = 30;
     bool _allocation_failure_flag = false;
     bool _allocation_enabled = true;
@@ -1088,6 +1098,7 @@ public:
     void clear_allocation_failure_flag() noexcept { _allocation_failure_flag = false; }
     bool allocation_failure_flag() const noexcept { return _allocation_failure_flag; }
     void refill_emergency_reserve();
+    void ensure_free_segments(size_t n_segments);
     void add_non_lsa_memory_in_use(size_t n) noexcept {
         _non_lsa_memory_in_use += n;
     }
@@ -1330,10 +1341,18 @@ void segment_pool::deallocate_segment(segment* seg) noexcept
 }
 
 void segment_pool::refill_emergency_reserve() {
-    while (_free_segments < _emergency_reserve_max) {
-        auto seg = allocate_segment(_emergency_reserve_max);
+    try {
+        ensure_free_segments(_emergency_reserve_max);
+    } catch (const std::bad_alloc&) {
+        throw bad_alloc(format("failed to refill emergency reserve of {} (have {} free segments)", _emergency_reserve_max, _free_segments));
+    }
+}
+
+void segment_pool::ensure_free_segments(size_t n_segments) {
+    while (_free_segments < n_segments) {
+        auto seg = allocate_segment(n_segments);
         if (!seg) {
-            throw bad_alloc(format("failed to refill emergency reserve of {} (have {} free segments)", _emergency_reserve_max, _free_segments));
+            throw std::bad_alloc();
         }
         ++_segments_in_use;
         free_segment(seg);
@@ -2335,6 +2354,44 @@ public:
 
     const eviction_fn& evictor() const noexcept {
         return _eviction_fn;
+    }
+
+    // LSA holds an internal "emergency reserve" of free segments that
+    // is only "opened" for usage before some critical allocations
+    // (in particular: the ones performed during memory compaction)
+    // to ensure that they won't fail.
+    //
+    // Here we hijack this mechanism to let the rest of the application implement
+    // some critical sections with infallible LSA allocations.
+    //
+    // reserve() increments the size of the internal emergency reserve,
+    // unreserve() decrements it.
+    //
+    // When you want to have some critical section that has to do some LSA 
+    // allocations infallibly (e.g. to restore some invariants
+    // of a LSA-managed data structure in a destructor), you can call reserve()
+    // beforehand to ensure that some extra memory will be held unused,
+    // and then call unreserve() (with reserve()'s return value as the argument)
+    // to make the reserved free segments available to the critical section.
+    // 
+    uintptr_t reserve(size_t memory) override {
+        // We round up the requested reserve to full segments.
+        size_t n_segments = (memory + segment::size - 1) >> segment::size_shift;
+
+        auto& pool = segment_pool();
+        size_t new_goal = pool.current_emergency_reserve_goal() + n_segments;
+        pool.ensure_free_segments(new_goal);
+        pool.set_current_emergency_reserve_goal(new_goal);
+
+        static_assert(sizeof(uintptr_t) >= sizeof(size_t));
+        return n_segments;
+    }
+
+    void unreserve(uintptr_t n_segments) noexcept override {
+        auto& pool = segment_pool();
+        assert(pool.current_emergency_reserve_goal() >= n_segments);
+        size_t new_goal = pool.current_emergency_reserve_goal() - n_segments;
+        pool.set_current_emergency_reserve_goal(new_goal);
     }
 
     friend class region;
