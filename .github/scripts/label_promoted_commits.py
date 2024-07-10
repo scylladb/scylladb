@@ -1,8 +1,9 @@
-from github import Github
 import argparse
 import re
 import sys
 import os
+from github import Github
+from github.GithubException import UnknownObjectException
 
 try:
     github_token = os.environ["GITHUB_TOKEN"]
@@ -77,9 +78,12 @@ def main():
                     comment = f'Closed via {commit.sha}'
                     add_comment_and_close_pr(pr, comment)
             else:
-                print(f'master branch, pr number is: {pr_number}')
-                pr = repo.get_pull(pr_number)
-                pr.add_to_labels('promoted-to-master')
+                try:
+                    pr = repo.get_pull(pr_number)
+                    pr.add_to_labels('promoted-to-master')
+                    print(f'master branch, pr number is: {pr_number}')
+                except UnknownObjectException:
+                    print(f'{pr_number} is not a PR but an issue, no need to add label')
             processed_prs.add(pr_number)
 
 
