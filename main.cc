@@ -931,6 +931,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // #293 - do not stop anything (unless snitch.on_all(start) fails)
             stop_snitch->cancel();
 
+            api::set_server_snitch(ctx, snitch).get();
+            auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
+                api::unset_server_snitch(ctx).get();
+            });
+
             if (auto opt_public_address = snitch.local()->get_public_address()) {
                 // Use the Public IP as broadcast_address to other nodes
                 // and the broadcast_rpc_address (for client CQL connections).
@@ -1665,10 +1670,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             }).get();
 
-            api::set_server_snitch(ctx, snitch).get();
-            auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
-                api::unset_server_snitch(ctx).get();
-            });
             api::set_server_column_family(ctx, sys_ks).get();
             auto stop_cf_api = defer_verbose_shutdown("column family API", [&ctx] {
                 api::unset_server_column_family(ctx).get();
