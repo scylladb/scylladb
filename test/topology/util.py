@@ -95,6 +95,9 @@ async def get_topology_coordinator(manager: ManagerClient) -> HostID:
 async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> None:
     """Ensure that the normal token owners and group 0 members match
        according to each currently running server.
+
+       Note that the normal token owners and group 0 members never match
+       in the presence of zero-token nodes.
     """
     servers = await manager.running_servers()
     for srv in servers:
