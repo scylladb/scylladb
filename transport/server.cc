@@ -304,6 +304,8 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
     _metrics.add_group("transport", std::move(transport_metrics));
 }
 
+cql_server::~cql_server() = default;
+
 shared_ptr<generic_server::connection>
 cql_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) {
     auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
