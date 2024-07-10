@@ -223,7 +223,7 @@ public:
     future<> move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations);
 
     void generate_update(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, gc_clock::time_point now);
-    void generate_partition_tombstone_update(data_dictionary::database db, const partition_key& base_key, tombstone partition_tomb);
+    bool generate_partition_tombstone_update(data_dictionary::database db, const partition_key& base_key, tombstone partition_tomb);
 
     size_t op_count() const;
 
@@ -262,6 +262,7 @@ class view_update_builder {
     mutation_fragment_v2_opt _existing;
     gc_clock::time_point _now;
     partition_key _key = partition_key::make_empty();
+    bool _skip_row_updates = false;
 public:
 
     view_update_builder(data_dictionary::database db, const replica::table& base, schema_ptr s,

@@ -1283,7 +1283,7 @@ std::optional<partition_key> view_updates::construct_view_partition_key_from_bas
     return view_pk;
 }
 
-void view_updates::generate_partition_tombstone_update(
+bool view_updates::generate_partition_tombstone_update(
         data_dictionary::database db,
         const partition_key& base_key,
         tombstone partition_tomb) {
@@ -1293,7 +1293,7 @@ void view_updates::generate_partition_tombstone_update(
     // of the base partition key columns. If it fails, we skip the optimization.
     auto view_key_opt = construct_view_partition_key_from_base(base_key);
     if (!view_key_opt) {
-        return;
+        return false;
     }
 
     // Apply the partition tombstone on the view partition
@@ -1301,6 +1301,7 @@ void view_updates::generate_partition_tombstone_update(
     mp.apply(partition_tomb);
 
     _op_count++;
+    return true;
 }
 
 future<> view_update_builder::close() noexcept {
@@ -1345,6 +1346,7 @@ future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_up
     }
     bool do_advance_updates = false;
     bool do_advance_existings = false;
+    bool is_partition_tombstone_applied_on_all_views = false;
     if (_update && _update->is_partition_start()) {
         _key = std::move(std::move(_update)->as_partition_start().key().key());
         _update_partition_tombstone = _update->as_partition_start().partition_tombstone();
@@ -1353,10 +1355,10 @@ future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_up
         if (_update_partition_tombstone) {
             // For views that have the same partition key as base, generate an update of partition tombstone to delete
             // the entire partition in one operation, instead of generating an update for each row.
+            is_partition_tombstone_applied_on_all_views = true;
             for (auto&& v : _view_updates) {
-                if (v.is_partition_key_permutation_of_base_partition_key()) {
-                    v.generate_partition_tombstone_update(_db, _key, _update_partition_tombstone);
-                }
+                bool is_applied = v.is_partition_key_permutation_of_base_partition_key() && v.generate_partition_tombstone_update(_db, _key, _update_partition_tombstone);
+                is_partition_tombstone_applied_on_all_views &= is_applied;
             }
         }
     }
@@ -1370,7 +1372,13 @@ future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_up
         co_await advance_existings();
     }
 
-    while (co_await on_results() == stop_iteration::no) {};
+    // If the partition tombstone update is applied to all the views and there are no other updates, we can skip going over
+    // all the rows trying to generate row updates, because the partition tombstones already cover everything.
+    if (is_partition_tombstone_applied_on_all_views && _update->is_end_of_partition()) {
+        _skip_row_updates = true;
+    }
+
+    while (!_skip_row_updates && co_await on_results() == stop_iteration::no) {};
 
     utils::chunked_vector<frozen_mutation_and_schema> mutations;
     for (auto& update : _view_updates) {
