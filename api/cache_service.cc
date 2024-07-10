@@ -320,5 +320,50 @@ void set_cache_service(http_context& ctx, routes& r) {
     });
 }
 
+void unset_cache_service(http_context& ctx, routes& r) {
+    cs::get_row_cache_save_period_in_seconds.unset(r);
+    cs::set_row_cache_save_period_in_seconds.unset(r);
+    cs::get_key_cache_save_period_in_seconds.unset(r);
+    cs::set_key_cache_save_period_in_seconds.unset(r);
+    cs::get_counter_cache_save_period_in_seconds.unset(r);
+    cs::set_counter_cache_save_period_in_seconds.unset(r);
+    cs::get_row_cache_keys_to_save.unset(r);
+    cs::set_row_cache_keys_to_save.unset(r);
+    cs::get_key_cache_keys_to_save.unset(r);
+    cs::set_key_cache_keys_to_save.unset(r);
+    cs::get_counter_cache_keys_to_save.unset(r);
+    cs::set_counter_cache_keys_to_save.unset(r);
+    cs::invalidate_key_cache.unset(r);
+    cs::invalidate_counter_cache.unset(r);
+    cs::set_row_cache_capacity_in_mb.unset(r);
+    cs::set_key_cache_capacity_in_mb.unset(r);
+    cs::set_counter_cache_capacity_in_mb.unset(r);
+    cs::save_caches.unset(r);
+    cs::get_key_capacity.unset(r);
+    cs::get_key_hits.unset(r);
+    cs::get_key_requests.unset(r);
+    cs::get_key_hit_rate.unset(r);
+    cs::get_key_hits_moving_avrage.unset(r);
+    cs::get_key_requests_moving_avrage.unset(r);
+    cs::get_key_size.unset(r);
+    cs::get_key_entries.unset(r);
+    cs::get_row_capacity.unset(r);
+    cs::get_row_hits.unset(r);
+    cs::get_row_requests.unset(r);
+    cs::get_row_hit_rate.unset(r);
+    cs::get_row_hits_moving_avrage.unset(r);
+    cs::get_row_requests_moving_avrage.unset(r);
+    cs::get_row_size.unset(r);
+    cs::get_row_entries.unset(r);
+    cs::get_counter_capacity.unset(r);
+    cs::get_counter_hits.unset(r);
+    cs::get_counter_requests.unset(r);
+    cs::get_counter_hit_rate.unset(r);
+    cs::get_counter_hits_moving_avrage.unset(r);
+    cs::get_counter_requests_moving_avrage.unset(r);
+    cs::get_counter_size.unset(r);
+    cs::get_counter_entries.unset(r);
+}
+
 }
 

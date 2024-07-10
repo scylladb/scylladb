@@ -16,5 +16,6 @@ namespace api {
 
 struct http_context;
 void set_cache_service(http_context& ctx, seastar::httpd::routes& r);
+void unset_cache_service(http_context& ctx, seastar::httpd::routes& r);
 
 }
