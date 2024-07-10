@@ -96,11 +96,9 @@ def sanitize_version(version):
     false negative version_compare() checks.
     """
     if version and '-' in version:
-        version = version.split('-', 1)[0]
-    # Newer setuptools does not accept ~dev in version strings, need to
-    # replace it to .dev0
-    if version and version.endswith('~dev'):
-        version = version.replace('~dev', '.dev0')
+        return version.split('-', 1)[0]
+    else:
+        return version
 
 
 def get_repo_file(dir):
