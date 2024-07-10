@@ -17,6 +17,7 @@
 #include "utils/streaming_histogram.hh"
 #include "utils/estimated_histogram.hh"
 #include "sstables/key.hh"
+#include "sstables/file_writer.hh"
 #include "db/commitlog/replay_position.hh"
 #include "version.hh"
 #include <vector>
@@ -234,8 +235,6 @@ private:
     unsigned _summary_index_pos = 0;
 };
 using summary = summary_ka;
-
-class file_writer;
 
 struct metadata {
     virtual ~metadata() {}
