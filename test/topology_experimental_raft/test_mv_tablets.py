@@ -7,7 +7,8 @@
 # Tests for interaction of materialized views with *tablets*
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier
+from test.pylib.rest_client import read_barrier
+from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
 from test.topology.conftest import skip_mode
 
@@ -16,7 +17,6 @@ from .test_alternator import get_alternator, alternator_config, full_query
 import pytest
 import asyncio
 import logging
-import random
 import time
 
 
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # information to propagate to all servers).
 async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_or_view_name: str, token: int):
     host = (await wait_for_cql_and_get_hosts(manager.cql, [server], time.time() + 60))[0]
-    await read_barrier(manager.cql, host)
+    await read_barrier(manager.api, server.ip_addr)
 
     rows = await manager.cql.run_async(f"SELECT last_token, replicas FROM system.tablets where "
                                        f"keyspace_name = '{keyspace_name}' and "

@@ -4,9 +4,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from test.pylib.util import read_barrier
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo, HostID
+from test.pylib.rest_client import read_barrier
 from typing import NamedTuple
 
 class TabletReplicas(NamedTuple):
@@ -25,7 +25,7 @@ async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, ke
 
     # read_barrier is needed to ensure that local tablet metadata on the queried node
     # reflects the finalized tablet movement.
-    await read_barrier(manager.get_cql(), host)
+    await read_barrier(manager.api, server.ip_addr)
 
     table_id = await manager.get_table_id(keyspace_name, table_name)
     rows = await manager.get_cql().run_async(f"SELECT last_token, replicas FROM system.tablets where "

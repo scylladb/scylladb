@@ -7,7 +7,8 @@ import pytest
 import time
 import asyncio
 import logging
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, read_barrier
+from test.pylib.rest_client import get_host_api_address, read_barrier
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo
 from test.topology.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
@@ -98,7 +99,7 @@ async def test_service_levels_upgrade(request, manager: ManagerClient):
     sl_v2 = "sl" + unique_name()
     await cql.run_async(f"CREATE SERVICE LEVEL {sl_v2}")
 
-    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+    await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
     result_with_sl_v2 = await cql.run_async(f"SELECT service_level FROM system.service_levels_v2")
     assert set([sl.service_level for sl in result_with_sl_v2]) == set(sls + [sl_v2])
 

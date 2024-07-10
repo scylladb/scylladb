@@ -10,7 +10,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError
 from test.pylib.rest_client import inject_error
-from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier, start_writes
+from test.pylib.util import wait_for_cql_and_get_hosts, start_writes
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.topology.conftest import skip_mode
 from test.topology.util import reconnect_driver

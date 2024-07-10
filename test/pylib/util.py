@@ -137,15 +137,6 @@ async def get_available_host(cql: Session, deadline: float) -> Host:
     return await wait_for(find_host, deadline)
 
 
-async def read_barrier(cql: Session, host: Host):
-    """To issue a read barrier it is sufficient to attempt dropping a
-    non-existing table. We need to use `if exists`, otherwise the statement
-    would fail on prepare/validate step which happens before a read barrier is
-    performed.
-    """
-    await cql.run_async("drop table if exists nosuchkeyspace.nosuchtable", host = host)
-
-
 # Wait for the given feature to be enabled.
 async def wait_for_feature(feature: str, cql: Session, host: Host, deadline: float) -> None:
     async def feature_is_enabled():

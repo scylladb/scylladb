@@ -5,9 +5,8 @@
 #
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import HTTPError
+from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.tablets import get_all_tablet_replicas
-from test.pylib.util import read_barrier
 from test.topology.conftest import skip_mode
 from test.topology.util import wait_for_cql_and_get_hosts
 import time
@@ -84,7 +83,7 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
     for h, s in zip(host_ids, servers):
         host = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 30)
         if h != host_ids[0]:
-            await read_barrier(manager.get_cql(), host[0]) # host-0 did the barrier in get_all_tablet_replicas above
+            await read_barrier(manager.api, host[0].address)  # host-0 did the barrier in get_all_tablet_replicas above
         res = await cql.run_async("SELECT COUNT(*) FROM MUTATION_FRAGMENTS(test.test)", host=host[0])
         logger.info(f"Host {h} reports {res} as mutation fragments count")
         if h in replicas:

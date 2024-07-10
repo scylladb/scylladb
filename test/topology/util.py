@@ -19,7 +19,8 @@ from cassandra.pool import Host                          # type: ignore # pylint
 from cassandra.util import datetime_from_uuid1           # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier, get_available_host, unique_name
+from test.pylib.rest_client import get_host_api_address, read_barrier
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
 from contextlib import asynccontextmanager
 
 
@@ -71,7 +72,7 @@ async def get_current_group0_config(manager: ManagerClient, srv: ServerInfo) -> 
      """
     assert manager.cql
     host = (await wait_for_cql_and_get_hosts(manager.cql, [srv], time.time() + 60))[0]
-    await read_barrier(manager.cql, host)
+    await read_barrier(manager.api, srv.ip_addr)
     group0_id = (await manager.cql.run_async(
         "select value from system.scylla_local where key = 'raft_group0_id'",
         host=host))[0].value
@@ -86,8 +87,9 @@ async def get_current_group0_config(manager: ManagerClient, srv: ServerInfo) -> 
 async def get_topology_coordinator(manager: ManagerClient) -> HostID:
     """Get the host ID of the topology coordinator."""
     host = await get_available_host(manager.cql, time.time() + 60)
-    await read_barrier(manager.cql, host)
-    return await manager.api.get_raft_leader(host.address)
+    host_address = get_host_api_address(host)
+    await read_barrier(manager.api, host_address)
+    return await manager.api.get_raft_leader(host_address)
 
 
 async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> None:

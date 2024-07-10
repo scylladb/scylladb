@@ -3,20 +3,17 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-import asyncio
 import logging
 import pytest
-import time
 
-from cassandra.cluster import ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT # type: ignore
-from cassandra.cluster import NoHostAvailable, OperationTimedOut # type: ignore
-from cassandra.query import SimpleStatement # type: ignore
+from cassandra.cluster import ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore
+from cassandra.cluster import NoHostAvailable, OperationTimedOut  # type: ignore
+from cassandra.cluster import Cluster  # type: ignore
+from cassandra.query import SimpleStatement  # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier
-
-from cassandra.cluster import Cluster
+from test.pylib.rest_client import read_barrier
 
 
 logger = logging.getLogger(__name__)
@@ -48,8 +45,7 @@ async def test_banned_node_cannot_communicate(manager: ManagerClient) -> None:
     await manager.remove_node(srvs[0].server_id, srvs[2].server_id)
     # Perform a read barrier on srvs[1] so it learns about the ban.
     logger.info(f"Performing read barrier on server {srvs[1]}")
-    host = (await wait_for_cql_and_get_hosts(cql, [srvs[1]], time.time() + 60))[0]
-    await read_barrier(cql, host)
+    await read_barrier(manager.api, srvs[1].ip_addr)
     logger.info(f"Unpausing {srvs[2]}")
     await manager.server_unpause(srvs[2].server_id)
 

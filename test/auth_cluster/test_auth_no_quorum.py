@@ -10,7 +10,8 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 import pytest
 from cassandra.auth import PlainTextAuthProvider
-from test.pylib.util import read_barrier, unique_name, wait_for_cql_and_get_hosts
+from test.pylib.rest_client import read_barrier
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.topology.util import trigger_snapshot
 
 
@@ -27,9 +28,7 @@ async def test_auth_no_quorum(manager: ManagerClient) -> None:
     }
     servers = await manager.servers_add(3, config=config)
 
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    await manager.servers_see_each_other(servers)
+    cql, _ = await manager.get_ready_cql(servers)
 
     # create users, this is done so that previous auth implementation (with RF=1) fails this test
     # otherwise it could happen that all users are luckily placed on a single node
@@ -38,7 +37,7 @@ async def test_auth_no_quorum(manager: ManagerClient) -> None:
         await cql.run_async(f"CREATE ROLE {role} WITH PASSWORD = '{role}' AND LOGIN = true")
 
     # auth reads are eventually consistent so we need to sync all nodes
-    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+    await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in servers))
 
     # check if users are replicated everywhere
     for role in roles:
