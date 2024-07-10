@@ -9,8 +9,8 @@ import time
 import pytest
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error
-from test.pylib.util import read_barrier, wait_for_cql_and_get_hosts
+from test.pylib.rest_client import inject_error, read_barrier
+from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.conftest import skip_mode
 
 
@@ -42,13 +42,12 @@ async def test_old_ip_notification_repro(manager: ManagerClient) -> None:
         await manager.server_change_ip(s2.server_id)
         logger.info(f"Starting {s2}")
         await manager.server_start(s2.server_id)
-        cql = manager.get_cql()
         logger.info(f"Wait for cql")
-        h1 = (await wait_for_cql_and_get_hosts(cql, [s1], time.time() + 60))[0]
+        await manager.get_ready_cql([s1])
         logger.info(f"Read barrier")
-        await read_barrier(cql, h1) # Wait for s1 to be aware of s2 with the new IP.
-        await handler.message() # s1 receives the gossip notification from the initial IP of s2.
+        await read_barrier(manager.api, s1.ip_addr)  # Wait for s1 to be aware of s2 with the new IP.
+        await handler.message()  # s1 receives the gossip notification from the initial IP of s2.
         logger.info(f"Read barrier")
         # If IP of s2 is overridden by its initial IP, the read barrier should time out.
-        await read_barrier(cql, h1)
+        await read_barrier(manager.api, s1.ip_addr)
         logger.info(f"Done")

@@ -40,7 +40,8 @@ from typing import Optional, Type, List, Set, Union, TYPE_CHECKING
 if TYPE_CHECKING:
     from cassandra.cluster import Session as CassandraSession            # type: ignore
     from test.pylib.manager_client import ManagerClient
-from test.pylib.util import get_available_host, read_barrier
+from test.pylib.rest_client import get_host_api_address, read_barrier
+from test.pylib.util import get_available_host
 
 
 logger = logging.getLogger('random_tables')
@@ -340,7 +341,7 @@ class RandomTables():
             # Issue a read barrier on some node and then keep using that node to do the queries.
             # This ensures that the queries return recent data (at least all data committed
             # when `verify_schema` was called).
-            await read_barrier(cql, host)
+            await read_barrier(self.manager.api, get_host_api_address(host))
 
         res1 = {row.table_name for row in await cql.run_async(cql_stmt1, host=host)}
         assert not tables - res1, f"Tables {tables - res1} not present"

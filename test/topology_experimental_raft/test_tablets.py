@@ -3,16 +3,12 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-import threading
-
-from cassandra.cluster import Session
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error_one_shot, HTTPError
-from test.pylib.rest_client import inject_error
-from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier
+from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
+from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.topology.conftest import skip_mode
 from test.topology.util import reconnect_driver
@@ -24,7 +20,6 @@ import time
 import random
 import os
 import glob
-from typing import NamedTuple
 
 
 logger = logging.getLogger(__name__)
@@ -707,7 +702,7 @@ async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_
 
     # read_barrier is needed to ensure that local tablet metadata on the queried node
     # reflects the finalized tablet movement.
-    await read_barrier(manager.cql, host)
+    await read_barrier(manager.api, server.ip_addr)
 
     table_id = await manager.get_table_id(keyspace_name, table_name)
     rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
@@ -954,10 +949,8 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
             await manager.api.move_tablet(node_ip=src_server.ip_addr, ks="testing", table=table_name, src_host=src_host_id, src_shard=shard_id_to_move, dst_host=dest_host_id, dst_shard=3, token=token)
 
     # And when ensuring that local tablet metadata on the queried node reflects the finalized tablet movement
-    host0 = manager.get_cql().cluster.metadata.get_host(servers[0].ip_addr)
-    host1 = manager.get_cql().cluster.metadata.get_host(servers[1].ip_addr)
-    await read_barrier(manager.get_cql(), host0)
-    await read_barrier(manager.get_cql(), host1)
+    await read_barrier(manager.api, servers[0].ip_addr)
+    await read_barrier(manager.api, servers[1].ip_addr)
 
     # Then tablet count metric is adjusted to depict that situation on src_host - all tablets from selected shard have been moved
     src_expected_count_per_shard[shard_id_to_move] = 0

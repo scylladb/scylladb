@@ -9,8 +9,10 @@ import logging
 import pytest
 import time
 
+from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import read_barrier, wait_for_cql_and_get_hosts, unique_name
+from test.pylib.rest_client import get_host_api_address, read_barrier
+from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
 from cassandra.cluster import ConsistencyLevel
 from test.topology.util import wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes
@@ -86,7 +88,7 @@ async def check_auth_v2_data_migration(manager: ManagerClient, hosts):
     cql = manager.get_cql()
     # auth reads are eventually consistent so we need to make sure hosts are up-to-date
     assert hosts
-    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+    await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
 
     data = auth_data()
 
@@ -128,7 +130,7 @@ async def check_auth_v2_works(manager: ManagerClient, hosts):
     username = unique_name("user_after_migration_")
     logging.info(f"Create role after migration: {username}")
     await cql.run_async(f"CREATE ROLE {username}")
-    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+    await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
     # see warmup_v1_static_values for background about checks below
     # check if it was added to a new table
     assert len(await cql.run_async(f"SELECT role FROM system.roles WHERE role = '{username}'")) == 1
@@ -188,7 +190,7 @@ async def test_auth_v2_during_recovery(manager: ManagerClient):
     role_name = "ro" + unique_name()
     await cql.run_async(f"CREATE ROLE {role_name}")
     # auth reads are eventually consistent so we need to sync all nodes
-    await asyncio.gather(*(read_barrier(cql, host) for host in hosts))
+    await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
 
     logging.info("Read roles before recovery")
     roles = [row.role for row in await cql.run_async(f"LIST ROLES")]

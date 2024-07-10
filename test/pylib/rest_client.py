@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from aiohttp import request, BaseConnector, UnixConnector, ClientTimeout
 import pytest
 from test.pylib.internal_types import IPAddress, HostID
+from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 
 
 logger = logging.getLogger(__name__)
@@ -501,3 +502,12 @@ async def read_barrier(api: ScyllaRESTAPIClient, node_ip: IPAddress, group_id: O
         params["group_id"] = group_id
 
     await api.client.post("/raft/read_barrier", host=node_ip, params=params)
+
+
+def get_host_api_address(host: Host) -> IPAddress:
+    """ Returns the API address of the host.
+
+        The API address can be different than the RPC (node) address under certain circumstances.
+        In particular, in case the RPC address has been modified.
+    """
+    return host.listen_address if host.listen_address else host.address

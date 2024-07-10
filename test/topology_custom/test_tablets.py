@@ -6,9 +6,8 @@
 from cassandra.protocol import ConfigurationException
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import HTTPError
+from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
-from test.pylib.util import read_barrier
 from test.topology.conftest import skip_mode
 from test.topology.util import wait_for_cql_and_get_hosts
 import time
@@ -156,7 +155,7 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
     for s in servers:
         host_id = await manager.get_host_id(s.server_id)
         host = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 30)
-        await read_barrier(manager.get_cql(), host[0]) # scylladb/scylladb#18199
+        await read_barrier(manager.api, s.ip_addr)  # scylladb/scylladb#18199
         for k in fragments:
             res = await cql.run_async(f"SELECT partition_region FROM MUTATION_FRAGMENTS(test.test) WHERE pk={k}", host=host[0])
             for fragment in res:
