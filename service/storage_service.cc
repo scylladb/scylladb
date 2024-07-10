@@ -187,6 +187,8 @@ storage_service::storage_service(abort_source& abort_source,
     init_messaging_service();
 }
 
+storage_service::~storage_service() = default;
+
 enum class node_external_status {
     UNKNOWN        = 0,
     STARTING       = 1,

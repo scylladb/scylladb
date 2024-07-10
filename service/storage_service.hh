@@ -213,6 +213,7 @@ public:
         cql3::query_processor& qp,
         sharded<qos::service_level_controller>& sl_controller,
         topology_state_machine& topology_state_machine);
+    ~storage_service();
 
     // Needed by distributed<>
     future<> stop();
