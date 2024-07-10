@@ -172,6 +172,8 @@ public:
             gms::gossiper& g,
             scheduling_group_key stats_key,
             maintenance_socket_enabled used_by_maintenance_socket);
+    ~cql_server();
+
 public:
     using response = cql_transport::response;
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
