@@ -112,8 +112,6 @@ void service_level_controller::do_abort() noexcept {
     }
 
     abort_group0_operations();
-    
-    _global_controller_db->notifications_serializer.broken();
 }
 
 future<> service_level_controller::stop() {
@@ -125,7 +123,8 @@ future<> service_level_controller::stop() {
         // Abort source didn't fire, so do it now
         do_abort();
     }
-
+    
+    _global_controller_db->notifications_serializer.broken();
     try {
         co_await std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>());
     } catch (const broken_semaphore& ignored) {
