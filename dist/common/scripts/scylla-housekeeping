@@ -80,8 +80,20 @@ def get_api(path):
     return get_json_from_url("http://" + api_address + path)
 
 
+def parse_scylla_version(version):
+    # Newer setuptools does not accept ~dev in version strings, need to
+    # replace it to X.Y.Z.dev0
+    if version and version.endswith('~dev'):
+        version = version.replace('~dev', '.dev0')
+    # Newer setuptools does not accept ~rcN in version strings, need to
+    # replace it to X.Y.ZrcN
+    if version and '~rc' in version:
+        version = version.replace('~', '')
+    return parse_version(version)
+
+
 def version_compare(a, b):
-    return parse_version(a) < parse_version(b)
+    return parse_scylla_version(a) < parse_scylla_version(b)
 
 
 def create_uuid_file(fl):
