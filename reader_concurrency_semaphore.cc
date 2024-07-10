@@ -926,12 +926,15 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
                 e.pr.set_exception(std::current_exception());
             }
 
+            // We now possibly have >= CPU concurrency, so even if the above read
+            // didn't release any resources, just dequeueing it from the
+            // _ready_list could allow us to admit new reads.
+            maybe_admit_waiters();
+
             if (need_preempt()) {
                 co_await coroutine::maybe_yield();
             }
         }
-
-        maybe_admit_waiters();
     }
 }
 
@@ -968,14 +971,21 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     maybe_admit_waiters();
 }
 
-reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t memory, sstring name, size_t max_queue_length,
-            utils::updateable_value<uint32_t> serialize_limit_multiplier, utils::updateable_value<uint32_t> kill_limit_multiplier)
+reader_concurrency_semaphore::reader_concurrency_semaphore(
+        int count,
+        ssize_t memory,
+        sstring name,
+        size_t max_queue_length,
+        utils::updateable_value<uint32_t> serialize_limit_multiplier,
+        utils::updateable_value<uint32_t> kill_limit_multiplier,
+        utils::updateable_value<uint32_t> cpu_concurrency)
     : _initial_resources(count, memory)
     , _resources(count, memory)
     , _name(std::move(name))
     , _max_queue_length(max_queue_length)
     , _serialize_limit_multiplier(std::move(serialize_limit_multiplier))
     , _kill_limit_multiplier(std::move(kill_limit_multiplier))
+    , _cpu_concurrency(cpu_concurrency)
 { }
 
 reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring name)
@@ -985,7 +995,8 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             std::move(name),
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max())) {}
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value(uint32_t(1))) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
     assert(!_stats.waiters);
@@ -1186,8 +1197,8 @@ bool reader_concurrency_semaphore::has_available_units(const resources& r) const
     return (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) || _resources.count == _initial_resources.count;
 }
 
-bool reader_concurrency_semaphore::all_need_cpu_permits_are_awaiting() const {
-    return _stats.need_cpu_permits == _stats.awaits_permits;
+bool reader_concurrency_semaphore::cpu_concurrency_limit_reached() const {
+    return (_stats.need_cpu_permits - _stats.awaits_permits) >= _cpu_concurrency();
 }
 
 std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_view queue_name) {
@@ -1270,7 +1281,7 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) 
         return {can_admit::no, reason::ready_list};
     }
 
-    if (!all_need_cpu_permits_are_awaiting()) {
+    if (cpu_concurrency_limit_reached()) {
         return {can_admit::no, reason::need_cpu_permits};
     }
 
