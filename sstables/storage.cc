@@ -68,7 +68,7 @@ public:
 // cannot define these classes in an anonymous namespace, as we need to
 // declare these storage classes as "friend" of class sstable
 class filesystem_storage final : public sstables::storage {
-    opened_directory _dir;
+    mutable opened_directory _dir;
     std::optional<std::filesystem::path> _temp_dir; // Valid while the sstable is being created, until sealed
 
 private:
@@ -192,20 +192,18 @@ void filesystem_storage::open(sstable& sst) {
 
     // Flushing parent directory to guarantee that temporary TOC file reached
     // the disk.
-    sst.sstable_write_io_check(sync_directory, _dir.native()).get();
+    _dir.sync(sst._write_error_handler).get();
 }
 
 future<> filesystem_storage::seal(const sstable& sst) {
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
     co_await remove_temp_dir();
-    auto dir_f = co_await open_checked_directory(sst._write_error_handler, _dir.native());
     // Guarantee that every component of this sstable reached the disk.
-    co_await dir_f.flush();
+    co_await _dir.sync(sst._write_error_handler);
     // Rename TOC because it's no longer temporary.
     co_await sst.sstable_write_io_check(rename_file, sst.filename(component_type::TemporaryTOC), sst.filename(component_type::TOC));
-    co_await dir_f.flush();
-    co_await dir_f.close();
+    co_await _dir.sync(sst._write_error_handler);
     // If this point was reached, sstable should be safe in disk.
     sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", sst._generation, sst._schema->ks_name(), sst._schema->cf_name());
 }
@@ -361,7 +359,7 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
         // deletion by leaving a TemporaryTOC file in the source directory.
         auto src_temp_toc = sstable::filename(_dir.native(), sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, component_type::TemporaryTOC);
         co_await sst.sstable_write_io_check(rename_file, std::move(dst_temp_toc), std::move(src_temp_toc));
-        co_await sst.sstable_write_io_check(sync_directory, _dir.native());
+        co_await _dir.sync(sst._write_error_handler);
     } else {
         // Now that the source sstable is linked to dir, remove
         // the TemporaryTOC file at the destination.
