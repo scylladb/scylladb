@@ -103,6 +103,25 @@ thread_local utils::updateable_value<bool> global_cache_index_pages(true);
 
 logging::logger sstlog("sstable");
 
+template <typename T>
+const char* nullsafe_typename(T* x) noexcept {
+    try {
+        return typeid(*x).name();
+    } catch (const std::bad_typeid&) {
+        return "nullptr";
+    }
+}
+
+// dynamic_cast, but calls on_internal_error on failure.
+template <typename Derived, typename Base>
+Derived* downcast_ptr(Base* x) {
+    if (auto casted = dynamic_cast<Derived*>(x)) {
+        return casted;
+    } else {
+        on_internal_error(sstlog, fmt::format("Bad downcast: expected {}, but got {}", typeid(Derived*).name(), nullsafe_typename(x)));
+    }
+}
+
 // Because this is a noop and won't hold any state, it is better to use a global than a
 // thread_local. It will be faster, specially on non-x86.
 struct noop_write_monitor final : public write_monitor {
@@ -1399,7 +1418,7 @@ void sstable::write_filter() {
         return;
     }
 
-    auto f = static_cast<utils::filter::murmur3_bloom_filter *>(_components->filter.get());
+    auto f = downcast_ptr<utils::filter::murmur3_bloom_filter>(_components->filter.get());
 
     auto&& bs = f->bits();
     auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
