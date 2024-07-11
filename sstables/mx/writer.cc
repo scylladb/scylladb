@@ -803,7 +803,7 @@ public:
         _sst._shards = { shard };
 
         _cfg.monitor->on_write_started(_data_writer->offset_tracker());
-        _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::m_format);
+        _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _sst._schema->bloom_filter_fp_chance(), utils::filter_format::m_format);
         _pi_write_m.promoted_index_block_size = cfg.promoted_index_block_size;
         _pi_write_m.promoted_index_auto_scale_threshold = cfg.promoted_index_auto_scale_threshold;
         _index_sampling_state.summary_byte_cost = _cfg.summary_byte_cost;
@@ -1464,7 +1464,7 @@ void writer::consume_end_of_stream() {
 
     _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(_sst_schema.header));
     seal_statistics(_sst.get_version(), _sst._components->statistics, _collector,
-        _sst._schema->get_partitioner().name(), _schema.bloom_filter_fp_chance(),
+        _sst._schema->get_partitioner().name(), _sst._schema->bloom_filter_fp_chance(),
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
     close_data_writer();
     _sst.write_summary();
