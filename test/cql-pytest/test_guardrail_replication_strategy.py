@@ -146,3 +146,12 @@ def test_given_restrict_replication_simplestrategy_when_it_is_set_should_emulate
         config_modifications.enter_context(config_value_context(cql, 'restrict_replication_simplestrategy', 'warn'))
         create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 3 }}",
                                                  warnings_count=1, fails_count=0)
+
+def test_config_replication_strategy_warn_list_roundtrips_quotes(cql):
+    # Use direct SELECT/UPDATE to avoid trippy config_value_context behavior
+    value = cql.execute("SELECT value FROM system.config WHERE name = 'replication_strategy_warn_list'").one().value
+    assert value == '["SimpleStrategy"]' # our lovely default
+    # try without quotes
+    cql.execute("UPDATE system.config SET value = '[SimpleStrategy]' WHERE name = 'replication_strategy_warn_list'")
+    # reproduces #
+    cql.execute("UPDATE system.config SET value = '[\"SimpleStrategy\"]' WHERE name = 'replication_strategy_warn_list'")

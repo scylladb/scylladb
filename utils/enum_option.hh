@@ -17,6 +17,7 @@
 #include <sstream>
 #include <type_traits>
 #include <fmt/ostream.h>
+#include <concepts>
 
 template<typename T>
 concept HasMapInterface = requires(T t) {
@@ -102,6 +103,11 @@ class enum_option {
     friend std::istream& operator>>(std::istream& s, enum_option<Mapper>& opt) {
         typename map_t::key_type key;
         s >> key;
+        if constexpr (requires { requires std::ranges::range<typename map_t::key_type>;  requires std::same_as<typename map_t::key_type::value_type, char>; }) {
+            if (key.size() >= 2 && key.front() == '"' && key.back() == '"') {
+                key = key.substr(1, key.size() - 2);
+            }
+        }
         auto map = Mapper::map();
         const auto found = map.find(key);
         if (found == map.end()) {
