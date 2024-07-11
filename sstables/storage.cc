@@ -36,10 +36,39 @@
 
 namespace sstables {
 
+class opened_directory final {
+    std::filesystem::path _pathname;
+    file _file;
+
+public:
+    explicit opened_directory(std::filesystem::path pathname) : _pathname(std::move(pathname)) {};
+    explicit opened_directory(const sstring &dir) : _pathname(std::string_view(dir)) {};
+    opened_directory(const opened_directory&) = delete;
+    opened_directory& operator=(const opened_directory&) = delete;
+    opened_directory(opened_directory&&) = default;
+    opened_directory& operator=(opened_directory&&) = default;
+    ~opened_directory() = default;
+
+    const std::filesystem::path::string_type& native() const noexcept {
+        return _pathname.native();
+    }
+
+    const std::filesystem::path& path() const noexcept {
+        return _pathname;
+    }
+
+    future<> sync(io_error_handler error_handler) {
+        if (!_file) {
+            _file = co_await do_io_check(error_handler, open_directory, _pathname.native());
+        }
+        co_await do_io_check(error_handler, std::mem_fn(&file::flush), _file);
+    };
+};
+
 // cannot define these classes in an anonymous namespace, as we need to
 // declare these storage classes as "friend" of class sstable
 class filesystem_storage final : public sstables::storage {
-    std::filesystem::path _dir;
+    opened_directory _dir;
     std::optional<std::filesystem::path> _temp_dir; // Valid while the sstable is being created, until sealed
 
 private:
@@ -56,7 +85,7 @@ private:
     future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
 
     virtual void change_dir_for_test(sstring nd) override {
-        _dir = nd;
+        _dir = opened_directory(nd);
     }
 
 public:
@@ -117,7 +146,7 @@ future<> filesystem_storage::rename_new_file(const sstable& sst, sstring from_na
 future<file> filesystem_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
-    auto tgt_dir = !readonly && _temp_dir ? *_temp_dir : _dir;
+    auto tgt_dir = !readonly && _temp_dir ? *_temp_dir : _dir.path();
     auto name = tgt_dir / sst.component_basename(type);
 
     auto f = open_sstable_component_file_non_checked(name.native(), flags, options, check_integrity);
@@ -185,7 +214,7 @@ future<> filesystem_storage::touch_temp_dir(const sstable& sst) {
     if (_temp_dir) {
         co_return;
     }
-    auto tmp = _dir / fmt::format("{}{}", sst._generation, tempdir_extension);
+    auto tmp = _dir.path() / fmt::format("{}{}", sst._generation, tempdir_extension);
     sstlog.debug("Touching temp_dir={}", tmp);
     co_await sst.sstable_touch_directory_io_check(tmp);
     _temp_dir = std::move(tmp);
@@ -355,7 +384,7 @@ future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_
     if (abs) {
         snapshot_dir = dir;
     } else {
-        snapshot_dir = _dir / dir;
+        snapshot_dir = _dir.path() / dir;
     }
     co_await sst.sstable_touch_directory_io_check(snapshot_dir);
     co_await create_links_common(sst, snapshot_dir, std::move(gen));
@@ -367,7 +396,7 @@ future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generatio
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             sst.get_filename(), sst._generation, new_dir, new_generation, delay_commit == nullptr);
     co_await create_links_common(sst, new_dir, new_generation, mark_for_removal::yes);
-    _dir = new_dir;
+    _dir = opened_directory(new_dir);
     generation_type old_generation = sst._generation;
     co_await coroutine::parallel_for_each(sst.all_components(), [&sst, old_generation, old_dir] (auto p) {
         return sst.sstable_write_io_check(remove_file, sstable::filename(old_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, old_generation, sst._format, p.second));
@@ -384,7 +413,7 @@ future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generatio
 
 future<> filesystem_storage::change_state(const sstable& sst, sstable_state state, generation_type new_generation, delayed_commit_changes* delay_commit) {
     auto to = state_to_dir(state);
-    auto path = _dir;
+    auto path = _dir.path();
     auto current = path.filename().native();
 
     // Moving between states means moving between basedir/state subdirectories.
