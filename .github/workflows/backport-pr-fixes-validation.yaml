@@ -22,5 +22,12 @@ jobs:
             const regex = new RegExp(pattern);
             
             if (!regex.test(body)) {
-              core.setFailed("PR body does not contain a valid 'Fixes' reference.");
+              const error = "PR body does not contain a valid 'Fixes' reference.";
+              core.setFailed(error);
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `:warning: ${error}`
+              });
             }
