@@ -35,6 +35,7 @@
 #include "db/per_partition_rate_limit_extension.hh"
 #include "db/tags/utils.hh"
 #include "db/tags/extension.hh"
+#include "index/target_parser.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -821,6 +822,56 @@ sstring schema::element_type(replica::database& db) const {
     return "table";
 }
 
+static void describe_index_columns(std::ostream& os, bool is_local, const schema& index_schema, schema_ptr base_schema) {
+    auto index_name = secondary_index::index_name_from_table_name(index_schema.cf_name());
+    if (!base_schema->all_indices().contains(index_name)) {
+        on_internal_error(dblog, format("Couldn't find index {} on table {}", index_name, base_schema->cf_name()));
+    }
+    
+    int n = 0;
+    os << "(";
+
+    if (is_local) {
+        os << "(";
+        for (auto& pk: index_schema.partition_key_columns()) {
+            if (n++ != 0) {
+                os << ", ";
+            }
+            os << pk.name_as_cql_string();
+        }
+        os << "), ";
+    }
+
+    // Global and local indexes may only contain one column.
+    // Local indexes support multi column indexes via custom indexes, but at least
+    // for now, Scylla supports no custom indexes.
+    auto index_metadata = base_schema->all_indices().at(index_name);
+    auto target_str = secondary_index::target_parser::get_target_column_name_from_string(
+        index_metadata.options().at(cql3::statements::index_target::target_option_name)
+    );
+    auto base_column_name = cql3_parser::index_target::column_name_from_target_string(target_str);
+    auto base_column = base_schema->get_column_definition(to_bytes(base_column_name));
+    if (!base_column) {
+        on_internal_error(dblog, format("Couldn't find base column {} in table {} for index {}", base_column_name, base_schema->cf_name(), index_name));
+    }
+    auto bk_type = base_column->type;
+
+    if (bk_type->is_collection() && !bk_type->is_multi_cell()) {
+        // Indexes on frozen collection require full() function but the function is dropped while saving the target.
+        os << "full(" << cql3::util::maybe_quote(base_column_name) << ")";
+    } else if (bk_type->is_set() && target_str.starts_with("keys(")) {
+        // Indexes on set are saved with target keys() but only valid targets when creating the index are values() or just the column name.
+        // Since indexes on list are always printed with values() target (it's always added even if the index is created only with column name),
+        // always add values() target to index to set
+        os << "values(" << cql3::util::maybe_quote(base_column_name) << ")";
+    } else {
+        // Target string is already quoted if needed
+        os << target_str;
+    }
+
+    os << ")";
+}
+
 std::ostream& schema::describe(replica::database& db, std::ostream& os, bool with_internals) const {
     os << "CREATE ";
     int n = 0;
@@ -830,23 +881,10 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
             auto is_local = !is_global_index(db, view_info()->base_id(), *this);
 
             os << "INDEX " << cql3::util::maybe_quote(secondary_index::index_name_from_table_name(cf_name())) << " ON "
-                    << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(view_info()->base_name()) << "(";
-            if (is_local) {
-                os << "(";
-            }
-            for (auto& pk : partition_key_columns()) {
-                if (n++ != 0) {
-                    os << ", ";
-                }
-                os << pk.name_as_cql_string();
-            }
-            if (is_local) {
-                os << ")";
-                if (!clustering_key_columns().empty()) {
-                    os << ", " << clustering_key_columns().front().name_as_cql_string();
-                }
-            }
-            os <<");\n";
+                    << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(view_info()->base_name());
+
+            describe_index_columns(os, is_local, *this, db.find_schema(view_info()->base_id()));  
+            os << ";\n";
             return os;
         } else {
             os << "MATERIALIZED VIEW " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " AS\n";
