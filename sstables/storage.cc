@@ -402,7 +402,7 @@ future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generatio
     auto temp_toc = sstable_version_constants::get_component_map(sst._version).at(component_type::TemporaryTOC);
     co_await sst.sstable_write_io_check(remove_file, sstable::filename(old_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, old_generation, sst._format, temp_toc));
     if (delay_commit == nullptr) {
-        co_await when_all(sst.sstable_write_io_check(sync_directory, old_dir), sst.sstable_write_io_check(sync_directory, new_dir)).discard_result();
+        co_await when_all(sst.sstable_write_io_check(sync_directory, old_dir), _dir.sync(sst._write_error_handler)).discard_result();
     } else {
         delay_commit->_dirs.insert(old_dir);
         delay_commit->_dirs.insert(new_dir);
