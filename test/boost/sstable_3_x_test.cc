@@ -5604,3 +5604,41 @@ SEASTAR_TEST_CASE(test_compression_premature_eof) {
         }
     });
 }
+
+// A reproducer for scylladb/scylladb#16065.
+// Creates an sstable with a newer schema, and populates
+// it with a reader created with an older schema.
+// 
+// Before the fixes, it would have resulted in an assert violation.
+SEASTAR_TEST_CASE(test_alter_bloom_fp_chance_during_write) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s1 = schema_builder("ks", "t")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("v", utf8_type, column_kind::regular_column)
+            .set_bloom_filter_fp_chance(1.0)
+            .build();
+        auto s2 = schema_builder(s1)
+            .set_bloom_filter_fp_chance(0.01)
+            .build();
+
+        auto ts = api::new_timestamp();
+
+        auto m = mutation(s1, partition_key::from_single_value(*s1, serialized(0)));
+        auto val = std::string(1000, '0');
+        m.set_clustered_cell(clustering_key::make_empty(), "v", val, ts);
+
+        auto mt = make_lw_shared<replica::memtable>(s1);
+        mt->apply(m);
+
+        auto sst = env.make_sstable(s2, sstable_version_types::me);
+        sst->write_components(mt->make_flat_reader(s1, env.make_reader_permit()), 1, s1, env.manager().configure_writer(), mt->get_encoding_stats()).get();
+
+        sstable_assertions sa(env, sst);
+        sa.load();
+        m.upgrade(s2);
+        auto assertions = assert_that(sa.make_reader());
+        assertions.produces(m);
+        assertions.produces_end_of_stream();
+    });
+}
+
