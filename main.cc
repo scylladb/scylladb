@@ -1235,11 +1235,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sl_controller.stop().get();
             });
 
-            //This starts the update loop - but no real update happens until the data accessor is not initialized.
-            sl_controller.local().update_from_distributed_data([cfg] () {
-                return std::chrono::duration_cast<steady_clock_type::duration>(std::chrono::milliseconds(cfg->service_levels_interval()));
-            });
-
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::system_keyspace> sys_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
@@ -1925,6 +1920,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return controller.reload_distributed_data_accessor(
                         qp.local(), group0_client, sys_ks.local(), sys_dist_ks.local());
             }).get();
+
+            sl_controller.local().maybe_start_legacy_update_from_distributed_data([cfg] () {
+                return std::chrono::duration_cast<steady_clock_type::duration>(std::chrono::milliseconds(cfg->service_levels_interval()));
+            }, ss.local(), group0_client);
 
             const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
             const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
