@@ -884,7 +884,7 @@ void writer::init_file_writers() {
             make_compressed_file_m_format_output_stream(
                 output_stream<char>(std::move(out)),
                 &_sst._components->compression,
-                _schema.get_compressor_params()), _sst.filename(component_type::Data));
+                _sst._schema->get_compressor_params()), _sst.filename(component_type::Data));
     }
 
     out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index).get0();
