@@ -3,7 +3,11 @@ Encryption: Data in Transit Client to Node
 
 Follow the procedures below to enable a client to node encryption.
 Once enabled, all communication between the client and the node is transmitted over TLS/SSL.
+<<<<<<< HEAD
 The libraries used by Scylla for OpenSSL are FIPS 140-2 certified.
+=======
+The libraries used by ScyllaDB for OpenSSL are FIPS 140-2 enabled.
+>>>>>>> bf6f7190a5 (Update client-node-encryption: OpsnSSL is FIPS *enabled*)
 
 Workflow
 ^^^^^^^^
