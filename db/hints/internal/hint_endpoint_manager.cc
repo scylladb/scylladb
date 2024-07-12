@@ -25,6 +25,7 @@
 #include "db/timeout_clock.hh"
 #include "replica/database.hh"
 #include "utils/disk-error-handler.hh"
+#include "utils/error_injection.hh"
 #include "utils/runtime.hh"
 
 // STD.
@@ -58,6 +59,10 @@ bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_
             ++_hints_in_progress;
             size_t mut_size = fm->representation().size();
             shard_stats().size_of_hints_in_progress += mut_size;
+
+            if (utils::get_local_injector().enter("slow_down_writing_hints")) {
+                co_await seastar::sleep(std::chrono::seconds(10));
+            }
 
             try {
                 const auto shared_lock = co_await get_shared_lock(file_update_mutex());

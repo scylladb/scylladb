@@ -14,6 +14,7 @@ from cassandra.cluster import ConnectionException, NoHostAvailable  # type: igno
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.manager_client import ManagerClient
+from test.pylib.rest_client import inject_error
 
 
 logger = logging.getLogger(__name__)
@@ -49,3 +50,30 @@ async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient)
     # Verify hints are written
     hints_after = get_hints_written_count(servers[0])
     assert hints_after > hints_before
+
+@pytest.mark.asyncio
+async def test_limited_concurrency_of_writes(manager: ManagerClient):
+    """
+    We want to verify that Scylla correctly limits the concurrency of writing hints to disk.
+    To do that, we leverage error injections decreasing the threshold when hints should start
+    being rejected, and we expect to receive an exception indicating that a node is overloaded.
+    """
+    node1 = await manager.server_add(config={
+        "error_injections_at_startup": ["decrease_max_size_of_hints_in_progress"]
+    })
+    node2 = await manager.server_add()
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2}")
+    await cql.run_async("CREATE TABLE ks.t (pk int primary key, v int)")
+
+    await manager.server_stop_gracefully(node2.server_id)
+
+    async with inject_error(manager.api, node1.ip_addr, "slow_down_writing_hints"):
+        try:
+            for i in range(100):
+                await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i})", consistency_level=ConsistencyLevel.ONE))
+            pytest.fail("The coordinator node has not been overloaded, which indiciates that the concurrency of writing hints is NOT limited")
+        except NoHostAvailable as e:
+            for _, err in e.errors.items():
+                assert err.summary == "Coordinator node overloaded" and re.match(r"Too many in flight hints: \d+", err.message)

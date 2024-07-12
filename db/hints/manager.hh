@@ -304,6 +304,8 @@ private:
 
     hint_endpoint_manager& get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip);
 
+    uint64_t max_size_of_hints_in_progress() const noexcept;
+
 public:
     bool have_ep_manager(const std::variant<locator::host_id, gms::inet_address>& ep) const noexcept;
 
