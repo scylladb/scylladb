@@ -363,6 +363,18 @@ keyspace_and_table parse_keyspace_and_table(scylla_rest_client& client, const bp
 }
 
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
+struct operation_action{
+    std::optional<operation_func> func = std::nullopt;
+    std::map<sstring, operation_action> suboperation_funcs = {};
+
+    operation_action(operation_func f)
+        : func(std::move(f))
+    {}
+
+    operation_action(std::map<sstring, operation_action> subfs)
+        : suboperation_funcs(std::move(subfs))
+    {}
+};
 
 std::map<operation, operation_func> get_operations_with_func();
 
