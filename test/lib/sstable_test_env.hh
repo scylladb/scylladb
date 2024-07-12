@@ -61,6 +61,10 @@ public:
     void remove_sst_from_reclaimed(sstable* sst) {
         _reclaimed.erase(*sst);
     }
+
+    auto& get_reclaimed_set() {
+        return _reclaimed;
+    }
 };
 
 class test_env_compaction_manager {
