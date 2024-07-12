@@ -962,10 +962,10 @@ future<> generation_service::check_and_repair_cdc_streams() {
     // Update _gen_id first, so that legacy_do_handle_cdc_generation (which will get called due to the status update)
     // won't try to update the gossiper, which would result in a deadlock inside add_local_application_state
     _gen_id = new_gen_id;
-    co_await _gossiper.add_local_application_state({
-            { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(new_gen_id) },
-            { gms::application_state::STATUS, *status }
-    });
+    co_await _gossiper.add_local_application_state(
+            std::pair(gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(new_gen_id)),
+            std::pair(gms::application_state::STATUS, *status)
+    );
     co_await _sys_ks.local().update_cdc_generation_id(new_gen_id);
 }
 

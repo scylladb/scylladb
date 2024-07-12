@@ -2234,18 +2234,10 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endp
 }
 
 future<> gossiper::add_local_application_state(application_state state, versioned_value value) {
-    return add_local_application_state({ {std::move(state), std::move(value)} });
+    application_state_map tmp;
+    tmp.emplace(std::pair(std::move(state), std::move(value)));
+    return add_local_application_state(std::move(tmp));
 }
-
-future<> gossiper::add_local_application_state(std::initializer_list<std::pair<application_state, utils::in<versioned_value>>> args) {
-    using in_pair_type = std::pair<application_state, utils::in<versioned_value>>;
-    using out_pair_type = std::pair<application_state, versioned_value>;
-
-    return add_local_application_state(boost::copy_range<application_state_map>(args | boost::adaptors::transformed([](const in_pair_type& p) {
-        return out_pair_type(p.first, p.second.move());
-    })));
-}
-
 
 // Depends on:
 // - on_change callbacks
