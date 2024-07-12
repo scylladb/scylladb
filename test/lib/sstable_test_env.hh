@@ -54,6 +54,10 @@ public:
     size_t get_total_reclaimable_memory() {
         return _total_reclaimable_memory;
     }
+
+    void remove_sst_from_reclaimed(sstable* sst) {
+        _reclaimed.erase(*sst);
+    }
 };
 
 struct test_env_config {
