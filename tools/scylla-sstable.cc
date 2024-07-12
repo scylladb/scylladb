@@ -273,6 +273,26 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
         sst_log.debug("Trying to locate data dir failed: {}", std::current_exception());
     }
 
+    try {
+        sstring keyspace_name, table_name;
+        try {
+            std::tie(keyspace_name, table_name) = get_keyspace_and_table_options(app_config);
+        } catch (std::invalid_argument&) {
+            keyspace_name = "my_keyspace";
+            table_name = "my_table";
+        }
+        if (!app_config.count("sstables")) {
+            throw std::runtime_error("no sstables provided on the command-line");
+        }
+        const auto sst_path = app_config["sstables"].as<std::vector<sstring>>().front();
+        return schema_with_source{.schema = tools::load_schema_from_sstable(cfg, fs::path(sst_path),
+                keyspace_name, table_name).get(),
+            .source = "sstable's serialization header",
+            .obtained_from = sst_path};
+    } catch (...) {
+        sst_log.debug("Trying to load schema from the sstable itself failed: {}", std::current_exception());
+    }
+
     fmt::print(std::cerr, "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually\n");
     return {};
 }
@@ -3030,6 +3050,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
                     schema_with_source->source,
                     schema_with_source->path ? format(" ({})", schema_with_source->path->native()) : "",
                     schema_with_source->obtained_from);
+            sst_log.trace("Loaded schema: {}", schema);
         } else {
             return 1;
         }
