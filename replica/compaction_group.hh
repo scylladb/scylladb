@@ -38,8 +38,6 @@ using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 //      - Also, a group will be owned by a single table. Different tables own different groups.
 //      - Each group can be thought of an isolated LSM tree, where Memtable(s) and SSTable(s) are
 //          isolated from other groups.
-// Usually, a table T in shard S will own a single compaction group. With compaction_group, a
-// table T will be able to own as many groups as it wishes.
 class compaction_group {
     table& _t;
     class table_state;
@@ -182,6 +180,9 @@ using const_compaction_group_ptr = lw_shared_ptr<const compaction_group>;
 // If a tablet needs splitting, the storage group can be put in splitting mode, allowing the storage
 // in main compaction groups to be split into two new compaction groups, all of which will be managed
 // by the same storage group.
+//
+// With vnodes, a table instance in a given shard will have a single group. With tablets, a table in a
+// shard will have as many groups as there are tablet replicas owned by that shard.
 class storage_group {
     compaction_group_ptr _main_cg;
     std::vector<compaction_group_ptr> _split_ready_groups;
