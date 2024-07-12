@@ -58,6 +58,10 @@ public:
     void remove_sst_from_reclaimed(sstable* sst) {
         _reclaimed.erase(*sst);
     }
+
+    auto& get_reclaimed_set() {
+        return _reclaimed;
+    }
 };
 
 struct test_env_config {

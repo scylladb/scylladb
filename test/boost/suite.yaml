@@ -42,5 +42,12 @@ custom_args:
         - '-c2 -m3G'
     cache_algorithm_test:
         - '-c1 -m256M'
+<<<<<<< HEAD
+=======
+    commitlog_cleanup_test:
+        - '-c1 -m2G'
+    bloom_filter_test:
+        - '-c1'
+>>>>>>> 0615c8a46b (boost/bloom_filter_test: add testcase to verify unlinked sstables are not reloaded)
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
