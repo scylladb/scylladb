@@ -107,8 +107,7 @@ add_custom_target(package
 
 set(dist_pkgs
   "${stripped_dist_pkg}")
-dist_submodule(cqlsh cqlsh dist_pkgs
-  NOARCH)
+dist_submodule(cqlsh cqlsh dist_pkgs)
 dist_submodule(tools java dist_pkgs
   NOARCH)
 dist_submodule(jmx jmx dist_pkgs
