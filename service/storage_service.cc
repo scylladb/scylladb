@@ -1842,6 +1842,10 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
                 throw std::runtime_error("A node that already left the cluster cannot be restarted");
             }
         } else {
+            if (!_db.local().get_config().join_ring() && !_feature_service.zero_token_nodes) {
+                throw std::runtime_error("Cannot boot a node with join_ring=false because the cluster does not support the ZERO_TOKEN_NODES feature");
+            }
+
             auto err = co_await wait_for_topology_request_completion(join_params.request_id);
             if (!err.empty()) {
                 throw std::runtime_error(fmt::format("{} failed. See earlier errors ({})", raft_replace_info ? "Replace" : "Bootstrap", err));
