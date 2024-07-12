@@ -323,6 +323,9 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
     }, so.value);
 }
 
+void sstables_manager::on_unlink(sstable* sst) {
+}
+
 sstables_registry::~sstables_registry() = default;
 
 }   // namespace sstables

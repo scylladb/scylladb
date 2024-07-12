@@ -188,6 +188,14 @@ public:
 
     void validate_new_keyspace_storage_options(const data_dictionary::storage_options&);
 
+<<<<<<< HEAD
+=======
+    const abort_source& get_abort_source() const noexcept { return _abort; }
+
+    // To be called by the sstable to signal its unlinking
+    void on_unlink(sstable* sst);
+
+>>>>>>> dbf22848a8 (sstables/sstables_manager: introduce on_unlink method)
 private:
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no
