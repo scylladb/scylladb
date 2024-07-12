@@ -176,7 +176,6 @@ public:
 
 using compaction_group_ptr = lw_shared_ptr<compaction_group>;
 using const_compaction_group_ptr = lw_shared_ptr<const compaction_group>;
-using compaction_group_vector = utils::chunked_vector<compaction_group_ptr>;
 
 // Storage group is responsible for storage that belongs to a single tablet.
 // A storage group can manage 1 or more compaction groups, each of which can be compacted independently.
