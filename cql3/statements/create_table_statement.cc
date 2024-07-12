@@ -201,10 +201,6 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
             throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
         }
 
-        if (db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets() && pt.is_counter()) {
-            throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: Counters are not yet supported with tablets", keyspace(), cf_name));
-        }
-
         if (pt.get_type()->is_multi_cell()) {
             if (pt.get_type()->is_user_type()) {
                 // check for multi-cell types (non-frozen UDTs or collections) inside a non-frozen UDT

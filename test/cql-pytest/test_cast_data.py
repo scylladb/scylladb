@@ -119,9 +119,6 @@ def test_ignore_cast_to_the_same_type(cql, table1):
     assert cql.execute(f"SELECT CAST(p as int) FROM {table1} WHERE p={p}").one()._fields[0] == "p"
 
 # Test casting a counter to various other types. Reproduces #14501.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def test_cast_from_counter(cql, table2):
     p = unique_key_int()
     # Set the counter to 1000 in two increments, to make it less trivial to
@@ -156,9 +153,6 @@ def test_cast_from_counter(cql, table2):
 # "text" type. Since "varchar" is just an alias for "text", casting
 # to varchar should work too, but in Cassandra it doesn't so this test
 # is marked a Cassandra bug.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def test_cast_from_counter_to_varchar(cql, table2, cassandra_bug):
     p = unique_key_int()
     cql.execute(f'UPDATE {table2} SET c = c + 1000 WHERE p = {p}')
