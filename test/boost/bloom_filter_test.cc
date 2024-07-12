@@ -52,6 +52,11 @@ std::pair<shared_sstable, size_t> create_sstable_with_bloom_filter(test_env& env
     return {sst, sst_bf_memory};
 }
 
+void dispose_and_stop_tracking_bf_memory(shared_sstable&& sst, test_env_sstables_manager& mgr) {
+    mgr.remove_sst_from_reclaimed(sst.get());
+    shared_sstable::dispose(sst.release().release());
+}
+
 SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
@@ -89,7 +94,7 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) 
 
         // Test auto reload - disposing sst3 should trigger reload of the
         // smallest filter in the reclaimed list, which is sst1's bloom filter.
-        shared_sstable::dispose(sst3.release().release());
+        dispose_and_stop_tracking_bf_memory(std::move(sst3), sst_mgr);
         REQUIRE_EVENTUALLY_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
         // only sst4's bloom filter memory should be reported as reclaimed
         REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst4_bf_memory);
@@ -154,7 +159,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
         utils::get_local_injector().enable("reload_reclaimed_components/pause", true);
 
         // dispose sst2 to trigger reload of sst1's bloom filter
-        shared_sstable::dispose(sst2.release().release());
+        dispose_and_stop_tracking_bf_memory(std::move(sst2), sst_mgr);
         // _total_reclaimable_memory will be updated when the reload begins; wait for it.
         REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory);
 
