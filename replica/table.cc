@@ -1047,7 +1047,7 @@ void table::for_each_compaction_group(std::function<void(compaction_group&)> act
     });
 }
 
-void table::for_each_const_compaction_group(std::function<void(const compaction_group&)> action) const {
+void table::for_each_compaction_group(std::function<void(const compaction_group&)> action) const {
     _sg_manager->for_each_storage_group([&] (size_t, storage_group& sg) {
         sg.for_each_compaction_group([&] (const compaction_group_ptr& cg) {
             action(*cg);
@@ -1630,7 +1630,7 @@ void table::rebuild_statistics() {
     _stats.live_sstable_count = 0;
     _stats.total_disk_space_used = 0;
 
-    for_each_const_compaction_group([this] (const compaction_group& cg) {
+    for_each_compaction_group([this] (const compaction_group& cg) {
         _stats.live_disk_space_used += cg.live_disk_space_used();
         _stats.total_disk_space_used += cg.total_disk_space_used();
         _stats.live_sstable_count += cg.live_sstable_count();
@@ -1910,7 +1910,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
 
 unsigned table::estimate_pending_compactions() const {
     unsigned ret = 0;
-    for_each_const_compaction_group([this, &ret] (const compaction_group& cg) {
+    for_each_compaction_group([this, &ret] (const compaction_group& cg) {
         ret += _compaction_strategy.estimated_pending_compactions(cg.as_table_state());
     });
     return ret;
@@ -2046,7 +2046,7 @@ lw_shared_ptr<const sstable_list> table::get_sstables_including_compacted_undele
         return get_sstables();
     }
     auto ret = make_lw_shared<sstable_list>(*_sstables->all());
-    for_each_const_compaction_group([&ret] (const compaction_group& cg) {
+    for_each_compaction_group([&ret] (const compaction_group& cg) {
         for (auto&& s: cg.compacted_undeleted_sstables()) {
             ret->insert(s);
         }
@@ -2447,7 +2447,7 @@ table::~table() {
 
 logalloc::occupancy_stats table::occupancy() const {
     logalloc::occupancy_stats res;
-    for_each_const_compaction_group([&] (const compaction_group& cg) {
+    for_each_compaction_group([&] (const compaction_group& cg) {
         for (auto& m : *const_cast<compaction_group&>(cg).memtables()) {
             res += m->region().occupancy();
         }
