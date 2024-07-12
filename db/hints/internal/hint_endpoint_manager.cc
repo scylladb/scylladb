@@ -11,6 +11,7 @@
 // Seastar features.
 #include <seastar/core/do_with.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/shared_mutex.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
@@ -20,17 +21,25 @@
 #include "db/hints/internal/hint_logger.hh"
 #include "db/hints/internal/hint_storage.hh"
 #include "db/hints/manager.hh"
+#include "db/timeout_clock.hh"
 #include "replica/database.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/runtime.hh"
 
 // STD.
 #include <algorithm>
+#include <chrono>
 #include <utility>
 #include <vector>
 
 namespace db::hints {
 namespace internal {
+
+namespace {
+
+constexpr std::chrono::seconds HINT_FILE_WRITE_TIMEOUT = std::chrono::seconds(2);
+
+} // anonymous namespace
 
 bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
@@ -41,9 +50,9 @@ bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_
             shard_stats().size_of_hints_in_progress += mut_size;
 
             return with_shared(file_update_mutex(), [this, fm, s, tr_state] () mutable -> future<> {
-                return get_or_load().then([this, fm = std::move(fm), s = std::move(s), tr_state] (hints_store_ptr log_ptr) mutable {
+                return get_or_load().then([fm = std::move(fm), s = std::move(s), tr_state] (hints_store_ptr log_ptr) mutable {
                     commitlog_entry_writer cew(s, *fm, db::commitlog::force_sync::no);
-                    return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + _shard_manager.HINT_FILE_WRITE_TIMEOUT);
+                    return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + HINT_FILE_WRITE_TIMEOUT);
                 }).then([this, tr_state] (db::rp_handle rh) {
                     auto rp = rh.release();
                     if (_last_written_rp < rp) {
