@@ -366,6 +366,14 @@ ratio_holder filter_recent_false_positive_as_ratio_holder(const sstables::shared
     return ratio_holder(f + sst->filter_get_recent_true_positive(), f);
 }
 
+uint64_t accumulate_on_active_memtables(replica::table& t, noncopyable_function<uint64_t(replica::memtable& mt)> action) {
+    uint64_t ret = 0;
+    t.for_each_active_memtable([&] (replica::memtable& mt) {
+        ret += action(mt);
+    });
+    return ret;
+}
+
 void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace>& sys_ks) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         std::vector<sstring> res;
@@ -401,13 +409,13 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::get_memtable_columns_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, req->get_path_param("name"), uint64_t{0}, [](replica::column_family& cf) {
-            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed(std::mem_fn(&replica::memtable::partition_count)), uint64_t(0));
+            return accumulate_on_active_memtables(cf, std::mem_fn(&replica::memtable::partition_count));
         }, std::plus<>());
     });
 
     cf::get_all_memtable_columns_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, uint64_t{0}, [](replica::column_family& cf) {
-            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed(std::mem_fn(&replica::memtable::partition_count)), uint64_t(0));
+            return accumulate_on_active_memtables(cf, std::mem_fn(&replica::memtable::partition_count));
         }, std::plus<>());
     });
 
@@ -421,33 +429,33 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::get_memtable_off_heap_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, req->get_path_param("name"), int64_t(0), [](replica::column_family& cf) {
-            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
-                return active_memtable->region().occupancy().total_space();
-            }), uint64_t(0));
+            return accumulate_on_active_memtables(cf, [] (replica::memtable& active_memtable) {
+                return active_memtable.region().occupancy().total_space();
+            });
         }, std::plus<int64_t>());
     });
 
     cf::get_all_memtable_off_heap_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, int64_t(0), [](replica::column_family& cf) {
-            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
-                return active_memtable->region().occupancy().total_space();
-            }), uint64_t(0));
+            return accumulate_on_active_memtables(cf, [] (replica::memtable& active_memtable) {
+                return active_memtable.region().occupancy().total_space();
+            });
         }, std::plus<int64_t>());
     });
 
     cf::get_memtable_live_data_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, req->get_path_param("name"), int64_t(0), [](replica::column_family& cf) {
-            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
-                return active_memtable->region().occupancy().used_space();
-            }), uint64_t(0));
+            return accumulate_on_active_memtables(cf, [] (replica::memtable& active_memtable) {
+                return active_memtable.region().occupancy().used_space();
+            });
         }, std::plus<int64_t>());
     });
 
     cf::get_all_memtable_live_data_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, int64_t(0), [](replica::column_family& cf) {
-            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
-                return active_memtable->region().occupancy().used_space();
-            }), uint64_t(0));
+            return accumulate_on_active_memtables(cf, [] (replica::memtable& active_memtable) {
+                return active_memtable.region().occupancy().used_space();
+            });
         }, std::plus<int64_t>());
     });
 
@@ -485,9 +493,9 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     cf::get_all_cf_all_memtables_live_data_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         warn(unimplemented::cause::INDEXES);
         return map_reduce_cf(ctx, int64_t(0), [](replica::column_family& cf) {
-            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
-                return active_memtable->region().occupancy().used_space();
-            }), uint64_t(0));
+            return accumulate_on_active_memtables(cf, [] (replica::memtable& active_memtable) {
+                return active_memtable.region().occupancy().used_space();
+            });
         }, std::plus<int64_t>());
     });
 

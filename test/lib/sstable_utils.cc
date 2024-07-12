@@ -41,6 +41,14 @@ lw_shared_ptr<replica::memtable> make_memtable(schema_ptr s, const std::vector<m
     return mt;
 }
 
+std::vector<replica::memtable*> active_memtables(replica::table& t) {
+    std::vector<replica::memtable*> active_memtables;
+    t.for_each_active_memtable([&] (replica::memtable& mt) {
+        active_memtables.push_back(&mt);
+    });
+    return active_memtables;
+}
+
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt) {
     return make_sstable_containing(sst_factory(), std::move(mt));
 }

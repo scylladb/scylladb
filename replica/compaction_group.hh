@@ -61,8 +61,6 @@ class compaction_group {
     seastar::condition_variable _staging_done_condition;
     // Gates async operations confined to a single group.
     seastar::gate _async_gate;
-    using list_hook_t = boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>;
-    list_hook_t _list_hook;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -82,10 +80,6 @@ private:
     // it to be moved from its original sstable set (e.g. maintenance) into a new one (e.g. main).
     future<> delete_unused_sstables(sstables::compaction_completion_desc desc);
 public:
-    using list_t = boost::intrusive::list<compaction_group,
-        boost::intrusive::member_hook<compaction_group, compaction_group::list_hook_t, &compaction_group::_list_hook>,
-        boost::intrusive::constant_time_size<false>>;
-
     compaction_group(table& t, size_t gid, dht::token_range token_range);
     ~compaction_group();
 
@@ -175,13 +169,14 @@ public:
     }
 
     compaction_manager& get_compaction_manager() noexcept;
+    const compaction_manager& get_compaction_manager() const noexcept;
 
     friend class storage_group;
 };
 
-using compaction_group_ptr = std::unique_ptr<compaction_group>;
+using compaction_group_ptr = lw_shared_ptr<compaction_group>;
+using const_compaction_group_ptr = lw_shared_ptr<const compaction_group>;
 using compaction_group_vector = utils::chunked_vector<compaction_group_ptr>;
-using compaction_group_list = compaction_group::list_t;
 
 // Storage group is responsible for storage that belongs to a single tablet.
 // A storage group can manage 1 or more compaction groups, each of which can be compacted independently.
@@ -191,74 +186,119 @@ using compaction_group_list = compaction_group::list_t;
 class storage_group {
     compaction_group_ptr _main_cg;
     std::vector<compaction_group_ptr> _split_ready_groups;
+    seastar::gate _async_gate;
 private:
     bool splitting_mode() const {
         return !_split_ready_groups.empty();
     }
     size_t to_idx(locator::tablet_range_side) const;
 public:
-    storage_group(compaction_group_ptr cg, compaction_group_list* list);
+    storage_group(compaction_group_ptr cg);
+
+    seastar::gate& async_gate() {
+        return _async_gate;
+    }
 
     const dht::token_range& token_range() const noexcept;
 
     size_t memtable_count() const noexcept;
 
-    compaction_group_ptr& main_compaction_group() noexcept;
-    std::vector<compaction_group_ptr> split_ready_compaction_groups() &&;
+    const compaction_group_ptr& main_compaction_group() const noexcept;
+    const std::vector<compaction_group_ptr>& split_ready_compaction_groups() const;
     compaction_group_ptr& select_compaction_group(locator::tablet_range_side) noexcept;
 
     uint64_t live_disk_space_used() const noexcept;
 
-    utils::small_vector<compaction_group*, 3> compaction_groups() noexcept;
+    void for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const noexcept;
+    utils::small_vector<compaction_group_ptr, 3> compaction_groups() noexcept;
+    utils::small_vector<const_compaction_group_ptr, 3> compaction_groups() const noexcept;
 
     // Puts the storage group in split mode, in which it internally segregates data
     // into two sstable sets and two memtable sets corresponding to the two adjacent
     // tablets post-split.
     // Preexisting sstables and memtables are not split yet.
     // Returns true if post-conditions for split() are met.
-    bool set_split_mode(compaction_group_list&);
+    bool set_split_mode();
 
     // Like set_split_mode() but triggers splitting for old sstables and memtables and waits
     // for it:
     //  1) Flushes all memtables which were created in non-split mode, and waits for that to complete.
     //  2) Compacts all sstables which overlap with the split point
     // Returns a future which resolves when this process is complete.
-    future<> split(compaction_group_list&, sstables::compaction_type_options::split opt);
+    future<> split(sstables::compaction_type_options::split opt);
 
     // Make an sstable set spanning all sstables in the storage_group
     lw_shared_ptr<const sstables::sstable_set> make_sstable_set() const;
 
     // Flush all memtables.
     future<> flush() noexcept;
+    bool can_flush() const;
+    api::timestamp_type min_memtable_timestamp() const;
+
+    bool compaction_disabled() const;
+    // Returns true when all compacted sstables were already deleted.
+    bool no_compacted_sstable_undeleted() const;
+
+    future<> stop() noexcept;
 };
 
-using storage_group_map = absl::flat_hash_map<size_t, std::unique_ptr<storage_group>, absl::Hash<size_t>>;
+using storage_group_ptr = lw_shared_ptr<storage_group>;
+using storage_group_map = absl::flat_hash_map<size_t, storage_group_ptr, absl::Hash<size_t>>;
 
 class storage_group_manager {
 protected:
-    // The compaction group list is only a helper for accessing the groups managed by the storage groups.
-    // The list entries are unlinked automatically when the storage group, they belong to, is removed.
-    compaction_group_list _compaction_groups;
     storage_group_map _storage_groups;
-    // Prevents _storage_groups from having its elements inserted or deleted while other layer iterates
-    // over them (or over _compaction_groups).
-    seastar::rwlock _lock;
 public:
     virtual ~storage_group_manager();
 
-    seastar::rwlock& get_rwlock() noexcept {
-        return _lock;
-    }
+    //    How concurrent loop and updates on the group map works without a lock:
+    //
+    //    Firstly, all yielding loops will work on a copy of map, to prevent a
+    //    concurrent update to the map from interfering with it.
+    //
+    //    scenario 1:
+    //    T
+    //    1   loop on the map
+    //    2                               storage group X is stopped on cleanup
+    //    3   loop reaches X
+    //
+    //    Here, X is stopped before it is reached. This is handled by teaching
+    //    iteration to skip groups that were stopped by cleanup (implemented
+    //    using gate).
+    //    X survives its removal from the map since it is a lw_shared_ptr.
+    //
+    //
+    //    scenario 2:
+    //    T
+    //    1   loop on the map
+    //    2   loop reaches X
+    //    3                               storage group X is stopped on cleanup
+    //
+    //    Here, X is stopped while being used, but that also happens during shutdown.
+    //    When X is stopped, flush happens and compactions are all stopped (exception
+    //    is not propagated upwards) and new ones cannot start afterward.
+    //
+    //
+    //    scenario 3:
+    //    T
+    //    1   loop on the map
+    //    2                               storage groups are split
+    //    3   loop reaches old groups
+    //
+    //    Here, the loop continues post storage group split, which rebuilds the old
+    //    map into a new one. This is handled by allowing the old map to still access
+    //    the compaction groups that were reassigned according to the new tablet count.
+    //    We don't move the compaction groups, but rather they're still visible by old
+    //    and new storage groups.
 
-    const compaction_group_list& compaction_groups() const noexcept {
-        return _compaction_groups;
-    }
-    compaction_group_list& compaction_groups() noexcept {
-        return _compaction_groups;
-    }
-
-    future<> for_each_storage_group_gently(std::function<future<>(size_t, storage_group&)> f);
+    // Important to not return storage_group_id in yielding variants, since ids can be
+    // invalidated when storage group count changes (e.g. split or merge).
+    future<> parallel_foreach_storage_group(std::function<future<>(storage_group&)> f);
+    future<> for_each_storage_group_gently(std::function<future<>(storage_group&)> f);
     void for_each_storage_group(std::function<void(size_t, storage_group&)> f) const;
+    const storage_group_map& storage_groups() const;
+
+    future<> stop_storage_groups() noexcept;
     void remove_storage_group(size_t id);
     storage_group& storage_group_for_id(const schema_ptr&, size_t i) const;
 
