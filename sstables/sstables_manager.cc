@@ -282,4 +282,40 @@ void sstables_manager::unplug_system_keyspace() noexcept {
     _sys_ks = nullptr;
 }
 
+<<<<<<< HEAD
+=======
+future<> sstables_manager::init_table_storage(const data_dictionary::storage_options& so, sstring dir) {
+    return sstables::init_table_storage(so, dir);
+}
+
+future<> sstables_manager::init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir) {
+    return sstables::init_keyspace_storage(so, dir);
+}
+
+future<> sstables_manager::destroy_table_storage(const data_dictionary::storage_options& so, sstring dir) {
+    return sstables::destroy_table_storage(so, dir);
+}
+
+void sstables_manager::validate_new_keyspace_storage_options(const data_dictionary::storage_options& so) {
+    std::visit(overloaded_functor {
+        [] (const data_dictionary::storage_options::local&) {
+        },
+        [this] (const data_dictionary::storage_options::s3& so) {
+            if (!_features.keyspace_storage_options) {
+                throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
+            }
+            // It's non-system keyspace
+            if (!is_known_endpoint(so.endpoint)) {
+                throw exceptions::configuration_exception(format("Endpoint {} not configured", so.endpoint));
+            }
+        }
+    }, so.value);
+}
+
+void sstables_manager::on_unlink(sstable* sst) {
+}
+
+sstables_registry::~sstables_registry() = default;
+
+>>>>>>> dbf22848a8 (sstables/sstables_manager: introduce on_unlink method)
 }   // namespace sstables
