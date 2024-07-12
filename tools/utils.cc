@@ -24,7 +24,7 @@ namespace bpo = boost::program_options;
 namespace tools::utils {
 
 bool operation::matches(std::string_view name) const {
-    return _name == name || std::ranges::find(_aliases, name) != _aliases.end();
+    return _name[0] == name || std::ranges::find(_aliases, name) != _aliases.end();
 }
 
 namespace {
