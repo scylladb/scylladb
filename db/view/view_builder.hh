@@ -214,6 +214,10 @@ public:
      */
     future<> stop();
 
+    static future<> migrate_to_v2(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard);
+
+    void upgrade_to_v2();
+
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override;
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override;
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;

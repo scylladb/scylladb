@@ -33,6 +33,7 @@
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
+#include "db/view/view_builder.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/join_node.hh"
@@ -89,6 +90,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     const service::raft_address_map& _address_map;
     service::topology_state_machine& _topo_sm;
     abort_source& _as;
+    gms::feature_service& _feature_service;
 
     raft::server& _raft;
     const raft::term_t _term;
@@ -1558,6 +1560,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 co_return true;
             }
 
+            if (auto guard_opt = co_await maybe_migrate_system_tables(std::move(guard)); !guard_opt) {
+                // The guard is consumed, it means we did migration
+                co_return true;
+            } else {
+                guard = std::move(*guard_opt);
+            }
+
             // If there is no other work, evaluate load and start tablet migration if there is imbalance.
             if (co_await maybe_start_tablet_migration(std::move(guard))) {
                 co_return true;
@@ -2418,6 +2427,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    // Returns the guard if no work done. Otherwise, performs a table migration and consumes the guard.
+    future<std::optional<group0_guard>> maybe_migrate_system_tables(group0_guard guard);
 
     // Returns true if the state machine was transitioned into tablet migration path.
     future<bool> maybe_start_tablet_migration(group0_guard);
@@ -2451,10 +2462,12 @@ public:
             service::topology_state_machine& topo_sm, abort_source& as, raft::server& raft_server,
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
-            std::chrono::milliseconds ring_delay)
+            std::chrono::milliseconds ring_delay,
+            gms::feature_service& feature_service)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _group0(group0), _address_map(_group0.address_map()), _topo_sm(topo_sm), _as(as)
+        , _feature_service(feature_service)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
@@ -2471,6 +2484,18 @@ public:
     virtual void on_up(const gms::inet_address& endpoint) {};
     virtual void on_down(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
 };
+
+future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_tables(group0_guard guard) {
+    // Check if we can upgrade the view_build_status table to v2, being managed by group0.
+    const auto view_builder_version = co_await _sys_ks.get_view_builder_version();
+    if (view_builder_version == db::system_keyspace::view_builder_version_t::v1 && _feature_service.view_build_status_on_group0) {
+        auto tmptr = get_token_metadata_ptr();
+        co_await db::view::view_builder::migrate_to_v2(tmptr, _sys_ks, _sys_ks.query_processor(), _group0.client(), _as, std::move(guard));
+        co_return std::nullopt;
+    }
+
+    co_return std::move(guard);
+}
 
 future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard guard) {
     rtlogger.debug("Evaluating tablet balance");
@@ -3022,14 +3047,16 @@ future<> run_topology_coordinator(
         raft_topology_cmd_handler_type raft_topology_cmd_handler,
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
-        endpoint_lifecycle_notifier& lifecycle_notifier) {
+        endpoint_lifecycle_notifier& lifecycle_notifier,
+        gms::feature_service& feature_service) {
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
             sys_ks, db, group0, topo_sm, as, raft,
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
-            ring_delay};
+            ring_delay,
+            feature_service};
 
     std::exception_ptr ex;
     lifecycle_notifier.register_subscriber(&coordinator);

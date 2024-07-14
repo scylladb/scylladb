@@ -35,6 +35,7 @@
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/untyped_result_set.hh"
 #include "cql3/expr/evaluate.hh"
 #include "db/view/view.hh"
 #include "db/view/view_builder.hh"
@@ -2546,6 +2547,83 @@ future<> view_builder::do_build_step() {
     }).handle_exception([] (std::exception_ptr ex) {
         vlogger.warn("Unexcepted error executing build step: {}. Ignored.", ex);
     });
+}
+
+future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard) {
+    inject_failure("view_builder_migrate_to_v2");
+
+    auto schema = qp.db().find_schema(db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS);
+
+    // `system_distributed` keyspace has RF=3 and we need to scan it with CL=ALL
+    // To support migration on cluster with 1 or 2 nodes, set appropriate CL
+    auto nodes_count = tmptr->get_normal_token_owners().size();
+    auto cl = db::consistency_level::ALL;
+    if (nodes_count == 1) {
+        cl = db::consistency_level::ONE;
+    } else if (nodes_count == 2) {
+        cl = db::consistency_level::TWO;
+    }
+
+    auto rows = co_await qp.execute_internal(
+        format("SELECT * FROM {}.{}", db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS),
+        cl,
+        view_builder_query_state(),
+        {},
+        cql3::query_processor::cache_internal::no);
+
+    auto col_names = boost::copy_range<std::vector<sstring>>(schema->all_columns() | boost::adaptors::transformed([] (const auto& col) {return col.name_as_cql_string(); }));
+    auto col_names_str = boost::algorithm::join(col_names, ", ");
+    sstring val_binders_str = "?";
+    for (size_t i = 1; i < col_names.size(); ++i) {
+        val_binders_str += ", ?";
+    }
+
+    std::vector<mutation> migration_muts;
+    migration_muts.reserve(rows->size() + 1);
+
+    // Insert all valid rows into the new table.
+    // Note the tables have the same schema.
+    for (const auto& row: *rows) {
+        std::vector<data_value_or_unset> values;
+        for (const auto& col: schema->all_columns()) {
+            if (row.has(col.name_as_text())) {
+                values.push_back(col.type->deserialize(row.get_blob(col.name_as_text())));
+            } else {
+                values.push_back(unset_value{});
+            }
+        }
+
+        auto muts = co_await qp.get_mutations_internal(
+            format("INSERT INTO {}.{} ({}) VALUES ({})",
+                db::system_keyspace::NAME,
+                db::system_keyspace::VIEW_BUILD_STATUS_V2,
+                col_names_str,
+                val_binders_str),
+            view_builder_query_state(),
+            guard.write_timestamp(),
+            std::move(values));
+        if (muts.size() != 1) {
+            on_internal_error(vlogger, format("expecting single insert mutation, got {}", muts.size()));
+        }
+        migration_muts.push_back(std::move(muts[0]));
+    }
+
+    // Update the view builder version to v2
+    auto version_mut = co_await sys_ks.make_view_builder_version_mutation(guard.write_timestamp(), db::system_keyspace::view_builder_version_t::v2);
+    migration_muts.push_back(std::move(version_mut));
+
+    // write the version as topology_change so that we can apply
+    // the change to the view_builder service in topology_state_load
+    service::topology_change change {
+        .mutations{migration_muts.begin(), migration_muts.end()},
+    };
+
+    auto group0_cmd = group0_client.prepare_command(std::move(change), guard, "migrate view_build_status to v2");
+    co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as);
+}
+
+void view_builder::upgrade_to_v2() {
+    _view_build_status_on_group0 = true;
 }
 
 // Called in the context of a seastar::thread.
