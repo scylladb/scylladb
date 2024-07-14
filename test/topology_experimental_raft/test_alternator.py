@@ -19,6 +19,15 @@ import logging
 import time
 import boto3
 import botocore
+<<<<<<< HEAD
+=======
+import requests
+import json
+
+from test.pylib.manager_client import ManagerClient
+from test.pylib.util import wait_for
+from test.topology.conftest import skip_mode
+>>>>>>> 0d1aa399f9 (alternator: fix "/localnodes" to not return nodes still joining)
 
 logger = logging.getLogger(__name__)
 
@@ -180,3 +189,128 @@ async def test_alternator_ttl_scheduling_group(alternator3):
     assert ratio < 0.1
 
     table.delete()
+<<<<<<< HEAD
+=======
+
+@pytest.mark.asyncio
+async def test_localnodes_broadcast_rpc_address(manager: ManagerClient):
+    """Test that if the "broadcast_rpc_address" of a node is set, the
+       "/localnodes" request returns not the node's internal IP address,
+       but rather the one set in broadcast_rpc_address as passed between
+       nodes via gossip. The case where this parameter is not configured is
+       tested separately, in test/alternator/test_scylla.py.
+       Reproduces issue #18711.
+    """
+    # Run two Scylla nodes telling both their broadcast_rpc_address is 1.2.3.4
+    # (this is silly, but servers_add() doesn't let us use a different config
+    # per server). We need to run two nodes to check that the node to which
+    # we send the /localnodes request knows not only its own modified
+    # address, but also the other node's (which it learnt by gossip).
+    # This address isn't used for any communication, but it will be
+    # produced by "/localnodes" and this is what we want to check
+    config = alternator_config | {
+        'broadcast_rpc_address': '1.2.3.4'
+    }
+    servers = await manager.servers_add(2, config=config)
+    for server in servers:
+        # We expect /localnodes to return ["1.2.3.4", "1.2.3.4"]
+        # (since we configured both nodes with the same broadcast_rpc_address).
+        # We need the retry loop below because the second node might take a
+        # bit of time to bootstrap after coming up, and only then will it
+        # appear on /localnodes (see #19694).
+        url = f"http://{server.ip_addr}:{config['alternator_port']}/localnodes"
+        timeout = time.time() + 10
+        while True:
+            assert time.time() < timeout
+            response = requests.get(url, verify=False)
+            j = json.loads(response.content.decode('utf-8'))
+            if j == ['1.2.3.4', '1.2.3.4']:
+                break # done
+            await asyncio.sleep(0.1)
+
+@pytest.mark.asyncio
+async def test_localnodes_drained_node(manager: ManagerClient):
+    """Test that if in a cluster one node is brought down with "nodetool drain"
+       a "/localnodes" request should NOT return that node. This test does
+       NOT reproduce issue #19694 - a DRAINED node is not considered is_alive()
+       and even before the fix of that issue, "/localnodes" didn't return it.
+    """
+    # Start a cluster with two nodes and verify that at this point,
+    # "/localnodes" on the first node returns both nodes.
+    # We the retry loop below because the second node might take a
+    # bit of time to bootstrap after coming up, and only then will it
+    # appear on /localnodes (see #19694).
+    servers = await manager.servers_add(2, config=alternator_config)
+    localnodes_request = f"http://{servers[0].ip_addr}:{alternator_config['alternator_port']}/localnodes"
+    async def check_localnodes_two():
+        response = requests.get(localnodes_request)
+        j = json.loads(response.content.decode('utf-8'))
+        if set(j) == {servers[0].ip_addr, servers[1].ip_addr}:
+            return True
+        elif set(j).issubset({servers[0].ip_addr, servers[1].ip_addr}):
+            return None # try again
+        else:
+            return False
+    assert await wait_for(check_localnodes_two, time.time() + 10)
+    # Now "nodetool" drain on the second node, leaving the second node
+    # in DRAINED state.
+    await manager.api.client.post("/storage_service/drain", host=servers[1].ip_addr)
+    # After that, "/localnodes" should no longer return the second node.
+    # It might take a short while until the first node learns what happened
+    # to node 1, so we may need to retry for a while
+    async def check_localnodes_one():
+        response = requests.get(localnodes_request)
+        j = json.loads(response.content.decode('utf-8'))
+        if set(j) == {servers[0].ip_addr, servers[1].ip_addr}:
+            return None # try again
+        elif set(j) == {servers[0].ip_addr}:
+            return True
+        else:
+            return False
+    assert await wait_for(check_localnodes_one, time.time() + 10)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_localnodes_joining_nodes(manager: ManagerClient):
+    """Test that if a cluster is being enlarged and a node is coming up but
+       not yet responsive, a "/localnodes" request should NOT return that node.
+       Reproduces issue #19694.
+    """
+    # Start a cluster with one node, and then bring up a second node,
+    # pausing its bootstrap (with an injection) in JOINING state.
+    # We need to start the second node in the background, because server_add()
+    # will wait for the bootstrap to complete - which we don't want to do.
+    server = await manager.server_add(config=alternator_config)
+    task = asyncio.create_task(manager.server_add(config=alternator_config | {'error_injections_at_startup': ['delay_bootstrap_20s']}))
+    # Sleep until the first node knows of the second one as a "live node"
+    # (we check this with the REST API's /gossiper/endpoint/live.
+    async def check_two_live_nodes():
+        j = await manager.api.client.get_json("/gossiper/endpoint/live", host=server.ip_addr)
+        if len(j) == 1:
+            return None # try again
+        elif len(j) == 2:
+            return True
+        else:
+            return False
+    assert await wait_for(check_two_live_nodes, time.time() + 10)
+
+    # At this point the second node is live, but hasn't finished bootstrapping
+    # (we delayed that with the injection). So the "/localnodes" should still
+    # return just one node - not both. Reproduces #19694 (two nodes used to
+    # be returned)
+    localnodes_request = f"http://{server.ip_addr}:{alternator_config['alternator_port']}/localnodes"
+    response = requests.get(localnodes_request)
+    j = json.loads(response.content.decode('utf-8'))
+    assert len(j) == 1
+    # Ending the test here will kill both servers. We don't wait for the
+    # second server to finish its long injection-caused bootstrap delay,
+    # so we don't check here that when the second server finally comes up,
+    # both nodes will finally be visible in /localnodes. This case is checked
+    # in other tests, where bootstrap finishes normally - we don't need to
+    # check this case again here.
+    task.cancel()
+
+# TODO: add a more thorough test for /localnodes, creating a cluster with
+# multiple nodes in multiple data centers, and check that we can get a list
+# of nodes in each data center.
+>>>>>>> 0d1aa399f9 (alternator: fix "/localnodes" to not return nodes still joining)
