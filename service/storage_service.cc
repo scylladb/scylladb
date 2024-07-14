@@ -3031,6 +3031,8 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 
     set_mode(mode::JOINING);
 
+    co_await utils::get_local_injector().inject("delay_bootstrap_20s", std::chrono::seconds(20));
+
     if (raft_server) { // Raft is enabled. Check if we need to bootstrap ourself using raft
         slogger.info("topology changes are using raft");
 
@@ -4743,6 +4745,8 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
         // Step 3: Prepare to sync data
         ctl.prepare(node_ops_cmd::bootstrap_prepare).get();
 
+        utils::get_local_injector().inject("delay_bootstrap_20s", std::chrono::seconds(20)).get();
+
         // Step 5: Sync data for bootstrap
         _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), bootstrap_tokens).get();
         on_streaming_finished();
@@ -6030,6 +6034,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
             }
             break;
             case raft_topology_cmd::command::stream_ranges: {
+<<<<<<< HEAD
                 const auto& rs = _topology_state_machine._topology.find(raft_server.id())->second;
                 auto tstate = _topology_state_machine._topology.tstate;
                 if (!rs.ring ||
@@ -6053,6 +6058,62 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                             co_await retrier(_bootstrap_result, coroutine::lambda([&] () -> future<> {
                                 if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
                                     co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens);
+=======
+                co_await with_scheduling_group(_db.local().get_streaming_scheduling_group(), coroutine::lambda([&] () -> future<> {
+                    const auto& rs = _topology_state_machine._topology.find(raft_server.id())->second;
+                    auto tstate = _topology_state_machine._topology.tstate;
+                    if (!rs.ring ||
+                        (tstate != topology::transition_state::write_both_read_old && rs.state != node_state::normal && rs.state != node_state::rebuilding)) {
+                        rtlogger.warn("got stream_ranges request while my tokens state is {} and node state is {}", tstate, rs.state);
+                        co_return;
+                    }
+
+                    utils::get_local_injector().inject("stream_ranges_fail",
+                                           [] { throw std::runtime_error("stream_range failed due to error injection"); });
+
+                    switch(rs.state) {
+                    case node_state::bootstrapping:
+                    case node_state::replacing: {
+                        set_mode(mode::BOOTSTRAP);
+                        // See issue #4001
+                        co_await _view_builder.local().mark_existing_views_as_built();
+                        co_await _db.invoke_on_all([] (replica::database& db) {
+                            for (auto& cf : db.get_non_system_column_families()) {
+                                cf->notify_bootstrap_or_replace_start();
+                            }
+                        });
+                        if (rs.state == node_state::bootstrapping) {
+                            if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
+                                co_await retrier(_bootstrap_result, coroutine::lambda([&] () -> future<> {
+                                    if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
+                                        co_await utils::get_local_injector().inject("delay_bootstrap_20s", std::chrono::seconds(20));
+
+                                        co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens);
+                                    } else {
+                                        dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
+                                            locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
+                                        co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, _topology_state_machine._topology.session);
+                                    }
+                                }));
+                            }
+                            // Bootstrap did not complete yet, but streaming did
+                        } else {
+                            co_await retrier(_bootstrap_result, coroutine::lambda([&] () ->future<> {
+                                if (!_topology_state_machine._topology.req_param.contains(raft_server.id())) {
+                                    on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", raft_server.id()));
+                                }
+                                if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
+                                    // FIXME: we should not need to translate ids to IPs here. See #6403.
+                                    std::unordered_set<gms::inet_address> ignored_ips;
+                                    for (const auto& id : _topology_state_machine._topology.ignored_nodes) {
+                                        auto ip = _group0->address_map().find(id);
+                                        if (!ip) {
+                                            on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", id));
+                                        }
+                                        ignored_ips.insert(*ip);
+                                    }
+                                    co_await _repair.local().replace_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, std::move(ignored_ips));
+>>>>>>> 0d1aa399f9 (alternator: fix "/localnodes" to not return nodes still joining)
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(),
                                         locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());

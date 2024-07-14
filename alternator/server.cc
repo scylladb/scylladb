@@ -208,8 +208,18 @@ protected:
         sstring local_dc = topology.get_datacenter();
         std::unordered_set<gms::inet_address> local_dc_nodes = topology.get_datacenter_endpoints().at(local_dc);
         for (auto& ip : local_dc_nodes) {
+<<<<<<< HEAD
             if (_gossiper.is_alive(ip)) {
                 rjson::push_back(results, rjson::from_string(ip.to_sstring()));
+=======
+            // Note that it's not enough for the node to be is_alive() - a
+            // node joining the cluster is also "alive" but not responsive to
+            // requests. We need the node to be in normal state. See #19694.
+            if (_gossiper.is_normal(ip)) {
+                // Use the gossiped broadcast_rpc_address if available instead
+                // of the internal IP address "ip". See discussion in #18711.
+                rjson::push_back(results, rjson::from_string(_gossiper.get_rpc_address(ip)));
+>>>>>>> 0d1aa399f9 (alternator: fix "/localnodes" to not return nodes still joining)
             }
         }
         rep->set_status(reply::status_type::ok);
