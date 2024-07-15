@@ -4060,9 +4060,11 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             return builder.build();
         };
 
-        auto next_timestamp = [] (auto step) {
+        // makes sure all data belonging to a table falls into the same time bucket.
+        auto now = gc_clock::now();
+        auto next_timestamp = [&now] (auto step) {
             using namespace std::chrono;
-            return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
+            return (now.time_since_epoch() - duration_cast<microseconds>(step)).count();
         };
         auto make_expiring_cell = [&] (schema_ptr s, std::chrono::hours step) {
             static thread_local int32_t value = 1;
@@ -4119,6 +4121,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
 
         // Make sure everything is expired
         forward_jump_clocks(std::chrono::hours(100));
+        now = gc_clock::now();
 
         auto compact_all_tables = [&] (size_t expected_before, size_t expected_after) {
             for (auto& t : tables) {
@@ -4149,7 +4152,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             return max_ongoing_compaction;
         };
 
-        // Allow fully expired sstables to be compacted in parallel
+        // Allow fully expired sstables to be compacted in parallel, as they have the same weight 0 (== weightless).
         BOOST_REQUIRE_LE(compact_all_tables(1, 0), num_tables);
 
         auto add_sstables_to_table = [&] (auto idx, size_t num_sstables) {
@@ -4166,7 +4169,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             add_sstables_to_table(i, DEFAULT_MIN_COMPACTION_THRESHOLD);
         }
 
-        // All buckets are expected to have the same weight (0)
+        // All buckets are expected to have the same weight (>0)
         // and therefore their compaction is expected to be serialized
         BOOST_REQUIRE_EQUAL(compact_all_tables(DEFAULT_MIN_COMPACTION_THRESHOLD, 1), 1);
     });
