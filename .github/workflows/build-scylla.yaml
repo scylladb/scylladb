@@ -13,11 +13,14 @@ on:
         value: ${{ jobs.build.outputs.md5sum }}
 
 jobs:
+  read-toolchain:
+    uses: ./.github/workflows/read-toolchain.yaml
   build:
     if: github.repository == 'scylladb/scylladb'
+    needs:
+      - read-toolchain
     runs-on: ubuntu-latest
-    # be consistent with tools/toolchain/image
-    container: scylladb/scylla-toolchain:fedora-40-20240621
+    container: ${{ needs.read-toolchain.outputs.image }}
     outputs:
       md5sum: ${{ steps.checksum.outputs.md5sum }}
     steps:
