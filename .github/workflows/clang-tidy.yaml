@@ -10,9 +10,6 @@ on:
       - 'docs/**'
       - '.github/**'
   workflow_dispatch:
-  schedule:
-    # only at 5AM Saturday
-    - cron: '0 5 * * SAT'
 
 env:
   BUILD_TYPE: RelWithDebInfo
