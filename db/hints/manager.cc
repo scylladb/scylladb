@@ -285,6 +285,39 @@ sync_point::shard_rps manager::calculate_current_sync_point(std::span<const gms:
         }
     }
 
+    // When `target_eps` is empty, it means the sync point should correspond to ALL hosts.
+    //
+    // It's worth noting here why this algorithm works. We don't have a guarantee that there's
+    // an endpoint manager for each hint directory stored by this node. However, if a hint
+    // directory doesn't have a corresponding endpoint manager, there is one of the two reasons
+    // for that:
+    //
+    // Reason 1. The hint directory is rejected by the host filter, i.e. this node is forbidden
+    //           to send hints to the node corresponding to the directory. In that case, the user
+    //           must've specified that they don't want hints to be sent there on their own
+    //           and it makes no sense to wait for those hints to be sent.
+    //
+    // Reason 2. When upgrading Scylla from a version with IP-based hinted handoff to a version
+    //           with support for host-ID hinted handoff, there's a transition period when
+    //           endpoint managers are identified by host IDs, while the names of hint directories
+    //           stored on disk still represent IP addresses; we keep mappings between those two
+    //           entities. It may happen that multiple IPs correspond to the same hint directory
+    //           and so -- even if a hint directory is accepted by the host filter, there might not
+    //           be an endpoint manager managing it. This reason is ONLY possible during the transition
+    //           period. Once the transition is done, only reason 1 can apply.
+    //           For more details on the mappings and related things, see:
+    //              scylladb/scylladb#12278 and scylladb/scylladb#15567.
+    //
+    // Because of that, it suffices to browse the existing endpoint managers and gather their
+    // last replay positions to abide by the design and guarantees of the sync point API, i.e.
+    // if the parameter `target_hosts` of a request to create a sync point is empty, we should
+    // create a sync point for ALL other nodes.
+    if (target_eps.empty()) {
+        for (const auto& [host_id, ep_man] : _ep_managers) {
+            rps[host_id] = ep_man.last_written_replay_position();
+        }
+    }
+
     return rps;
 }
 

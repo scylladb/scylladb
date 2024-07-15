@@ -279,6 +279,9 @@ public:
     }
 
     /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_eps`.
+    ///
+    /// \param target_eps The list of endpoints the sync point should correspond to. When empty, the function assumes all endpoints.
+    /// \return Sync point corresponding to the specified endpoints.
     sync_point::shard_rps calculate_current_sync_point(std::span<const gms::inet_address> target_eps) const;
 
     /// \brief Waits until hint replay reach replay positions described in `rps`.
