@@ -2371,8 +2371,31 @@ future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_na
     }
 }
 
+static future<std::unordered_map<locator::host_id, sstring>>
+view_status_common(cql3::query_processor& qp, sstring ks_name, sstring cf_name, sstring view_ks_name, sstring view_name, db::consistency_level cl) {
+    return qp.execute_internal(
+            format("SELECT host_id, status FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", ks_name, cf_name),
+            cl,
+            view_builder_query_state(),
+            { std::move(view_ks_name), std::move(view_name) },
+            cql3::query_processor::cache_internal::no).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+        return boost::copy_range<std::unordered_map<locator::host_id, sstring>>(*cql_result
+                | boost::adaptors::transformed([] (const cql3::untyped_result_set::row& row) {
+                    auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+                    auto status = row.get_as<sstring>("status");
+                    return std::pair(std::move(host_id), std::move(status));
+                }));
+    });
+}
+
 future<std::unordered_map<locator::host_id, sstring>> view_builder::view_status(sstring ks_name, sstring view_name) const {
-    return _sys_dist_ks.view_status(std::move(ks_name), std::move(view_name));
+    if (_view_build_status_on_group0) {
+        co_return co_await view_status_common(_qp, db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2,
+                std::move(ks_name), std::move(view_name), db::consistency_level::LOCAL_ONE);
+    } else {
+        co_return co_await view_status_common(_qp, db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS,
+                std::move(ks_name), std::move(view_name), db::consistency_level::ONE);
+    }
 }
 
 future<std::unordered_map<sstring, sstring>>
