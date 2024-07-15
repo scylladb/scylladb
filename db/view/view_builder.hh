@@ -172,6 +172,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     std::unordered_map<std::pair<sstring, sstring>, seastar::shared_promise<>, utils::tuple_hash> _build_notifiers;
     stats _stats;
     metrics::metric_groups _metrics;
+    bool _view_build_status_on_group0 = false;
 
     struct view_builder_init_state {
         std::vector<future<>> bookkeeping_ops;

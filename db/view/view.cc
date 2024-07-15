@@ -2284,16 +2284,91 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
     });
 }
 
+service::query_state& view_builder_query_state() {
+    using namespace std::chrono_literals;
+    const auto t = 10s;
+    static timeout_config tc{ t, t, t, t, t, t, t };
+    static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
+    static thread_local service::query_state qs(cs, empty_service_permit());
+    return qs;
+};
+
+static future<> announce_with_raft(
+        cql3::query_processor& qp,
+        ::service::raft_group0_client& group0_client,
+        seastar::abort_source& as,
+        const sstring query_string,
+        std::vector<data_value_or_unset> values,
+        std::string_view description) {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+
+    while (true) {
+        as.check();
+
+        auto guard = co_await group0_client.start_operation(as);
+        auto timestamp = guard.write_timestamp();
+
+        auto muts = co_await qp.get_mutations_internal(
+                query_string,
+                view_builder_query_state(),
+                timestamp,
+                values);
+        std::vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
+
+        auto group0_cmd = group0_client.prepare_command(
+            ::service::write_mutations{
+                .mutations{std::move(cmuts)},
+            },
+            guard,
+            description
+        );
+
+        try {
+            co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as, ::service::raft_timeout{});
+        } catch (::service::group0_concurrent_modification&) {
+            // retry
+            continue;
+        }
+        break;
+    }
+}
+
 future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_name) {
-    return _sys_dist_ks.start_view_build(std::move(ks_name), std::move(view_name));
+    if (_view_build_status_on_group0) {
+        const sstring query_string = format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)",
+                db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
+        auto host_id = _db.get_token_metadata().get_my_id();
+        co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
+                {std::move(ks_name), std::move(view_name), host_id.uuid(), "STARTED"},
+                "view builder: mark view build STARTED");
+    } else {
+        co_await _sys_dist_ks.start_view_build(std::move(ks_name), std::move(view_name));
+    }
 }
 
 future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_name) {
-    return _sys_dist_ks.finish_view_build(std::move(ks_name), std::move(view_name));
+    if (_view_build_status_on_group0) {
+        const sstring query_string = format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
+                db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
+        auto host_id = _db.get_token_metadata().get_my_id();
+        co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
+                {"SUCCESS", std::move(ks_name), std::move(view_name), host_id.uuid()},
+                "view builder: mark view build SUCCESS");
+    } else {
+        co_await _sys_dist_ks.finish_view_build(std::move(ks_name), std::move(view_name));
+    }
 }
 
 future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_name) {
-    return _sys_dist_ks.remove_view(std::move(ks_name), std::move(view_name));
+    if (_view_build_status_on_group0) {
+        const sstring query_string = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?",
+                db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
+        co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
+                {std::move(ks_name), std::move(view_name)},
+                "view builder: delete view build status");
+    } else {
+        co_await _sys_dist_ks.remove_view(std::move(ks_name), std::move(view_name));
+    }
 }
 
 future<std::unordered_map<locator::host_id, sstring>> view_builder::view_status(sstring ks_name, sstring view_name) const {
