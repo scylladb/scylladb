@@ -161,8 +161,13 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
         return make_checked_file(error_handler, std::move(f));
     });
 
-    return f.handle_exception([this, type] (auto ep) {
+    return f.handle_exception([this, type, &error_handler] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", filename(type), ep);
+        try {
+            error_handler(ep);
+        } catch (...) {
+            ep = std::current_exception();
+        }
         return make_exception_future<file>(ep);
     });
   } catch (...) {
