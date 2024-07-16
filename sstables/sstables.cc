@@ -103,6 +103,25 @@ thread_local utils::updateable_value<bool> global_cache_index_pages(true);
 
 logging::logger sstlog("sstable");
 
+template <typename T>
+const char* nullsafe_typename(T* x) noexcept {
+    try {
+        return typeid(*x).name();
+    } catch (const std::bad_typeid&) {
+        return "nullptr";
+    }
+}
+
+// dynamic_cast, but calls on_internal_error on failure.
+template <typename Derived, typename Base>
+Derived* downcast_ptr(Base* x) {
+    if (auto casted = dynamic_cast<Derived*>(x)) {
+        return casted;
+    } else {
+        on_internal_error(sstlog, fmt::format("Bad downcast: expected {}, but got {}", typeid(Derived*).name(), nullsafe_typename(x)));
+    }
+}
+
 // Because this is a noop and won't hold any state, it is better to use a global than a
 // thread_local. It will be faster, specially on non-x86.
 struct noop_write_monitor final : public write_monitor {
@@ -1403,7 +1422,7 @@ void sstable::write_filter() {
         return;
     }
 
-    auto f = static_cast<utils::filter::murmur3_bloom_filter *>(_components->filter.get());
+    auto f = downcast_ptr<utils::filter::murmur3_bloom_filter>(_components->filter.get());
 
     auto&& bs = f->bits();
     auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
@@ -1418,7 +1437,7 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring o
     // Skip rebuilding the bloom filter if the false positive rate based
     // on the current bitset size is within 75% to 125% of the configured
     // false positive rate.
-    auto curr_bitset_size = static_cast<utils::filter::bloom_filter*>(_components->filter.get())->bits().memory_size();
+    auto curr_bitset_size = downcast_ptr<utils::filter::bloom_filter>(_components->filter.get())->bits().memory_size();
     auto bitset_size_lower_bound = utils::i_filter::get_filter_size(num_partitions,
                                                                     _schema->bloom_filter_fp_chance() * 1.25);
     auto bitset_size_upper_bound = utils::i_filter::get_filter_size(num_partitions,
@@ -1441,7 +1460,7 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring o
     // The rebuilding is done in-place as this method is only called before the sstable is sealed.
     _components->filter = utils::i_filter::get_filter(num_partitions, _schema->bloom_filter_fp_chance(), get_filter_format(_version));
     sstlog.info("Rebuilding bloom filter {}: resizing bitset from {} bytes to {} bytes. sstable origin: {}", filename(component_type::Filter), curr_bitset_size,
-                static_cast<utils::filter::bloom_filter*>(_components->filter.get())->bits().memory_size(), origin);
+                downcast_ptr<utils::filter::bloom_filter>(_components->filter.get())->bits().memory_size(), origin);
 
     auto index_file = open_file(component_type::Index, open_flags::ro).get();
     auto index_file_closer = deferred_action([&index_file] {
