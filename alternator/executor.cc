@@ -1812,10 +1812,18 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     auto op = make_shared<put_item_operation>(_proxy, std::move(request));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
+
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::MODIFY,
+            auth::make_data_resource(op->schema()->ks_name(), op->schema()->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "MODIFY permissions denied on {}.{} by RBAC", op->schema()->ks_name(), op->schema()->cf_name()));
+    }
+
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
-        return container().invoke_on(*shard, _ssg,
+        co_return co_await container().invoke_on(*shard, _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
@@ -1828,7 +1836,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
             });
         });
     }
-    return op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
+    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
         _stats.api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     });
 }
