@@ -589,7 +589,7 @@ private:
             _lang_manager.invoke_on_all(&lang::manager::start).get();
 
 
-            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([this] {
                 _db.stop().get();
             });
@@ -607,7 +607,7 @@ private:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory)).get();
+            _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get(), std::ref(_feature_service), std::ref(_token_metadata)).get();
             auto stop_proxy = defer([this] { _proxy.stop().get(); });
 
             _cql_config.start(cql3::cql_config::default_tag{}).get();
@@ -642,7 +642,7 @@ private:
             _sys_ks.start(std::ref(_qp), std::ref(_db)).get();
             auto stop_sys_kd = defer([this] { _sys_ks.stop().get(); });
 
-            replica::distributed_loader::init_system_keyspace(_sys_ks, _erm_factory, _db).get();
+            replica::distributed_loader::init_system_keyspace(_sys_ks, _db).get();
             _db.local().init_schema_commitlog();
             _sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
 
@@ -657,16 +657,9 @@ private:
                 host_id = linfo.host_id;
                 _sys_ks.local().save_local_info(std::move(linfo), _snitch.local()->get_location(), my_address, my_address).get();
             }
-            locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id, &cfg_in] (locator::token_metadata& tm) {
-                auto& topo = tm.get_topology();
-                topo.set_host_id_cfg(hostid);
-                topo.add_or_update_endpoint(hostid,
-                                            cfg_in.broadcast_address,
-                                            std::nullopt,
-                                            locator::node::state::normal,
-                                            smp::count);
-                return make_ready_future<>();
-            }).get();
+
+            replica::database::set_this_node(_db, host_id, cfg_in.broadcast_address,
+                    std::nullopt, locator::node::state::normal, smp::count).get();
 
             uint16_t port = 7000;
             if (cfg_in.ms_listen) {
@@ -778,7 +771,7 @@ private:
                 std::ref(_sys_ks),
                 std::ref(_sys_dist_ks),
                 std::ref(_feature_service), std::ref(_mm),
-                std::ref(_token_metadata), std::ref(_erm_factory), std::ref(_ms),
+                std::ref(_token_metadata), std::ref(_ms),
                 std::ref(_repair),
                 std::ref(_stream_manager),
                 std::ref(_elc_notif),

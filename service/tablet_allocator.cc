@@ -1224,6 +1224,7 @@ public:
         };
 
         topo.for_each_node([&] (const locator::node* node_ptr) {
+            lblogger.info("Examining node {} in dc={} state={}", *node_ptr, node_ptr->dc_rack().dc, node_ptr->get_state());
             if (node_ptr->dc_rack().dc != dc) {
                 return;
             }

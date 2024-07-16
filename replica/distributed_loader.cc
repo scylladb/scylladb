@@ -484,12 +484,12 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
     }
 }
 
-future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<locator::effective_replication_map_factory>& erm_factory, distributed<replica::database>& db) {
+future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<replica::database>& db) {
     population_started = true;
 
-    return seastar::async([&sys_ks, &erm_factory, &db] {
-        sys_ks.invoke_on_all([&erm_factory, &db] (auto& sys_ks) {
-            return sys_ks.make(erm_factory.local(), db.local());
+    return seastar::async([&sys_ks, &db] {
+        sys_ks.invoke_on_all([&db] (auto& sys_ks) {
+            return sys_ks.make(db.local());
         }).get();
 
         for (auto ksname : system_keyspaces) {

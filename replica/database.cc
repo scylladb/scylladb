@@ -8,6 +8,7 @@
 
 #include <fmt/ranges.h>
 #include <fmt/std.h>
+#include "locator/token_metadata.hh"
 #include "log.hh"
 #include "replica/database_fwd.hh"
 #include "utils/lister.hh"
@@ -55,6 +56,7 @@
 #include "utils/human_readable.hh"
 #include "utils/fmt-compat.hh"
 #include "utils/error_injection.hh"
+#include "utils/stall_free.hh"
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"
@@ -312,7 +314,7 @@ public:
     }
 };
 
-database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory,
         compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _user_types(std::make_shared<db_user_types_storage>(*this))
@@ -383,6 +385,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _mnotifier(mn)
     , _feat(feat)
     , _shared_token_metadata(stm)
+    , _erm_factory(erm_factory)
     , _lang_manager(langm)
     , _stop_barrier(std::move(barrier))
     , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
@@ -687,7 +690,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await db::schema_tables::extract_scylla_specific_keyspace_info(proxy, v);
         auto ksm = create_keyspace_from_schema_partition(v, scylla_specific_rs);
-        co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
+        co_return co_await create_keyspace(ksm, system_keyspace::no);
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
@@ -851,8 +854,7 @@ void database::init_schema_commitlog() {
     }).release();
 }
 
-future<> database::create_local_system_table(
-        schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
+future<> database::create_local_system_table(schema_ptr table, bool write_in_user_memory) {
     auto ks_name = table->ks_name();
     if (!has_keyspace(ks_name)) {
         bool durable = _cfg.data_file_directories().size() > 0;
@@ -862,7 +864,7 @@ future<> database::create_local_system_table(
                 std::nullopt,
                 durable
                 );
-        co_await create_keyspace(ksm, erm_factory, replica::database::system_keyspace::yes);
+        co_await create_keyspace(ksm, replica::database::system_keyspace::yes);
     }
     auto& ks = find_keyspace(ks_name);
     auto cfg = ks.make_column_family_config(*table, *this);
@@ -1319,7 +1321,7 @@ std::vector<view_ptr> database::get_views() const {
             | boost::adaptors::transformed([] (auto& cf) { return view_ptr(cf->schema()); }));
 }
 
-future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
+future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system) {
     auto kscfg = make_keyspace_config(*ksm);
     if (system == system_keyspace::yes) {
         kscfg.enable_disk_reads = kscfg.enable_disk_writes = kscfg.enable_commitlog = !_cfg.volatile_system_keyspace_for_testing();
@@ -1331,28 +1333,28 @@ future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metada
         // don't make internal keyspaces write wait for user writes (if under pressure), and also to avoid possible deadlocks.
         kscfg.dirty_memory_manager = &_system_dirty_memory_manager;
     }
-    keyspace ks(ksm, std::move(kscfg), erm_factory);
+    keyspace ks(ksm, std::move(kscfg), get_erm_factory());
     co_await ks.create_replication_strategy(get_shared_token_metadata());
     _keyspaces.emplace(ksm->name(), std::move(ks));
 }
 
 future<>
-database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
+database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system) {
     if (_keyspaces.contains(ksm->name())) {
         co_return;
     }
 
-    co_await create_in_memory_keyspace(ksm, erm_factory, system);
+    co_await create_in_memory_keyspace(ksm, system);
     auto& ks = _keyspaces.at(ksm->name());
     if (ks.datadir() != "") {
         co_await get_sstables_manager(system).init_keyspace_storage(ks.metadata()->get_storage_options(), ks.datadir());
     }
 }
 
-future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata) {
+future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ks_metadata) {
     co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
         auto ksm = keyspace_metadata::new_keyspace(ks_metadata);
-        co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
+        co_await db.create_keyspace(ksm, system_keyspace::no);
     }, [&] (replica::database& db) -> future<> {
         const auto& ks = db.find_keyspace(ks_metadata.name());
         co_await db.get_notifier().create_keyspace(ks.metadata());
@@ -2945,6 +2947,151 @@ void database::plug_view_update_generator(db::view::view_update_generator& gener
 
 void database::unplug_view_update_generator() noexcept {
     _view_update_generator = nullptr;
+}
+
+future<> database::replicate_to_all_cores(sharded<database>& sharded_db, locator::mutable_token_metadata_ptr tmptr, std::function<future<>(const database&)> per_shard_cb) noexcept {
+    assert(this_shard_id() == 0);
+
+    dblog.debug("Replicating token_metadata to all cores");
+    std::exception_ptr ex;
+
+    std::vector<locator::mutable_token_metadata_ptr> pending_token_metadata_ptr;
+    pending_token_metadata_ptr.resize(smp::count);
+    std::vector<std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr>> pending_effective_replication_maps;
+    pending_effective_replication_maps.resize(smp::count);
+    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms;
+    pending_table_erms.resize(smp::count);
+
+    try {
+        auto base_shard = this_shard_id();
+        pending_token_metadata_ptr[base_shard] = tmptr;
+        // clone a local copy of updated token_metadata on all other shards
+        co_await smp::invoke_on_others(base_shard, [&, tmptr] () -> future<> {
+            pending_token_metadata_ptr[this_shard_id()] = make_token_metadata_ptr(co_await tmptr->clone_async());
+        });
+
+        // Precalculate new effective_replication_map for all keyspaces
+        // and clone to all shards;
+        //
+        // TODO: at the moment create on shard 0 first
+        // but in the future we may want to use hash() % smp::count
+        // to evenly distribute the load.
+        auto& db = sharded_db.local();
+        auto keyspaces = db.get_all_keyspaces();
+        for (auto& ks_name : keyspaces) {
+            auto rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
+            if (rs->is_per_table()) {
+                continue;
+            }
+            auto erm = co_await db.get_erm_factory().create_effective_replication_map(rs, tmptr);
+            pending_effective_replication_maps[base_shard].emplace(ks_name, std::move(erm));
+        }
+        co_await sharded_db.invoke_on_others([&] (database& db) -> future<> {
+            for (auto& ks_name : keyspaces) {
+                auto rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
+                if (rs->is_per_table()) {
+                    continue;
+                }
+                auto tmptr = pending_token_metadata_ptr[this_shard_id()];
+                auto erm = co_await db.get_erm_factory().create_effective_replication_map(rs, tmptr);
+                pending_effective_replication_maps[this_shard_id()].emplace(ks_name, std::move(erm));
+            }
+        });
+        // Prepare per-table erms.
+        co_await sharded_db.invoke_on_all([&] (database& db) {
+            auto tmptr = pending_token_metadata_ptr[this_shard_id()];
+            db.get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table> table) {
+                auto rs = db.find_keyspace(table->schema()->keypace_name()).get_replication_strategy_ptr();
+                locator::effective_replication_map_ptr erm;
+                if (auto pt_rs = rs->maybe_as_per_table()) {
+                    erm = pt_rs->make_replication_map(id, tmptr);
+                } else {
+                    erm = pending_effective_replication_maps[this_shard_id()][table->schema()->keypace_name()];
+                }
+                pending_table_erms[this_shard_id()].emplace(id, std::move(erm));
+            });
+        });
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    // Rollback on metadata replication error
+    if (ex) {
+        try {
+            co_await smp::invoke_on_all([&] () -> future<> {
+                auto tmptr = std::move(pending_token_metadata_ptr[this_shard_id()]);
+                auto erms = std::move(pending_effective_replication_maps[this_shard_id()]);
+                auto table_erms = std::move(pending_table_erms[this_shard_id()]);
+
+                co_await utils::clear_gently(erms);
+                co_await utils::clear_gently(tmptr);
+            });
+        } catch (...) {
+            dblog.warn("Failure to reset pending token_metadata in cleanup path: {}. Ignored.", std::current_exception());
+        }
+
+        std::rethrow_exception(std::move(ex));
+    }
+
+    // Apply changes on all shards
+    try {
+        co_await sharded_db.invoke_on_all([&] (database& db) -> future<> {
+            db._shared_token_metadata.set(std::move(pending_token_metadata_ptr[this_shard_id()]));
+
+            auto& erms = pending_effective_replication_maps[this_shard_id()];
+            for (auto it = erms.begin(); it != erms.end(); ) {
+                auto& ks = db.find_keyspace(it->first);
+                ks.update_effective_replication_map(std::move(it->second));
+                it = erms.erase(it);
+            }
+
+            auto& table_erms = pending_table_erms[this_shard_id()];
+            for (auto it = table_erms.begin(); it != table_erms.end(); ) {
+                auto& cf = db.find_column_family(it->first);
+                co_await cf.update_effective_replication_map(std::move(it->second));
+                co_await utils::get_local_injector().inject("delay_after_erm_update", [&cf] (auto& handler) -> future<> {
+                    const auto ks_name = handler.get("ks_name");
+                    const auto cf_name = handler.get("cf_name");
+                    assert(ks_name);
+                    assert(cf_name);
+                    if (cf.schema()->ks_name() != *ks_name || cf.schema()->cf_name() != *cf_name) {
+                        co_return;
+                    }
+
+                    co_await sleep(std::chrono::seconds{5});
+                });
+                it = table_erms.erase(it);
+            }
+
+            co_await per_shard_cb(db);
+        });
+    } catch (...) {
+        // applying the changes on all shards should never fail
+        // it will end up in an inconsistent state that we can't recover from.
+        dblog.error("Failed to apply token_metadata changes: {}. Aborting.", std::current_exception());
+        abort();
+    }
+}
+
+future<> database::mutate_token_metadata(sharded<database>& db, std::function<future<>(locator::token_metadata&)> func) {
+    assert(this_shard_id() == 0);
+    auto& stm = db.local()._shared_token_metadata;
+    auto [lk, tmptr] = co_await stm.get_mutable_token_metadata_ptr();
+    co_await func(*tmptr);
+    co_await replicate_to_all_cores(db, std::move(tmptr));
+}
+
+future<> database::set_this_node(sharded<database>& db, const locator::host_id& host_id, const gms::inet_address& endpoint,
+        std::optional<locator::endpoint_dc_rack> opt_dr,
+        std::optional<locator::node::state> opt_st,
+        std::optional<shard_id> opt_shard_count) {
+    dblog.info("Setting this node host_id={} address={}", host_id, endpoint);
+    co_await mutate_token_metadata(db, [&] (locator::token_metadata& tm) {
+        auto& topo = tm.get_topology();
+        topo.set_host_id_cfg(host_id);
+        topo.add_or_update_endpoint(host_id, endpoint, opt_dr, opt_st, opt_shard_count);
+        return make_ready_future();
+    });
 }
 
 } // namespace replica

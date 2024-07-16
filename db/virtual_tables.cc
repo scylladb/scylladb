@@ -1027,7 +1027,7 @@ future<> initialize_virtual_tables(
     auto add_table = [&] (std::unique_ptr<virtual_table>&& tbl) -> future<> {
         auto schema = tbl->schema();
         virtual_tables[schema->id()] = std::move(tbl);
-        co_await db.create_local_system_table(schema, false, ss.get_erm_factory());
+        co_await db.create_local_system_table(schema, false);
         auto& cf = db.find_column_family(schema);
         cf.mark_ready_for_writes(nullptr);
         auto& vt = virtual_tables[schema->id()];

@@ -7,6 +7,7 @@
  */
 
 #include "dht/i_partitioner_fwd.hh"
+#include "inet_address_vectors.hh"
 #include "service/pager/paging_state.hh"
 
 #include "idl/range.idl.hh"
@@ -42,7 +43,7 @@ class paging_state {
     std::optional<clustering_key> get_clustering_key();
     uint32_t get_remaining_low_bits();
     query_id get_query_uuid() [[version 2.2]] = query_id::create_null_id();
-    std::unordered_map<dht::token_range, std::vector<locator::host_id>> get_last_replicas() [[version 2.2]] = std::unordered_map<dht::token_range, std::vector<locator::host_id>>();
+    std::unordered_map<dht::token_range, host_id_vector_replica_set> get_last_replicas() [[version 2.2]] = std::unordered_map<dht::token_range, host_id_vector_replica_set>();
     std::optional<db::read_repair_decision> get_query_read_repair_decision() [[version 2.3]] = std::nullopt;
     uint32_t get_rows_fetched_for_last_partition_low_bits() [[version 3.1]] = 0;
     uint32_t get_remaining_high_bits() [[version 4.3]] = 0;

@@ -425,6 +425,8 @@ public:
         return _lock_func();
     }
 
+    future<std::tuple<token_metadata_lock, mutable_token_metadata_ptr>> get_mutable_token_metadata_ptr();
+
     // mutate_token_metadata_on_all_shards acquires the shared_token_metadata lock,
     // clones the token_metadata (using clone_async)
     // and calls an asynchronous functor on
