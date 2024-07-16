@@ -311,6 +311,15 @@ class load_balancer {
     // Data structure used for making load-balancing decisions over a set of nodes.
     using node_load_map = std::unordered_map<host_id, node_load>;
 
+    // Less-comparator which orders nodes by load.
+    struct nodes_by_load_cmp {
+        node_load_map& nodes;
+
+        bool operator()(host_id a, host_id b) const {
+            return nodes[a].avg_load < nodes[b].avg_load;
+        }
+    };
+
     // We have split and merge thresholds, which work respectively as (target) upper and lower
     // bound for average size of tablets.
     //
@@ -884,9 +893,7 @@ public:
         std::vector<host_id> nodes_by_load_dst;
         nodes_by_load_dst.reserve(nodes.size());
 
-        auto nodes_cmp = [&] (const host_id& a, const host_id& b) {
-            return nodes[a].avg_load < nodes[b].avg_load;
-        };
+        auto nodes_cmp = nodes_by_load_cmp(nodes);
         auto nodes_dst_cmp = [&] (const host_id& a, const host_id& b) {
             return nodes_cmp(b, a);
         };
