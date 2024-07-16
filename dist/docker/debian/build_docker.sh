@@ -61,7 +61,7 @@ if [ -f build/build.ninja ]; then
    esac
 fi
 
-container="$(buildah from docker.io/ubuntu:22.04)"
+container="$(buildah from docker.io/ubuntu:24.04)"
 
 packages=(
     "build/dist/$config/debian/${product}_$version-$release-1_$arch.deb"
