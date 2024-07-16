@@ -315,3 +315,33 @@ def test_rbac_putitem_read(dynamodb, cql, test_table_s):
                 ret = authorized(lambda: tab.put_item(Item={'p': p, 'v': v2}, ReturnValues='ALL_OLD'))
                 assert ret['Attributes'] == {'p': p, 'v': v1}
     assert {'p': p, 'v': v2} == authorized(lambda: test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'])
+
+# Test DeleteItem's support of permissions.
+# As PutItem above, DeleteItem requires the "MODIFY" permission, both for
+# its usual write-only operation and also for ReturnValues=ALL_OLD
+def test_rbac_deleteitem_write(dynamodb, cql, test_table_s):
+    p = random_string()
+    v = random_string()
+    test_table_s.put_item(Item={'p': p, 'v': v})
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            unauthorized(lambda: tab.delete_item(Key={'p': p}))
+            with temporary_grant(cql, 'MODIFY', cql_table_name(tab), role):
+                authorized(lambda: tab.delete_item(Key={'p': p}))
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
+def test_rbac_deleteitem_read(dynamodb, cql, test_table_s):
+    p = random_string()
+    v = random_string()
+    test_table_s.put_item(Item={'p': p, 'v': v})
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            unauthorized(lambda: tab.delete_item(Key={'p': p}))
+            # With just the MODIFY permission, not SELECT permission, we
+            # can DeleteItem with ReturnValues=ALL_OLD and read the item:
+            with temporary_grant(cql, 'MODIFY', cql_table_name(tab), role):
+                ret = authorized(lambda: tab.delete_item(Key={'p': p}, ReturnValues='ALL_OLD'))
+                assert ret['Attributes'] == {'p': p, 'v': v}
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
