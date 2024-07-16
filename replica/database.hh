@@ -1783,7 +1783,7 @@ public:
 
     // Returns the list of ranges held by this endpoint
     // The returned list is sorted, and its elements are non overlapping and non wrap-around.
-    dht::token_range_vector get_keyspace_local_ranges(locator::vnode_effective_replication_map_ptr erm);
+    future<dht::token_range_vector> get_keyspace_local_ranges(locator::vnode_effective_replication_map_ptr erm);
 
     void set_format(sstables::sstable_version_types format) noexcept;
     void set_format_by_config();
