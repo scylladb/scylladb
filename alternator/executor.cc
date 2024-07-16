@@ -10,6 +10,7 @@
 #include <seastar/core/sleep.hh>
 #include "alternator/executor.hh"
 #include "cdc/log.hh"
+#include "auth/service.hh"
 #include "db/config.hh"
 #include "log.hh"
 #include "schema/schema_builder.hh"
@@ -3265,7 +3266,14 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
 
-    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::SELECT,
+            auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "SELECT permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
+
+    co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);

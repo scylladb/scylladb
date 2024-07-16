@@ -17,7 +17,8 @@ import boto3
 from botocore.exceptions import ClientError
 import time
 from contextlib import contextmanager
-from test.alternator.util import is_aws, unique_table_name
+from test.alternator.util import is_aws, unique_table_name, random_string
+from functools import cache
 
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT, NoHostAvailable
@@ -124,3 +125,140 @@ def test_login_false(dynamodb, cql):
         with new_dynamodb(dynamodb, role, key) as d:
             with pytest.raises(ClientError, match='UnrecognizedClientException.*login=false'):
                 d.meta.client.list_tables()
+
+# Quote an identifier if it needs to be double-quoted in CQL. Quoting is
+# *not* needed if the identifier matches [a-z][a-z0-9_]*, otherwise it does.
+# double-quotes ('"') in the string are doubled.
+def maybe_quote(identifier):
+    if re.match('^[a-z][a-z0-9_]*$', identifier):
+        return identifier
+    return '"' + identifier.replace('"', '""') + '"'
+
+# Currently, some time may pass after calling GRANT or REVOKE until this
+# change actually takes affect: There can be group0 delays as well as caching
+# of the permissions up to permissions_validity_in_ms milliseconds.
+# This is why we need authorized() and unauthorized() in tests below - these
+# functions will retry the operation until it's authorized or not authorized.
+# To make tests fast, the permissions_validity_in_ms parameter should
+# be configured (e.g. test/cql-pytest/run.py) to be as low as possible.
+# But these tests should handle any configured value, as authorized() and
+# unauthorized() use exponential backoff until a long timeout.
+#
+# However, note that the long timeout means that a *failing* test will take
+# a long time. This is a big problem for xfailing tests, so those should
+# explicitly set timeout to a multiple of permissions_validitity_in_ms()
+# (see below).
+def authorized(fun, timeout=10):
+    deadline = time.time() + timeout
+    sleep = 0.001
+    while time.time() < deadline:
+        try:
+            return fun()
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'AccessDeniedException':
+                raise
+            time.sleep(sleep)
+            sleep *= 1.5
+    return fun()
+
+def unauthorized(fun, timeout=10):
+    deadline = time.time() + timeout
+    sleep = 0.001
+    while time.time() < deadline:
+        try:
+            fun()
+            time.sleep(sleep)
+            sleep *= 1.5
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'AccessDeniedException':
+                return
+            raise
+    try:
+        fun()
+        pytest.fail(f'No AccessDeniedException until timeout of {timeout}')
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'AccessDeniedException':
+            return
+        raise
+
+@cache
+def permissions_validity_in_ms(cql):
+    return 0.001 * int(list(cql.execute("SELECT value FROM system.config WHERE name = 'permissions_validity_in_ms'"))[0][0])
+
+# Convenience context manager for temporarily GRANTing some permission and
+# then revoking it.
+@contextmanager
+def temporary_grant(cql, permission, resource, role):
+    role = maybe_quote(role)
+    cql.execute(f"GRANT {permission} ON {resource} TO {role}")
+    try:
+        yield
+    finally:
+        cql.execute(f"REVOKE {permission} ON {resource} FROM {role}")
+
+@contextmanager
+def temporary_grant_role(cql, role_src, role_dst):
+    role_src = maybe_quote(role_src)
+    role_dst = maybe_quote(role_dst)
+    cql.execute(f"GRANT {role_src} TO {role_dst}")
+    try:
+        yield
+    finally:
+        cql.execute(f"REVOKE {role_src} FROM {role_dst}")
+
+# Convenience function for getting the full CQL table name (ksname.cfname)
+# for the given Alternator table. This uses our insider knowledge that
+# table named "x" is stored in keyspace called "alternator_x", and if we
+# ever change this we'll need to change this function too.
+def cql_table_name(tab):
+    return maybe_quote('alternator_' + tab.name) + '.' + maybe_quote(tab.name)
+
+def cql_keyspace_name(tab):
+    return maybe_quote('alternator_' + tab.name)
+
+# Test GetItem's support of permissions.
+# A fresh new role has no permissions to read a table, and we can allow it
+# by granting a "SELECT" permission on the specific table, keyspace, or all
+# keyspaces, or by assigning another role with these permissions to the given
+# role.
+# Because the GetItem test is the first, we check in this case all these
+# cases like role inheritence. Once we know role inheritence works, the
+# following tests for other DynamoDB API operations will not need to repeat
+# them again and again.
+def test_rbac_getitem(dynamodb, cql, test_table_s):
+    p = random_string()
+    v = random_string()
+    item = {'p': p, 'v': v}
+    test_table_s.put_item(Item=item)
+    # Sanity check: we can read the item we just wrote using the superuser
+    # role.
+    assert item == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    # If we now create a fresh new role, it can't read the item:
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            unauthorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True))
+            # If we now add the permissions to read this table, GetItem
+            # will work:
+            with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                assert item == authorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True)['Item'])
+            # After revoking the temporary permission grant, we get access
+            # denied again:
+            unauthorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True))
+            # Check that granting permissions to the entire keyspace also works:
+            with temporary_grant(cql, 'SELECT', 'KEYSPACE ' + cql_keyspace_name(tab), role):
+                assert item == authorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True)['Item'])
+            unauthorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True))
+            # check that granting permissions to all keyspaces also works:
+            with temporary_grant(cql, 'SELECT', 'ALL KEYSPACES', role):
+                assert item == authorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True)['Item'])
+            unauthorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True))
+            # Test an inherited role: Create a second role, give that
+            # second role permission to read this table, give the first
+            # role the permissions of the second role - and see that the
+            # first role can read the table.
+            with new_role(cql, login=False) as (role2, _):
+                with temporary_grant(cql, 'SELECT', cql_table_name(tab), role2):
+                    with temporary_grant_role(cql, role2, role):
+                        assert item == authorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True)['Item'])
+            unauthorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True))
