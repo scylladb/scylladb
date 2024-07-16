@@ -2610,9 +2610,9 @@ const sstring& database::get_snitch_name() const {
     return _cfg.endpoint_snitch();
 }
 
-dht::token_range_vector database::get_keyspace_local_ranges(locator::vnode_effective_replication_map_ptr erm) {
+future<dht::token_range_vector> database::get_keyspace_local_ranges(locator::vnode_effective_replication_map_ptr erm) {
     auto my_address = erm->get_topology().my_address();
-    return erm->get_ranges(my_address);
+    co_return co_await erm->get_ranges(my_address);
 }
 
 /*!
