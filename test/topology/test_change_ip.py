@@ -12,6 +12,7 @@ import time
 
 import pytest
 import uuid
+from cassandra.cluster import NoHostAvailable  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host  # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo
 from test.pylib.random_tables import Column, IntType, TextType
@@ -88,7 +89,17 @@ async def test_change_two(manager, random_tables, mode):
 
                 return True
 
-            await wait_for(see_proper_ips, time.time() + 60)
+            # FIXME: This is a workaround for the scylladb/python-driver#295 issue.
+            #        We ignore the exception and keep retrying the operation.
+            #        Can be removed once the issue is fixed.
+            async def safe_see_proper_ips():
+                try:
+                    return await see_proper_ips()
+                except NoHostAvailable as e:
+                    logger.info(f"see_proper_ips failed: {e}")
+                    return None
+
+            await wait_for(safe_see_proper_ips, time.time() + 60)
 
     # We're checking the crash scenario here - the servers[0] crashes just after
     # saving s1_new_ip but before removing s1_old_ip. After its restart we should
