@@ -345,3 +345,49 @@ def test_rbac_deleteitem_read(dynamodb, cql, test_table_s):
                 ret = authorized(lambda: tab.delete_item(Key={'p': p}, ReturnValues='ALL_OLD'))
                 assert ret['Attributes'] == {'p': p, 'v': v}
     assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
+# Test UpdateItem's support of permissions.
+# As PutItem above, UpdateItem requires the "MODIFY" permission, both for
+# its usual write-only operation and also read-modify-write and even for
+# ReturnValues=ALL_OLD.
+def test_rbac_updateitem_write(dynamodb, cql, test_table_s):
+    p = random_string()
+    v = random_string()
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            unauthorized(lambda: tab.update_item(Key={'p': p},
+                UpdateExpression='SET v = :val',
+                ExpressionAttributeValues={':val': v}))
+            with temporary_grant(cql, 'MODIFY', cql_table_name(tab), role):
+                authorized(lambda: tab.update_item(Key={'p': p},
+                    UpdateExpression='SET v = :val',
+                    ExpressionAttributeValues={':val': v}))
+    assert {'p': p, 'v': v} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
+def test_rbac_updateitem_read(dynamodb, cql, test_table_s):
+    p = random_string()
+    v1 = random_string()
+    test_table_s.put_item(Item={'p': p, 'v': v1})
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            v2 = 42
+            unauthorized(lambda: tab.update_item(Key={'p': p},
+                UpdateExpression='SET v = :val',
+                ExpressionAttributeValues={':val': v2},
+                ReturnValues='ALL_OLD'))
+            # With just the MODIFY permission, not SELECT permission, we
+            # can UpdateItem with ReturnValues=ALL_OLD and read the item:
+            with temporary_grant(cql, 'MODIFY', cql_table_name(tab), role):
+                ret = authorized(lambda: tab.update_item(Key={'p': p},
+                    UpdateExpression='SET v = :val',
+                    ExpressionAttributeValues={':val': v2},
+                    ReturnValues='ALL_OLD'))
+                assert ret['Attributes'] == {'p': p, 'v': v1}
+                # Just MODIFY permission, not SELECT permission, also allows
+                # us to do a read-modify-write expression:
+                ret = authorized(lambda: tab.update_item(Key={'p': p},
+                    UpdateExpression='SET v =  v + :val',
+                    ExpressionAttributeValues={':val': 1}))
+    assert {'p': p, 'v': v2 + 1} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
