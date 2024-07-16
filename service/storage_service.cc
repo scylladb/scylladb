@@ -3134,6 +3134,12 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 }
 
 future<> storage_service::stop() {
+    // if there is a background "isolate" shutdown
+    // in progress, we need to sync with it. Mostly
+    // relevant for tests
+    if (_transport_stopped.has_value()) {
+        co_await stop_transport();
+    }
     co_await uninit_messaging_service();
     // make sure nobody uses the semaphore
     node_ops_signal_abort(std::nullopt);
@@ -6762,19 +6768,25 @@ future<> storage_service::uninit_messaging_service() {
 
 void storage_service::do_isolate_on_error(disk_error type)
 {
-    static std::atomic<bool> isolated = { false };
-
-    if (!isolated.exchange(true)) {
+    if (!std::exchange(_isolated, true)) {
         slogger.error("Shutting down communications due to I/O errors until operator intervention: {} error: {}", type == disk_error::commit ? "Commitlog" : "Disk", std::current_exception());
-        // isolated protect us against multiple stops
+        // isolated protect us against multiple stops on _this_ shard
         //FIXME: discarded future.
         (void)isolate();
     }
 }
 
 future<> storage_service::isolate() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        return ss.stop_transport();
+    auto src_shard = this_shard_id();
+    // this invokes on shard 0. So if we get here _from_ shard 0,
+    // we _should_ do the stop. If we call from another shard, we
+    // should test-and-set again to avoid double shutdown.
+    return run_with_no_api_lock([src_shard] (storage_service& ss) {
+        // check again to ensure secondary shard does not race
+        if (src_shard == this_shard_id() || !std::exchange(ss._isolated, true)) {
+            return ss.stop_transport();
+        }
+        return make_ready_future<>();
     });
 }
 
