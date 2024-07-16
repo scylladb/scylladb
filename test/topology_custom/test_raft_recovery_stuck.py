@@ -77,8 +77,7 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
 
     logging.info(f"Restarting {others}")
-    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in others))
-    cql = await reconnect_driver(manager)
+    await manager.rolling_restart(others)
 
     logging.info(f"{others} restarted, waiting until driver reconnects to them")
     hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
@@ -100,11 +99,11 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     logging.info(f"Removing {srv1} using {others[0]}")
     await manager.remove_node(others[0].server_id, srv1.server_id)
 
-    logging.info(f"Deleting Raft data and upgrade state on {hosts} and restarting")
+    logging.info(f"Deleting Raft data and upgrade state on {hosts}")
     await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
-    await asyncio.gather(*(manager.server_restart(srv.server_id) for srv in others))
-    cql = await reconnect_driver(manager)
+    logging.info(f"Restarting {others}")
+    await manager.rolling_restart(others)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
     hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
