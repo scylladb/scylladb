@@ -36,6 +36,9 @@
 #include "utils/error_injection.hh"
 #include "db/commitlog/commitlog.hh"
 #include "test/lib/make_random_string.hh"
+#include "db/extensions.hh"
+#include "db/config.hh"
+#include "service/storage_service.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -1170,3 +1173,170 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
     });
 }
 
+static future<> exceptions_in_flush_helper(std::unique_ptr<sstables::file_io_extension> mep, bool& should_fail, const bool& did_fail) {
+    auto ext = std::make_shared<db::extensions>();
+    auto cfg = seastar::make_shared<db::config>(ext);
+
+    ext->add_sstable_file_io_extension("test", std::move(mep));
+
+    co_await do_with_cql_env([&](cql_test_env& env) -> future<> {
+
+        co_await env.execute_cql(fmt::format("create table t0 (pk text primary key, v text)"));
+
+        should_fail = true;
+
+        int i = 0;
+
+        testlog.debug("Wait for fail");
+
+        auto f = make_ready_future<>();
+
+        while (!did_fail) {
+            std::string pk = "apa" + std::to_string(i++);
+            std::string v = "ko";
+            co_await env.execute_cql(fmt::format("insert into ks.t0 (pk, v) values ('{}', '{}')", pk, v));
+
+            f = f.then([&] {
+                return env.db().invoke_on_all([] (replica::database& db) {
+                    return db.flush_all_memtables();
+                });
+            });
+        }
+
+        BOOST_REQUIRE(did_fail);
+        testlog.debug("Reset fail trigger");
+
+        should_fail = false;
+        bool isolated = false;
+        // can't use eventually_true here, because neither we nor the invoke on shard 0 is in seastar
+        // thread.
+        for (int i = 0; i < 10; ++i) {
+            isolated = co_await env.get_storage_service().invoke_on(0, [&](service::storage_service& ss) {
+                return ss.is_isolated(); 
+            });
+            if (isolated) {
+                break;
+            }
+            // isolation is not syncnronous;
+            co_await sleep(2s);
+        }
+
+        BOOST_REQUIRE(isolated);
+        testlog.debug("Trying to stop");
+
+        co_await std::move(f);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_write) {
+    class myext : public sstables::file_io_extension {
+    public:
+        bool should_fail = false;
+        bool did_fail = false;
+
+        future<file> wrap_file(sstable& t, component_type type, file f, open_flags flags) override {
+            if (should_fail) {
+                class myimpl : public seastar::file_impl {
+                    file _file;
+                    myext& _myext;
+                public:
+                    myimpl(file f, myext& ext)
+                        : _file(std::move(f))
+                        , _myext(ext)
+                    {}
+                    void fail() const {
+                        if (_myext.should_fail) {
+                            _myext.did_fail = true;
+                            testlog.debug("Throwing exception");
+                            throw std::system_error(EACCES, std::system_category());
+                        }
+                    }
+                    future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
+                        fail();
+                        return get_file_impl(_file)->write_dma(pos, buffer, len, intent);
+                    }
+                    future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+                        fail();
+                        return get_file_impl(_file)->write_dma(pos, std::move(iov), intent);
+                    }
+                    future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent* intent) override {
+                        fail();
+                        return get_file_impl(_file)->read_dma(pos, buffer, len, intent);
+                    }
+                    future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+                        fail();
+                        return get_file_impl(_file)->read_dma(pos, std::move(iov), intent);
+                    }
+                    future<> flush(void) override {
+                        fail();
+                        return get_file_impl(_file)->flush();
+                    }
+                    future<struct stat> stat(void) override {
+                        fail();
+                        return get_file_impl(_file)->stat();
+                    }
+                    future<> truncate(uint64_t length) override {
+                        fail();
+                        return get_file_impl(_file)->truncate(length);
+                    }
+                    future<> discard(uint64_t offset, uint64_t length) override {
+                        fail();
+                        return get_file_impl(_file)->discard(offset, length);
+                    }
+                    future<> allocate(uint64_t position, uint64_t length) override {
+                        fail();
+                        return get_file_impl(_file)->allocate(position, length);
+                    }
+                    future<uint64_t> size(void) override {
+                        fail();
+                        return get_file_impl(_file)->size();
+                    }
+                    future<> close() override {
+                        fail();
+                        return get_file_impl(_file)->close();
+                    }
+                    std::unique_ptr<seastar::file_handle_impl> dup() override {
+                        fail();
+                        return get_file_impl(_file)->dup();
+                    }
+                    subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override {
+                        fail();
+                        return get_file_impl(_file)->list_directory(std::move(next));
+                    }
+                    future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
+                        fail();
+                        return get_file_impl(_file)->dma_read_bulk(offset, range_size, intent);
+                    }
+                };
+                co_return file(make_shared<myimpl>(std::move(f), *this));
+            }
+            co_return f;
+        }
+    };
+    auto mep = std::make_unique<myext>();
+    auto& me = *mep;
+    co_await exceptions_in_flush_helper(std::move(mep), me.should_fail, me.did_fail);
+}
+
+SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_open) {
+    auto ext = std::make_shared<db::extensions>();
+    auto cfg = seastar::make_shared<db::config>(ext);
+
+    class myext : public sstables::file_io_extension {
+    public:
+        bool should_fail = false;
+        bool did_fail = false;
+
+        future<file> wrap_file(sstable& t, component_type type, file f, open_flags flags) override {
+            if (should_fail) {
+                did_fail = true;
+                testlog.debug("Throwing exception");
+                throw std::system_error(EACCES, std::system_category());
+            }
+            co_return f;
+        }
+    };
+    auto mep = std::make_unique<myext>();
+    auto& me = *mep;
+    co_await exceptions_in_flush_helper(std::move(mep), me.should_fail, me.did_fail);
+}
