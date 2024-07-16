@@ -3674,6 +3674,8 @@ public:
         case pm:
             os << "pm";
             break;
+        default:
+            utils::on_internal_error(format("Unexpected value for t.mode_ in switch statement: {}",t.mode_));
         }
         return os;
     }
@@ -3746,6 +3748,8 @@ public:
         case pm:
             os << "pm";
             break;
+        default:
+            utils::on_internal_error(format("Unexpected value for t.mode_ in switch statement: {}",t.mode_));
         }
         return os;
     }
@@ -3825,6 +3829,8 @@ public:
         case pm:
             os << "pm";
             break;
+        default:
+            utils::on_internal_error(format("Unexpected value for t.mode_ in switch statement: {}",t.mode_));
         }
         return os;
     }
@@ -3909,6 +3915,8 @@ public:
         case pm:
             os << "pm";
             break;
+        default:
+            utils::on_internal_error(format("Unexpected value for t.mode_ in switch statement: {}",t.mode_));
         }
         return os;
     }
