@@ -747,6 +747,35 @@ public:
         }
     }
 
+    // Checks whether moving a tablet from src_info to target_info would go against convergence.
+    // Returns false if the tablet should not be moved, and true if it may be moved.
+    //
+    // Moving tablets only when this method returns true ensures that balancing nodes will reach convergence.
+    // Otherwise, oscillations of tablet load between nodes across different plan making rounds could happen,
+    // where tablets are moved back and forth between nodes and convergence is never reached.
+    //
+    // The assumption is that the algorithm moves tablets from more loaded nodes to less loaded nodes,
+    // so convergence is reached where the node we picked as source has lower load, or will have lower
+    // load post-movement, than the node we picked as the destination.
+    bool check_convergence(node_load& src_info, node_load& dst_info) {
+        // Allow migrating only from candidate nodes which have higher load than the target.
+        if (src_info.avg_load <= dst_info.avg_load) {
+            lblogger.trace("Load inversion: src={} (avg_load={}), dst={} (avg_load={})",
+                           src_info.id, src_info.avg_load, dst_info.id, dst_info.avg_load);
+            return false;
+        }
+
+        // Prevent load inversion post-movement which can lead to oscillations.
+        if (src_info.get_avg_load(src_info.tablet_count - 1) <
+            dst_info.get_avg_load(dst_info.tablet_count + 1)) {
+            lblogger.trace("Load inversion post-movement: src={} (avg_load={}), dst={} (avg_load={})",
+                           src_info.id, src_info.avg_load, dst_info.id, dst_info.avg_load);
+            return false;
+        }
+
+        return true;
+    }
+
     future<migration_plan> make_node_plan(node_load_map& nodes, host_id host, node_load& node_load) {
         migration_plan plan;
         const tablet_metadata& tmeta = _tm->tablets();
@@ -1060,21 +1089,8 @@ public:
                     break;
                 }
 
-                // If balance is not achieved, still consider migrating from candidate nodes which have higher load than the target.
-                // max_off_candidate_load may be higher than the load of current candidate.
-                if (src_node_info.avg_load <= target_info.avg_load) {
-                    lblogger.debug("No more candidate nodes. Next candidate is {} with avg_load={}, target's avg_load={}",
-                            src_host, src_node_info.avg_load, target_info.avg_load);
-                    _stats.for_dc(dc).stop_no_candidates++;
-                    break;
-                }
-
-                // Prevent load inversion which can lead to oscillations.
-                if (src_node_info.get_avg_load(nodes[src_host].tablet_count - 1) <
-                        target_info.get_avg_load(target_info.tablet_count + 1)) {
-                    lblogger.debug("No more candidate nodes, load would be inverted. Next candidate is {} with "
-                                   "avg_load={}, target's avg_load={}",
-                            src_host, src_node_info.avg_load, target_info.avg_load);
+                if (!check_convergence(src_node_info, target_info)) {
+                    lblogger.debug("No more candidates. Load would be inverted.");
                     _stats.for_dc(dc).stop_load_inversion++;
                     break;
                 }
