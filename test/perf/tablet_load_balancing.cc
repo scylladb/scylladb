@@ -128,6 +128,7 @@ struct params {
 
 struct table_balance {
     double shard_overcommit;
+    double best_shard_overcommit;
     double node_overcommit;
 };
 
@@ -147,7 +148,8 @@ template<>
 struct fmt::formatter<table_balance> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const table_balance& b, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{shard={:.2f}, node={:.2f}}}", b.shard_overcommit, b.node_overcommit);
+        return fmt::format_to(ctx.out(), "{{shard={:.2f} (best={:.2f}), node={:.2f}}}",
+                              b.shard_overcommit, b.best_shard_overcommit, b.node_overcommit);
     }
 };
 
@@ -291,7 +293,9 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
                 auto avg_shard_load = double(sum_node_load) / shard_count;
                 auto shard_overcommit = shard_load_minmax.max() / avg_shard_load;
-                testlog.info("Shard overcommit: {:.2f}", shard_overcommit);
+                // Overcommit given the best distribution of tablets given current number of tablets.
+                auto best_shard_overcommit = div_ceil(sum_node_load, shard_count) / avg_shard_load;
+                testlog.info("Shard overcommit: {:.2f}, best={:.2f}", shard_overcommit, best_shard_overcommit);
 
                 auto node_imbalance = node_load_minmax.max() - node_load_minmax.min();
                 auto avg_node_load = double(sum_node_load) / hosts.size();
@@ -301,6 +305,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
                 res.tables[table_index++] = {
                     .shard_overcommit = shard_overcommit,
+                    .best_shard_overcommit = best_shard_overcommit,
                     .node_overcommit = node_overcommit
                 };
             }
