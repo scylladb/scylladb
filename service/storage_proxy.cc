@@ -6143,6 +6143,8 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
         paxos::paxos_state::guard l = co_await paxos::paxos_state::get_cas_lock(token, write_timeout);
 
+        co_await utils::get_local_injector().inject("cas_timeout_after_lock", write_timeout + std::chrono::milliseconds(100));
+
         while (true) {
             // Finish the previous PAXOS round, if any, and, as a side effect, compute
             // a ballot (round identifier) which is a) unique b) has good chances of being
