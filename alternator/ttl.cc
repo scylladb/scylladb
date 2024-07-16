@@ -389,7 +389,7 @@ static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary
 
 // ranges_holder_primary holds just the primary ranges themselves
 class ranges_holder_primary {
-    const dht::token_range_vector _token_ranges;
+    dht::token_range_vector _token_ranges;
 public:
     ranges_holder_primary(const locator::vnode_effective_replication_map_ptr& erm, gms::gossiper& g, gms::inet_address ep)
         : _token_ranges(erm->get_primary_ranges(ep)) {}
