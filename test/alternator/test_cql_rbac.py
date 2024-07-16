@@ -262,3 +262,56 @@ def test_rbac_getitem(dynamodb, cql, test_table_s):
                     with temporary_grant_role(cql, role2, role):
                         assert item == authorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True)['Item'])
             unauthorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True))
+
+# Test PutItem's support of permissions.
+# PutItem, and other data-modifying operations (DeleteItem, UpdateItem, etc.)
+# usually only write, and require the "MODIFY" permission to do that.
+# But these operations can also be asked to read old values from the table
+# by using ReturnValues=ALL_OLD, so we have a separate test for this case
+# (checking which permissions it requires) below.
+def test_rbac_putitem_write(dynamodb, cql, test_table_s):
+    p = random_string()
+    # In a new role without permissions, we can't write an item:
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            v = random_string()
+            unauthorized(lambda: tab.put_item(Item={'p': p, 'v': v}))
+            # If we now add the permissions to MODIFY this table, PutItem
+            # will work:
+            with temporary_grant(cql, 'MODIFY', cql_table_name(tab), role):
+                v = random_string()
+                authorized(lambda: tab.put_item(Item={'p': p, 'v': v}))
+                # Let's verify that put_item not only didn't fail, it actually
+                # did the right thing. This check is quite redundant - we
+                # already know from many other tests that if we have
+                # permission to do PutItem, it works correctly. So let's
+                # check it just once here but not do it again in other
+                # tests for other operations below.
+                # We don't yet have permissions to read the item back:
+                unauthorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True))
+                # Let's also add SELECT permissions to read the item back:
+                with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                    assert {'p': p, 'v': v} == authorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True)['Item'])
+            # After revoking the temporary permission grant of MODIFY, we get
+            # access denied again on PutItem:
+            unauthorized(lambda: tab.put_item(Item={'p': p, 'v': v}))
+
+# As explained above, this test confirms that even when PutItem *reads*
+# an item (by using ReturnValues=ALL_OLD), it still requires only the MODIFY
+# permission and not SELECT.
+def test_rbac_putitem_read(dynamodb, cql, test_table_s):
+    p = random_string()
+    v1 = random_string()
+    test_table_s.put_item(Item={'p': p, 'v': v1})
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            v2 = random_string()
+            unauthorized(lambda: tab.put_item(Item={'p': p, 'v': v2}))
+            # With just the MODIFY permission, not SELECT permission, we
+            # can PutItem with ReturnValues=ALL_OLD and read the item:
+            with temporary_grant(cql, 'MODIFY', cql_table_name(tab), role):
+                ret = authorized(lambda: tab.put_item(Item={'p': p, 'v': v2}, ReturnValues='ALL_OLD'))
+                assert ret['Attributes'] == {'p': p, 'v': v1}
+    assert {'p': p, 'v': v2} == authorized(lambda: test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'])
