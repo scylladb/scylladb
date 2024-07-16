@@ -630,8 +630,7 @@ public:
         return result;
     }
 
-    // FIXME: return a future object.
-    virtual dht::token_range_vector get_ranges(inet_address ep) const override {
+    virtual future<dht::token_range_vector> get_ranges(inet_address ep) const override {
         dht::token_range_vector ret;
 
         auto& tablet_map = get_tablet_map();
@@ -642,9 +641,10 @@ public:
             if (should_add_range) {
                 ret.push_back(tablet_map.get_token_range(tablet_id));
             }
+            co_await coroutine::maybe_yield();
         }
 
-        return ret;
+        co_return ret;
     }
 
     virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {
