@@ -179,6 +179,8 @@ public:
 
     virtual sharded<sstables::storage_manager>& get_sstorage_manager() = 0;
 
+    virtual sharded<service::storage_service>& get_storage_service() = 0;
+
     data_dictionary::database data_dictionary();
 };
 
