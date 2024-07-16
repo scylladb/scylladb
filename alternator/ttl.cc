@@ -412,9 +412,9 @@ public:
 // range's primary owner, needed to implement should_skip().
 class ranges_holder_secondary {
     std::vector<std::pair<dht::token_range, gms::inet_address>> _token_ranges;
-    gms::gossiper& _gossiper;
+    const gms::gossiper& _gossiper;
 public:
-    ranges_holder_secondary(const locator::effective_replication_map_ptr& erm, gms::gossiper& g, gms::inet_address ep)
+    ranges_holder_secondary(const locator::effective_replication_map_ptr& erm, const gms::gossiper& g, gms::inet_address ep)
         : _token_ranges(get_secondary_ranges(erm, ep))
         , _gossiper(g) {}
     std::size_t size() const { return _token_ranges.size(); }
