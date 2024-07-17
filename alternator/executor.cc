@@ -2172,7 +2172,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 1, primary_key_hash{schema}, primary_key_equal{schema});
         for (auto& request : it->value.GetArray()) {
             if (!request.IsObject() || request.MemberCount() != 1) {
-                return make_ready_future<request_return_type>(api_error::validation(format("Invalid BatchWriteItem request: {}", request)));
+                co_return api_error::validation(format("Invalid BatchWriteItem request: {}", request));
             }
             auto r = request.MemberBegin();
             const std::string r_name = r->name.GetString();
@@ -2183,7 +2183,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                         item, schema, put_or_delete_item::put_item{}));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(), mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
-                    return make_ready_future<request_return_type>(api_error::validation("Provided list of item keys contains duplicates"));
+                    co_return api_error::validation("Provided list of item keys contains duplicates");
                 }
                 used_keys.insert(std::move(mut_key));
             } else if (r_name == "DeleteRequest") {
@@ -2193,16 +2193,25 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(),
                         mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
-                    return make_ready_future<request_return_type>(api_error::validation("Provided list of item keys contains duplicates"));
+                    co_return api_error::validation("Provided list of item keys contains duplicates");
                 }
                 used_keys.insert(std::move(mut_key));
             } else {
-                return make_ready_future<request_return_type>(api_error::validation(format("Unknown BatchWriteItem request type: {}", r_name)));
+                co_return api_error::validation(format("Unknown BatchWriteItem request type: {}", r_name));
             }
         }
     }
 
-    return do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([] () {
+    for (const auto& b : mutation_builders) {
+        if (!co_await client_state.check_has_permission(auth::command_desc(
+                auth::permission::MODIFY,
+                auth::make_data_resource(b.first->ks_name(), b.first->cf_name())))) {
+            co_return api_error::access_denied(format(
+                "MODIFY permissions denied on {}.{} by RBAC", b.first->ks_name(), b.first->cf_name()));
+        }
+    }
+
+    co_return co_await do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([] () {
         // FIXME: Issue #5650: If we failed writing some of the updates,
         // need to return a list of these failed updates in UnprocessedItems
         // rather than fail the whole write (issue #5650).
