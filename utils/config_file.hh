@@ -292,6 +292,8 @@ public:
     boost::program_options::options_description_easy_init&
     add_deprecated_options(boost::program_options::options_description_easy_init&);
 
+    void print_help(std::ostream& os);
+
     /**
      * Default behaviour for yaml parser is to throw on
      * unknown stuff, invalid opts or conversion errors.

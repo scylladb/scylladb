@@ -657,6 +657,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     init("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)");
     init("config", bpo::value<std::vector<std::string>>()->default_value(std::vector<std::string>(), ""),
             "configuration yaml snippet (i.e. 'workdir: /var/lib/scylla'); may be repeated");
+    init("help-config", bpo::bool_switch(), "print yaml configuration options and exit");
 
     configurable::append_all(*cfg, init);
     cfg->add_options(init);
@@ -702,6 +703,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     return app.run(ac, av, [&] () -> future<int> {
 
         auto&& opts = app.configuration();
+
+        if (opts["help-config"].as<bool>()) {
+            cfg->print_help(std::cout);
+            return make_ready_future<int>(0);
+        }
 
         namespace sm = seastar::metrics;
         app_metrics.add_group("scylladb", {

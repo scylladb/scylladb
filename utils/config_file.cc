@@ -294,6 +294,24 @@ utils::config_file::add_deprecated_options(bpo::options_description_easy_init& i
     return init;
 }
 
+void
+utils::config_file::print_help(std::ostream& os) {
+    for (config_src& src : _cfgs) {
+        switch (src.status()) {
+        case value_status::Unused:
+            continue;
+        case value_status::Invalid:
+            continue;
+        case value_status::Deprecated:
+            os << "(deprecated) ";
+            break;
+        case value_status::Used:
+            break;
+        }
+        fmt::print(os, "{} ({}):\n {}\n\n", src.name(), src.liveness(), src.desc());
+    }
+}
+
 void utils::config_file::read_from_yaml(const sstring& yaml, config_source source, error_handler h) {
     read_from_yaml(yaml.c_str(), source, std::move(h));
 }
