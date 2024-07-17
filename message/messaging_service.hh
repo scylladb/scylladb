@@ -24,6 +24,7 @@
 #include "locator/host_id.hh"
 #include "service/session.hh"
 #include "service/maintenance_mode.hh"
+#include "dht/i_partitioner_fwd.hh"
 
 #include <list>
 #include <vector>
@@ -62,14 +63,6 @@ class shared_token_metadata;
 class frozen_mutation;
 class frozen_schema;
 class canonical_mutation;
-
-namespace dht {
-    class token;
-    class ring_position;
-    using partition_range = interval<ring_position>;
-    using token_range = interval<token>;
-    using token_range_vector = std::vector<token_range>;
-}
 
 namespace query {
     using partition_range = dht::partition_range;
