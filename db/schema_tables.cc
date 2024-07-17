@@ -1002,7 +1002,7 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
     co_await proxy.local().mutate_locally(std::move(muts), tracing::trace_state_ptr());
 }
 
-future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition) {
+static future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition) {
     lw_shared_ptr<query::result_set> scylla_specific_rs;
     if (proxy.local().local_db().has_schema(NAME, SCYLLA_KEYSPACES)) {
         auto&& rs = partition.second;
@@ -1294,8 +1294,10 @@ std::vector<mutation> make_drop_keyspace_mutations(schema_features features, lw_
  *
  * @param partition Keyspace attributes in serialized form
  */
-lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result_value_type& result, lw_shared_ptr<query::result_set> scylla_specific_rs)
+future<lw_shared_ptr<keyspace_metadata>> create_keyspace_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result_value_type& result)
 {
+    auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, result);
+
     auto&& rs = result.second;
     if (rs->empty()) {
         throw std::runtime_error("query result has no rows");
@@ -1333,7 +1335,7 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
             initial_tablets = row.get<int>("initial_tablets");
         }
     }
-    return keyspace_metadata::new_keyspace(keyspace_name, strategy_name, strategy_options, initial_tablets, durable_writes, storage_opts);
+    co_return keyspace_metadata::new_keyspace(keyspace_name, strategy_name, strategy_options, initial_tablets, durable_writes, storage_opts);
 }
 
 template<typename V>

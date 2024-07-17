@@ -279,14 +279,12 @@ static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_pr
     }
     auto& sharded_db = proxy.local().get_db();
     for (auto&& val : created) {
-        auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, val);
-        auto ksm = create_keyspace_from_schema_partition(val, std::move(scylla_specific_rs));
+        auto ksm = co_await create_keyspace_from_schema_partition(proxy, val);
         co_await replica::database::create_keyspace_on_all_shards(sharded_db, proxy, *ksm);
     }
     for (auto& name : altered) {
         auto v = co_await read_schema_partition_for_keyspace(proxy, KEYSPACES, name);
-        auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, v);
-        auto tmp_ksm = create_keyspace_from_schema_partition(v, scylla_specific_rs);
+        auto tmp_ksm = co_await create_keyspace_from_schema_partition(proxy, v);
         co_await replica::database::update_keyspace_on_all_shards(sharded_db, *tmp_ksm);
     }
     co_return dropped;
