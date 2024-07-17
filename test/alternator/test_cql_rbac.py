@@ -213,6 +213,9 @@ def temporary_grant_role(cql, role_src, role_dst):
 def cql_table_name(tab):
     return maybe_quote('alternator_' + tab.name) + '.' + maybe_quote(tab.name)
 
+def cql_gsi_name(tab, gsi):
+    return maybe_quote('alternator_' + tab.name) + '.' + maybe_quote(tab.name + ":" + gsi)
+
 def cql_keyspace_name(tab):
     return maybe_quote('alternator_' + tab.name)
 
@@ -391,6 +394,79 @@ def test_rbac_updateitem_read(dynamodb, cql, test_table_s):
                     UpdateExpression='SET v =  v + :val',
                     ExpressionAttributeValues={':val': 1}))
     assert {'p': p, 'v': v2 + 1} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
+# Test Query's support of permissions - the "SELECT" permission is needed.
+def test_rbac_query(dynamodb, cql, test_table):
+    p = random_string()
+    c = random_string()
+    item = {'p': p, 'c': c}
+    test_table.put_item(Item=item)
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table.name)
+            # Without SELECT permissions, the Query will fail:
+            unauthorized(lambda: tab.query(ConsistentRead=True,
+                KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}))
+            # Adding SELECT permissions, the Query will succeed:
+            with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                assert [item] == authorized(lambda: tab.query(ConsistentRead=True,
+                        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})['Items'])
+
+# When reading with Query (or Scan), the IndexName option can ask to read
+# from a view (GSI or LSI) instead of from the base table. We decided that
+# the base table and each individual view can have *separate* permissions,
+# so granting SELECT permission on the base table does not allow reading
+# a view, and vice versa. This test verifies this.
+# Note that if a table is created *by* a role, the auto-grant feature
+# (tested below) ensures that this role can read the base and all views.
+# So here the table is not created by the role - but rather by the superuser,
+# and the permissions are granted explicitly to the role on a specific table.
+def test_rbac_query_separate_index_permissions(dynamodb, cql):
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' } ],
+        'GlobalSecondaryIndexes': [
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            } ]
+    }
+    with new_test_table(dynamodb, **schema) as table:
+        with new_role(cql) as (role, key):
+            with new_dynamodb(dynamodb, role, key) as d:
+                tab = d.Table(table.name)
+                # Without extra permissions, the new role can read neither
+                # the base table nore the view:
+                unauthorized(lambda: tab.query(KeyConditions={'p': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+                unauthorized(lambda: tab.query(IndexName='hello', KeyConditions={'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+                # Granting permissions on the base table we can read the
+                # base table but NOT the view:
+                with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                    authorized(lambda: tab.query(KeyConditions={'p': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+                    unauthorized(lambda: tab.query(IndexName='hello', KeyConditions={'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+                # Granting permissions on the GSI we can read the GSI but not
+                # the base table:
+                with temporary_grant(cql, 'SELECT', cql_gsi_name(tab, 'hello'), role):
+                    unauthorized(lambda: tab.query(KeyConditions={'p': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+                    authorized(lambda: tab.query(IndexName='hello', KeyConditions={'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+
+# Test Scan's support of permissions - the "SELECT" permission is needed.
+def test_rbac_scan(dynamodb, cql, test_table):
+    # We will Scan an existing (empty or not empty) table with Limit=1
+    # just to check if Scan is`allowed or not - we won't check the results'
+    # correctness - there are plenty of other tests for that.
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table.name)
+            # Without SELECT permissions, the Scan will fail:
+            unauthorized(lambda: tab.scan(ConsistentRead=True, Limit=1))
+            # Adding SELECT permissions, the Scan will succeed:
+            with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                authorized(lambda: tab.scan(ConsistentRead=True, Limit=1))
 
 # Test DeleteTable's permissions checks. The DeleteTable operation requires
 # a DROP permission on the specific table (or on something which contains it -
