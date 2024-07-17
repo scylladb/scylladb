@@ -655,6 +655,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
     // TODO : default, always read?
     init("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)");
+    init("config", bpo::value<std::vector<std::string>>()->default_value(std::vector<std::string>(), ""),
+            "configuration yaml snippet (i.e. 'workdir: /var/lib/scylla'); may be repeated");
 
     configurable::append_all(*cfg, init);
     cfg->add_options(init);
@@ -739,6 +741,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
+
+            // Read --config options first, so they can override the later read_config().
+            for (auto& yaml: opts["config"].as<std::vector<std::string>>()) {
+                startlog.info("config: {}", yaml);
+                cfg->read_from_yaml(yaml, utils::config_file::config_source::CommandLine);
+            }
+
             read_config(opts, *cfg).get();
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
             enable_initial_error_injections(*cfg).get();
