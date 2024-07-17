@@ -299,6 +299,10 @@ void utils::config_file::read_from_yaml(const char* yaml, config_source source, 
      * file mapping to the data type...
      */
     auto doc = YAML::Load(yaml);
+    if (!doc.IsMap()) {
+        h(std::string_view(yaml).contains('\n') ? "<document>" : yaml, "Expected a yaml mapping", std::nullopt);
+        return;
+    }
     for (auto node : doc) {
         auto label = node.first.as<sstring>();
 
