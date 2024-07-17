@@ -3893,6 +3893,13 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         old_paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::SELECT,
+            auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "SELECT permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
+
     auto regular_columns = boost::copy_range<query::column_id_vector>(
             schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto static_columns = boost::copy_range<query::column_id_vector>(
