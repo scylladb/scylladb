@@ -42,7 +42,9 @@ public:
     kind _kind;
     int64_t _data;
 
-    token() : _kind(kind::before_all_keys) {
+    token()
+        : _kind(kind::before_all_keys)
+        , _data(0) {
     }
 
     token(kind k, int64_t d)
@@ -85,7 +87,7 @@ public:
         return std::strong_ordering::equal;
     }
 
-    bool operator==(const token& o) const noexcept { return *this <=> o == 0; }
+    bool operator==(const token& o) const noexcept = default;
 
     bool is_minimum() const noexcept {
         return _kind == kind::before_all_keys;
