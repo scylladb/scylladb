@@ -110,22 +110,26 @@ public:
 
     struct config_src {
         config_file* _cf;
-        std::string_view _name, _alias, _desc;
+        std::string_view _name, _alias;
+        liveness _liveness;
+        std::string_view _desc;
         const config_type* _type;
         size_t _per_shard_values_offset;
     protected:
         virtual const void* current_value() const = 0;
     public:
-        config_src(config_file* cf, std::string_view name, const config_type* type, std::string_view desc)
+        config_src(config_file* cf, std::string_view name, const config_type* type, config_file::liveness liveness, std::string_view desc)
             : _cf(cf)
             , _name(name)
+            , _liveness(liveness)
             , _desc(desc)
             , _type(type)
         {}
-        config_src(config_file* cf, std::string_view name, std::string_view alias, const config_type* type, std::string_view desc)
+        config_src(config_file* cf, std::string_view name, std::string_view alias, config_file::liveness liveness, const config_type* type, std::string_view desc)
             : _cf(cf)
             , _name(name)
             , _alias(alias)
+            , _liveness(liveness)
             , _desc(desc)
             , _type(type)
         {}
@@ -142,6 +146,9 @@ public:
         }
         std::string_view type_name() const {
             return _type->name();
+        }
+        config_file::liveness liveness() const {
+            return _liveness;
         }
         config_file * get_config_file() const {
             return _cf;
@@ -175,7 +182,6 @@ public:
                 value.set(typed_source->value());
             }
         };
-        liveness _liveness;
         std::vector<T> _allowed_values;
     protected:
         updateable_value_source<T>& the_value() {
@@ -192,15 +198,14 @@ public:
         typedef T type;
         typedef named_value<T> MyType;
 
-        named_value(config_file* file, std::string_view name, std::string_view alias, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
+        named_value(config_file* file, std::string_view name, std::string_view alias, config_file::liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
-            : config_src(file, name, alias, &config_type_for<T>, desc)
+            : config_src(file, name, alias, liveness_, &config_type_for<T>, desc)
             , _value_status(vs)
-            , _liveness(liveness_)
             , _allowed_values(std::move(allowed_values)) {
             file->add(*this, std::make_unique<the_value_type>(std::move(t)));
         }
-        named_value(config_file* file, std::string_view name, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
+        named_value(config_file* file, std::string_view name, config_file::liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
             : named_value(file, name, {}, liveness_, vs, t, desc) {
         }
@@ -254,6 +259,10 @@ public:
 
         observer<T> observe(std::function<void (const T&)> callback) const {
             return the_value().observe(std::move(callback));
+        }
+
+        config_file::liveness liveness() const {
+            return _liveness;
         }
 
         void add_command_line_option(bpo::options_description_easy_init&) override;
