@@ -15,6 +15,7 @@
 #include "log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
+#include "service/client_state.hh"
 #include "timestamp.hh"
 #include "types/map.hh"
 #include "schema/schema.hh"
@@ -1279,7 +1280,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         verify_billing_mode(request);
     }
 
-    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state))]
+    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), client_state_other_shard = client_state.move_to_other_shard()]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         // FIXME: the following needs to be in a loop. If mm.announce() below
         // fails, we need to retry the whole thing.
@@ -1310,6 +1311,12 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         }
 
         auto schema = builder.build();
+
+        if (!co_await client_state_other_shard.get().check_has_permission(auth::command_desc(
+            auth::permission::ALTER, auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+            co_return api_error::access_denied(format(
+                "ALTER permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+        }
 
         auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema,  std::vector<view_ptr>(), group0_guard.write_timestamp());
 
