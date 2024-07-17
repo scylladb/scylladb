@@ -13,7 +13,6 @@
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
 #include "db/operation_type.hh"
-#include <concepts>
 #include <stdexcept>
 #include <seastar/core/sstring.hh>
 #include "bytes.hh"
@@ -319,9 +318,12 @@ public:
     function_execution_exception(sstring func_name_, sstring detail, sstring ks_name_, std::vector<sstring> args_) noexcept;
 };
 
-}
+} // namespace exceptions
 
 #if FMT_VERSION < 100000
+
+#include <concepts>
+
 // fmt v10 introduced formatter for std::exception
 template <std::derived_from<exceptions::cassandra_exception> T>
 struct fmt::formatter<T> : fmt::formatter<string_view> {
