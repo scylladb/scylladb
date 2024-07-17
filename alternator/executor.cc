@@ -565,12 +565,20 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     schema_ptr schema = get_table(_proxy, request);
     rjson::value table_description = fill_table_description(schema, table_status::deleting, _proxy);
 
-    co_await _mm.container().invoke_on(0, [&] (service::migration_manager& mm) -> future<> {
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::DROP,
+            auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "DROP permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
+
+    co_await _mm.container().invoke_on(0, [&, cs = client_state.move_to_other_shard()] (service::migration_manager& mm) -> future<> {
         // FIXME: the following needs to be in a loop. If mm.announce() below
         // fails, we need to retry the whole thing.
         auto group0_guard = co_await mm.start_group0_operation();
 
-        if (!p.local().data_dictionary().has_schema(keyspace_name, table_name)) {
+        std::optional<data_dictionary::table> tbl = p.local().data_dictionary().try_find_table(keyspace_name, table_name);
+        if (!tbl) {
             throw api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
         }
 
@@ -578,6 +586,28 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
         auto m2 = co_await service::prepare_keyspace_drop_announcement(_proxy.local_db(), keyspace_name, group0_guard.write_timestamp());
 
         std::move(m2.begin(), m2.end(), std::back_inserter(m));
+
+        // When deleting a table and its views, we need to remove this role's
+        // special permissions in those tables (undoing the "auto-grant" done
+        // by CreateTable). If we didn't do this, if a second role later
+        // recreates a table with the same name, the first role would still
+        // have permissions over the new table.
+        // To make things more robust we just remove *all* permissions for
+        // the deleted table (CQL's drop_table_statement also does this).
+        // Unfortunately, there is an API mismatch between this code (which
+        // uses separate group0_guard and vector<mutation>) and the function
+        // revoke_all() which uses a combined "group0_batch" structure - so
+        // we need to do some ugly back-and-forth conversions between the pair
+        // to the group0_batch and back to the pair :-(
+        service::group0_batch mc(std::move(group0_guard));
+        mc.add_mutations(std::move(m));
+        co_await auth::revoke_all(*cs.get().get_auth_service(),
+            auth::make_data_resource(schema->ks_name(), schema->cf_name()), mc);
+        for (const view_ptr& v : tbl->views()) {
+            co_await auth::revoke_all(*cs.get().get_auth_service(),
+                auth::make_data_resource(v->ks_name(), v->cf_name()), mc);
+        }
+        std::tie(m, group0_guard) = co_await std::move(mc).extract();
 
         co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: delete {} table", table_name));
     });
