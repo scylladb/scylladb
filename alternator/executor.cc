@@ -3485,6 +3485,15 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         requests.emplace_back(std::move(rs));
     }
 
+    for (const table_requests& tr : requests) {
+        if (!co_await client_state.check_has_permission(auth::command_desc(
+                auth::permission::SELECT,
+                auth::make_data_resource(tr.schema->ks_name(), tr.schema->cf_name())))) {
+            co_return api_error::access_denied(format(
+                "SELECT permissions denied on {}.{} by RBAC", tr.schema->ks_name(), tr.schema->cf_name()));
+        }
+    }
+
     // If we got here, all "requests" are valid, so let's start the
     // requests for the different partitions all in parallel.
     std::vector<future<std::vector<rjson::value>>> response_futures;
