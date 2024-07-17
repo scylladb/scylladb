@@ -653,6 +653,24 @@ def test_rbac_updatetable(dynamodb, cql):
                     authorized(lambda: tab.meta.client.update_table(TableName=tab.name,
                         BillingMode='PAY_PER_REQUEST'))
 
+# A test for API operations that do not require any permissions, so can be
+# performed on a new role with no grants. This currently includes
+# ListTables, DescribeTable, DescribeEndpoints, ListTagsOfResource,
+# DescribeTimeToLive, DescribeContinuousBackups
+def test_no_permissions_needed(dynamodb, cql, test_table):
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            # Try the various operations that don't need any permissions,
+            # and check that they don't fail (we don't check what is the
+            # result).
+            d.meta.client.list_tables()
+            d.meta.client.describe_endpoints()
+            r = d.meta.client.describe_table(TableName=test_table.name)
+            arn = r['Table']['TableArn']
+            d.meta.client.list_tags_of_resource(ResourceArn=arn)
+            d.meta.client.describe_time_to_live(TableName=test_table.name)
+            d.meta.client.describe_continuous_backups(TableName=test_table.name)
+
 # A test for permission checks in BatchWriteItem. BatchWriteItem needs the
 # "MODIFY" permission, but one BatchWriteItem may write to several tables
 # so needs MODIFY permissions on all of them, not just one. If any of the
