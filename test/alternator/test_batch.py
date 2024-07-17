@@ -274,6 +274,27 @@ def test_batch_get_item_hash(test_table_s):
     got_items = reply['Responses'][test_table_s.name]
     assert multiset(got_items) == multiset(items)
 
+# A single GetBatchItem batch can ask for items from multiple tables, let's
+# test that too.
+def test_batch_get_item_two_tables(test_table, test_table_s):
+    items1 = [{'p': random_string(), 'c': random_string(), 'v': random_string()} for i in range(3)]
+    items2 = [{'p': random_string(), 'v': random_string()} for i in range(3)]
+    with test_table.batch_writer() as batch:
+        for item in items1:
+            batch.put_item(item)
+    with test_table_s.batch_writer() as batch:
+        for item in items2:
+            batch.put_item(item)
+    keys1 = [{k: x[k] for k in ('p', 'c')} for x in items1]
+    keys2 = [{k: x[k] for k in ('p')} for x in items2]
+    reply = test_table_s.meta.client.batch_get_item(RequestItems = {
+        test_table.name: {'Keys': keys1, 'ConsistentRead': True},
+        test_table_s.name: {'Keys': keys2, 'ConsistentRead': True}})
+    got_items1 = reply['Responses'][test_table.name]
+    got_items2 = reply['Responses'][test_table_s.name]
+    assert multiset(got_items1) == multiset(items1)
+    assert multiset(got_items2) == multiset(items2)
+
 # Test what do we get if we try to read two *missing* values in addition to
 # an existing one. It turns out the missing items are simply not returned,
 # with no sign they are missing.
