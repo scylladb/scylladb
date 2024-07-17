@@ -715,3 +715,28 @@ def test_rbac_batchgetitem(dynamodb, cql, test_table, test_table_s):
                     r = authorized(lambda: d.meta.client.batch_get_item(RequestItems = batch)['Responses'])
                     assert r[test_table.name] == [{'p': p, 'c': c, 'v': v}]
                     assert r[test_table_s.name] == [{'p': p, 'v': v}]
+
+# A test for permission checks in TagResource and UntagResource. We
+# consider this a variant of UpdateTable, because one of its uses is to
+# modify non-standard parameters of the table (such as its write isolation
+# policy), so require the ALTER permission on both.
+def test_rbac_tagresource(dynamodb, cql):
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]
+    }
+    with new_test_table(dynamodb, **schema) as table:
+        arn = table.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
+        with new_role(cql) as (role, key):
+            with new_dynamodb(dynamodb, role, key) as d:
+                tab = d.Table(table.name)
+                # Without ALTER permission, TagResource and UntagResource
+                # are refused
+                tags = [{'Key': 'hello', 'Value': 'dog'},
+                        {'Key': 'hi', 'Value': '42'}]
+                unauthorized(lambda: d.meta.client.tag_resource(ResourceArn=arn, Tags=tags))
+                unauthorized(lambda: d.meta.client.untag_resource(ResourceArn=arn, TagKeys=['hello']))
+                # With granting ALTER permissions, it works:
+                with temporary_grant(cql, 'ALTER', cql_table_name(table), role):
+                    authorized(lambda: d.meta.client.tag_resource(ResourceArn=arn, Tags=tags))
+                    authorized(lambda: d.meta.client.untag_resource(ResourceArn=arn, TagKeys=['hello']))

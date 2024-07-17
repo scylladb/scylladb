@@ -866,6 +866,11 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
     if (tags->Size() < 1) {
         co_return api_error::validation("The number of tags must be at least 1") ;
     }
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::ALTER, auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "ALTER permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     });
@@ -885,6 +890,11 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
     }
 
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::ALTER, auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "ALTER permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
 
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
