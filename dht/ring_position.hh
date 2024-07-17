@@ -175,11 +175,13 @@ public:
     using after_key = bool_class<after_key_tag>;
 
     static ring_position_view min() noexcept {
-        return { minimum_token(), nullptr, -1 };
+        static auto min_token = minimum_token();
+        return { min_token, nullptr, -1 };
     }
 
     static ring_position_view max() noexcept {
-        return { maximum_token(), nullptr, 1 };
+        static auto max_token = maximum_token();
+        return { max_token, nullptr, 1 };
     }
 
     bool is_min() const noexcept {

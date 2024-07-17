@@ -51,14 +51,16 @@ void print_token(sstring desc, dht::token t) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_minimum_token) {
-    auto t = dht::minimum_token();
+    auto t = dht::token::minimum();
+    BOOST_REQUIRE_EQUAL(t, dht::minimum_token());
     BOOST_REQUIRE(t.is_minimum());
     BOOST_REQUIRE_EQUAL(dht::token::to_int64(t), std::numeric_limits<int64_t>::min());
     BOOST_REQUIRE_EQUAL(t.raw(), std::numeric_limits<int64_t>::min());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_maximum_token) {
-    auto t = dht::maximum_token();
+    auto t = dht::token::maximum();
+    BOOST_REQUIRE_EQUAL(t, dht::maximum_token());
     BOOST_REQUIRE(t.is_maximum());
     BOOST_REQUIRE_EQUAL(dht::token::to_int64(t), std::numeric_limits<int64_t>::min());
     BOOST_REQUIRE_EQUAL(t.raw(), std::numeric_limits<int64_t>::max());
@@ -66,8 +68,18 @@ SEASTAR_THREAD_TEST_CASE(test_maximum_token) {
 
 SEASTAR_THREAD_TEST_CASE(test_first_token) {
     auto t = dht::first_token();
+    BOOST_REQUIRE_EQUAL(t, dht::first_token());
+    BOOST_REQUIRE(t.is_first());
     BOOST_REQUIRE_EQUAL(dht::token::to_int64(t), std::numeric_limits<int64_t>::min() + 1);
     BOOST_REQUIRE_EQUAL(t.raw(), std::numeric_limits<int64_t>::min() + 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_last_token) {
+    auto t = dht::token::last();
+    BOOST_REQUIRE_EQUAL(t, dht::last_token());
+    BOOST_REQUIRE(t.is_last());
+    BOOST_REQUIRE_EQUAL(dht::token::to_int64(t), std::numeric_limits<int64_t>::max());
+    BOOST_REQUIRE_EQUAL(t.raw(), std::numeric_limits<int64_t>::max());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_ordering) {
@@ -79,7 +91,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_ordering) {
     auto next = next_token(first);
     print_token("next", next);
     BOOST_REQUIRE(first <=> next < 0);
-    auto last = dht::token(dht::token::kind::key, std::numeric_limits<int64_t>::max());
+    auto last = dht::last_token();
     print_token("last", last);
     BOOST_REQUIRE(next <=> last < 0);
     auto maximum = dht::maximum_token();

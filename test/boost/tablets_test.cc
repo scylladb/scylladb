@@ -904,8 +904,8 @@ SEASTAR_TEST_CASE(test_large_tablet_metadata) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
-    const auto real_min_token = dht::token(dht::token_kind::key, std::numeric_limits<int64_t>::min() + 1);
-    const auto real_max_token = dht::token(dht::token_kind::key, std::numeric_limits<int64_t>::max());
+    const auto real_min_token = dht::token::first();
+    const auto real_max_token = dht::token::last();
 
     for (auto&& tmap : {
         tablet_map(1),
