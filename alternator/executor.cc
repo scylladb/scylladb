@@ -963,7 +963,7 @@ static void validate_attribute_definitions(const rjson::value& attribute_definit
     }
 }
 
-static future<executor::request_return_type> create_table_on_shard0(tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper) {
+static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
     // We begin by parsing and validating the content of the CreateTable
@@ -1153,6 +1153,12 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     }
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::CREATE,
+            auth::resource(auth::resource_kind::data)))) {
+        co_return api_error::access_denied("CREATE permissions denied on ALL KEYSPACES by RBAC");
+    }
+
     schema_ptr schema = builder.build();
     auto where_clause_it = where_clauses.begin();
     for (auto& view_builder : view_builders) {
@@ -1213,6 +1219,26 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         });
 
     }
+    // If a role is allowed to create a table, we must give it permissions to
+    // use (and eventually delete) the specific table it just created (and
+    // also the view tables). This is known as "auto-grant".
+    // Unfortunately, there is an API mismatch between this code (which uses
+    // separate group0_guard and vector<mutation>) and the function
+    // grant_applicable_permissions() which uses a combined "group0_batch"
+    // structure - so we need to do some ugly back-and-forth conversions
+    // between the pair to the group0_batch and back to the pair :-(
+    service::group0_batch mc(std::move(group0_guard));
+    mc.add_mutations(std::move(schema_mutations));
+    co_await auth::grant_applicable_permissions(
+        *client_state.get_auth_service(), *client_state.user(),
+        auth::make_data_resource(schema->ks_name(), schema->cf_name()), mc);
+    for (const schema_builder& view_builder : view_builders) {
+        co_await auth::grant_applicable_permissions(
+            *client_state.get_auth_service(), *client_state.user(),
+            auth::make_data_resource(view_builder.ks_name(), view_builder.cf_name()), mc);
+    }
+    std::tie(schema_mutations, group0_guard) = co_await std::move(mc).extract();
+
     co_await mm.announce(std::move(schema_mutations), std::move(group0_guard), format("alternator-executor: create {} table", table_name));
 
     co_await mm.wait_for_schema_agreement(sp.local_db(), db::timeout_clock::now() + 10s, nullptr);
@@ -1226,9 +1252,9 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
 
-    co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &sp = _proxy.container(), &g = _gossiper.container()]
+    co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &sp = _proxy.container(), &g = _gossiper.container(), client_state_other_shard = client_state.move_to_other_shard()]
                                         (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
-        co_return co_await create_table_on_shard0(tr, std::move(request), sp.local(), mm, g.local());
+        co_return co_await create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), sp.local(), mm, g.local());
     });
 }
 
