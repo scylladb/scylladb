@@ -685,3 +685,33 @@ def test_rbac_batchwriteitem(dynamodb, cql, test_table, test_table_s):
                     authorized(lambda: d.meta.client.batch_write_item(RequestItems = batch))
                     assert 'Item' in test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)
                     assert 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
+# A test for permission checks in BatchGetItem. BatchGetItem needs the
+# "SELECT" permission, but one BatchGetItem may read from several tables
+# so needs SELECT permissions on all of them, not just one. If any of the
+# operations in the batch are not permitted, we want the entire batch to
+# fail and not do anything (there is no API to return a separate error
+# for each item in the batch).
+def test_rbac_batchgetitem(dynamodb, cql, test_table, test_table_s):
+    p = random_string()
+    c = random_string()
+    v = random_string()
+    test_table.put_item(Item={'p': p, 'c': c, 'v': v})
+    test_table_s.put_item(Item={'p': p, 'v': v})
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            # Without SELECT permission on *both* tables, the BatchGetItem
+            # operation will fail. Only after we grant SELECT to both tables,
+            # it will work.
+            batch = {
+                test_table.name: {'Keys': [{'p': p, 'c': c}], 'ConsistentRead': True},
+                test_table_s.name: {'Keys': [{'p': p}], 'ConsistentRead': True}
+            }
+            unauthorized(lambda: d.meta.client.batch_get_item(RequestItems = batch))
+            with temporary_grant(cql, 'SELECT', cql_table_name(test_table), role):
+                unauthorized(lambda: d.meta.client.batch_get_item(RequestItems = batch))
+                with temporary_grant(cql, 'SELECT', cql_table_name(test_table_s), role):
+                    # Finally, with both grants, the read should work:
+                    r = authorized(lambda: d.meta.client.batch_get_item(RequestItems = batch)['Responses'])
+                    assert r[test_table.name] == [{'p': p, 'c': c, 'v': v}]
+                    assert r[test_table_s.name] == [{'p': p, 'v': v}]
