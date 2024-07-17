@@ -394,7 +394,7 @@ class ranges_holder_primary {
 public:
     explicit ranges_holder_primary(dht::token_range_vector token_ranges) : _token_ranges(std::move(token_ranges)) {}
     static future<ranges_holder_primary> make(const locator::vnode_effective_replication_map_ptr& erm, gms::inet_address ep) {
-        co_return ranges_holder_primary(co_await erm->get_primary_ranges(ep));
+        co_return ranges_holder_primary(co_await locator::as_token_range_vector(erm->get_primary_ranges(ep)));
     }
     std::size_t size() const { return _token_ranges.size(); }
     const dht::token_range& operator[](std::size_t i) const {

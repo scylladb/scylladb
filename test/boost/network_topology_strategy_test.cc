@@ -10,6 +10,7 @@
 #include <boost/range/adaptors.hpp>
 #include <fmt/ranges.h>
 #include "gms/inet_address.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/types.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/sequenced_set.hh"
@@ -69,9 +70,9 @@ static void verify_sorted(const dht::token_range_vector& trv) {
 }
 
 static future<> check_ranges_are_sorted(vnode_effective_replication_map_ptr erm, gms::inet_address ep) {
-    verify_sorted(co_await erm->get_ranges(ep));
-    verify_sorted(co_await erm->get_primary_ranges(ep));
-    verify_sorted(co_await erm->get_primary_ranges_within_dc(ep));
+    verify_sorted(co_await locator::as_token_range_vector(erm->get_ranges(ep)));
+    verify_sorted(co_await locator::as_token_range_vector(erm->get_primary_ranges(ep)));
+    verify_sorted(co_await locator::as_token_range_vector(erm->get_primary_ranges_within_dc(ep)));
 }
 
 void strategy_sanity_check(

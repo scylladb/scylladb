@@ -7,6 +7,7 @@
  */
 
 #include "repair.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "repair/row_level.hh"
 
 #include "locator/network_topology_strategy.hh"
@@ -1244,15 +1245,15 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
             // but instead of each range being assigned just one primary owner
             // across the entire cluster, here each range is assigned a primary
             // owner in each of the DCs.
-            ranges = co_await erm.get_primary_ranges_within_dc(my_address);
+            ranges = co_await locator::as_token_range_vector(erm.get_primary_ranges_within_dc(my_address));
         } else if (options.data_centers.size() > 0 || options.hosts.size() > 0) {
             throw std::invalid_argument("You need to run primary range repair on all nodes in the cluster.");
         } else {
-            ranges = co_await erm.get_primary_ranges(my_address);
+            ranges = co_await locator::as_token_range_vector(erm.get_primary_ranges(my_address));
         }
     } else {
         // get keyspace local ranges
-        ranges = co_await erm.get_ranges(my_address);
+        ranges = co_await locator::as_token_range_vector(erm.get_ranges(my_address));
     }
 
     if (!options.data_centers.empty() && !options.hosts.empty()) {
@@ -1750,7 +1751,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
         streaming::stream_reason reason = is_removenode ? streaming::stream_reason::removenode : streaming::stream_reason::decommission;
         size_t nr_ranges_total = 0;
         for (const auto& [keyspace_name, erm] : ks_erms) {
-            dht::token_range_vector ranges = erm->get_ranges(leaving_node).get();
+            dht::token_range_vector ranges = locator::as_token_range_vector(erm->get_ranges(leaving_node)).get();
             auto nr_tables = get_nr_tables(db, keyspace_name);
             nr_ranges_total += ranges.size() * nr_tables;
         }
@@ -1777,7 +1778,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             auto& strat = erm->get_replication_strategy();
             // First get all ranges the leaving node is responsible for
-            dht::token_range_vector ranges = erm->get_ranges(leaving_node).get();
+            dht::token_range_vector ranges = locator::as_token_range_vector(erm->get_ranges(leaving_node)).get();
             auto nr_tables = get_nr_tables(db, keyspace_name);
             rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size() * nr_tables);
             size_t nr_ranges_total = ranges.size() * nr_tables;
@@ -1964,7 +1965,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             }
             auto& strat = erm->get_replication_strategy();
             // Okay to yield since tm is immutable
-            dht::token_range_vector ranges = strat.get_ranges(myid, tmptr).get();
+            dht::token_range_vector ranges = locator::as_token_range_vector(strat.get_ranges(myid, tmptr)).get();
             auto nr_tables = get_nr_tables(db, keyspace_name);
             nr_ranges_total += ranges.size() * nr_tables;
 
@@ -1988,7 +1989,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
-            dht::token_range_vector ranges = strat.get_ranges(myid, *tmptr).get();
+            dht::token_range_vector ranges = locator::as_token_range_vector(strat.get_ranges(myid, *tmptr)).get();
             auto& topology = erm->get_token_metadata().get_topology();
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             auto nr_tables = get_nr_tables(db, keyspace_name);

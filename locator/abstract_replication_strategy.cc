@@ -7,6 +7,7 @@
  */
 
 #include "locator/abstract_replication_strategy.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
@@ -197,60 +198,28 @@ long abstract_replication_strategy::parse_replication_factor(sstring rf)
     }
 }
 
-static
-void
-insert_token_range_to_sorted_container_while_unwrapping(
-        const dht::token& prev_tok,
-        const dht::token& tok,
-        dht::token_range_vector& ret) {
-    if (prev_tok < tok) {
-        auto pos = ret.end();
-        if (!ret.empty() && !std::prev(pos)->end()) {
-            // We inserted a wrapped range (a, b] previously as
-            // (-inf, b], (a, +inf). So now we insert in the next-to-last
-            // position to keep the last range (a, +inf) at the end.
-            pos = std::prev(pos);
-        }
-        ret.insert(pos,
-                dht::token_range{
-                        dht::token_range::bound(prev_tok, false),
-                        dht::token_range::bound(tok, true)});
-    } else {
-        ret.emplace_back(
-                dht::token_range::bound(prev_tok, false),
-                std::nullopt);
-        // Insert in front to maintain sorded order
-        ret.emplace(
-                ret.begin(),
-                std::nullopt,
-                dht::token_range::bound(tok, true));
-    }
-}
-
-future<dht::token_range_vector>
+dht::token_range_generator
 vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iteration(bool&, const inet_address&)> consider_range_for_endpoint) const {
-    dht::token_range_vector ret;
     const auto& tm = *_tmptr;
     const auto& sorted_tokens = tm.sorted_tokens();
     if (sorted_tokens.empty()) {
         on_internal_error(rslogger, "Token metadata is empty");
     }
-    auto prev_tok = sorted_tokens.back();
+    std::optional<dht::token_range::bound> prev_bound;
     for (const auto& tok : sorted_tokens) {
         bool add_range = false;
         for_each_natural_endpoint_until(tok, [&] (const inet_address& ep) {
             return consider_range_for_endpoint(add_range, ep);
         });
         if (add_range) {
-            insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
+            co_yield dht::token_range(prev_bound, dht::token_range::bound(tok, true));
         }
-        prev_tok = tok;
-        co_await coroutine::maybe_yield();
+        prev_bound = dht::token_range::bound(tok, false);
     }
-    co_return ret;
+    co_yield dht::token_range(prev_bound, std::nullopt);
 }
 
-future<dht::token_range_vector>
+dht::token_range_generator
 vnode_effective_replication_map::get_ranges(inet_address ep) const {
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
@@ -265,23 +234,22 @@ vnode_effective_replication_map::get_ranges(inet_address ep) const {
 }
 
 // Caller must ensure that token_metadata will not change throughout the call.
-future<dht::token_range_vector>
+dht::token_range_generator
 abstract_replication_strategy::get_ranges(locator::host_id ep, token_metadata_ptr tmptr) const {
-    co_return co_await get_ranges(ep, *tmptr);
+    return get_ranges(ep, *tmptr);
 }
 
 // Caller must ensure that token_metadata will not change throughout the call.
-future<dht::token_range_vector>
+dht::token_range_generator
 abstract_replication_strategy::get_ranges(locator::host_id ep, const token_metadata& tm) const {
-    dht::token_range_vector ret;
     if (!tm.is_normal_token_owner(ep)) {
-        co_return ret;
+        co_return;
     }
     const auto& sorted_tokens = tm.sorted_tokens();
     if (sorted_tokens.empty()) {
         on_internal_error(rslogger, "Token metadata is empty");
     }
-    auto prev_tok = sorted_tokens.back();
+    std::optional<dht::token_range::bound> prev_bound;
     for (auto tok : sorted_tokens) {
         bool should_add = false;
         if (get_type() == replication_strategy_type::everywhere_topology) {
@@ -293,14 +261,14 @@ abstract_replication_strategy::get_ranges(locator::host_id ep, const token_metad
             should_add = eps.contains(ep);
         }
         if (should_add) {
-            insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
+            co_yield dht::token_range(prev_bound, dht::token_range::bound(tok, true));
         }
-        prev_tok = tok;
+        prev_bound = dht::token_range::bound(tok, false);
     }
-    co_return ret;
+    co_yield dht::token_range(prev_bound, std::nullopt);
 }
 
-future<dht::token_range_vector>
+dht::token_range_generator
 vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
@@ -313,7 +281,7 @@ vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
     });
 }
 
-future<dht::token_range_vector>
+dht::token_range_generator
 vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
     const topology& topo = _tmptr->get_topology();
     sstring local_dc = topo.get_datacenter(ep);
@@ -333,6 +301,15 @@ vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) c
         // stop the iteration once the first node contained the local datacenter was considered.
         return stop_iteration::yes;
     });
+}
+
+future<dht::token_range_vector> as_token_range_vector(dht::token_range_generator range_gen) {
+    dht::token_range_vector ret;
+    while (auto range_opt = co_await range_gen()) {
+        ret.emplace_back(*range_opt);
+    }
+    ret.shrink_to_fit();
+    co_return ret;
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
