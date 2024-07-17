@@ -652,3 +652,36 @@ def test_rbac_updatetable(dynamodb, cql):
                 with temporary_grant(cql, 'ALTER', cql_table_name(tab), role):
                     authorized(lambda: tab.meta.client.update_table(TableName=tab.name,
                         BillingMode='PAY_PER_REQUEST'))
+
+# A test for permission checks in BatchWriteItem. BatchWriteItem needs the
+# "MODIFY" permission, but one BatchWriteItem may write to several tables
+# so needs MODIFY permissions on all of them, not just one. If any of the
+# operations in the batch are not permitted, we want the entire batch to
+# fail and not do anything (there is no API to return a separate error
+# for each item in the batch).
+def test_rbac_batchwriteitem(dynamodb, cql, test_table, test_table_s):
+    p = random_string()
+    c = random_string()
+    v = random_string()
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            # Without MODIFY permission to *both* tables, the BatchWriteItem
+            # operation will fail (and we can check through the superuser
+            # role neither item was written). Only after we grant MODIFY on
+            # both tables, it will work.
+            batch = {
+                test_table.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'v': v}}}],
+                test_table_s.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'v': v}}}],
+            }
+            unauthorized(lambda: d.meta.client.batch_write_item(RequestItems = batch))
+            with temporary_grant(cql, 'MODIFY', cql_table_name(test_table), role):
+                unauthorized(lambda: d.meta.client.batch_write_item(RequestItems = batch))
+                # Verify through the superuser role that until now, neither
+                # item was written.
+                assert not 'Item' in test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)
+                assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+                with temporary_grant(cql, 'MODIFY', cql_table_name(test_table_s), role):
+                    # Finally, with both grants, the write should work:
+                    authorized(lambda: d.meta.client.batch_write_item(RequestItems = batch))
+                    assert 'Item' in test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)
+                    assert 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
