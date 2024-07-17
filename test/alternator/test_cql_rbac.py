@@ -436,6 +436,17 @@ def new_named_table(dynamodb, tabname, **kwargs):
     finally:
         table.delete()
 
+def new_named_table_unauthorized(dynamodb, tabname, **kwargs):
+    try:
+        unauthorized(lambda: dynamodb.create_table(TableName=tabname,
+                BillingMode='PAY_PER_REQUEST', **kwargs))
+    except:
+        # Oops, if the table creation *was* authorized, delete the
+        # table 
+        dynamodb.meta.client.get_waiter('table_exists').wait(TableName=tabname)
+        dynamodb.meta.client.delete_table(TableName=tabname)
+
+
 # When a role is allowed to CreateTable, the role is automatically granted
 # permissions to use the new table (and all its materialized views), and
 # to eventually delete them. However, when the table and views are finally
@@ -487,3 +498,58 @@ def test_rbac_deletetable_autorevoke(dynamodb, cql):
                     unauthorized(lambda: d1.Table(table_name).query(IndexName='hello',
                         Select='ALL_PROJECTED_ATTRIBUTES',
                         KeyConditions={'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+
+# Test CreateTable's support for permissions. Because a CreateTable operation
+# creates a keyspace and a table, it requires the "CREATE" permission on
+# "ALL KEYSPACES" - nothing less is enough.
+# Test that additionally, CreateTable's has an "autogrant" feature: If a role
+# is allowed to create a table, this role is automatically given full (SELECT
+# and MODIFY) permissions to the newly-created table.
+def test_rbac_createtable(dynamodb, cql):
+    # An example table schema, with a GSI to make the example even more
+    # interesting (it needs to create a table and a view)
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' } ],
+        'GlobalSecondaryIndexes': [
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            } ]
+    }
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            # Without CREATE permissions, CreateTable won't work:
+            table_name = unique_table_name()
+            new_named_table_unauthorized(d, table_name, **schema)
+            # Adding CREATE permissions, it should work
+            with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role):
+                with new_named_table(d, table_name, **schema) as tab:
+                    # After being allowed to create the table, this role
+                    # is automatically granted permissions to SELECT or MODIFY
+                    # it (and also its GSI).
+                    p = random_string()
+                    x = random_string()
+                    v = random_string()
+                    authorized(lambda: tab.put_item(Item={'p': p, 'x': x, 'v': v}))
+                    assert {'p': p, 'x': x, 'v': v} == authorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True)['Item'])
+                    # Check this role can also read from the view. We don't
+                    # check the data itself (maybe the view wasn't yet updated)
+                    # just that we have permissions.
+                    authorized(lambda: tab.query(IndexName='hello',
+                        Select='ALL_PROJECTED_ATTRIBUTES',
+                        KeyConditions={'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+                    # Check that ALTER permissions were auto-granted too.
+                    # The UpdateTable below doesn't actually change anything
+                    # (it just sets BillingMode to what it was), but the
+                    # access check is done even if there's nothing to do.
+                    authorized(lambda: tab.meta.client.update_table(TableName=tab.name,
+                        BillingMode='PAY_PER_REQUEST'))
+                    # Note that when we now go out of scope, the new table
+                    # will be deleted under the new role, so this test also
+                    # verifies that the role was correctly auto-granted the
+                    # DROP permission.
