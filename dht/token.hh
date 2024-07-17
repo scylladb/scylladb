@@ -74,6 +74,19 @@ public:
         }
     }
 
+    std::strong_ordering operator<=>(const token& o) const noexcept {
+        if (_kind < o._kind) {
+            return std::strong_ordering::less;
+        } else if (_kind > o._kind) {
+            return std::strong_ordering::greater;
+        } else if (_kind == token_kind::key) {
+            return _data <=> o._data;
+        }
+        return std::strong_ordering::equal;
+    }
+
+    bool operator==(const token& o) const noexcept { return *this <=> o == 0; }
+
     bool is_minimum() const noexcept {
         return _kind == kind::before_all_keys;
     }
@@ -213,8 +226,7 @@ struct raw_token_less_comparator {
 
 const token& minimum_token() noexcept;
 const token& maximum_token() noexcept;
-std::strong_ordering operator<=>(const token& t1, const token& t2);
-inline bool operator==(const token& t1, const token& t2) { return t1 <=> t2 == 0; }
+
 std::ostream& operator<<(std::ostream& out, const token& t);
 
 // Returns a successor for token t.
@@ -241,7 +253,9 @@ token last_token_of_compaction_group(unsigned most_significant_bits, size_t grou
 
 struct token_comparator {
     // Return values are those of a trichotomic comparison.
-    std::strong_ordering operator()(const token& t1, const token& t2) const;
+    std::strong_ordering operator()(const token& t1, const token& t2) const {
+        return t1 <=> t2;
+    }
 };
 
 } // namespace dht
