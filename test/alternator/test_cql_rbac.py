@@ -629,3 +629,26 @@ def test_rbac_createtable(dynamodb, cql):
                     # will be deleted under the new role, so this test also
                     # verifies that the role was correctly auto-granted the
                     # DROP permission.
+
+# Test UpdateTable's support for permissions. It requires the "ALTER"
+# permission permission on the given table (or, as usual, something
+# containing it - like a keyspace, all keyspaces, or another role).
+def test_rbac_updatetable(dynamodb, cql):
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]
+    }
+    with new_test_table(dynamodb, **schema) as table:
+        with new_role(cql) as (role, key):
+            with new_dynamodb(dynamodb, role, key) as d:
+                tab = d.Table(table.name)
+                # Without ALTER permissions, UpdateTable won't work.
+                # The "update" doesn't actually change anything (it just
+                # sets BillingMode to what it was), but the access check is
+                # done even if there's nothing to do
+                unauthorized(lambda: tab.meta.client.update_table(TableName=tab.name,
+                    BillingMode='PAY_PER_REQUEST'))
+                # With ALTER permissions, it works.
+                with temporary_grant(cql, 'ALTER', cql_table_name(tab), role):
+                    authorized(lambda: tab.meta.client.update_table(TableName=tab.name,
+                        BillingMode='PAY_PER_REQUEST'))
