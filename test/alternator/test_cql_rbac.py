@@ -740,3 +740,25 @@ def test_rbac_tagresource(dynamodb, cql):
                 with temporary_grant(cql, 'ALTER', cql_table_name(table), role):
                     authorized(lambda: d.meta.client.tag_resource(ResourceArn=arn, Tags=tags))
                     authorized(lambda: d.meta.client.untag_resource(ResourceArn=arn, TagKeys=['hello']))
+
+# Test that UpdateTimeToLive requires the ALTER permissions, similar to
+# UpdateTable.
+def test_rbac_updatetimetolive(dynamodb, cql):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }],
+        # Work around issue #16567 that Alternator TTL doesn't work with
+        # tablets. When that issue is solved, the following Tags should be
+        # removed.
+        Tags=[{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+    ) as table:
+        with new_role(cql) as (role, key):
+            with new_dynamodb(dynamodb, role, key) as d:
+                # Without ALTER permissions, UpdateTimeToLive will fail with
+                # AccessDeniedException. With the ALTER permissions, it will
+                # succeed.
+                unauthorized(lambda: d.meta.client.update_time_to_live(TableName=table.name,
+                    TimeToLiveSpecification={'AttributeName': 'dog', 'Enabled': True}))
+                with temporary_grant(cql, 'ALTER', cql_table_name(table), role):
+                    authorized(lambda: d.meta.client.update_time_to_live(TableName=table.name,
+                        TimeToLiveSpecification={'AttributeName': 'dog', 'Enabled': True}))
