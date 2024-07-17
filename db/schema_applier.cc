@@ -283,8 +283,8 @@ static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_pr
         co_await replica::database::create_keyspace_on_all_shards(sharded_db, proxy, *ksm);
     }
     for (auto& name : altered) {
-        auto v = co_await read_schema_partition_for_keyspace(proxy, KEYSPACES, name);
-        auto tmp_ksm = co_await create_keyspace_from_schema_partition(proxy, v);
+        auto tmp_ksm = co_await create_keyspace_from_schema_partition(proxy,
+                schema_result_value_type{name, after.at(name)});
         co_await replica::database::update_keyspace_on_all_shards(sharded_db, *tmp_ksm);
     }
     co_return dropped;
