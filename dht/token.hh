@@ -79,7 +79,7 @@ public:
             return std::strong_ordering::less;
         } else if (_kind > o._kind) {
             return std::strong_ordering::greater;
-        } else if (_kind == token_kind::key) {
+        } else if (_kind == token_kind::key) [[likely]] {
             return _data <=> o._data;
         }
         return std::strong_ordering::equal;
