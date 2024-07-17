@@ -148,9 +148,9 @@ public:
         }
         bool matches(std::string_view name) const;
         virtual void add_command_line_option(bpo::options_description_easy_init&) = 0;
-        virtual void set_value(const YAML::Node&) = 0;
+        virtual void set_value(const YAML::Node&, config_source source) = 0;
         virtual bool set_value(sstring, config_source = config_source::Internal) = 0;
-        virtual future<> set_value_on_all_shards(const YAML::Node&) = 0;
+        virtual future<> set_value_on_all_shards(const YAML::Node&, config_source source) = 0;
         virtual future<bool> set_value_on_all_shards(sstring, config_source = config_source::Internal) = 0;
         virtual value_status status() const noexcept = 0;
         virtual config_source source() const noexcept = 0;
@@ -257,12 +257,12 @@ public:
         }
 
         void add_command_line_option(bpo::options_description_easy_init&) override;
-        void set_value(const YAML::Node&) override;
+        void set_value(const YAML::Node&, config_source source) override;
         bool set_value(sstring, config_source = config_source::Internal) override;
         // For setting a single value on all shards,
         // without having to call broadcast_to_all_shards
         // that broadcasts all values to all shards.
-        future<> set_value_on_all_shards(const YAML::Node&) override;
+        future<> set_value_on_all_shards(const YAML::Node&, config_source source) override;
         future<bool> set_value_on_all_shards(sstring, config_source = config_source::Internal) override;
     };
 
@@ -298,8 +298,8 @@ public:
      */
     using error_handler = std::function<void(const sstring&, const sstring&, std::optional<value_status>)>;
 
-    void read_from_yaml(const sstring&, error_handler = {});
-    void read_from_yaml(const char *, error_handler = {});
+    void read_from_yaml(const sstring&, config_source source, error_handler = {});
+    void read_from_yaml(const char *, config_source source, error_handler = {});
     future<> read_from_file(const sstring&, error_handler = {});
     future<> read_from_file(file, error_handler = {});
 

@@ -279,11 +279,11 @@ utils::config_file::add_deprecated_options(bpo::options_description_easy_init& i
     return init;
 }
 
-void utils::config_file::read_from_yaml(const sstring& yaml, error_handler h) {
-    read_from_yaml(yaml.c_str(), std::move(h));
+void utils::config_file::read_from_yaml(const sstring& yaml, config_source source, error_handler h) {
+    read_from_yaml(yaml.c_str(), source, std::move(h));
 }
 
-void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
+void utils::config_file::read_from_yaml(const char* yaml, config_source source, error_handler h) {
     std::unordered_map<sstring, cfg_ref> values;
 
     if (!h) {
@@ -310,7 +310,7 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
 
         config_src& cfg = *i;
 
-        if (cfg.source() > config_source::SettingsFile) {
+        if (cfg.source() > source) {
             // already set
             continue;
         }
@@ -330,7 +330,7 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
         }
         // Still, a syntax error is an error warning, not a fail
         try {
-            cfg.set_value(node.second);
+            cfg.set_value(node.second, source);
         } catch (std::exception& e) {
             h(label, e.what(), cfg.status());
         } catch (...) {
@@ -363,7 +363,7 @@ future<> utils::config_file::read_from_file(file f, error_handler h) {
     return f.size().then([this, f, h](size_t s) {
         return do_with(make_file_input_stream(f), [this, s, h](input_stream<char>& in) {
             return in.read_exactly(s).then([this, h](temporary_buffer<char> buf) {
-               read_from_yaml(sstring(buf.begin(), buf.end()), h);
+               read_from_yaml(sstring(buf.begin(), buf.end()), config_source::SettingsFile, h);
             });
         });
     });
