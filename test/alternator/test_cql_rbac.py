@@ -17,7 +17,7 @@ import boto3
 from botocore.exceptions import ClientError
 import time
 from contextlib import contextmanager
-from test.alternator.util import is_aws, unique_table_name, random_string
+from test.alternator.util import is_aws, unique_table_name, random_string, new_test_table
 from functools import cache
 
 from cassandra.auth import PlainTextAuthProvider
@@ -391,3 +391,99 @@ def test_rbac_updateitem_read(dynamodb, cql, test_table_s):
                     UpdateExpression='SET v =  v + :val',
                     ExpressionAttributeValues={':val': 1}))
     assert {'p': p, 'v': v2 + 1} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
+# Test DeleteTable's permissions checks. The DeleteTable operation requires
+# a DROP permission on the specific table (or on something which contains it -
+# the keyspace or ALL KEYSPACES).
+def test_rbac_deletetable(dynamodb, cql):
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]
+    }
+    with new_test_table(dynamodb, **schema) as table:
+        with new_role(cql) as (role, key):
+            with new_dynamodb(dynamodb, role, key) as d:
+                tab = d.Table(table.name)
+                # Without DROP permissions, DeleteTable won't work:
+                unauthorized(lambda: tab.delete())
+                # Adding the DROP permissions on this specific table, it
+                # can be deleted. We could also add the permissions on the
+                # keyspace, on ALL KEYSPACES, or on an inherited role, but
+                # we already have other tests above for this kind of
+                # inheritence so don't need to test it again for DeleteTable.
+                with temporary_grant(cql, 'DROP', cql_table_name(tab), role):
+                    tabname = tab.name
+                    authorized(lambda: tab.delete())
+                    # officially, the DynamoDB API requires waiting for
+                    # delete to be done, although it's not currently
+                    # necessary in Alternator.
+                    tab.meta.client.get_waiter('table_not_exists').wait(TableName=tabname)
+                    # When we'll go out of scope on temporary_grant() and
+                    # new_test_table(), they expect the table to exist and
+                    # complain that it doesn't. So let's recreate the table,
+                    # using our original, super-user, role.
+                    table = dynamodb.create_table(TableName=tabname,
+                        BillingMode='PAY_PER_REQUEST', **schema)
+                    table.meta.client.get_waiter('table_exists').wait(TableName=tabname)
+
+@contextmanager
+def new_named_table(dynamodb, tabname, **kwargs):
+    table = authorized(lambda: dynamodb.create_table(TableName=tabname,
+                BillingMode='PAY_PER_REQUEST', **kwargs))
+    table.meta.client.get_waiter('table_exists').wait(TableName=tabname)
+    try:
+        yield table
+    finally:
+        table.delete()
+
+# When a role is allowed to CreateTable, the role is automatically granted
+# permissions to use the new table (and all its materialized views), and
+# to eventually delete them. However, when the table and views are finally
+# deleted, we need to remove those grants - we don't want them to stay in the
+# permissions table and if later a _second_ role creates a table with
+# the same name, the first role will still have access to it!
+# The following test creates this scenario with two roles, and confirms that
+# DeleteTable revokes the permissions from the table.
+def test_rbac_deletetable_autorevoke(dynamodb, cql):
+    # An example table schema, with a GSI to allow us to also test the
+    # permissions on the view.
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' } ],
+        'GlobalSecondaryIndexes': [
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            } ]
+    }
+    # Table name to use throughout the test below (role1 will create it,
+    # delete it, and then role2 will re-create it).
+    table_name = unique_table_name()
+    # Create two roles and two DynamoDB sessions for them (d1, d2):
+    with new_role(cql) as (role1, key1), new_role(cql) as (role2, key2):
+        with new_dynamodb(dynamodb, role1, key1) as d1, new_dynamodb(dynamodb, role2, key2) as d2:
+            # Allow role1 to create a table, create it and immediately
+            # delete it:
+            with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role1):
+                with new_named_table(d1, table_name, **schema) as tab:
+                    pass
+            # Allow role2 to re-create a table with the same name that
+            # role1 just deleted, and create it:
+            with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role2):
+                with new_named_table(d2, table_name, **schema) as tab:
+                    # At this point, role2 should have permissions to use
+                    # this table, but role1 should not!
+                    authorized(lambda: d2.Table(table_name).get_item(Key={'p': 'dog'}, ConsistentRead=True))
+                    unauthorized(lambda: d1.Table(table_name).get_item(Key={'p': 'dog'}, ConsistentRead=True))
+                    # Same for the view - it should be usable by role2,
+                    # but not by role1!
+                    authorized(lambda: d2.Table(table_name).query(IndexName='hello',
+                        Select='ALL_PROJECTED_ATTRIBUTES',
+                        KeyConditions={'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+                    unauthorized(lambda: d1.Table(table_name).query(IndexName='hello',
+                        Select='ALL_PROJECTED_ATTRIBUTES',
+                        KeyConditions={'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
