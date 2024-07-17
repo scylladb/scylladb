@@ -32,6 +32,21 @@
 
 namespace bpo = boost::program_options;
 
+namespace utils {
+
+auto
+format_as(config_file::liveness l) {
+    switch (l) {
+    case utils::config_file::liveness::LiveUpdate:
+        return "live-updatable";
+    case utils::config_file::liveness::MustRestart:
+        return "requires-restart";
+    }
+    std::unreachable();
+}
+
+}
+
 template<>
 std::istream& std::operator>>(std::istream& is, std::unordered_map<seastar::sstring, seastar::sstring>& map) {
    std::istreambuf_iterator<char> i(is), e;
