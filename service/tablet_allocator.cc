@@ -1373,6 +1373,15 @@ public:
         };
 
         for (auto&& [host, node_load] : nodes) {
+            if (lblogger.is_enabled(seastar::log_level::debug)) {
+                shard_id shard = 0;
+                for (auto&& shard_load : node_load.shards) {
+                    lblogger.debug("shard {}: all tablets: {}, candidates: {}, tables: {}", tablet_replica {host, shard},
+                                   shard_load.tablet_count, shard_load.candidate_count(), shard_load.tablet_count_per_table);
+                    shard++;
+                }
+            }
+
             if (host != target && (nodes_to_drain.empty() || nodes_to_drain.contains(host))) {
                 nodes_by_load.push_back(host);
                 std::make_heap(node_load.shards_by_load.begin(), node_load.shards_by_load.end(),
@@ -1517,6 +1526,15 @@ public:
             auto unload_target_load_sketch = seastar::defer([&] {
                 nodes[dst.host].target_load_sketch->unload(dst.host, dst.shard);
             });
+
+            if (lblogger.is_enabled(seastar::log_level::trace)) {
+                shard_id shard = 0;
+                for (auto&& shard_load : target_info.shards) {
+                    lblogger.trace("shard {}: all tablets: {}, candidates: {}, tables: {}", tablet_replica {dst.host, shard},
+                                   shard_load.tablet_count, shard_load.candidate_count(), shard_load.tablet_count_per_table);
+                    shard++;
+                }
+            }
 
             // Pick tablet movement.
 
