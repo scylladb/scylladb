@@ -248,10 +248,6 @@ static void maybe_delete_schema_version(mutation& m) {
 
 static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, const schema_result& before, const schema_result& after)
 {
-    std::vector<schema_result_value_type> created;
-    std::vector<sstring> altered;
-    std::set<sstring> dropped;
-
     /*
      * - we don't care about entriesOnlyOnLeft() or entriesInCommon(), because only the changes are of interest to us
      * - of all entriesOnlyOnRight(), we only care about ones that have live columns; it's possible to have a ColumnFamily
@@ -264,28 +260,25 @@ static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_pr
      */
     auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
-    for (auto&& key : diff.entries_only_on_left) {
-        slogger.info("Dropping keyspace {}", key);
-        dropped.emplace(key);
-    }
-    for (auto&& key : diff.entries_only_on_right) {
-        auto& value = after.at(key);
-        slogger.info("Creating keyspace {}", key);
-        created.emplace_back(schema_result_value_type{key, std::move(value)});
-    }
-    for (auto&& key : diff.entries_differing) {
-        slogger.info("Altering keyspace {}", key);
-        altered.emplace_back(key);
-    }
+    auto& created = diff.entries_only_on_right;
+    auto& altered = diff.entries_differing;
+    auto& dropped = diff.entries_only_on_left;
+
     auto& sharded_db = proxy.local().get_db();
-    for (auto&& val : created) {
-        auto ksm = co_await create_keyspace_from_schema_partition(proxy, val);
+    for (auto& name : created) {
+        slogger.info("Creating keyspace {}", name);
+        auto ksm = co_await create_keyspace_from_schema_partition(proxy,
+                schema_result_value_type{name, after.at(name)});
         co_await replica::database::create_keyspace_on_all_shards(sharded_db, proxy, *ksm);
     }
     for (auto& name : altered) {
+        slogger.info("Altering keyspace {}", name);
         auto tmp_ksm = co_await create_keyspace_from_schema_partition(proxy,
                 schema_result_value_type{name, after.at(name)});
         co_await replica::database::update_keyspace_on_all_shards(sharded_db, *tmp_ksm);
+    }
+    for (auto& key : dropped) {
+        slogger.info("Dropping keyspace {}", key);
     }
     co_return dropped;
 }
