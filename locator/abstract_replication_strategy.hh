@@ -468,7 +468,7 @@ struct fmt::formatter<locator::vnode_effective_replication_map::factory_key> {
     }
 
     template <typename FormatContext>
-    auto format(const locator::vnode_effective_replication_map::factory_key& key, FormatContext& ctx) {
+    auto format(const locator::vnode_effective_replication_map::factory_key& key, FormatContext& ctx) const {
         std::ostringstream os;
         os << key;
         return fmt::format_to(ctx.out(), "{}", os.str());
