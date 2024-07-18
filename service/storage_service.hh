@@ -528,6 +528,7 @@ private:
     sharded<service::tablet_allocator>& _tablet_allocator;
     sharded<cdc::generation_service>& _cdc_gens;
     sharded<db::view::view_builder>& _view_builder;
+    bool _isolated = false;
 private:
     /**
      * Handle node bootstrap
@@ -710,6 +711,10 @@ public:
     // Must run on shard 0.
     future<> check_and_repair_cdc_streams();
 
+    // for testing
+    bool is_isolated() const {
+        return _isolated;
+    }
 private:
     promise<> _drain_finished;
     std::optional<shared_future<>> _transport_stopped;
