@@ -22,6 +22,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
 from contextlib import asynccontextmanager
+from typing import Optional
 
 
 logger = logging.getLogger(__name__)
@@ -210,17 +211,23 @@ async def wait_until_last_generation_is_in_use(cql: Session):
     else:
         logger.info(f"The last generation is already in use.")
 
-async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host]):
+async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host], cqls: Optional[list[Session]] = None):
+    # The cqls parameter is a temporary workaround for testing the recovery mode in the presence of live zero-token
+    # nodes. A zero-token node requires a different cql session not to be ignored by the driver because of empty tokens
+    # in the system.peers table.
     assert len(hosts) != 0
 
-    topo_results = await asyncio.gather(*(manager.cql.run_async("SELECT * FROM system.topology", host=host) for host in hosts))
+    if cqls is None:
+        cqls = [manager.cql] * len(hosts)
+
+    topo_results = await asyncio.gather(*(cql.run_async("SELECT * FROM system.topology", host=host) for cql, host in zip(cqls, hosts)))
 
     for host, topo_res in zip(hosts, topo_results):
         logging.info(f"Dumping the state of system.topology as seen by {host}:")
         for row in topo_res:
             logging.info(f"  {row}")
 
-    for host, topo_res in zip(hosts, topo_results):
+    for cql, host, topo_res in zip(cqls, hosts, topo_results):
         assert len(topo_res) != 0
 
         for row in topo_res:
@@ -250,7 +257,7 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
         assert enabled_features == computed_enabled_features
         assert "SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES" in enabled_features
 
-        cdc_res = await manager.cql.run_async("SELECT * FROM system.cdc_generations_v3", host=host)
+        cdc_res = await cql.run_async("SELECT * FROM system.cdc_generations_v3", host=host)
         assert len(cdc_res) != 0
 
         all_generations = frozenset(row.id for row in cdc_res)
