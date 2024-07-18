@@ -103,6 +103,19 @@ def new_dynamodb(dynamodb, role, key):
     finally:
         ret.meta.client.close()
 
+@contextmanager
+def new_dynamodb_streams(dynamodb, role, key):
+    url = dynamodb.meta.client._endpoint.host
+    config = dynamodb.meta.client._client_config
+    verify = not url.startswith('https')
+    ret = boto3.client('dynamodbstreams', endpoint_url=url, verify=verify,
+        aws_access_key_id=role, aws_secret_access_key=key,
+        region_name='us-east-1', config=config)
+    try:
+        yield ret
+    finally:
+        ret.close()
+
 # A basic test for creating a new role. The ListTables operation is allowed
 # to any role, so it should work in the new role when given the right password
 # and fail with the wrong password.
@@ -215,6 +228,9 @@ def cql_table_name(tab):
 
 def cql_gsi_name(tab, gsi):
     return maybe_quote('alternator_' + tab.name) + '.' + maybe_quote(tab.name + ":" + gsi)
+
+def cql_cdclog_name(tab):
+    return maybe_quote('alternator_' + tab.name) + '.' + maybe_quote(tab.name + "_scylla_cdc_log")
 
 def cql_keyspace_name(tab):
     return maybe_quote('alternator_' + tab.name)
@@ -822,3 +838,40 @@ def test_rbac_superuser(dynamodb, cql, test_table_s):
         with new_dynamodb(dynamodb, role, key) as d:
             tab = d.Table(test_table_s.name)
             authorized(lambda: tab.put_item(Item={'p': p}))
+
+# In the Streams API, the functions ListStreams, DescribeStream and
+# GetShardIterator don't read data and are similar in spirit to DescribeTable
+# and don't require any permissions. But GetRecords actually reads data, so
+# we require the SELECT permissions. The following test checks all that.
+# The test does not intend to test correctness of Alternator Streams, just
+# the permissions, so it uses an empty table with no data.
+def test_rbac_streams(dynamodb, cql):
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }],
+        'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
+        # Work around issue #16137 that Alternator Streams doesn't work with
+        # tablets. When that issue is solved, the following Tags should be
+        # removed.
+        'Tags': [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+    }
+    with new_test_table(dynamodb, **schema) as table:
+        with new_role(cql) as (role, key):
+            with new_dynamodb_streams(dynamodb, role, key) as ds:
+                # Check that we can use ListStreams, DescribeStream and
+                # GetShardIterator without being granted permissions.
+                # only for GetRecords we'll need permissions below.
+                streams = ds.list_streams(TableName=table.name)
+                arn = streams['Streams'][0]['StreamArn']
+                desc = ds.describe_stream(StreamArn=arn)
+                shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+                iter = ds.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
+                unauthorized(lambda: ds.get_records(ShardIterator=iter))
+                # GetRecords checks the SELECT permissions on the CDC table,
+                # not the base table, so a grant on the base table doesn't
+                # help:
+                with temporary_grant(cql, 'SELECT', cql_table_name(table), role):
+                    unauthorized(lambda: ds.get_records(ShardIterator=iter))
+                # Only a grant on the CDC log table helps:
+                with temporary_grant(cql, 'SELECT', cql_cdclog_name(table), role):
+                    authorized(lambda: ds.get_records(ShardIterator=iter))
