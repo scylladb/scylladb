@@ -5005,6 +5005,9 @@ public:
                            _cf(std::move(cf)), _permit(std::move(permit)), _rate_limit_info(rate_limit_info) {
         _proxy->get_stats().reads++;
         _proxy->get_stats().foreground_reads++;
+        if (seastar::current_scheduling_group().is_main()) {
+            abort();
+        }
     }
     virtual ~abstract_read_executor() {
         _proxy->get_stats().reads--;
