@@ -22,6 +22,15 @@
 
 #include <seastar/json/json_elements.hh>
 
+namespace utils {
+
+template <typename T>
+T config_from_string(std::string_view string_representation) {
+    return boost::lexical_cast<T>(string_representation);
+}
+
+}
+
 namespace YAML {
 
 /*
@@ -84,7 +93,7 @@ std::istream& operator>>(std::istream& is, std::unordered_map<K, V, Args...>& ma
     is >> tmp;
 
     for (auto& p : tmp) {
-        map[boost::lexical_cast<K>(p.first)] = boost::lexical_cast<V>(p.second);
+        map[utils::config_from_string<K>(p.first)] = utils::config_from_string<V>(p.second);
     }
     return is;
 }
@@ -94,7 +103,7 @@ std::istream& operator>>(std::istream& is, std::vector<V, Args...>& dst) {
     std::vector<seastar::sstring> tmp;
     is >> tmp;
     for (auto& v : tmp) {
-        dst.emplace_back(boost::lexical_cast<V>(v));
+        dst.emplace_back(utils::config_from_string<V>(v));
     }
     return is;
 }
@@ -126,7 +135,7 @@ void validate(boost::any& out, const std::vector<std::string>& in, std::unordere
                 ve = s.begin() + i->position();
             }
 
-            (*p)[boost::lexical_cast<K>(k)] = boost::lexical_cast<V>(sstring(vs, ve));
+            (*p)[utils::config_from_string<K>(k)] = utils::config_from_string<V>(sstring(vs, ve));
         }
     }
 }
@@ -210,7 +219,7 @@ bool utils::config_file::named_value<T>::set_value(sstring value, config_source 
         return false;
     }
 
-    (*this)(boost::lexical_cast<T>(value), src);
+    (*this)(config_from_string<T>(value), src);
     return true;
 }
 
@@ -232,7 +241,7 @@ future<bool> utils::config_file::named_value<T>::set_value_on_all_shards(sstring
         co_return false;
     }
 
-    co_await smp::invoke_on_all([this, value = boost::lexical_cast<T>(value), src] () {
+    co_await smp::invoke_on_all([this, value = config_from_string<T>(value), src] () {
         (*this)(value, src);
     });
     co_return true;

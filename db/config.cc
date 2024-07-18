@@ -177,7 +177,7 @@ struct convert<seastar::log_level> {
         if (!convert<std::string>::decode(node, tmp)) {
             return false;
         }
-        rhs = boost::lexical_cast<seastar::log_level>(tmp);
+        rhs = utils::config_from_string<seastar::log_level>(tmp);
         return true;
     }
 };
