@@ -343,7 +343,12 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(
             _cfg.maintenance_reader_concurrency_semaphore_count_limit,
+#if 1
             max_memory_streaming_concurrent_reads(),
+#else
+            // FIXME: hack for test
+            size_t(512*1024),
+#endif
             "streaming",
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),

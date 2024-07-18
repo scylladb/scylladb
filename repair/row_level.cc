@@ -2988,6 +2988,8 @@ public:
             auto max = _shard_task.rs.max_repair_memory();
             auto wanted = (_all_live_peer_nodes.size() + 1) * repair::task_manager_module::max_repair_memory_per_range;
             wanted = std::min(max, wanted);
+            // FIXME: hack for test
+            wanted = 1;
             rlogger.trace("repair[{}]: Started to get memory budget, wanted={}, available={}, max_repair_memory={}",
                     _shard_task.global_repair_id.uuid(), wanted, mem_sem.current(), max);
             auto mem_permit = seastar::get_units(mem_sem, wanted).get();

@@ -429,8 +429,13 @@ float node_ops_metrics::repair_finished_percentage() {
 repair::task_manager_module::task_manager_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept
     : tasks::task_manager::module(tm, "repair")
     , _rs(rs)
+// FIXME: hack for test
+#if 1
+    , _range_parallelism_semaphore(1, named_semaphore_exception_factory{"repair range parallelism"})
+#else
     , _range_parallelism_semaphore(std::max(size_t(1), size_t(max_repair_memory / max_repair_memory_per_range / 4)),
             named_semaphore_exception_factory{"repair range parallelism"})
+#endif
 {
     auto nr = _range_parallelism_semaphore.available_units();
     rlogger.info("Setting max_repair_memory={}, max_repair_memory_per_range={}, max_repair_ranges_in_parallel={}",
