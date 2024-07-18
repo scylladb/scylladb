@@ -21,11 +21,13 @@ from test.topology.util import reconnect_driver, enter_recovery_state, \
 @log_run_time
 async def test_topology_recovery_after_majority_loss(request, manager: ManagerClient):
     servers = await manager.servers_add(3)
+    servers += await manager.servers_add(2, config={'join_ring': False})
     cql = manager.cql
     assert(cql)
 
+    # Currently python driver ignores zero-token nodes, so we skip them here.
     logging.info("Waiting until driver connects to every server")
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers[:-2], time.time() + 60)
 
     srv1, *others = servers
 
@@ -73,7 +75,7 @@ async def test_topology_recovery_after_majority_loss(request, manager: ManagerCl
 
     logging.info("Add two more nodes")
     servers = [srv1] + await manager.servers_add(2)
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers[:-2], time.time() + 60)
 
     logging.info("Waiting for the new CDC generations publishing")
     await wait_for_cdc_generations_publishing(cql, hosts, time.time() + 60)
