@@ -13,7 +13,8 @@ public:
     enum class read_strategy {
         local,
         multishard_split,
-        multishard_filter
+        multishard_filter,
+        multishard_proxy,
     };
 
 private:
@@ -90,6 +91,9 @@ template <> struct fmt::formatter<repair_reader::read_strategy>  : fmt::formatte
                 break;
             case multishard_filter:
                 name = "multishard_filter";
+                break;
+            case multishard_proxy:
+                name = "multishard_proxy";
                 break;
         };
         return formatter<string_view>::format(name, ctx);

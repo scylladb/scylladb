@@ -65,6 +65,7 @@
 #include "readers/filtering.hh"
 #include "readers/evictable.hh"
 #include "readers/queue.hh"
+#include "utils/stall_free.hh"
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -2356,6 +2357,93 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
             testlog.trace("Comparing mutation {:d}/{:d}", i, min_size - 1);
             assert_that(tested_muts[i]).is_equal_to(reference_muts[i]);
         }
+
+        return make_ready_future<>();
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_perf_multishard_streaming_reader) {
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+        env.execute_cql("CREATE KEYSPACE multishard_streaming_reader_ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1};").get();
+        env.execute_cql("CREATE TABLE multishard_streaming_reader_ks.test (pk int, v int, PRIMARY KEY(pk));").get();
+
+        const auto insert_id = env.prepare("INSERT INTO multishard_streaming_reader_ks.test (\"pk\", \"v\") VALUES (?, ?);").get();
+
+        const auto partition_count = 1000000;
+
+        for (int pk = 0; pk < partition_count; ++pk) {
+            env.execute_prepared(insert_id, {{
+                    cql3::raw_value::make_value(serialized(pk)),
+                    cql3::raw_value::make_value(serialized(0))}}).get();
+        }
+
+
+        auto token_range = dht::token_range::make_open_ended_both_sides();
+        auto partition_range = dht::to_partition_range(token_range);
+
+        std::atomic<uint64_t> muts_cnt{0};
+
+        auto t1 = std::chrono::steady_clock::now();
+        {
+            smp::invoke_on_all([&env, &muts_cnt, partition_range] () -> future<> {
+                bool use_streaming_reader = true;
+                auto schema = env.local_db().find_column_family("multishard_streaming_reader_ks", "test").schema();
+                auto& table = env.db().local().find_column_family(schema);
+                auto erm = table.get_effective_replication_map();
+                const auto fwd = streamed_mutation::forwarding::no;
+                const auto fwd_mr = mutation_reader::forwarding::no;
+                tracing::trace_state_ptr trace_state;
+                const auto compaction_time = gc_clock::time_point();
+                auto ref_reader = use_streaming_reader
+                    ? table.make_streaming_reader(schema, make_reader_permit(env), partition_range, schema->full_slice(), fwd_mr, compaction_time)
+                    : table.as_mutation_source().make_reader_v2(schema, make_reader_permit(env), partition_range, schema->full_slice(), std::move(trace_state), fwd, fwd_mr);
+                auto close_ref_reader = deferred_close(ref_reader);
+                std::vector<mutation> ref_muts;
+                while (auto mut_opt = co_await read_mutation_from_mutation_reader(ref_reader)) {
+                    ref_muts.push_back(std::move(*mut_opt));
+                    co_await coroutine::maybe_yield();
+                }
+                muts_cnt.fetch_add(ref_muts.size());
+                testlog.info("ref_muts={} smp={}", ref_muts.size(), smp::count);
+                co_await utils::clear_gently(ref_muts);
+            }).get();
+        }
+        auto t2 = std::chrono::steady_clock::now();
+        {
+            auto reader_factory = [db = &env.db()] (
+                    schema_ptr s,
+                    reader_permit permit,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    tracing::trace_state_ptr trace_state,
+                    mutation_reader::forwarding fwd_mr) mutable {
+                auto& table = db->local().find_column_family(s);
+                return table.as_mutation_source().make_reader_v2(std::move(s), std::move(permit), range, slice, std::move(trace_state),
+                        streamed_mutation::forwarding::no, fwd_mr);
+            };
+
+            auto schema = env.local_db().find_column_family("multishard_streaming_reader_ks", "test").schema();
+            auto& table = env.db().local().find_column_family(schema);
+            auto erm = table.get_effective_replication_map();
+            auto reference_reader = make_multishard_combining_reader_v2(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory)),
+                        schema, erm, make_reader_permit(env), partition_range, schema->full_slice());
+            auto close_reference_reader = deferred_close(reference_reader);
+            std::vector<mutation> tested_muts;
+            while (auto mut_opt = read_mutation_from_mutation_reader(reference_reader).get()) {
+                tested_muts.push_back(std::move(*mut_opt));
+                seastar::thread::maybe_yield();
+            }
+            testlog.info("tested_muts={} smp={}", tested_muts.size(), smp::count);
+            assert(tested_muts.size() == muts_cnt);
+            utils::clear_gently(tested_muts).get();
+
+        }
+        auto t3 = std::chrono::steady_clock::now();
+
+        auto d1 = std::chrono::duration<float>(t2 - t1);
+        auto d2 = std::chrono::duration<float>(t3 - t2);
+
+        testlog.info("mutations={} reader1={} reader2={} diff={}", partition_count, d1, d2, d2 / d1);
 
         return make_ready_future<>();
     }).get();

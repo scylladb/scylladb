@@ -1213,6 +1213,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"mixed_shard_optimization",
+                     "description":"If the value is the string 'true' with any capitalization, perform mixed shard optimization. It improves the efficiency of the readers used by repair for clusters with mixed shard numbers.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             },

@@ -354,7 +354,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
     ss::repair_async.set(r, [&ctx, &repair](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         static std::unordered_set<sstring> options = {"primaryRange", "parallelism", "incremental",
                 "jobThreads", "ranges", "columnFamilies", "dataCenters", "hosts", "ignore_nodes", "trace",
-                "startToken", "endToken", "ranges_parallelism", "small_table_optimization"};
+                "startToken", "endToken", "ranges_parallelism", "small_table_optimization", "mixed_shard_optimization"};
 
         // Nodetool still sends those unsupported options. Ignore them to avoid failing nodetool repair.
         static std::unordered_set<sstring> legacy_options_to_ignore = {"pullRepair", "ignoreUnreplicatedKeyspaces"};
