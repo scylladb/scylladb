@@ -384,11 +384,12 @@ struct sstable_manager_service {
     cache_tracker tracker;
     sstables::directory_semaphore dir_sem;
     sstables::sstables_manager sst_man;
+    abort_source abort;
 
     explicit sstable_manager_service(const db::config& dbcfg)
         : feature_service(gms::feature_config_from_db_config(dbcfg))
         , dir_sem(1)
-        , sst_man("schema_loader", large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }) {
+        , sst_man("schema_loader", large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, abort) {
     }
 
     future<> stop() {
@@ -663,9 +664,10 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
     gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
     cache_tracker tracker;
     sstables::directory_semaphore dir_sem(1);
+    abort_source abort;
     sstables::sstables_manager sst_man("tools::load_schema_from_sstable", large_data_handler, dbcfg, feature_service, tracker,
         memory::stats().total_memory(), dir_sem,
-        [host_id = locator::host_id::create_random_id()] { return host_id; });
+        [host_id = locator::host_id::create_random_id()] { return host_id; }, abort);
     auto close_sst_man = deferred_close(sst_man);
 
     schema_ptr bootstrap_schema = schema_builder(keyspace, table).with_column("pk", int32_type, column_kind::partition_key).build();

@@ -24,7 +24,8 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, noncopyable_function<locator::host_id()>&& resolve_host_id, scheduling_group maintenance_sg, storage_manager* shared)
+    sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem,
+    noncopyable_function<locator::host_id()>&& resolve_host_id, const abort_source& abort, scheduling_group maintenance_sg, storage_manager* shared)
     : _storage(shared)
     , _available_memory(available_memory)
     , _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
@@ -39,6 +40,7 @@ sstables_manager::sstables_manager(
     , _dir_semaphore(dir_sem)
     , _resolve_host_id(std::move(resolve_host_id))
     , _maintenance_sg(std::move(maintenance_sg))
+    , _abort(abort)
 {
     _components_reloader_status = components_reloader_fiber();
 }

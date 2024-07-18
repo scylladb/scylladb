@@ -167,6 +167,7 @@ private:
     trust_promoted_index _trust_pi;
     std::optional<column_values_fixed_lengths> _ck_values_fixed_lengths;
     tracing::trace_state_ptr _trace_state;
+    const abort_source& _abort;
 
     inline bool is_mc_format() const { return static_cast<bool>(_ck_values_fixed_lengths); }
 
@@ -185,6 +186,8 @@ public:
     }
 
     processing_result process_state(temporary_buffer<char>& data) {
+        _abort.check();
+
         auto current_pos = [&] { return this->position() - data.size(); };
         auto read_vint_or_uint64 = [this] (temporary_buffer<char>& data) {
             return is_mc_format() ? this->read_unsigned_vint(data) : this->read_64(data);
@@ -318,11 +321,13 @@ public:
 
     index_consume_entry_context(const sstable& sst, reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi,
             input_stream<char>&& input, uint64_t start, uint64_t maxlen,
-            std::optional<column_values_fixed_lengths> ck_values_fixed_lengths, tracing::trace_state_ptr trace_state = {})
+            std::optional<column_values_fixed_lengths> ck_values_fixed_lengths,
+            const abort_source& abort, tracing::trace_state_ptr trace_state = {})
         : continuous_data_consumer(std::move(permit), std::move(input), start, maxlen)
         , _sst(sst), _consumer(consumer), _entry_offset(start), _trust_pi(trust_pi)
         , _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
         , _trace_state(std::move(trace_state))
+        , _abort(abort)
     {}
 };
 
@@ -459,6 +464,7 @@ class index_reader {
     logalloc::region& _region;
     use_caching _use_caching;
     bool _single_page_read;
+    abort_source _abort;
 
     std::unique_ptr<index_consume_entry_context<index_consumer>> make_context(uint64_t begin, uint64_t end, index_consumer& consumer) {
         auto index_file = make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching);
@@ -469,7 +475,7 @@ class index_reader {
                             ? std::make_optional(get_clustering_values_fixed_lengths(_sstable->get_serialization_header()))
                             : std::optional<column_values_fixed_lengths>{};
         return std::make_unique<index_consume_entry_context<index_consumer>>(*_sstable, _permit, consumer, trust_pi, std::move(input),
-                            begin, end - begin, ck_values_fixed_lengths, _trace_state);
+                            begin, end - begin, ck_values_fixed_lengths, _abort, _trace_state);
     }
 
     future<> advance_context(index_bound& bound, uint64_t begin, uint64_t end, int quantity) {

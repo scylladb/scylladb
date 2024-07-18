@@ -1461,11 +1461,10 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring o
         }
     };
 
-    // Replace the existing filter with a new one that can optimally represent the given num_partitions.
-    // The rebuilding is done in-place as this method is only called before the sstable is sealed.
-    _components->filter = utils::i_filter::get_filter(num_partitions, _schema->bloom_filter_fp_chance(), get_filter_format(_version));
+    // Create a new filter that can optimally represent the given num_partitions.
+    auto optimal_filter = utils::i_filter::get_filter(num_partitions, _schema->bloom_filter_fp_chance(), get_filter_format(_version));
     sstlog.info("Rebuilding bloom filter {}: resizing bitset from {} bytes to {} bytes. sstable origin: {}", filename(component_type::Filter), curr_bitset_size,
-                downcast_ptr<utils::filter::bloom_filter>(_components->filter.get())->bits().memory_size(), origin);
+                downcast_ptr<utils::filter::bloom_filter>(optimal_filter.get())->bits().memory_size(), origin);
 
     auto index_file = open_file(component_type::Index, open_flags::ro).get();
     auto index_file_closer = deferred_action([&index_file] {
@@ -1483,15 +1482,23 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions, sstring o
     auto sem_stopper = deferred_stop(sem);
 
     // rebuild the filter using index_consume_entry_context
-    bloom_filter_builder bfb_consumer(_components->filter);
+    bloom_filter_builder bfb_consumer(optimal_filter);
     index_consume_entry_context<bloom_filter_builder> consumer_ctx(
             *this, sem.make_tracking_only_permit(_schema, "rebuild_filter_from_index", db::no_timeout, {}), bfb_consumer, trust_promoted_index::no,
             make_file_input_stream(index_file, 0, index_file_size, {.buffer_size = sstable_buffer_size}), 0, index_file_size,
             (_version >= sstable_version_types::mc
                 ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
-                : std::optional<column_values_fixed_lengths>{}));
+                : std::optional<column_values_fixed_lengths>{}), _manager._abort);
     auto consumer_ctx_closer = deferred_close(consumer_ctx);
-    consumer_ctx.consume_input().get();
+    try {
+        consumer_ctx.consume_input().get();
+    } catch (...) {
+        sstlog.warn("Failed to rebuild bloom filter {} : {}. Existing bloom filter will be written to disk.", filename(component_type::Filter), std::current_exception());
+        return;
+    }
+
+    // Replace the existing filter with the new optimal filter.
+    _components->filter.swap(optimal_filter);
 }
 
 size_t sstable::total_reclaimable_memory_size() const {
@@ -2038,7 +2045,7 @@ future<> sstable::generate_summary() {
                     make_file_input_stream(index_file, 0, index_size, std::move(options)), 0, index_size,
                     (_version >= sstable_version_types::mc
                         ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
-                        : std::optional<column_values_fixed_lengths>{}));
+                        : std::optional<column_values_fixed_lengths>{}), _manager._abort);
 
         try {
             co_await ctx->consume_input();
