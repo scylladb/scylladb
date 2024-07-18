@@ -100,6 +100,21 @@ error_injection_list_to_json(const std::vector<db::config::error_injection_at_st
 }
 
 template <>
+bool
+config_from_string(std::string_view value) {
+    // boost::lexical_cast doesn't accept true/false, which are our output representations
+    // for bools. We want round-tripping, so we need to accept true/false. For backward
+    // compatibility, we also accept 1/0. #19791.
+    if (value == "true" || value == "1") {
+        return true;
+    } else if (value == "false" || value == "0") {
+        return false;
+    } else {
+        throw boost::bad_lexical_cast(typeid(std::string_view), typeid(bool));
+    }
+}
+
+template <>
 const config_type config_type_for<bool> = config_type("bool", value_to_json<bool>);
 
 template <>

@@ -29,6 +29,9 @@ T config_from_string(std::string_view string_representation) {
     return boost::lexical_cast<T>(string_representation);
 }
 
+template <>
+bool config_from_string(std::string_view string_representation);
+
 }
 
 namespace YAML {
