@@ -780,3 +780,45 @@ def test_rbac_updatetimetolive(dynamodb, cql):
                 with temporary_grant(cql, 'ALTER', cql_table_name(table), role):
                     authorized(lambda: d.meta.client.update_time_to_live(TableName=table.name,
                         TimeToLiveSpecification={'AttributeName': 'dog', 'Enabled': True}))
+
+@pytest.fixture(scope="module")
+def dot_table(dynamodb):
+    name = "." + unique_table_name() + ".hello"
+    table = dynamodb.create_table(TableName=name, BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }])
+    table.meta.client.get_waiter('table_exists').wait(TableName=name)
+    yield table
+    table.delete()
+
+# The rules on Alternator table names are not identical to CQL table names.
+# In particular, an Alternator table's name may contain a dot and the
+# resulting name is not a valid CQL table (the fixture "dot_table" creates
+# a table with such a name). We want to be able to pass such names to GRANT
+# commands.
+def test_rbac_table_name_with_dot(dynamodb, cql, dot_table):
+    p = random_string()
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(dot_table.name)
+            # Before granting MODIFY permissions, PutItem fails
+            unauthorized(lambda: tab.put_item(Item={'p': p}))
+            # Check that grant works despite the illegal (CQL-wise) table name
+            with temporary_grant(cql, 'MODIFY', cql_table_name(tab), role):
+                authorized(lambda: tab.put_item(Item={'p': p}))
+
+# A "superuser" role should be able to do any operation. We'll just test
+# this on PutItem, but assuming the permission-checking code uses the same
+# logic for all operations, it should apply to all operations
+def test_rbac_superuser(dynamodb, cql, test_table_s):
+    p = random_string()
+    # A non-super role can't write to a pre-existing table:
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            unauthorized(lambda: tab.put_item(Item={'p': p}))
+    # But a superuser role, can:
+    with new_role(cql, superuser=True) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            authorized(lambda: tab.put_item(Item={'p': p}))
