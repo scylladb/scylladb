@@ -23,6 +23,7 @@
 #include "partition_range_compat.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+#include "utils/UUID.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -618,7 +619,8 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
         streaming::stream_reason reason_,
         bool hints_batchlog_flushed,
         bool small_table_optimization,
-        std::optional<int> ranges_parallelism)
+        std::optional<int> ranges_parallelism,
+        bool mixed_shard_optimization)
     : repair_task_impl(module, id, 0, "shard", keyspace, "", "", parent_id_.uuid(), reason_)
     , rs(repair)
     , db(repair.get_db())
@@ -637,6 +639,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
     , _small_table_optimization(small_table_optimization)
     , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
+    , _mixed_shard_optimization(mixed_shard_optimization)
 {
     rlogger.debug("repair[{}]: Setting user_ranges_parallelism to {}", global_repair_id.uuid(),
             _user_ranges_parallelism ? std::to_string(_user_ranges_parallelism->available_units()) : "unlimited");
@@ -852,6 +855,8 @@ struct repair_options {
 
     bool small_table_optimization = false;
 
+    bool mixed_shard_optimization = false;
+
     repair_options(std::unordered_map<sstring, sstring> options) {
         bool_opt(primary_range, options, PRIMARY_RANGE_KEY);
         ranges_opt(ranges, options, RANGES_KEY);
@@ -890,6 +895,7 @@ struct repair_options {
         int_opt(ranges_parallelism, options, RANGES_PARALLELISM_KEY);
 
         bool_opt(small_table_optimization, options, SMALL_TABLE_OPTIMIZATION_KEY);
+        bool_opt(mixed_shard_optimization, options, MIXED_SHARD_OPTIMIZATION);
 
         // The parsing code above removed from the map options we have parsed.
         // If anything is left there in the end, it's an unsupported option.
@@ -913,6 +919,7 @@ struct repair_options {
     static constexpr const char* END_TOKEN = "endToken";
     static constexpr const char* RANGES_PARALLELISM_KEY = "ranges_parallelism";
     static constexpr const char* SMALL_TABLE_OPTIMIZATION_KEY = "small_table_optimization";
+    static constexpr const char* MIXED_SHARD_OPTIMIZATION = "mixed_shard_optimization";
 
     // Settings of "parallelism" option. Numbers must match Cassandra's
     // RepairParallelism enum, which is used by the caller.
@@ -1170,6 +1177,9 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
             if (options.small_table_optimization) {
                 throw std::invalid_argument("The small_table_optimization option is not supported for tablet repair");
             }
+            if (options.mixed_shard_optimization) {
+                throw std::invalid_argument("The mixed_shard_optimization option is not supported for tablet repair");
+            }
 
             // Reject unsupported option combinations.
             if (!options.data_centers.empty() && !options.hosts.empty()) {
@@ -1314,9 +1324,10 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
         ranges = {range};
         rlogger.info("repair[{}]: Using small table optimization for keyspace={} tables={} range={}", id.uuid(), keyspace, cfs, range);
     }
+    auto mixed_shard_optimization = options.mixed_shard_optimization;
 
     auto ranges_parallelism = options.ranges_parallelism == -1 ? std::nullopt : std::optional<int>(options.ranges_parallelism);
-    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>({}, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), small_table_optimization, ranges_parallelism);
+    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>({}, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), small_table_optimization, mixed_shard_optimization, ranges_parallelism);
     co_return id.id;
 }
 
@@ -1388,13 +1399,23 @@ future<> repair::user_requested_repair_task_impl::run() {
 
         auto ranges_parallelism = _ranges_parallelism;
         bool small_table_optimization = _small_table_optimization;
-        for (auto shard : boost::irange(unsigned(0), smp::count)) {
+        bool mixed_shard_optimization = _mixed_shard_optimization;
+        unsigned start_shard = 0;
+        unsigned end_shard = smp::count;
+        if (mixed_shard_optimization) {
+            start_shard = utils::uuid_xor_to_uint32(uuid.uuid()) % smp::count;
+            end_shard = start_shard + 1;
+        }
+        rlogger.debug("repair[{}]: keyspace={} mixed_shard_optimization={} start_shard={} end_shard={}",
+                uuid, keyspace, mixed_shard_optimization, start_shard, end_shard);
+        for (auto shard : boost::irange(start_shard, end_shard)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, ranges_parallelism, small_table_optimization,
-                    data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
+                    data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs, mixed_shard_optimization] (repair_service& local_repair) mutable -> future<> {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
                 auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism);
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair,
+                        hints_batchlog_flushed, small_table_optimization, ranges_parallelism, mixed_shard_optimization);
                 co_await task->done();
             });
             repair_results.push_back(std::move(f));
