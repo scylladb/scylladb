@@ -63,6 +63,10 @@ public:
         }
         co_await do_io_check(error_handler, std::mem_fn(&file::flush), _file);
     };
+
+    future<> close() {
+        return _file ? _file.close() : make_ready_future<>();
+    }
 };
 
 // cannot define these classes in an anonymous namespace, as we need to
@@ -84,9 +88,13 @@ private:
     future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
     future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
 
+    future<> change_dir(sstring new_dir) {
+        auto old_dir = std::exchange(_dir, opened_directory(new_dir));
+        return old_dir.close();
+    }
+
     virtual future<> change_dir_for_test(sstring nd) override {
-        _dir = opened_directory(nd);
-        return make_ready_future<>();
+        return change_dir(nd);
     }
 
 public:
@@ -395,7 +403,7 @@ future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generatio
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             sst.get_filename(), sst._generation, new_dir, new_generation, delay_commit == nullptr);
     co_await create_links_common(sst, new_dir, new_generation, mark_for_removal::yes);
-    _dir = opened_directory(new_dir);
+    co_await change_dir(new_dir);
     generation_type old_generation = sst._generation;
     co_await coroutine::parallel_for_each(sst.all_components(), [&sst, old_generation, old_dir] (auto p) {
         return sst.sstable_write_io_check(remove_file, sstable::filename(old_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, old_generation, sst._format, p.second));
