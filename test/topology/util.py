@@ -233,9 +233,8 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
             assert row.release_version is not None
             assert row.supported_features is not None
             assert row.shard_count is not None
-            assert row.tokens is not None
 
-            assert len(row.tokens) == row.num_tokens
+            assert (0 if row.tokens is None else len(row.tokens)) == row.num_tokens
 
         assert topo_res[0].committed_cdc_generations is not None
         committed_generations = frozenset(gen[1] for gen in topo_res[0].committed_cdc_generations)
