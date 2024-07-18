@@ -169,10 +169,12 @@ static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstrin
     return env.reusable_sst(std::move(schema), load_dir, generation).then([write_dir, generation] (sstable_ptr sst) mutable {
         sstable_generation_generator gen{generation.as_int()};
         sstables::test(sst).change_generation_number(gen());
-        sstables::test(sst).change_dir(write_dir);
-        auto fut = sstables::test(sst).store();
+        auto fut = sstables::test(sst).change_dir(write_dir);
         return std::move(fut).then([sst = std::move(sst)] {
-            return make_ready_future<sstable_ptr>(std::move(sst));
+            auto fut = sstables::test(sst).store();
+            return std::move(fut).then([sst = std::move(sst)] {
+                return make_ready_future<sstable_ptr>(std::move(sst));
+            });
         });
     });
 }

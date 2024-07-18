@@ -84,8 +84,9 @@ private:
     future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
     future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
 
-    virtual void change_dir_for_test(sstring nd) override {
+    virtual future<> change_dir_for_test(sstring nd) override {
         _dir = opened_directory(nd);
+        return make_ready_future<>();
     }
 
 public:
