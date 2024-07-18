@@ -875,3 +875,83 @@ def test_rbac_streams(dynamodb, cql):
                 # Only a grant on the CDC log table helps:
                 with temporary_grant(cql, 'SELECT', cql_cdclog_name(table), role):
                     authorized(lambda: ds.get_records(ShardIterator=iter))
+
+# In the test above (test_rbac_streams), the superuser creates a table and
+# a stream, and grants a role the ability to read them. In this test, the role
+# itself creates the table and the stream, and we need to check that the
+# role receives permissions to read the stream it just created (auto-grant).
+# We have two tests for the two ways to create a CDC log: creating a table
+# with streams enabled up-front during creation - and enabling the stream
+# later in an already existing table.
+# Reproduces issue #19798
+@pytest.mark.xfail(reason="#19798")
+@pytest.mark.parametrize("during_creation", [True, False])
+def test_rbac_streams_autogrant(dynamodb, cql, during_creation):
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }],
+        # Work around issue #16137 that Alternator Streams doesn't work with
+        # tablets. When that issue is solved, the following Tags should be
+        # removed.
+        'Tags': [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+    }
+    enable_stream = {'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'}}
+    if during_creation:
+        schema.update(enable_stream)
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d, new_dynamodb_streams(dynamodb, role, key) as ds:
+            # Allow the new role to create a table. The table created in the
+            # new role should permission to work on it - in particular to
+            # use the stream (GetRecords).
+            with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role):
+                table_name = unique_table_name()
+                with new_named_table(d, table_name, **schema) as table:
+                    if not during_creation:
+                        authorized(lambda: table.update(**enable_stream))
+                    streams = ds.list_streams(TableName=table.name)
+                    arn = streams['Streams'][0]['StreamArn']
+                    desc = ds.describe_stream(StreamArn=arn)
+                    shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+                    iter = ds.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
+                    # Note: use low timeout to avoid slow xfail
+                    authorized(lambda: ds.get_records(ShardIterator=iter), timeout=3*permissions_validity_in_ms(cql))
+
+# Once autogrant works (tested in the above test, test_rbac_streams_autogrant)
+# we also need auto-revoke - i.e., when the stream is deleted the permissions
+# should be deleted - otherwise if role1 creates a table and a stream, deletes
+# it, and later role2 creates a table with the same name, role1 might be able
+# to read the new stream!
+def test_rbac_streams_autorevoke(dynamodb, cql):
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }],
+        'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
+        # Work around issue #16137 that Alternator Streams doesn't work with
+        # tablets. When that issue is solved, the following Tags should be
+        # removed.
+        'Tags': [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+    }
+    table_name = unique_table_name()
+    with new_role(cql) as (role1, key1), new_role(cql) as (role2, key2):
+        with new_dynamodb(dynamodb, role1, key1) as d1, new_dynamodb(dynamodb, role2, key2) as d2, new_dynamodb_streams(dynamodb, role1, key1) as ds1:
+            with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role1):
+                with new_named_table(d1, table_name, **schema) as table:
+                    # role1 created table_name, so autogrant will now give
+                    # it permissions to read the table and the CDC log.
+                    # we hope this permission is auto-revoked when the
+                    # table is deleted when this scope end.
+                    pass
+                # After role1 deleted the table table_name, let's have
+                # role2 create a table with the same name:
+                with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role2):
+                    with new_named_table(d2, table_name, **schema) as table:
+                        # At this point, the new table and its stream should
+                        # be readable to role2 but NOT to role1. Let's check
+                        # its indeed not reable to role1 (get_records will
+                        # fail) - so auto-revoke worked:
+                        streams = ds1.list_streams(TableName=table.name)
+                        arn = streams['Streams'][0]['StreamArn']
+                        desc = ds1.describe_stream(StreamArn=arn)
+                        shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+                        iter = ds1.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
+                        unauthorized(lambda: ds1.get_records(ShardIterator=iter))
