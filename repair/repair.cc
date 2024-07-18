@@ -692,6 +692,19 @@ size_t repair::shard_repair_task_impl::ranges_size() const noexcept {
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
 future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& range, table_info table) {
+    if (_mixed_shard_optimization) {
+        auto range_start = range.start() ? range.start()->value() : dht::minimum_token();
+        auto start = uint64_t(dht::token::to_int64(range_start));
+        auto range_end = range.end() ? range.end()->value() : dht::maximum_token();
+        auto end = uint64_t(dht::token::to_int64(range_end));
+        auto shard = (start ^ end) % smp::count;
+        if (shard != this_shard_id()) {
+            rlogger.debug("repair[{}]: Skipped repair on this shard for mixed shard optimization keyspace={} table={} range={}",
+                    global_repair_id.uuid(), _status.keyspace, table.name, range);
+            co_return;
+        }
+    }
+
     check_in_abort_or_shutdown();
     ranges_index++;
     repair_neighbors r_neighbors = get_repair_neighbors(range);
@@ -1402,12 +1415,14 @@ future<> repair::user_requested_repair_task_impl::run() {
         bool mixed_shard_optimization = _mixed_shard_optimization;
         unsigned start_shard = 0;
         unsigned end_shard = smp::count;
+#if 0
         if (mixed_shard_optimization) {
             start_shard = utils::uuid_xor_to_uint32(uuid.uuid()) % smp::count;
             end_shard = start_shard + 1;
         }
         rlogger.debug("repair[{}]: keyspace={} mixed_shard_optimization={} start_shard={} end_shard={}",
                 uuid, keyspace, mixed_shard_optimization, start_shard, end_shard);
+#endif
         for (auto shard : boost::irange(start_shard, end_shard)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, ranges_parallelism, small_table_optimization,
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs, mixed_shard_optimization] (repair_service& local_repair) mutable -> future<> {
