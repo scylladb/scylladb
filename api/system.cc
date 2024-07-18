@@ -10,6 +10,7 @@
 #include "api/api-doc/system.json.hh"
 #include "api/api-doc/metrics.json.hh"
 #include "replica/database.hh"
+#include "sstables/sstables_manager.hh"
 
 #include <rapidjson/document.h>
 #include <seastar/core/reactor.hh>
@@ -182,6 +183,11 @@ void set_system(http_context& ctx, routes& r) {
         apilog.info("Profile dumped to {}", profile_dest);
         return make_ready_future<json::json_return_type>(json::json_return_type(json::json_void()));
     }) ;
+
+    hs::get_highest_supported_sstable_version.set(r, [&ctx] (const_req req) {
+        auto& table = ctx.db.local().find_column_family("system", "local");
+        return seastar::to_sstring(table.get_sstables_manager().get_highest_supported_format());
+    });
 }
 
 }
