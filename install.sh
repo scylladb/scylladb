@@ -350,6 +350,7 @@ if ! $without_systemd; then
 ExecStart=
 ExecStart=$prefix/kernel_conf/scylla_tune_sched
 EOS
+        chmod 644 "$retc"/systemd/system/scylla-tune-sched.service.d/execpath.conf
     fi
 fi
 relocate_python3 "$rprefix"/kernel_conf dist/common/kernel_conf/scylla_tune_sched
@@ -376,6 +377,7 @@ if ! $nonroot && ! $without_systemd; then
 EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-node-exporter
 EOS
+        chmod 644 "$retc"/systemd/system/scylla-node-exporter.service.d/sysconfdir.conf
     fi
 elif ! $without_systemd; then
     install -d -m755 "$rsystemd"/scylla-node-exporter.service.d
@@ -388,7 +390,7 @@ ExecStart=$rprefix/node_exporter/node_exporter $SCYLLA_NODE_EXPORTER_ARGS
 User=
 Group=
 EOS
-
+    chmod 644 "$rsystemd"/scylla-node-exporter.service.d/nonroot.conf
 fi
 
 # scylla-server
@@ -438,14 +440,13 @@ install -m755 -d "$rdata"/view_hints
 install -m755 -d "$rdata"/coredump
 install -m755 -d "$rhkdata"
 install -m755 -d "$rprefix"/swagger-ui
-cp -r swagger-ui/dist "$rprefix"/swagger-ui
+cp -pr swagger-ui/dist "$rprefix"/swagger-ui
 install -d -m755 -d "$rprefix"/api
-cp -r api/api-doc "$rprefix"/api
+cp -pr api/api-doc "$rprefix"/api
 install -d -m755 -d "$rprefix"/scyllatop
-cp -r tools/scyllatop/* "$rprefix"/scyllatop
+cp -pr tools/scyllatop/* "$rprefix"/scyllatop
 install -d -m755 -d "$rprefix"/scripts
-cp -r dist/common/scripts/* "$rprefix"/scripts
-chmod 755 "$rprefix"/scripts/*
+cp -pr dist/common/scripts/* "$rprefix"/scripts
 ln -srf "$rprefix/scyllatop/scyllatop.py" "$rprefix/bin/scyllatop"
 if $supervisor; then
     install -d -m755 "$rprefix"/supervisor
@@ -463,6 +464,7 @@ SBINFILES+=" $(cd seastar/scripts; ls seastar-cpu-map.sh)"
 cat << EOS > "$rprefix"/scripts/scylla_product.py
 PRODUCT="$product"
 EOS
+chmod 644 "$rprefix"/scripts/scylla_product.py
 
 if ! $nonroot && ! $without_systemd; then
     install -d -m755 "$retc"/systemd/system/scylla-server.service.d
@@ -474,6 +476,7 @@ EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-server
 EnvironmentFile=/etc/scylla.d/*.conf
 EOS
+        chmod 644 "$retc"/systemd/system/scylla-server.service.d/sysconfdir.conf
         for i in daily restart; do
             install -d -m755 "$retc"/systemd/system/scylla-housekeeping-$i.service.d
             cat << EOS > "$retc"/systemd/system/scylla-housekeeping-$i.service.d/sysconfdir.conf
@@ -481,12 +484,14 @@ EOS
 EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-housekeeping
 EOS
+            chmod 644 "$retc"/systemd/system/scylla-housekeeping-$i.service.d/sysconfdir.conf
             if ! $packaging; then
                 cat << EOS > "$retc"/systemd/system/scylla-housekeeping-$i.service.d/offline.conf
 [Service]
 ExecStart=
 ExecStart=$rprefix/scripts/scylla-housekeeping --uuid-file \$UUID_FILE -q -c \$CONFIG_FILE version --mode ${i:0:1}
 EOS
+                chmod 644 "$retc"/systemd/system/scylla-housekeeping-$i.service.d/offline.conf
             fi
         done
     fi
@@ -505,6 +510,7 @@ ExecStopPost=
 User=
 AmbientCapabilities=
 EOS
+        chmod 644 "$rsystemd"/scylla-server.service.d/nonroot.conf
     else
         cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
 [Service]
@@ -523,6 +529,7 @@ StandardOutput=file:$rprefix/scylla-server.log
 StandardError=
 StandardError=inherit
 EOS
+        chmod 644 "$rsystemd"/scylla-server.service.d/nonroot.conf
     fi
     for i in daily restart; do
         install -d -m755 "$rsystemd"/scylla-housekeeping-$i.service.d
@@ -556,6 +563,7 @@ StandardError=
 StandardError=inherit
 EOS
         fi
+        chmod 644 "$rsystemd"/scylla-housekeeping-$i.service.d/nonroot.conf
     done
 fi
 
@@ -565,13 +573,14 @@ if ! $nonroot; then
         cat << EOS > "$rprefix"/scripts/scylla_sysconfdir.py
 SYSCONFDIR="$sysconfdir"
 EOS
+        chmod 644 "$rprefix"/scripts/scylla_sysconfdir.py
     fi
     install -m755 -d "$rusr/bin"
     ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
     ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
     ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
     ln -srf "$rprefix/bin/nodetool" "$rusr/bin/nodetool"
-    install -d "$rusr"/sbin
+    install -d -m755 "$rusr"/sbin
     for i in $SBINFILES; do
         ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
     done
@@ -594,7 +603,8 @@ else
     cat << EOS > "$rprefix"/scripts/scylla_sysconfdir.py
 SYSCONFDIR="$sysconfdir"
 EOS
-    install -d "$rprefix"/sbin
+    chmod 644 "$rprefix"/scripts/scylla_sysconfdir.py
+    install -d -m755 "$rprefix"/sbin
     for i in $SBINFILES; do
         ln -srf "$rprefix/scripts/$i" "$rprefix/sbin/$i"
     done
@@ -627,10 +637,12 @@ if $supervisor; then
 directory=$rprefix
 command=/bin/bash -c './supervisor/$service.sh'
 EOS
+        chmod 644 `supervisor_conf $retc $service`
         if [ "$service" != "scylla-server" ]; then
             cat << EOS >> `supervisor_conf $retc $service`
 user=scylla
 EOS
+            chmod 644 `supervisor_conf $retc $service`
         fi
         if $supervisor_log_to_stdout; then
             cat << EOS >> `supervisor_conf $retc $service`
@@ -639,6 +651,7 @@ stdout_logfile_maxbytes=0
 stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 EOS
+            chmod 644 `supervisor_conf $retc $service`
         fi
     done
 fi
@@ -654,7 +667,9 @@ if $nonroot; then
     sed -i -e "s#/etc/scylla.d#$retc/scylla.d#g" $rsysconfdir/scylla-housekeeping
     # nonroot install is also 'offline install'
     touch $rprefix/SCYLLA-OFFLINE-FILE
+    chmod 644 $rprefix/SCYLLA-OFFLINE-FILE
     touch $rprefix/SCYLLA-NONROOT-FILE
+    chmod 644 $rprefix/SCYLLA-NONROOT-FILE
     if ! $without_systemd_check && check_usermode_support; then
         systemctl --user daemon-reload
     fi
@@ -666,6 +681,7 @@ elif ! $packaging; then
     sed -i -e "s#REPO_FILES=.*#REPO_FILES=#g" $rsysconfdir/scylla-housekeeping
     # run install.sh without --packaging is 'offline install'
     touch $rprefix/SCYLLA-OFFLINE-FILE
+    chmod 644 $rprefix/SCYLLA-OFFLINE-FILE
     nousr=
     nogrp=
     getent passwd scylla || nousr=1
