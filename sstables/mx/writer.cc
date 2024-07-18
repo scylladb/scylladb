@@ -797,7 +797,7 @@ public:
         // exactly what callers used to do anyway.
         estimated_partitions = std::max(uint64_t(1), estimated_partitions);
 
-        _sst.open_sstable();
+        _sst.open_sstable(cfg.origin);
         _sst.create_data().get();
         _compression_enabled = !_sst.has_component(component_type::CRC);
         init_file_writers();
@@ -1470,7 +1470,7 @@ void writer::consume_end_of_stream() {
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
     close_data_writer();
     _sst.write_summary();
-    _sst.maybe_rebuild_filter_from_index(_num_partitions_consumed, _cfg.origin);
+    _sst.maybe_rebuild_filter_from_index(_num_partitions_consumed);
     _sst.write_filter();
     _sst.write_statistics();
     _sst.write_compression();
@@ -1485,7 +1485,7 @@ void writer::consume_end_of_stream() {
             { large_data_type::elements_in_collection, std::move(_elements_in_collection_entry) },
         }
     });
-    _sst.write_scylla_metadata(_shard, std::move(features), std::move(identifier), std::move(ld_stats), _cfg.origin);
+    _sst.write_scylla_metadata(_shard, std::move(features), std::move(identifier), std::move(ld_stats));
     _sst.seal_sstable(_cfg.backup).get();
 }
 
