@@ -551,6 +551,14 @@ protected:
         // the exclusive lock can be freed to let regular compaction run in parallel to major
         lock_holder.return_all();
 
+        co_await utils::get_local_injector().inject("major_compaction_wait", [this] (auto& handler) -> future<> {
+            cmlog.info("major_compaction_wait: waiting");
+            while (!handler.poll_for_message() && !_compaction_data.is_stop_requested()) {
+                co_await sleep(std::chrono::milliseconds(5));
+            }
+            cmlog.info("major_compaction_wait: released");
+        });
+
         co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, on_replace);
 
         finish_compaction();
