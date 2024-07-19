@@ -1,5 +1,9 @@
+import os
 from sphinx.directives.other import Include
+from sphinx.util import logging
 from docutils.parsers.rst import directives
+
+LOGGER = logging.getLogger(__name__)
 
 class IncludeFlagDirective(Include):
     option_spec = Include.option_spec.copy()
@@ -8,11 +12,18 @@ class IncludeFlagDirective(Include):
     def run(self):
         env = self.state.document.settings.env
         base_path = self.options.get('base_path', '_common')
+        file_path = self.arguments[0]
 
         if env.app.tags.has('enterprise'):
-            self.arguments[0] = base_path + "_enterprise/" + self.arguments[0]
+            enterprise_path = os.path.join(base_path + "_enterprise", file_path)
+            _, enterprise_abs_path = env.relfn2path(enterprise_path)
+            if os.path.exists(enterprise_abs_path):
+                self.arguments[0] = enterprise_path
+            else:
+                LOGGER.info(f"Enterprise content not found: Skipping inclusion of {file_path}")
+                return []
         else:
-            self.arguments[0] = base_path + "/" + self.arguments[0]
+            self.arguments[0] = os.path.join(base_path, file_path)
         return super().run()
 
 def setup(app):
