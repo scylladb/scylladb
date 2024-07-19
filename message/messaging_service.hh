@@ -299,6 +299,7 @@ public:
         struct tenant {
             scheduling_group sched_group;
             sstring name;
+            bool enabled = true;
         };
         // Must have at least one element. No two tenants should have the same
         // scheduling group. [0] is the default tenant, that all unknown
@@ -319,6 +320,7 @@ private:
     struct tenant_connection_index {
         scheduling_group sched_group;
         unsigned cliend_idx;
+        bool enabled;
     };
 private:
     config _cfg;
