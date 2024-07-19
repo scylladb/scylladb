@@ -460,6 +460,7 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     });
 
     init_local_preferred_ip_cache(_cfg.preferred_ips);
+    init_feature_listeners();
 }
 
 msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
@@ -800,6 +801,22 @@ void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_addre
     // just read.
     //
     remove_rpc_client(msg_addr(ep));
+}
+
+void messaging_service::init_feature_listeners() {
+    _maintenance_tenant_enabled_listener = _feature_service.maintenance_tenant.when_enabled([this] {
+        enable_scheduling_tenant("$maintenance");
+    });
+}
+
+void messaging_service::enable_scheduling_tenant(std::string_view name) {
+    for (size_t i = 0; i < _scheduling_config.statement_tenants.size(); ++i) {
+        if (_scheduling_config.statement_tenants[i].name == name) {
+            _scheduling_config.statement_tenants[i].enabled = true;
+            _connection_index_for_tenant[i].enabled = true;
+            return;
+        }
+    }
 }
 
 gms::inet_address messaging_service::get_public_endpoint_for(const gms::inet_address& ip) const {
