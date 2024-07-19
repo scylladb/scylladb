@@ -536,6 +536,12 @@ public:
     std::vector<messaging_service::scheduling_info_for_connection_index> initial_scheduling_info() const;
     unsigned get_rpc_client_idx(messaging_verb verb) const;
     static constexpr std::array<std::string_view, 3> _connection_types_prefix = {"statement:", "statement-ack:", "forward:"}; // "forward" is the old name for "mapreduce"
+
+    void init_feature_listeners();
+private:
+    std::any _maintenance_tenant_enabled_listener;
+
+    void enable_scheduling_tenant(std::string_view name);
 };
 
 } // namespace netw

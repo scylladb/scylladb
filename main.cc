@@ -1360,7 +1360,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             scfg.statement_tenants = {
                     {dbcfg.statement_scheduling_group, "$user"},
                     {default_scheduling_group(), "$system"},
-                    {dbcfg.streaming_scheduling_group, "$maintenance"}
+                    {dbcfg.streaming_scheduling_group, "$maintenance", false}
             };
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = dbcfg.gossip_scheduling_group;

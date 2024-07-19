@@ -126,6 +126,22 @@ public:
     gms::feature group0_schema_versioning { *this, "GROUP0_SCHEMA_VERSIONING"sv };
     gms::feature supports_consistent_topology_changes { *this, "SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES"sv };
     gms::feature host_id_based_hinted_handoff { *this, "HOST_ID_BASED_HINTED_HANDOFF"sv };
+<<<<<<< HEAD
+=======
+    gms::feature topology_requests_type_column { *this, "TOPOLOGY_REQUESTS_TYPE_COLUMN"sv };
+    gms::feature native_reverse_queries { *this, "NATIVE_REVERSE_QUERIES"sv };
+    gms::feature zero_token_nodes { *this, "ZERO_TOKEN_NODES"sv };
+    gms::feature view_build_status_on_group0 { *this, "VIEW_BUILD_STATUS_ON_GROUP0"sv };
+
+    // Whether to allow fragmented commitlog entries. While this is a node-local feature as such, hide
+    // behind a feature to ensure an upgrading cluster appears to be at least functional before using,
+    // to avoid data loss if rolling back in a dirty state, but also because it changes which/how mutations
+    // can be applied to a given node - i.e. with it on, a node can accept larger, say, schema mutations,
+    // whereas without it, it will fail the insert - i.e. for things like raft etc _all_ nodes should
+    // have it or none, otherwise we can get partial failures on writes.
+    gms::feature fragmented_commitlog_entries { *this, "FRAGMENTED_COMMITLOG_ENTRIES"sv };
+    gms::feature maintenance_tenant { *this, "MAINTENANCE_TENANT"sv };
+>>>>>>> b4b91ca364 (message/messaging_service: guard adding maintenance tenant under cluster feature)
 
     // A feature just for use in tests. It must not be advertised unless
     // the "features_enable_test_feature" injection is enabled.
