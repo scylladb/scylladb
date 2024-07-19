@@ -465,6 +465,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
                     ring_points.emplace_back(point, inet_address(format("192.{}.{}.{}", dc_name, rack_name, i)));
                     node_count_per_dc[dc_name]++;
                     node_count_per_rack[dc_name][rack_name]++;
+                    point++;
                 }
             }
         }
@@ -553,6 +554,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
             sstring rack_name = fmt::format("{}", 10 + rack);
             for (size_t i = 1; i <= nodes_per_rack; ++i) {
                 ring_points.emplace_back(point, inet_address(format("192.{}.{}.{}", dc_name, rack_name, i)));
+                point++;
             }
         }
     }
