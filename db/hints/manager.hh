@@ -104,7 +104,6 @@ public:
     static inline const std::string FILENAME_PREFIX{"HintsLog" + commitlog::descriptor::SEPARATOR};
     // Non-const - can be modified with an error injection.
     static inline std::chrono::seconds hints_flush_period = std::chrono::seconds(10);
-    static constexpr std::chrono::seconds HINT_FILE_WRITE_TIMEOUT = std::chrono::seconds(2);
 private:
     static constexpr uint64_t MAX_SIZE_OF_HINTS_IN_PROGRESS = 10 * 1024 * 1024; // 10MB
 
@@ -304,6 +303,8 @@ private:
     }
 
     hint_endpoint_manager& get_ep_manager(const endpoint_id& host_id, const gms::inet_address& ip);
+
+    uint64_t max_size_of_hints_in_progress() const noexcept;
 
 public:
     bool have_ep_manager(const std::variant<locator::host_id, gms::inet_address>& ep) const noexcept;

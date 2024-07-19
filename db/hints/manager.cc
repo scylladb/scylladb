@@ -389,6 +389,14 @@ hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id, const
     }
 }
 
+uint64_t manager::max_size_of_hints_in_progress() const noexcept {
+    if (utils::get_local_injector().enter("decrease_max_size_of_hints_in_progress")) [[unlikely]] {
+        return 1'000;
+    } else {
+        return MAX_SIZE_OF_HINTS_IN_PROGRESS;
+    }
+}
+
 bool manager::have_ep_manager(const std::variant<locator::host_id, gms::inet_address>& ep) const noexcept {
     if (std::holds_alternative<locator::host_id>(ep)) {
         return _ep_managers.contains(std::get<locator::host_id>(ep));
@@ -470,7 +478,7 @@ static bool endpoint_downtime_not_bigger_than(const gms::gossiper& gossiper, con
 bool manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
     // There is no need to check the DC here because if there is an in-flight hint for this
     // endpoint, then this means that its DC has already been checked and found to be ok.
-    return _stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS
+    return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress()
             && !_proxy.local_db().get_token_metadata().get_topology().is_me(ep)
             && hints_in_progress_for(ep) > 0
             && endpoint_downtime_not_bigger_than(local_gossiper(), ep, _max_hint_window_us);
@@ -496,7 +504,7 @@ bool manager::can_hint_for(endpoint_id ep) const noexcept {
     // In the worst case there's going to be (_max_size_of_hints_in_progress + N - 1) in-flight
     // hints where N is the total number nodes in the cluster.
     const auto hipf = hints_in_progress_for(ep);
-    if (_stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS && hipf > 0) {
+    if (_stats.size_of_hints_in_progress > max_size_of_hints_in_progress() && hipf > 0) {
         manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}",
                 _stats.size_of_hints_in_progress, ep, hipf);
         return false;

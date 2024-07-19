@@ -11,59 +11,87 @@
 // Seastar features.
 #include <seastar/core/do_with.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/shared_mutex.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/coroutine/exception.hh>
 
 // Scylla includes.
 #include "db/hints/internal/common.hh"
 #include "db/hints/internal/hint_logger.hh"
 #include "db/hints/internal/hint_storage.hh"
 #include "db/hints/manager.hh"
+#include "db/timeout_clock.hh"
 #include "replica/database.hh"
 #include "utils/disk-error-handler.hh"
+#include "utils/error_injection.hh"
 #include "utils/runtime.hh"
 
 // STD.
 #include <algorithm>
+#include <chrono>
+#include <exception>
 #include <utility>
 #include <vector>
 
 namespace db::hints {
 namespace internal {
 
+namespace {
+
+constexpr std::chrono::seconds HINT_FILE_WRITE_TIMEOUT = std::chrono::seconds(2);
+
+} // anonymous namespace
+
 bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).
-        (void)with_gate(_store_gate, [this, s = std::move(s), fm = std::move(fm), tr_state] () mutable {
+        (void) with_gate(_store_gate,
+                [this, s_ = std::move(s), fm_ = std::move(fm), tr_state_ = tr_state] () mutable -> future<> {
+            // We discard the future to this call to `with_gate()`, so wrapping this lambda
+            // within `coroutine::lambda` will NOT work. That's why we need to copy these
+            // variables by hand.
+            auto s = std::move(s_);
+            auto fm = std::move(fm_);
+            auto tr_state = std::move(tr_state_);
+
             ++_hints_in_progress;
             size_t mut_size = fm->representation().size();
             shard_stats().size_of_hints_in_progress += mut_size;
 
-            return with_shared(file_update_mutex(), [this, fm, s, tr_state] () mutable -> future<> {
-                return get_or_load().then([this, fm = std::move(fm), s = std::move(s), tr_state] (hints_store_ptr log_ptr) mutable {
-                    commitlog_entry_writer cew(s, *fm, db::commitlog::force_sync::no);
-                    return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + _shard_manager.HINT_FILE_WRITE_TIMEOUT);
-                }).then([this, tr_state] (db::rp_handle rh) {
-                    auto rp = rh.release();
-                    if (_last_written_rp < rp) {
-                        _last_written_rp = rp;
-                        manager_logger.debug("[{}] Updated last written replay position to {}", end_point_key(), rp);
-                    }
-                    ++shard_stats().written;
+            if (utils::get_local_injector().enter("slow_down_writing_hints")) {
+                co_await seastar::sleep(std::chrono::seconds(10));
+            }
 
-                    manager_logger.trace("Hint to {} was stored", end_point_key());
-                    tracing::trace(tr_state, "Hint to {} was stored", end_point_key());
-                }).handle_exception([this, tr_state] (std::exception_ptr eptr) {
-                    ++shard_stats().errors;
+            try {
+                const auto shared_lock = co_await get_shared_lock(file_update_mutex());
 
-                    manager_logger.debug("store_hint(): got the exception when storing a hint to {}: {}", end_point_key(), eptr);
-                    tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), eptr);
-                });
-            }).finally([this, mut_size, fm, s] {
-                --_hints_in_progress;
-                shard_stats().size_of_hints_in_progress -= mut_size;
-            });;
+                hints_store_ptr log_ptr = co_await get_or_load();
+                commitlog_entry_writer cew(s, *fm, commitlog::force_sync::no);
+
+                rp_handle rh = co_await log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + HINT_FILE_WRITE_TIMEOUT);
+
+                const replay_position rp = rh.release();
+                if (_last_written_rp < rp) {
+                    _last_written_rp = rp;
+                    manager_logger.debug("[{}] Updated last written replay position to {}", end_point_key(), rp);
+                }
+
+                ++shard_stats().written;
+
+                manager_logger.trace("Hint to {} was stored", end_point_key());
+                tracing::trace(tr_state, "Hint to {} was stored", end_point_key());
+            } catch (...) {
+                ++shard_stats().errors;
+                const auto eptr = std::current_exception();
+
+                manager_logger.debug("store_hint(): got the exception when storing a hint to {}: {}", end_point_key(), eptr);
+                tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), eptr);
+            }
+
+            --_hints_in_progress;
+            shard_stats().size_of_hints_in_progress -= mut_size;
         });
     } catch (...) {
         manager_logger.trace("Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
@@ -72,6 +100,7 @@ bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_
         ++shard_stats().dropped;
         return false;
     }
+
     return true;
 }
 
