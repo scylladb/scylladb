@@ -56,7 +56,7 @@ public:
     // (deserialized_bytes_proxy is convertible to bytes&&, but not bytes_view.)
     token(kind k, const bytes& b) : _kind(std::move(k)) {
         if (_kind != kind::key) {
-            _data = 0;
+            _data = std::numeric_limits<int64_t>::min();
         } else {
             if (b.size() != sizeof(_data)) {
                 throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
@@ -67,7 +67,7 @@ public:
 
     token(kind k, bytes_view b) : _kind(std::move(k)) {
         if (_kind != kind::key) {
-            _data = 0;
+            _data = std::numeric_limits<int64_t>::min();
         } else {
             if (b.size() != sizeof(_data)) {
                 throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
@@ -90,11 +90,11 @@ public:
     constexpr bool operator==(const token& o) const noexcept = default;
 
     static constexpr token minimum() noexcept {
-        return token{ kind::before_all_keys, 0 };
+        return token{ kind::before_all_keys, std::numeric_limits<int64_t>::min() };
     }
 
     static constexpr token maximum() noexcept {
-        return token{ kind::after_all_keys, 0 };
+        return token{ kind::after_all_keys, std::numeric_limits<int64_t>::min() };
     }
 
     // Returns the smallest token in the ring which can be associated with a partition key.
@@ -206,9 +206,6 @@ public:
     }
 
     constexpr int64_t raw() const noexcept {
-        if (is_minimum()) {
-            return std::numeric_limits<int64_t>::min();
-        }
         if (is_maximum()) {
             return std::numeric_limits<int64_t>::max();
         }
