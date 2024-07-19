@@ -30,24 +30,10 @@ async def test_different_group0_ids(manager: ManagerClient):
     # Consistent topology changes are disabled to use repair based node operations.
     scylla_a = await manager.server_add(config={'force_gossip_topology_changes': True})
     scylla_b = await manager.server_add(start=False, config={'force_gossip_topology_changes': True})
-    await manager.server_update_config(scylla_b.server_id, key='seed_provider', value=[{
-            'class_name': 'org.apache.cassandra.locator.SimpleSeedProvider',
-            'parameters': [{
-                    'seeds': f'{scylla_b.ip_addr}'
-                }]
-            }]
-        )
-    await manager.server_start(scylla_b.server_id)
+    await manager.server_start(scylla_b.server_id, seeds=[scylla_b.ip_addr])
 
     await manager.server_stop(scylla_b.server_id)
-    await manager.server_update_config(scylla_b.server_id, key='seed_provider', value=[{
-            'class_name': 'org.apache.cassandra.locator.SimpleSeedProvider',
-            'parameters': [{
-                    'seeds': f'{scylla_a.ip_addr},{scylla_b.ip_addr}'
-                }]
-            }]
-        )
-    await manager.server_start(scylla_b.server_id)
+    await manager.server_start(scylla_b.server_id, seeds=[scylla_a.ip_addr, scylla_b.ip_addr])
 
     log_file_a = await manager.server_open_log(scylla_a.server_id)
     log_file_b = await manager.server_open_log(scylla_b.server_id)

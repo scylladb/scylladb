@@ -310,6 +310,14 @@ class ScyllaServer:
         self.config["alternator_address"] = ip_addr
         self._write_config_file()
 
+    def change_seeds(self, seeds: List[str]):
+        """Change seeds of the current server. Pre: the server is stopped"""
+        if self.is_running:
+            raise RuntimeError(f"Can't change seeds of a running server {self.ip_addr}.")
+        self.seeds = seeds
+        self.config['seed_provider'][0]['parameters'][0]['seeds'] = '{}'.format(','.join(seeds))
+        self._write_config_file()
+
     @property
     def rpc_address(self) -> IPAddress:
         return self.config["rpc_address"]
@@ -1045,7 +1053,8 @@ class ScyllaCluster:
         self.logger.debug("Cluster %s marking server %s as removed", self, server_id)
         self.removed.add(server_id)
 
-    async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None) -> None:
+    async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
+                           seeds: Optional[List[IPAddress]] = None) -> None:
         """Start a server. No-op if already running."""
         if server_id in self.running:
             return
@@ -1054,7 +1063,11 @@ class ScyllaCluster:
         server = self.stopped.pop(server_id)
         self.logger.info("Cluster %s starting server %s ip %s", self,
                          server_id, server.ip_addr)
-        server.seeds = self._seeds()
+        if not seeds:
+            seeds = self._seeds()
+            if not seeds:
+                seeds = [server.ip_addr]
+        server.change_seeds(seeds)
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
@@ -1427,7 +1440,8 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(request.match_info["server_id"]))
         data = await request.json()
         expected_error = data["expected_error"]
-        await self.cluster.server_start(server_id, expected_error)
+        seeds = data["seeds"]
+        await self.cluster.server_start(server_id, expected_error, seeds)
 
     async def _cluster_server_pause(self, request) -> None:
         """Pause the specified server."""
