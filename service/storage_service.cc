@@ -12,6 +12,7 @@
 #include "storage_service.hh"
 #include "compaction/task_manager_module.hh"
 #include "gc_clock.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "raft/raft.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/qos/service_level_controller.hh"
@@ -3409,8 +3410,9 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                 // calculate the ownership with replication and add the endpoint to the final ownership map
                 try {
                     float ownership = 0.0f;
-                    auto ranges = ss.get_ranges_for_endpoint(erm, endpoint);
-                    for (auto& r : ranges) {
+                    auto range_gen = erm->get_ranges(endpoint);
+                    while (auto range_opt = co_await range_gen()) {
+                        const auto& r = *range_opt;
                         // get_ranges_for_endpoint will unwrap the first range.
                         // With t0 t1 t2 t3, the first range (t3,t0] will be split
                         // as (min,t0] and (t3,max]. Skippping the range (t3,max]
@@ -4715,7 +4717,7 @@ future<> storage_service::rebuild(sstring source_dc) {
                 }
                 auto ks_erms = ss._db.local().get_non_local_strategy_keyspaces_erms();
                 for (const auto& [keyspace_name, erm] : ks_erms) {
-                    co_await streamer->add_ranges(keyspace_name, erm, ss.get_ranges_for_endpoint(erm, ss.get_broadcast_address()), ss._gossiper, false);
+                    co_await streamer->add_ranges(keyspace_name, erm, co_await ss.get_ranges_for_endpoint(erm, ss.get_broadcast_address()), ss._gossiper, false);
                 }
                 try {
                     co_await streamer->stream_async();
@@ -4756,20 +4758,18 @@ int32_t storage_service::get_exception_count() {
 
 future<std::unordered_multimap<dht::token_range, inet_address>>
 storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replication_map_ptr erm, inet_address endpoint) {
-    // First get all ranges the leaving endpoint is responsible for
-    auto ranges = get_ranges_for_endpoint(erm, endpoint);
-
-    slogger.debug("Node {} ranges [{}]", endpoint, ranges);
-
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
 
     // Find (for each range) all nodes that store replicas for these ranges as well
-    for (auto& r : ranges) {
+    for (auto range_gen = erm->get_ranges(endpoint); auto range_opt = co_await range_gen(); ) {
+        const auto& r = *range_opt;
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto eps = erm->get_natural_endpoints(end_token);
         current_replica_endpoints.emplace(r, std::move(eps));
         co_await coroutine::maybe_yield();
     }
+
+    slogger.debug("Node {} ranges [{}]", endpoint, current_replica_endpoints);
 
     auto temp = co_await get_token_metadata_ptr()->clone_after_all_left();
 
@@ -4787,7 +4787,8 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
     // not in the currentReplicaEndpoints list, will be needing the
     // range.
     const auto& rs = erm->get_replication_strategy();
-    for (auto& r : ranges) {
+    for (auto range_gen = erm->get_ranges(endpoint); auto range_opt = co_await range_gen(); ) {
+        const auto& r = *range_opt;
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto new_replica_endpoints = co_await rs.calculate_natural_ips(end_token, temp);
 
@@ -5599,7 +5600,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 }
                                 auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                                 for (const auto& [keyspace_name, erm] : ks_erms) {
-                                    co_await streamer->add_ranges(keyspace_name, erm, get_ranges_for_endpoint(erm, get_broadcast_address()), _gossiper, false);
+                                    co_await streamer->add_ranges(keyspace_name, erm, co_await get_ranges_for_endpoint(erm, get_broadcast_address()), _gossiper, false);
                                 }
                                 try {
                                     co_await streamer->stream_async();
@@ -6912,9 +6913,9 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, wrap
     return calculate_splits(std::move(tokens), split_count, cf);
 };
 
-dht::token_range_vector
+future<dht::token_range_vector>
 storage_service::get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const {
-    return erm->get_ranges(ep);
+    co_return co_await locator::as_token_range_vector(erm->get_ranges(ep));
 }
 
 // Caller is responsible to hold token_metadata valid until the returned future is resolved

@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
+#include "dht/i_partitioner_fwd.hh"
 #include "gms/inet_address.hh"
 #include "locator/snitch_base.hh"
 #include "locator/token_range_splitter.hh"
@@ -157,8 +158,8 @@ public:
 
     // Use the token_metadata provided by the caller instead of _token_metadata
     // Note: must be called with initialized, non-empty token_metadata.
-    future<dht::token_range_vector> get_ranges(locator::host_id ep, token_metadata_ptr tmptr) const;
-    future<dht::token_range_vector> get_ranges(locator::host_id ep, const token_metadata& tm) const;
+    dht::token_range_generator get_ranges(locator::host_id ep, token_metadata_ptr tmptr) const;
+    dht::token_range_generator get_ranges(locator::host_id ep, const token_metadata& tm) const;
 
     // Caller must ensure that token_metadata will not change throughout the call.
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_addresses(const token_metadata& tm) const;
@@ -262,7 +263,7 @@ public:
     // This function is not efficient, and not meant for the fast path.
     //
     // Note: must be called after token_metadata has been initialized.
-    virtual dht::token_range_vector get_ranges(inet_address ep) const = 0;
+    virtual dht::token_range_generator get_ranges(inet_address ep) const = 0;
 
     shard_id shard_for_reads(const schema& s, dht::token t) const {
         return get_sharder(s).shard_for_reads(t);
@@ -334,7 +335,7 @@ public: // effective_replication_map
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
-    dht::token_range_vector get_ranges(inet_address ep) const override;
+    dht::token_range_generator get_ranges(inet_address ep) const override;
 public:
     explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
             ring_mapping pending_endpoints, ring_mapping read_endpoints, std::unordered_set<locator::host_id> dirty_endpoints, size_t replication_factor) noexcept
@@ -366,14 +367,14 @@ public:
     // StorageService.getPrimaryRangesForEndpoint().
     //
     // Note: must be called after token_metadata has been initialized.
-    dht::token_range_vector get_primary_ranges(inet_address ep) const;
+    dht::token_range_generator get_primary_ranges(inet_address ep) const;
 
     // get_primary_ranges_within_dc() is similar to get_primary_ranges()
     // except it assigns a primary node for each range within each dc,
     // instead of one node globally.
     //
     // Note: must be called after token_metadata has been initialized.
-    dht::token_range_vector get_primary_ranges_within_dc(inet_address ep) const;
+    dht::token_range_generator get_primary_ranges_within_dc(inet_address ep) const;
 
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
     get_range_addresses() const;
@@ -388,7 +389,7 @@ public:
     std::unordered_set<locator::host_id> get_all_pending_nodes() const;
 
 private:
-    dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
+    dht::token_range_generator do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
     inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
     host_id_vector_replica_set do_get_replicas(const token& tok, bool is_vnode) const;
     stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
@@ -418,6 +419,8 @@ using vnode_effective_replication_map_ptr = shared_ptr<const vnode_effective_rep
 using mutable_vnode_effective_replication_map_ptr = shared_ptr<vnode_effective_replication_map>;
 using vnode_erm_ptr = vnode_effective_replication_map_ptr;
 using mutable_vnode_erm_ptr = mutable_vnode_effective_replication_map_ptr;
+
+future<dht::token_range_vector> as_token_range_vector(dht::token_range_generator);
 
 inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, ring_mapping pending_endpoints,
     ring_mapping read_endpoints, std::unordered_set<locator::host_id> dirty_endpoints, size_t replication_factor) {

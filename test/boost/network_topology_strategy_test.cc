@@ -10,6 +10,7 @@
 #include <boost/range/adaptors.hpp>
 #include <fmt/ranges.h>
 #include "gms/inet_address.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/types.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/sequenced_set.hh"
@@ -68,10 +69,10 @@ static void verify_sorted(const dht::token_range_vector& trv) {
     BOOST_CHECK(boost::adjacent_find(trv, not_strictly_before) == trv.end());
 }
 
-static void check_ranges_are_sorted(vnode_effective_replication_map_ptr erm, gms::inet_address ep) {
-    verify_sorted(erm->get_ranges(ep));
-    verify_sorted(erm->get_primary_ranges(ep));
-    verify_sorted(erm->get_primary_ranges_within_dc(ep));
+static future<> check_ranges_are_sorted(vnode_effective_replication_map_ptr erm, gms::inet_address ep) {
+    verify_sorted(co_await locator::as_token_range_vector(erm->get_ranges(ep)));
+    verify_sorted(co_await locator::as_token_range_vector(erm->get_primary_ranges(ep)));
+    verify_sorted(co_await locator::as_token_range_vector(erm->get_primary_ranges_within_dc(ep)));
 }
 
 void strategy_sanity_check(
@@ -178,7 +179,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         auto endpoints2 = erm->get_natural_endpoints(t2);
 
         endpoints_check(ars_ptr, tmptr, endpoints2, topo);
-        check_ranges_are_sorted(erm, rp.host);
+        check_ranges_are_sorted(erm, rp.host).get();
         BOOST_CHECK(endpoints1 == endpoints2);
     }
 }

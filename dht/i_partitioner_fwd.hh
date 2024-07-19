@@ -9,6 +9,9 @@
 
 #pragma once
 #include <vector>
+
+#include <seastar/coroutine/generator.hh>
+
 #include "interval.hh"
 
 namespace sstables {
@@ -30,6 +33,7 @@ using token_range = interval<token>;
 
 using partition_range_vector = std::vector<partition_range>;
 using token_range_vector = std::vector<token_range>;
+using token_range_generator = seastar::coroutine::experimental::generator<dht::token_range>;
 
 class decorated_key;
 

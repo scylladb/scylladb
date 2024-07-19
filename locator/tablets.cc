@@ -630,8 +630,7 @@ public:
         return result;
     }
 
-    // FIXME: return a future object.
-    virtual dht::token_range_vector get_ranges(inet_address ep) const override {
+    virtual dht::token_range_generator get_ranges(inet_address ep) const override {
         dht::token_range_vector ret;
 
         auto& tablet_map = get_tablet_map();
@@ -640,11 +639,9 @@ public:
             auto should_add_range = std::find(std::begin(endpoints), std::end(endpoints), ep) != std::end(endpoints);
 
             if (should_add_range) {
-                ret.push_back(tablet_map.get_token_range(tablet_id));
+                co_yield dht::token_range(tablet_map.get_token_range(tablet_id));
             }
         }
-
-        return ret;
     }
 
     virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {
