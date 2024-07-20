@@ -287,14 +287,14 @@ int new_ring_position_l(lua_State* l) {
             pk = pop_userdata<partition_key>(l, 2);
             token = dht::get_token(s, *pk);
         } else if (lua_type(l, 2) == LUA_TNUMBER) {
-            token = dht::token(dht::token_kind::key, lua_tointeger(l, 2));
+            token = dht::token(lua_tointeger(l, 2));
         }
     }
 
     if (lua_gettop(l) == 3) {
         pk = pop_userdata<partition_key>(l, 2);
         if (lua_type(l, 3) == LUA_TNUMBER) {
-            token = dht::token(dht::token_kind::key, lua_tointeger(l, 3));
+            token = dht::token(lua_tointeger(l, 3));
         } else {
             luaL_checktype(l, 3, LUA_TNIL);
         }
@@ -303,7 +303,7 @@ int new_ring_position_l(lua_State* l) {
         if (!weight) {
             luaL_error(l, "weight of 0 is invalid for min/max ring_position");
         }
-        token = dht::token(weight < 0 ? dht::token_kind::after_all_keys : dht::token_kind::before_all_keys, 0);
+        token = weight < 0 ? dht::maximum_token() : dht::minimum_token();
     }
 
     push_userdata<dht::ring_position_ext>(l, *token, std::move(pk), weight);

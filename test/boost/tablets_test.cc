@@ -2385,7 +2385,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : test_config.ring_points) {
             std::unordered_set<token> tokens;
-            tokens.insert({dht::token::kind::key, tests::d2t(ring_point / test_config.ring_points.size())});
+            tokens.insert(dht::token{tests::d2t(ring_point / test_config.ring_points.size())});
             topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
             tm.update_host_id(id, endpoint);
             co_await tm.update_normal_tokens(std::move(tokens), id);

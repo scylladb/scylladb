@@ -39,7 +39,7 @@ debug(Args&&... args) {
 }
 
 static dht::token token_from_long(uint64_t value) {
-    return dht::token(dht::token::kind::key, value);
+    return dht::token(value);
 }
 
 static int64_t long_from_token(dht::token token) {

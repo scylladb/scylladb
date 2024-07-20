@@ -2531,7 +2531,7 @@ SEASTAR_TEST_CASE(test_reads_cassandra_static_compact) {
 }
 
 static dht::token token_from_long(int64_t value) {
-    return { dht::token::kind::key, value };
+    return dht::token{ value };
 }
 
 SEASTAR_TEST_CASE(basic_interval_map_testing_for_sstable_set) {
@@ -2896,11 +2896,11 @@ SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
         const auto t2 = muts.back().decorated_key()._token;
         dht::partition_range_vector prs;
 
-        prs.emplace_back(dht::ring_position::starting_at({dht::token_kind::key, t1.raw() - 200}), dht::ring_position::ending_at({dht::token_kind::key, t1.raw() - 100}));
-        prs.emplace_back(dht::ring_position::starting_at({dht::token_kind::key, t1.raw() + 2}), dht::ring_position::ending_at({dht::token_kind::key, t2.raw() + 2}));
+        prs.emplace_back(dht::ring_position::starting_at(dht::token{t1.raw() - 200}), dht::ring_position::ending_at(dht::token{t1.raw() - 100}));
+        prs.emplace_back(dht::ring_position::starting_at(dht::token{t1.raw() + 2}), dht::ring_position::ending_at(dht::token{t2.raw() + 2}));
         // Should be at eof() after the above range is finished
-        prs.emplace_back(dht::ring_position::starting_at({dht::token_kind::key, t2.raw() + 100}), dht::ring_position::ending_at({dht::token_kind::key, t2.raw() + 200}));
-        prs.emplace_back(dht::ring_position::starting_at({dht::token_kind::key, t2.raw() + 300}), dht::ring_position::ending_at({dht::token_kind::key, t2.raw() + 400}));
+        prs.emplace_back(dht::ring_position::starting_at(dht::token{t2.raw() + 100}), dht::ring_position::ending_at(dht::token{t2.raw() + 200}));
+        prs.emplace_back(dht::ring_position::starting_at(dht::token{t2.raw() + 300}), dht::ring_position::ending_at(dht::token{t2.raw() + 400}));
 
         auto reader = sst->make_reader(schema, permit, prs.front(), schema->full_slice());
         auto close_reader = deferred_close(reader);

@@ -43,14 +43,13 @@ public:
     kind _kind;
     int64_t _data;
 
-    constexpr token() noexcept
-        : _kind(kind::before_all_keys)
-        , _data(0) {
-    }
+private:
+    constexpr token(kind k, int64_t d) noexcept : _kind(k), _data(d) {}
 
-    constexpr token(kind k, int64_t d) noexcept
-        : _kind(std::move(k))
-        , _data(normalize(d)) { }
+public:
+    constexpr token() noexcept : token(kind::before_all_keys, 0) {}
+
+    constexpr explicit token(int64_t d) noexcept : token(kind::key, normalize(d)) {}
 
     // This constructor seems redundant with the bytes_view constructor, but
     // it's necessary for IDL, which passes a deserialized_bytes_proxy here.
