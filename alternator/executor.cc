@@ -1808,7 +1808,6 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     auto command = previous_item_read_command(proxy, schema, ck, selection);
     command->allow_limit = db::allow_per_partition_rate_limit::yes;
     auto cl = db::consistency_level::LOCAL_QUORUM;
-
     return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
             [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
         auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
@@ -2615,13 +2614,21 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
     const std::vector<managed_bytes_opt>& result_row,
     const std::optional<attrs_to_get>& attrs_to_get,
     rjson::value& item,
+    consumed_capacity_counter* consumed_capacity_collector,
     bool include_all_embedded_attributes)
 {
     const auto& columns = selection.get_columns();
     auto column_it = columns.begin();
     for (const managed_bytes_opt& cell : result_row) {
+        if (!cell) {
+            ++column_it;
+            continue;
+        }
         std::string column_name = (*column_it)->name_as_text();
-        if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
+        if (column_name != executor::ATTRS_COLUMN_NAME) {
+            if (consumed_capacity_collector) {
+                (*consumed_capacity_collector) += column_name.length() + cell->size();
+            }
             if (!attrs_to_get || attrs_to_get->contains(column_name)) {
                 // item is expected to start empty, and column_name are unique
                 // so add() makes sense
@@ -2631,13 +2638,20 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                     rjson::add_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(linearized_cell, **column_it));
                 });
             }
-        } else if (cell) {
+        } else {
             auto deserialized = attrs_type()->deserialize(*cell);
             auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
             for (auto entry : keys_and_values) {
                 std::string attr_name = value_cast<sstring>(entry.first);
+                if (consumed_capacity_collector) {
+                    (*consumed_capacity_collector) += attr_name.length();
+                }
                 if (include_all_embedded_attributes || !attrs_to_get || attrs_to_get->contains(attr_name)) {
                     bytes value = value_cast<bytes>(entry.second);
+                    if (consumed_capacity_collector && value.length()) {
+                        // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+                        (*consumed_capacity_collector) += value.length() - 1;
+                    }
                     rjson::value v = deserialize_item(value);
                     if (attrs_to_get) {
                         auto it = attrs_to_get->find(attr_name);
@@ -2653,6 +2667,8 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                     // item is expected to start empty, and attribute
                     // names are unique so add() makes sense
                     rjson::add_with_string_name(item, attr_name, std::move(v));
+                } else if (consumed_capacity_collector) {
+                    (*consumed_capacity_collector) += value_cast<bytes>(entry.second).length() - 1;
                 }
             }
         }
@@ -2664,7 +2680,8 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const std::optional<attrs_to_get>& attrs_to_get) {
+        const std::optional<attrs_to_get>& attrs_to_get,
+        consumed_capacity_counter* consumed_capacity_collector) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now());
@@ -2672,6 +2689,10 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
 
     auto result_set = builder.build();
     if (result_set->empty()) {
+        if (consumed_capacity_collector) {
+            // empty results is counted as having a minimal length (e.g. 1 byte).
+            (*consumed_capacity_collector) += 1;
+        }
         // If there is no matching item, we're supposed to return an empty
         // object without an Item member - not one with an empty Item member
         return {};
@@ -2681,7 +2702,7 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         // called describe_multi_item(), not this function.
         throw std::logic_error("describe_single_item() asked to describe multiple items");
     }
-    describe_single_item(selection, *result_set->rows().begin(), attrs_to_get, item);
+    describe_single_item(selection, *result_set->rows().begin(), attrs_to_get, item, consumed_capacity_collector);
     return item;
 }
 
@@ -3397,15 +3418,16 @@ static rjson::value describe_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const std::optional<attrs_to_get>& attrs_to_get) {
-    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get);
-    if (!opt_item) {
-        // If there is no matching item, we're supposed to return an empty
-        // object without an Item member - not one with an empty Item member
-        return rjson::empty_object();
-    }
+        const std::optional<attrs_to_get>& attrs_to_get,
+        consumed_capacity_counter& consumed_capacity,
+        uint64_t& metric) {
+    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get, &consumed_capacity);
     rjson::value item_descr = rjson::empty_object();
-    rjson::add(item_descr, "Item", std::move(*opt_item));
+    if (opt_item) {
+        rjson::add(item_descr, "Item", std::move(*opt_item));
+    }
+    consumed_capacity.add_consumed_capacity_to_response_if_needed(item_descr);
+    metric += consumed_capacity.get_half_units();
     return item_descr;
 }
 
@@ -3448,12 +3470,15 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
+    rcu_consumed_capacity_counter add_capacity(request, cl == db::consistency_level::LOCAL_QUORUM);
     co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::SELECT);
     co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
-            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
+            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time), add_capacity=std::move(add_capacity)] (service::storage_proxy::coordinator_query_result qr) mutable {
+
         _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-        return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
+
+        return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, _stats.rcu_total)));
     });
 }
 
