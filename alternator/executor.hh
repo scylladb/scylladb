@@ -22,6 +22,7 @@
 #include "stats.hh"
 #include "utils/rjson.hh"
 #include "utils/updateable_value.hh"
+#include "alternator/consumed_capacity.hh"
 
 #include "tracing/trace_state.hh"
 
@@ -234,7 +235,8 @@ public:
         const query::partition_slice&,
         const cql3::selection::selection&,
         const query::result&,
-        const std::optional<attrs_to_get>&);
+        const std::optional<attrs_to_get>&,
+        consumed_capacity_counter* = nullptr);
 
     static future<std::vector<rjson::value>> describe_multi_item(schema_ptr schema,
         const query::partition_slice&& slice,
@@ -246,6 +248,7 @@ public:
         const std::vector<managed_bytes_opt>&,
         const std::optional<attrs_to_get>&,
         rjson::value&,
+        consumed_capacity_counter* consumed_capacity_collector = nullptr,
         bool = false);
 
     static void add_stream_options(const rjson::value& stream_spec, schema_builder&, service::storage_proxy& sp);
