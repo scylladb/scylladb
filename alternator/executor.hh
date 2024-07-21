@@ -22,6 +22,7 @@
 #include "stats.hh"
 #include "utils/rjson.hh"
 #include "utils/updateable_value.hh"
+#include "alternator/consumed_capacity.hh"
 
 namespace db {
     class system_distributed_keyspace;
@@ -230,7 +231,8 @@ public:
         const query::partition_slice&,
         const cql3::selection::selection&,
         const query::result&,
-        const std::optional<attrs_to_get>&);
+        const std::optional<attrs_to_get>&,
+        consumed_capacity_counter&);
 
     static future<std::vector<rjson::value>> describe_multi_item(schema_ptr schema,
         const query::partition_slice&& slice,
