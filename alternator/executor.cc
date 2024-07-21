@@ -1558,6 +1558,10 @@ rmw_operation::parse_returnvalues_on_condition_check_failure(const rjson::value&
         throw api_error::validation(format("Unrecognized value for ReturnValuesOnConditionCheckFailure: {}", s));
     }
 }
+static replica::table_stats& get_table_stats_from_schema(service::storage_proxy& sp, const schema& schema) {
+    replica::table& table = sp.local_db().find_column_family(schema.id());
+    return table.get_stats();
+}
 
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
     : _request(std::move(request))
@@ -1574,7 +1578,8 @@ rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& reque
 std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) {
     if (qr->row_count()) {
         auto selection = cql3::selection::selection::wildcard(_schema);
-        auto previous_item = executor::describe_single_item(_schema, slice, *selection, *qr, {});
+        consumed_capacity_counter dummy_counter;
+        auto previous_item = executor::describe_single_item(_schema, slice, *selection, *qr, {}, dummy_counter);
         if (previous_item) {
             return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts);
         }
@@ -1640,10 +1645,10 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     auto command = previous_item_read_command(proxy, schema, ck, selection);
     command->allow_limit = db::allow_per_partition_rate_limit::yes;
     auto cl = db::consistency_level::LOCAL_QUORUM;
-
     return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
             [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
+        consumed_capacity_counter dummy;
+        auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {}, dummy);
         if (previous_item) {
             return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
         } else {
@@ -2477,11 +2482,36 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
     }
 }
 
+static uint64_t get_result_row_length(const cql3::selection::selection& selection,
+        const std::vector<managed_bytes_opt>& result_row) {
+    uint64_t result = 0;
+    const auto& columns = selection.get_columns();
+    auto column_it = columns.begin();
+    for (const managed_bytes_opt& cell : result_row) {
+        std::string column_name = (*column_it)->name_as_text();
+        if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
+            result += column_name.length();
+            result += (cell)? cell->size() : 0;
+        } else if (cell) {
+            auto deserialized = attrs_type()->deserialize(*cell);
+            auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
+            for (auto entry : keys_and_values) {
+                std::string attr_name = value_cast<sstring>(entry.first);
+                result += attr_name.length();
+                result += value_cast<bytes>(entry.second).length() -1;
+            }
+        }
+        ++column_it;
+    }
+    return result;
+}
+
 std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const std::optional<attrs_to_get>& attrs_to_get) {
+        const std::optional<attrs_to_get>& attrs_to_get,
+        consumed_capacity_counter& consumed_capacity_collector) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now());
@@ -2497,6 +2527,9 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         // If the result set contains multiple rows, the code should have
         // called describe_multi_item(), not this function.
         throw std::logic_error("describe_single_item() asked to describe multiple items");
+    }
+    if (!consumed_capacity_collector.is_dummy()) {
+        consumed_capacity_collector += get_result_row_length(selection, *result_set->rows().begin());
     }
     describe_single_item(selection, *result_set->rows().begin(), attrs_to_get, item);
     return item;
@@ -3211,15 +3244,19 @@ static rjson::value describe_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const std::optional<attrs_to_get>& attrs_to_get) {
-    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get);
+        const std::optional<attrs_to_get>& attrs_to_get,
+        consumed_capacity_counter& consumed_capacity,
+        uint64_t& metric) {
+    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get, consumed_capacity);
     if (!opt_item) {
         // If there is no matching item, we're supposed to return an empty
         // object without an Item member - not one with an empty Item member
+        //TODO: We need to keep track of those requests
         return rjson::empty_object();
     }
     rjson::value item_descr = rjson::empty_object();
     rjson::add(item_descr, "Item", std::move(*opt_item));
+    consumed_capacity.add_consumed_capacity_if_needed(item_descr, metric);
     return item_descr;
 }
 
@@ -3261,12 +3298,15 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
-
+    auto add_capacity = get_read_consumed_capacity(request, cl);
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
-            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
+            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time), add_capacity=std::move(add_capacity)] (service::storage_proxy::coordinator_query_result qr) mutable {
+
         _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-        return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
+
+        uint64_t& metric = get_table_stats_from_schema(_proxy, *schema).rcu;
+        return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, metric)));
     });
 }
 
