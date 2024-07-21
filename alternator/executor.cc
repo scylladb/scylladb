@@ -105,7 +105,7 @@ std::string make_jsonable::to_json() const {
 }
 
 json::json_return_type make_streamed(rjson::value&& value) {
-    // CMH. json::json_return_type uses std::function, not noncopyable_function. 
+    // CMH. json::json_return_type uses std::function, not noncopyable_function.
     // Need to make a copyable version of value. Gah.
     auto rs = make_shared<rjson::value>(std::move(value));
     std::function<future<>(output_stream<char>&&)> func = [rs](output_stream<char>&& os) mutable -> future<> {
@@ -285,8 +285,8 @@ schema_ptr executor::find_table(service::storage_proxy& proxy, const rjson::valu
 schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request) {
     auto schema = executor::find_table(proxy, request);
     if (!schema) {
-        // if we get here then the name was missing, since syntax or missing actual CF 
-        // checks throw. Slow path, but just call get_table_name to generate exception. 
+        // if we get here then the name was missing, since syntax or missing actual CF
+        // checks throw. Slow path, but just call get_table_name to generate exception.
         get_table_name(request);
     }
     return schema;
@@ -514,10 +514,10 @@ static rjson::value fill_table_description(schema_ptr schema, table_status tbl_s
     rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", wcu);
     rjson::add(table_description["ProvisionedThroughput"], "NumberOfDecreasesToday", 0);
 
-   
+
 
     data_dictionary::table t = proxy.data_dictionary().find_column_family(schema);
-    
+
     if (tbl_status != table_status::deleting) {
         rjson::add(table_description, "CreationDateTime", rjson::value(creation_date_seconds));
         std::unordered_map<std::string,std::string> key_attribute_types;
@@ -1373,10 +1373,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     elogger.trace("Updating table {}", request);
 
     static const std::vector<sstring> unsupported = {
-        "GlobalSecondaryIndexUpdates", 
+        "GlobalSecondaryIndexUpdates",
         "ProvisionedThroughput",
         "ReplicaUpdates",
-        "SSESpecification", 
+        "SSESpecification",
     };
 
     for (auto& s : unsupported) {
@@ -1643,7 +1643,7 @@ thread_local utils::updateable_value<uint32_t> executor::s_default_timeout_in_ms
 db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + std::chrono::milliseconds(s_default_timeout_in_ms);
 }
-        
+
 static future<std::unique_ptr<rjson::value>> get_previous_item(
         service::storage_proxy& proxy,
         service::client_state& client_state,
@@ -2597,25 +2597,25 @@ static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& re
 }
 
 /**
- * Helper routine to extract data when we already have 
+ * Helper routine to extract data when we already have
  * row, etc etc.
- * 
+ *
  * Note: include_all_embedded_attributes means we should
  * include all values in the `ATTRS_COLUMN_NAME` map column.
- * 
- * We could change the behaviour to simply include all values 
- * from this column if the `ATTRS_COLUMN_NAME` is explicit in 
- * `attrs_to_get`, but I am scared to do that now in case 
+ *
+ * We could change the behaviour to simply include all values
+ * from this column if the `ATTRS_COLUMN_NAME` is explicit in
+ * `attrs_to_get`, but I am scared to do that now in case
  * there is some corner case in existing code.
- * 
- * Explicit bool means we can be sure all previous calls are 
+ *
+ * Explicit bool means we can be sure all previous calls are
  * as before.
- */ 
+ */
 void executor::describe_single_item(const cql3::selection::selection& selection,
     const std::vector<managed_bytes_opt>& result_row,
     const std::optional<attrs_to_get>& attrs_to_get,
     rjson::value& item,
-    bool include_all_embedded_attributes) 
+    bool include_all_embedded_attributes)
 {
     const auto& columns = selection.get_columns();
     auto column_it = columns.begin();
