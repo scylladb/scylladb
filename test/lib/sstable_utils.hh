@@ -129,8 +129,8 @@ public:
         _sst->_generation = generation;
     }
 
-    void change_dir(sstring dir) {
-        _sst->_storage->change_dir_for_test(dir);
+    future<> change_dir(sstring dir) {
+        return _sst->_storage->change_dir_for_test(dir);
     }
 
     void set_data_file_size(uint64_t size) {

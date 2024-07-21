@@ -42,7 +42,7 @@ class storage {
     friend class test;
 
     // Internal, but can also be used by tests
-    virtual void change_dir_for_test(sstring nd) {
+    virtual future<> change_dir_for_test(sstring nd) {
         assert(false && "Changing directory not implemented");
     }
     virtual future<> create_links(const sstable& sst, const std::filesystem::path& dir) const {
