@@ -15,6 +15,7 @@ target_sources(alternator
     conditions.cc
     auth.cc
     streams.cc
+    consumed_capacity.cc
     ttl.cc
     ${cql_grammar_srcs})
 target_include_directories(alternator
