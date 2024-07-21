@@ -262,17 +262,6 @@ void utils::config_file::add(const std::vector<cfg_ref> & cfgs) {
     _cfgs.insert(_cfgs.end(), cfgs.begin(), cfgs.end());
 }
 
-bpo::options_description utils::config_file::get_options_description() {
-    bpo::options_description opts("");
-    return get_options_description(opts);
-}
-
-bpo::options_description utils::config_file::get_options_description(boost::program_options::options_description opts) {
-    auto init = opts.add_options();
-    add_options(init);
-    return opts;
-}
-
 bpo::options_description_easy_init&
 utils::config_file::add_options(bpo::options_description_easy_init& init) {
     for (config_src& src : _cfgs) {

@@ -284,9 +284,6 @@ public:
     void add(std::initializer_list<cfg_ref>);
     void add(const std::vector<cfg_ref> &);
 
-    boost::program_options::options_description get_options_description();
-    boost::program_options::options_description get_options_description(boost::program_options::options_description);
-
     boost::program_options::options_description_easy_init&
     add_options(boost::program_options::options_description_easy_init&);
     boost::program_options::options_description_easy_init&
