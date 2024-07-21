@@ -15,7 +15,7 @@ pull_request_rules:
         - closed
     actions:
       delete_head_branch:
-  - name: Automate backport pull request 5.2
+  - name: Automate backport pull request 6.1
     conditions:
       - or:
         - closed
@@ -23,11 +23,11 @@ pull_request_rules:
       - or:
           - base=master
           - base=next
-      - label=backport/5.2 # The PR must have this label to trigger the backport
+      - label=backport/6.1 # The PR must have this label to trigger the backport
       - label=promoted-to-master
     actions:
       copy:
-        title: "[Backport 5.2] {{ title }}"
+        title: "[Backport 6.1] {{ title }}"
         body: |
           {{ body }}
 
@@ -37,7 +37,7 @@ pull_request_rules:
 
            Refs #{{number}}
         branches:
-          - branch-5.2
+          - branch-6.1
         assignees:
           - "{{ author }}"
   - name: Automate backport pull request 5.4
