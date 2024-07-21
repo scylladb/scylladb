@@ -2002,8 +2002,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
         std::vector<bool> expected_shards_touched(smp::count);
 
         const dht::sharder& sharder = erm->get_sharder(*s.schema());
-        dht::token start_token(dht::token_kind::key, 0);
-        dht::token end_token(dht::token_kind::key, 0);
+        dht::token start_token(0);
+        dht::token end_token(0);
         const auto additional_shards = tests::random::get_int<unsigned>(0, smp::count - 1);
 
         auto shard = sharder.shard_for_reads(start_token);

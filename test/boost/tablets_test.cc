@@ -904,8 +904,8 @@ SEASTAR_TEST_CASE(test_large_tablet_metadata) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
-    const auto real_min_token = dht::token(dht::token_kind::key, std::numeric_limits<int64_t>::min() + 1);
-    const auto real_max_token = dht::token(dht::token_kind::key, std::numeric_limits<int64_t>::max());
+    const auto real_min_token = dht::token::first();
+    const auto real_max_token = dht::token::last();
 
     for (auto&& tmap : {
         tablet_map(1),
@@ -2385,7 +2385,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : test_config.ring_points) {
             std::unordered_set<token> tokens;
-            tokens.insert({dht::token::kind::key, tests::d2t(ring_point / test_config.ring_points.size())});
+            tokens.insert(dht::token{tests::d2t(ring_point / test_config.ring_points.size())});
             topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
             tm.update_host_id(id, endpoint);
             co_await tm.update_normal_tokens(std::move(tokens), id);

@@ -67,7 +67,7 @@ static_sharder::next_shard(const token& t) const {
     auto shard = shard_for_reads(t);
     auto next_shard = shard + 1 == _shard_count ? 0 : shard + 1;
     auto next_token = token_for_next_shard_for_reads(t, next_shard);
-    if (next_token == dht::maximum_token()) {
+    if (next_token.is_maximum()) {
         return std::nullopt;
     }
     return shard_and_token{next_shard, next_token};
@@ -189,7 +189,7 @@ ring_position_range_sharder::next(const schema& s) {
     auto shard_boundary_token = next_shard_and_token->token;
     auto shard_boundary = ring_position::starting_at(shard_boundary_token);
     if ((!_range.end() || shard_boundary.less_compare(s, _range.end()->value()))
-            && shard_boundary_token != maximum_token()) {
+            && !shard_boundary_token.is_maximum()) {
         // split the range at end_of_shard
         auto start = _range.start();
         auto end = interval_bound<ring_position>(shard_boundary, false);
@@ -240,7 +240,7 @@ split_range_to_single_shard(const schema& s, const static_sharder& sharder, cons
             start_boundary,
             shard] () mutable {
         if (pr.overlaps(partition_range(start_boundary, {}), cmp)
-                && !(start_boundary && start_boundary->value().token() == maximum_token())) {
+                && !(start_boundary && start_boundary->value().token().is_maximum())) {
             dht::token end_token = maximum_token();
             auto s_a_t = sharder.next_shard(start_token);
             if (s_a_t) {

@@ -23,7 +23,7 @@ const sstring cdc_partitioner::name() const {
 }
 
 static dht::token to_token(int64_t value) {
-    return dht::token(dht::token::kind::key, value);
+    return dht::token(value);
 }
 
 static dht::token to_token(bytes_view key) {
