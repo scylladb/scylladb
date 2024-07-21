@@ -262,25 +262,22 @@ void utils::config_file::add(const std::vector<cfg_ref> & cfgs) {
     _cfgs.insert(_cfgs.end(), cfgs.begin(), cfgs.end());
 }
 
-bpo::options_description_easy_init&
-utils::config_file::add_options(bpo::options_description_easy_init& init) {
+void
+utils::config_file::add_options(bpo::options_description& options) {
+    bpo::options_description deprecated_options("Deprecated options - ignored");
+
+    auto easy_init_std = options.add_options();
+    auto easy_init_deprecated = deprecated_options.add_options();
+
     for (config_src& src : _cfgs) {
         if (src.status() == value_status::Used) {
-            src.add_command_line_option(init);
+            src.add_command_line_option(easy_init_std);
+        } else if (src.status() == value_status::Deprecated) {
+            src.add_command_line_option(easy_init_deprecated);
         }
     }
-    return init;
-}
 
-
-bpo::options_description_easy_init&
-utils::config_file::add_deprecated_options(bpo::options_description_easy_init& init) {
-    for (config_src& src : _cfgs) {
-        if (src.status() == value_status::Deprecated) {
-            src.add_command_line_option(init);
-        }
-    }
-    return init;
+    options.add(deprecated_options);
 }
 
 void

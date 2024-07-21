@@ -284,10 +284,7 @@ public:
     void add(std::initializer_list<cfg_ref>);
     void add(const std::vector<cfg_ref> &);
 
-    boost::program_options::options_description_easy_init&
-    add_options(boost::program_options::options_description_easy_init&);
-    boost::program_options::options_description_easy_init&
-    add_deprecated_options(boost::program_options::options_description_easy_init&);
+    void add_options(boost::program_options::options_description&);
 
     void print_help(std::ostream& os);
 

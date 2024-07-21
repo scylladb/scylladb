@@ -648,11 +648,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     init("build-mode", bpo::bool_switch(), "print build mode and exit");
     init("list-tools", bpo::bool_switch(), "list included tools and exit");
 
-    bpo::options_description deprecated_options("Deprecated options - ignored");
-    auto deprecated_options_easy_init = deprecated_options.add_options();
-    cfg->add_deprecated_options(deprecated_options_easy_init);
-    app.get_options_description().add(deprecated_options);
-
     // TODO : default, always read?
     init("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)");
     init("config", bpo::value<std::vector<std::string>>()->default_value(std::vector<std::string>(), ""),
@@ -660,7 +655,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     init("help-config", bpo::bool_switch(), "print yaml configuration options and exit");
 
     configurable::append_all(*cfg, init);
-    cfg->add_options(init);
+    cfg->add_options(app.get_options_description());
 
     // If --version is requested, print it out and exit immediately to avoid
     // Seastar-specific warnings that may occur when running the app
@@ -704,7 +699,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
         auto&& opts = app.configuration();
 
-        if (opts["help-config"].as<bool>()) {
+        if (opts.count("help-config") && opts["help-config"].as<bool>()) {
             cfg->print_help(std::cout);
             return make_ready_future<int>(0);
         }
@@ -714,9 +709,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label("") }, [] { return 0; })
         });
 
-        for (auto& opt: deprecated_options.options()) {
-            if (opts.contains(opt->long_name())) {
-                startlog.warn("{} option ignored (deprecated)", opt->long_name());
+        for (auto& this_cfg: cfg->set_values()) {
+            if (this_cfg.get().status() == utils::config_file::value_status::Deprecated) {
+                startlog.warn("{} option ignored (deprecated)", this_cfg.get().name());
             }
         }
 
