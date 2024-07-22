@@ -2616,7 +2616,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     auto sl_version = co_await _sys_ks.get_service_levels_version();
     if (!sl_version || *sl_version < 2) {
         rtlogger.info("migrating service levels data");
-        co_await qos::service_level_controller::migrate_to_v2(tmptr->get_all_endpoints().size(), _sys_ks, _sys_ks.query_processor(), _group0.client(), _as);
+        co_await qos::service_level_controller::migrate_to_v2(tmptr->get_normal_token_owners().size(), _sys_ks, _sys_ks.query_processor(), _group0.client(), _as);
     }
 
     auto auth_version = co_await _sys_ks.get_auth_version();
@@ -2662,7 +2662,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     std::set<sstring> enabled_features;
 
     // Build per-node state
-    for (const auto& host_id: tmptr->get_all_endpoints()) {
+    for (const auto& host_id: tmptr->get_normal_token_owners()) {
         const auto ep = tmptr->get_endpoint_for_host_id_if_known(host_id);
         if (!ep) {
             throw std::runtime_error(format("failed to build initial raft topology state from gossip for node with ID {}, as its IP is not known", host_id));

@@ -1216,7 +1216,7 @@ std::set<inet_address> gossiper::get_live_members() const {
 
 std::set<inet_address> gossiper::get_live_token_owners() const {
     std::set<inet_address> token_owners;
-    auto normal_token_owners = get_token_metadata_ptr()->get_all_ips();
+    auto normal_token_owners = get_token_metadata_ptr()->get_normal_token_owners_ips();
     for (auto& node: normal_token_owners) {
         if (is_alive(node)) {
             token_owners.insert(node);
@@ -1227,7 +1227,7 @@ std::set<inet_address> gossiper::get_live_token_owners() const {
 
 std::set<inet_address> gossiper::get_unreachable_token_owners() const {
     std::set<inet_address> token_owners;
-    auto normal_token_owners = get_token_metadata_ptr()->get_all_ips();
+    auto normal_token_owners = get_token_metadata_ptr()->get_normal_token_owners_ips();
     for (auto& node: normal_token_owners) {
         if (!is_alive(node)) {
             token_owners.insert(node);

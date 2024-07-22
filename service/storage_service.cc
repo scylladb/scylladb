@@ -765,13 +765,13 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     // endpoints. We cannot rely on seeds alone, since it is not guaranteed that seeds
     // will be up to date and reachable at the time of restart.
     const auto tmptr = get_token_metadata_ptr();
-    for (const auto& e: tmptr->get_all_endpoints()) {
+    for (const auto& e: tmptr->get_normal_token_owners()) {
         if (is_me(e)) {
             continue;
         }
         const auto& topo = tmptr->get_topology();
         const auto* node = topo.find_node(e);
-        // node must exist in topology if it's in tmptr->get_all_endpoints
+        // node must exist in topology if it's in tmptr->get_normal_token_owners
         if (!node) {
             on_internal_error(slogger, format("Found no node for {} in topology", e));
         }

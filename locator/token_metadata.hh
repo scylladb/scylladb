@@ -310,9 +310,9 @@ public:
 
     token get_predecessor(token t) const;
 
-    const std::unordered_set<host_id>& get_all_endpoints() const;
+    const std::unordered_set<host_id>& get_normal_token_owners() const;
 
-    std::unordered_set<gms::inet_address> get_all_ips() const;
+    std::unordered_set<gms::inet_address> get_normal_token_owners_ips() const;
 
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */

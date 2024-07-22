@@ -250,7 +250,7 @@ public:
     // node that is still joining the cluster, e.g., a node that is still
     // streaming data before it finishes the bootstrap process and turns into
     // NORMAL status.
-    const std::unordered_set<host_id>& get_all_endpoints() const noexcept {
+    const std::unordered_set<host_id>& get_normal_token_owners() const noexcept {
         return _normal_token_owners;
     }
 
@@ -1094,12 +1094,12 @@ token_metadata::get_predecessor(token t) const {
 }
 
 const std::unordered_set<host_id>&
-token_metadata::get_all_endpoints() const {
-    return _impl->get_all_endpoints();
+token_metadata::get_normal_token_owners() const {
+    return _impl->get_normal_token_owners();
 }
 
-std::unordered_set<gms::inet_address> token_metadata::get_all_ips() const {
-    const auto& host_ids = _impl->get_all_endpoints();
+std::unordered_set<gms::inet_address> token_metadata::get_normal_token_owners_ips() const {
+    const auto& host_ids = _impl->get_normal_token_owners();
     std::unordered_set<gms::inet_address> result;
     result.reserve(host_ids.size());
     for (const auto& id: host_ids) {
