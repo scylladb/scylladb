@@ -86,6 +86,30 @@ def test_system_config_read(scylla_only, cql):
     assert isinstance(obj, str)
     assert obj and obj.isascii() and obj.isprintable()
 
+# Verify that boolean configuration items round-trip and use the yaml/json
+# representation (true/false). #19791.
+def test_system_config_update_boolean(scylla_only, cql):
+    var = 'compaction_enforce_min_threshold'
+    value = cql.execute(f"SELECT value FROM system.config WHERE name = '{var}'")[0].value
+    assert value in ('true', 'false')
+    other = 'true' if value == 'false' else 'false'
+    cql.execute(f"UPDATE system.config SET value = '{other}' WHERE name = '{var}'")
+    readback = cql.execute(f"SELECT value FROM system.config WHERE name = '{var}'")[0].value
+    assert readback == other
+
+    # just for completeness, check that writing 0/1 works too
+    cql.execute(f"UPDATE system.config SET value = '0' WHERE name = '{var}'")
+    readback = cql.execute(f"SELECT value FROM system.config WHERE name = '{var}'")[0].value
+    assert readback == 'false'
+    cql.execute(f"UPDATE system.config SET value = '1' WHERE name = '{var}'")
+    readback = cql.execute(f"SELECT value FROM system.config WHERE name = '{var}'")[0].value
+    assert readback == 'true'
+
+    # restore original
+    cql.execute(f"UPDATE system.config SET value = '{value}' WHERE name = '{var}'")
+    readback = cql.execute(f"SELECT value FROM system.config WHERE name = '{var}'")[0].value
+    assert readback == value
+
 def test_token_ring_vnodes(scylla_only, cql, test_keyspace_vnodes):
     rows = list(cql.execute(f"SELECT * FROM system.token_ring WHERE keyspace_name = '{test_keyspace_vnodes}'"))
     num_tokens = int(list(cql.execute("SELECT value FROM system.config WHERE name = 'num_tokens'"))[0].value)
