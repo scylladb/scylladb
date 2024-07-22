@@ -3220,6 +3220,11 @@ std::pair<shared_sstable, size_t> create_sstable_with_bloom_filter(test_env& env
     return {sst, sst_bf_memory};
 }
 
+void dispose_and_stop_tracking_bf_memory(shared_sstable&& sst, test_env_sstables_manager& mgr) {
+    mgr.remove_sst_from_reclaimed(sst.get());
+    shared_sstable::dispose(sst.release().release());
+}
+
 SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
@@ -3257,7 +3262,7 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) 
 
         // Test auto reload - disposing sst3 should trigger reload of the
         // smallest filter in the reclaimed list, which is sst1's bloom filter.
-        shared_sstable::dispose(sst3.release().release());
+        dispose_and_stop_tracking_bf_memory(std::move(sst3), sst_mgr);
         REQUIRE_EVENTUALLY_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
         // only sst4's bloom filter memory should be reported as reclaimed
         REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst4_bf_memory);
@@ -3322,7 +3327,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
         utils::get_local_injector().enable("reload_reclaimed_components/pause", true);
 
         // dispose sst2 to trigger reload of sst1's bloom filter
-        shared_sstable::dispose(sst2.release().release());
+        dispose_and_stop_tracking_bf_memory(std::move(sst2), sst_mgr);
         // _total_reclaimable_memory will be updated when the reload begins; wait for it.
         REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory);
 
@@ -3348,3 +3353,57 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
         .available_memory = 500
     });
 }
+
+SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
+    return test_env::do_with_async([] (test_env& env) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        simple_schema ss;
+        auto schema = ss.schema();
+
+        auto mut = mutation(schema, ss.make_pkey(1));
+        mut.partition().apply_insert(*schema, ss.make_ckey(1), ss.new_timestamp());
+
+        // bloom filter will be reclaimed automatically due to low memory
+        auto sst = make_sstable_containing(env.make_sstable(schema), {mut});
+        auto& sst_mgr = env.manager();
+        BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), 0);
+        auto memory_reclaimed = sst_mgr.get_total_memory_reclaimed();
+
+        // manager's reclaimed set has the sst now
+        auto& reclaimed_set = sst_mgr.get_reclaimed_set();
+        BOOST_REQUIRE_EQUAL(reclaimed_set.size(), 1);
+        BOOST_REQUIRE_EQUAL(reclaimed_set.begin()->get_filename(), sst->get_filename());
+
+        // hold a copy of shared sst object in async thread to test reload after unlink
+        utils::get_local_injector().enable("test_bloom_filter_reload_after_unlink");
+        auto async_sst_holder = seastar::async([sst] {
+            // do nothing just hold a copy of sst and wait for message signalling test completion
+            utils::get_local_injector().inject("test_bloom_filter_reload_after_unlink", [] (auto& handler) {
+                auto ret = handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{5});
+                return ret;
+            }).get();
+        });
+
+        // unlink the sst and release the object
+        sst->unlink().get();
+        sst.release();
+
+        // reclaimed set should be now empty but the total memory reclaimed should
+        // be still the same as the sst object is not deactivated yet due to a copy
+        // being alive in the async thread.
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_reclaimed_set().size(), 0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), memory_reclaimed);
+
+        // message async thread to complete waiting and thus release its copy of sst, triggering deactivation
+        utils::get_local_injector().receive_message("test_bloom_filter_reload_after_unlink");
+        async_sst_holder.get();
+
+        REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
+    }, {
+        // set available memory = 0 to force reclaim the bloom filter
+        .available_memory = 0
+    });
+};
