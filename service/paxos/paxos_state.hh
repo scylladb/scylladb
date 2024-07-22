@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #pragma once
+#include "seastar/core/semaphore.hh"
 #include "service/paxos/proposal.hh"
 #include "log.hh"
 #include "utils/digest_algorithm.hh"
@@ -31,6 +32,7 @@ private:
 
     class key_lock_map {
         using semaphore = basic_semaphore<semaphore_default_exception_factory, clock_type>;
+        using semaphore_units = semaphore_units<semaphore_default_exception_factory, clock_type>;
         using map = std::unordered_map<dht::token, semaphore>;
 
         semaphore& get_semaphore_for_key(const dht::token& key);
@@ -46,22 +48,15 @@ private:
         key_lock_map& _map;
         dht::token _key;
         clock_type::time_point _timeout;
-        bool _locked = false;
+        key_lock_map::semaphore_units _units;
     public:
-        future<> lock() {
-            auto f = _map.get_semaphore_for_key(_key).wait(_timeout, 1);
-            _locked = true;
-            return f;
+        future<> lock () {
+            return get_units(_map.get_semaphore_for_key(_key), 1, _timeout).then([this] (auto&& u) { _units = std::move(u); });
         }
         guard(key_lock_map& map, const dht::token& key, clock_type::time_point timeout) : _map(map), _key(key), _timeout(timeout) {};
-        guard(guard&& o) noexcept : _map(o._map), _key(std::move(o._key)), _timeout(o._timeout), _locked(o._locked) {
-            o._locked = false;
-        }
+        guard(guard&& o) = default;
         ~guard() {
-            if (_locked) {
-                _map.get_semaphore_for_key(_key).signal(1);
-                _map.release_semaphore_for_key(_key);
-            }
+            _map.release_semaphore_for_key(_key);
         }
     };
 
