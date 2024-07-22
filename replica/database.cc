@@ -760,6 +760,10 @@ database::init_commitlog() {
             // Initiate a background flush. Waited upon in `stop()`.
             (void)_tables_metadata.get_table(id).flush(pos);
         }).release(); // we have longer life time than CL. Ignore reg anchor
+
+        _cfg.commitlog_max_data_lifetime_in_seconds.observe([this](uint32_t max_time) {
+            _commitlog->update_max_data_lifetime(max_time == 0 ? std::nullopt : std::make_optional(uint64_t(max_time)));
+        });
     });
 }
 

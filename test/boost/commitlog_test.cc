@@ -1705,3 +1705,119 @@ SEASTAR_TEST_CASE(test_wait_for_delete) {
     co_await log.shutdown();
     co_await log.clear();
 }
+
+SEASTAR_TEST_CASE(test_commitlog_max_data_lifetime) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.commitlog_data_max_lifetime_in_seconds = 2;
+    cfg.allow_going_over_size_limit = false;
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    rp_set rps;
+    // uncomment for verbosity
+    // logging::logger_registry().set_logger_level("commitlog", logging::log_level::debug);
+
+    auto uuid = make_table_id();
+    auto size = log.max_record_size();
+
+    std::unordered_set<cf_id_type> ids;
+
+    condition_variable cond;
+
+    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+        log.discard_completed_segments(id, rps);
+        ids.insert(id);
+        cond.signal();
+    });
+
+    rp_handle h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+        dst.fill('1', size);
+    });
+    h.release();
+
+    // should not be signaled yet. 
+    BOOST_REQUIRE(!ids.contains(uuid));
+
+    int n = 0; 
+    while (!ids.contains(uuid) && n++ < 3) {
+        // way long, but lets give it some leeway on slow test cluster.
+        co_await cond.wait(20s);
+    }
+
+    // but now it must
+    BOOST_REQUIRE(ids.contains(uuid));
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
+SEASTAR_TEST_CASE(test_commitlog_update_max_data_lifetime) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.commitlog_data_max_lifetime_in_seconds = std::nullopt;
+    cfg.allow_going_over_size_limit = false;
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    rp_set rps;
+    // uncomment for verbosity
+    // logging::logger_registry().set_logger_level("commitlog", logging::log_level::debug);
+
+    auto uuid = make_table_id();
+    auto size = log.max_record_size();
+
+    std::unordered_set<cf_id_type> ids;
+
+    condition_variable cond;
+
+    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+        log.discard_completed_segments(id, rps);
+        ids.insert(id);
+        cond.signal();
+    });
+
+    rp_handle h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+        dst.fill('1', size);
+    });
+    h.release();
+
+    try {
+        co_await cond.wait(10s);
+        BOOST_FAIL("should not reach");
+    } catch (condition_variable_timed_out&) {
+    }
+
+    // should not be signaled yet. 
+    BOOST_REQUIRE(!ids.contains(uuid));
+
+    log.update_max_data_lifetime(2);
+
+    int n = 0; 
+    while (!ids.contains(uuid) && n++ < 3) {
+        // way long, but lets give it some leeway on slow test cluster.
+        co_await cond.wait(10s);
+    }
+
+    // but now it must
+    BOOST_REQUIRE(ids.contains(uuid));
+
+    co_await log.shutdown();
+    co_await log.clear();
+}

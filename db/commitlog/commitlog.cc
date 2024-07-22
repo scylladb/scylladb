@@ -113,6 +113,9 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     if (cfg.commitlog_flush_threshold_in_mb() >= 0) {
         c.commitlog_flush_threshold_in_mb = cfg.commitlog_flush_threshold_in_mb();
     }
+    if (cfg.commitlog_max_data_lifetime_in_seconds() > 0) {
+        c.commitlog_data_max_lifetime_in_seconds = cfg.commitlog_max_data_lifetime_in_seconds();
+    }
 
     return c;
 }
@@ -490,6 +493,7 @@ public:
     }
 
     void flush_segments(uint64_t size_to_remove);
+    void check_no_data_older_than_allowed();
 
 private:
     class shutdown_marker{};
@@ -1793,6 +1797,77 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
     totals.bytes_flush_requested += flushing;
 }
 
+void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
+    auto max = cfg.commitlog_data_max_lifetime_in_seconds;
+    if (!max) {
+        return;
+    }
+
+    auto now = gc_clock::now();
+
+    std::unordered_set<cf_id_type> ids;
+    std::optional<replay_position> high;
+
+    for (auto& s : _segments) {
+        auto rp = replay_position(s->_desc.id, db::position_type(s->size_on_disk()));
+        if (rp <= _flush_position) {
+            // already requested.
+            continue;
+        }
+
+        bool any_found = false;
+
+        for (auto [id, low_ts] : s->_cf_min_time) {
+            // Ignore CF:s already released.
+            if (!s->_cf_dirty.count(id)) {
+                continue;
+            }
+
+            uint64_t time_since_first_added = std::chrono::duration_cast<std::chrono::seconds>(now - low_ts).count();
+            if (time_since_first_added >= *max) {
+                // There is data in this segment that has lived longer than allowed (might be flushed actually
+                // but can still affect compaction/resurrect stuff on replay). Collect all dirty 
+                // id:s (stuff keeping this segment alive), and ask for them to be memtable flushed
+                for (auto& id : s->_cf_dirty | boost::adaptors::map_keys) {
+                    ids.insert(id);
+                }
+
+                // highest position (so far) is end of segment.
+                high = rp;
+
+                // If this segment is actually the active one, we must close it. Otherwise flushing 
+                // won't help.
+                if (s->is_still_allocating()) {
+                    // fixme. discarded future.
+                    (void)s->close();
+                }
+                any_found = true;
+                break;
+            }
+        }
+
+        // segments are sequential. Can't start becoming older.
+        if (!any_found) {
+            break;
+        }
+    }
+
+    if (!ids.empty()) {
+        auto callbacks = boost::copy_range<std::vector<flush_handler>>(_flush_handlers | boost::adaptors::map_values);
+        // For each CF id: for each callback c: call c(id, high)
+        for (auto& f : callbacks) {
+            for (auto& id : ids) {
+                try {
+                    f(id, *high);
+                } catch (...) {
+                    clogger.error("Exception during flush request {}/{}: {}", id, *high, std::current_exception());
+                }
+            }
+        }
+        _flush_position = *high;
+    }
+}
+
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(descriptor d, named_file f, open_flags flags) {
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
@@ -2468,6 +2543,9 @@ void db::commitlog::segment_manager::on_timer() {
                 flush_segments(cur + extra - max);
             }
         }
+
+        check_no_data_older_than_allowed();
+
         return do_pending_deletes();
     });
     arm();
@@ -3298,6 +3376,11 @@ gc_clock::time_point db::commitlog::min_gc_time(const cf_id_type& id) const {
 db::replay_position db::commitlog::min_position() const {
     return _segment_manager->min_position();
 }
+
+void db::commitlog::update_max_data_lifetime(std::optional<uint64_t> commitlog_data_max_lifetime_in_seconds) {
+    _segment_manager->cfg.commitlog_data_max_lifetime_in_seconds = commitlog_data_max_lifetime_in_seconds;
+}
+
 
 future<std::vector<sstring>> db::commitlog::get_segments_to_replay() const {
     return _segment_manager->get_segments_to_replay();
