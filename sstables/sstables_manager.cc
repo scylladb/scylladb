@@ -282,4 +282,9 @@ void sstables_manager::unplug_system_keyspace() noexcept {
     _sys_ks = nullptr;
 }
 
+void sstables_manager::on_unlink(sstable* sst) {
+    // Remove the sst from manager's reclaimed list to prevent any attempts to reload its components.
+    _reclaimed.erase(*sst);
+}
+
 }   // namespace sstables
