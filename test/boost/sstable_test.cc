@@ -166,17 +166,12 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
 }
 
 static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type generation) {
-    return env.reusable_sst(std::move(schema), load_dir, generation).then([write_dir, generation] (sstable_ptr sst) mutable {
-        sstable_generation_generator gen{generation.as_int()};
-        sstables::test(sst).change_generation_number(gen());
-        auto fut = sstables::test(sst).change_dir(write_dir);
-        return std::move(fut).then([sst = std::move(sst)] {
-            auto fut = sstables::test(sst).store();
-            return std::move(fut).then([sst = std::move(sst)] {
-                return make_ready_future<sstable_ptr>(std::move(sst));
-            });
-        });
-    });
+    auto sst = co_await env.reusable_sst(std::move(schema), load_dir, generation);
+    sstable_generation_generator gen(generation.as_int());
+    sstables::test(sst).change_generation_number(gen());
+    co_await sstables::test(sst).change_dir(write_dir);
+    co_await sstables::test(sst).store();
+    co_return sst;
 }
 
 static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type generation) {
