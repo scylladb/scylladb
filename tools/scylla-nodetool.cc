@@ -376,7 +376,7 @@ struct operation_action{
     {}
 };
 
-std::map<operation, operation_func> get_operations_with_func();
+const std::map<operation, operation_action>& get_operations_with_func();
 
 void backup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::unordered_map<sstring, sstring> params;
@@ -2886,9 +2886,9 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"-hf", "--hex-format"},
 };
 
-std::map<operation, operation_func> get_operations_with_func() {
+const std::map<operation, operation_action>& get_operations_with_func() {
 
-    const static std::map<operation, operation_func> operations_with_func {
+    const static std::map<operation, operation_action> operations_with_func {
         {
             {
                 "backup",
@@ -2917,7 +2917,9 @@ bootstrapping or decommissioning a node.
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/checkandrepaircdcstreams.html")),
             },
-            checkandrepaircdcstreams_operation
+            {
+                checkandrepaircdcstreams_operation
+            }
         },
         {
             {
@@ -2940,7 +2942,9 @@ For more information, see: {}
                     typed_option<std::vector<sstring>>("cleanup_arg", "[<keyspace> <tables>...]", -1),
                 }
             },
-            cleanup_operation
+            {
+                cleanup_operation
+            }
         },
         {
             {
@@ -2958,7 +2962,9 @@ For more information, see: {}
                     typed_option<std::vector<sstring>>("keyspaces", "[<keyspaces>...]", -1),
                 }
             },
-            clearsnapshot_operation
+            {
+                clearsnapshot_operation
+            }
         },
         {
             {
@@ -2988,7 +2994,9 @@ For more information, see: {}
                     typed_option<std::vector<sstring>>("compaction_arg", "[<keyspace> <tables>...] or [<SStable files>...] ", -1),
                 }
             },
-            compact_operation
+            {
+                compact_operation
+            }
         },
         {
             {
@@ -3001,7 +3009,9 @@ For more information, see: {}
                     typed_option<sstring>("format,F", "text", "Output format, one of: (json, yaml or text); defaults to text"),
                 },
             },
-            compactionhistory_operation
+            {
+                compactionhistory_operation
+            }
         },
         {
             {
@@ -3014,7 +3024,9 @@ For more information, see: {}
                     typed_option<bool>("human-readable,H", false, "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
                 },
             },
-            compactionstats_operation
+            {
+                compactionstats_operation
+            }
         },
         {
             {
@@ -3024,7 +3036,9 @@ fmt::format(R"(
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/decommission.html")),
             },
-            decommission_operation
+            {
+                decommission_operation
+            }
         },
         {
             {
@@ -3042,7 +3056,9 @@ For more information, see: {}
                     typed_option<std::vector<sstring>>("table", "The table to describe the ring for (for tablet keyspaces)", -1),
                 },
             },
-            describering_operation
+            {
+                describering_operation
+            }
         },
         {
             {
@@ -3052,7 +3068,9 @@ fmt::format(R"(
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/describecluster.html")),
             },
-            describecluster_operation
+            {
+                describecluster_operation
+            }
         },
         {
             {
@@ -3067,7 +3085,9 @@ For more information, see: {}
                     typed_option<std::vector<sstring>>("table", "The table(s) to disable automatic compaction for", -1),
                 }
             },
-            disableautocompaction_operation
+            {
+                disableautocompaction_operation
+            }
         },
         {
             {
@@ -3077,7 +3097,9 @@ fmt::format(R"(
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/disablebackup.html")),
             },
-            disablebackup_operation
+            {
+                disablebackup_operation
+            }
         },
         {
             {
@@ -3087,7 +3109,9 @@ fmt::format(R"(
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/disablebinary.html")),
             },
-            disablebinary_operation
+            {
+                disablebinary_operation
+            }
         },
         {
             {
@@ -3097,7 +3121,9 @@ fmt::format(R"(
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/disablegossip.html")),
             },
-            disablegossip_operation
+            {
+                disablegossip_operation
+            }
         },
         {
             {
@@ -3114,7 +3140,9 @@ flush command.
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/drain.html")),
             },
-            drain_operation
+            {
+                drain_operation
+            }
         },
         {
             {
@@ -3129,7 +3157,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("table", "The table(s) to enable automatic compaction for", -1),
                 }
             },
-            enableautocompaction_operation
+            {
+                enableautocompaction_operation
+            }
         },
         {
             {
@@ -3139,7 +3169,9 @@ fmt::format(R"(
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/enablebackup.html")),
             },
-            enablebackup_operation
+            {
+                enablebackup_operation
+            }
         },
         {
             {
@@ -3151,7 +3183,9 @@ The native protocol is enabled by default.
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/enablebinary.html")),
             },
-            enablebinary_operation
+            {
+                enablebinary_operation
+            }
         },
         {
             {
@@ -3163,7 +3197,9 @@ The gossip protocol is enabled by default.
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/enablegossip.html")),
             },
-            enablegossip_operation
+            {
+                enablegossip_operation
+            }
         },
         {
             {
@@ -3182,7 +3218,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("table", "The table(s) to flush", -1),
                 }
             },
-            flush_operation
+            {
+                flush_operation
+            }
         },
         {
             {
@@ -3198,7 +3236,9 @@ For more information, see: {}"
                     typed_option<sstring>("key", "The partition key for which we need to find the endpoint", 1),
                 },
             },
-            getendpoints_operation
+            {
+                getendpoints_operation
+            }
         },
         {
             {
@@ -3208,7 +3248,9 @@ R"(
 Prints a table with the name and current logging level for each logger in ScyllaDB.
 )",
             },
-            getlogginglevels_operation
+            {
+                getlogginglevels_operation
+            }
         },
         {
             {
@@ -3226,7 +3268,9 @@ For more information, see: {}"
                     typed_option<sstring>("key", "The partition key for which we need to find the sstables", 1),
                 },
             },
-            getsstables_operation
+            {
+                getsstables_operation
+            }
         },
         {
             {
@@ -3238,7 +3282,9 @@ This value is the probability for tracing a request. To change this value see se
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/gettraceprobability.html")),
             },
-            gettraceprobability_operation
+            {
+                gettraceprobability_operation
+            }
         },
         {
             {
@@ -3248,7 +3294,9 @@ fmt::format(R"(
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/gossipinfo.html")),
             },
-            gossipinfo_operation
+            {
+                gossipinfo_operation
+            }
         },
         {
             {
@@ -3260,7 +3308,9 @@ For more information, see: {}"
                     typed_option<sstring>("command", "The command to get more information about", 1),
                 },
             },
-            [] (scylla_rest_client&, const bpo::variables_map&) {}
+            {
+                [] (scylla_rest_client&, const bpo::variables_map&) {}
+            }
         },
         {
             {
@@ -3273,7 +3323,9 @@ For more information, see: {}"
                     typed_option<>("tokens,T", "Display all tokens"),
                 },
             },
-            info_operation
+            {
+                info_operation
+            }
         },
         {
             {
@@ -3287,7 +3339,9 @@ For more information, see: {}"
                 { },
                 { },
             },
-            listsnapshots_operation
+            {
+                listsnapshots_operation
+            }
         },
         {
             {
@@ -3301,7 +3355,9 @@ This operation is not supported.
                     typed_option<sstring>("new-token", "The new token to move to this node", 1),
                 },
             },
-            move_operation
+            {
+                move_operation
+            }
         },
         {
             {
@@ -3315,7 +3371,9 @@ For more information, see: {}"
                 },
                 { },
             },
-            netstats_operation
+            {
+                netstats_operation
+            }
         },
         {
             {
@@ -3332,7 +3390,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("table", "<keyspace> <table>, <keyspace>.<table> or <keyspace>-<table>", 2),
                 }
             },
-            proxyhistograms_operation
+            {
+                proxyhistograms_operation
+            }
         },
         {
             {
@@ -3354,7 +3414,9 @@ For more information, see: {}"
                     typed_option<sstring>("source-dc", "DC from which to stream data (default: any DC)", 1),
                 },
             },
-            rebuild_operation
+            {
+                rebuild_operation
+            }
         },
         {
             {
@@ -3378,7 +3440,9 @@ For more information, see: {}"
                     typed_option<sstring>("table", "The table to load sstable(s) into", 1),
                 },
             },
-            refresh_operation
+            {
+                refresh_operation
+            }
         },
         {
             {
@@ -3399,7 +3463,9 @@ For more information, see: {}"
                     typed_option<sstring>("remove-operation", "status|force|$HOST_ID - show status of current node removal, force completion of pending removal, or remove provided ID", 1),
                 },
             },
-            removenode_operation
+            {
+                removenode_operation
+            }
         },
         {
             {
@@ -3437,7 +3503,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("table", "The table(s) to repair, if missing all tables are repaired", -1),
                 },
             },
-            repair_operation
+            {
+                repair_operation
+            }
         },
         {
             {
@@ -3449,7 +3517,9 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
                 { },
                 { },
             },
-            resetlocalschema_operation
+            {
+                resetlocalschema_operation
+            }
         },
         {
             {
@@ -3466,7 +3536,9 @@ For more information, see: {}"
                     typed_option<sstring>("table", "The table to print the ring for (needed for tablet keyspaces)", 1),
                 },
             },
-            ring_operation
+            {
+                ring_operation
+            }
         },
         {
             {
@@ -3489,7 +3561,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("table", "The table(s) to scrub (if unspecified, all tables in the keyspace are scrubbed)", -1),
                 },
             },
-            scrub_operation
+            {
+                scrub_operation
+            }
         },
         {
             {
@@ -3506,7 +3580,9 @@ For more information, see: {}"
                     typed_option<sstring>("level", "The log level to set, one of (trace, debug, info, warn and error), if unspecified, default level is reset to default log level", 1),
                 },
             },
-            setlogginglevel_operation
+            {
+                setlogginglevel_operation
+            }
         },
         {
             {
@@ -3524,7 +3600,9 @@ For more information, see: {}"
                     typed_option<double>("trace_probability", "trace probability value, must between 0 and 1, e.g. 0.2", 1),
                 },
             },
-            settraceprobability_operation
+            {
+                settraceprobability_operation
+            }
         },
         {
             {
@@ -3543,7 +3621,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to snapshot", -1),
                 },
             },
-            snapshot_operation
+            {
+                snapshot_operation
+            }
         },
         {
             {
@@ -3558,7 +3638,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("table", "The table names (optional)", -1),
                 },
             },
-            sstableinfo_operation,
+            {
+                sstableinfo_operation,
+            }
         },
         {
             {
@@ -3575,7 +3657,9 @@ For more information, see: {}"
                     typed_option<sstring>("table", "The table name (needed to display load information, if the keyspace uses tablets)", 1),
                 },
             },
-            status_operation
+            {
+                status_operation
+            }
         },
         {
             {
@@ -3589,7 +3673,9 @@ By default, the incremental backup status is `not running`.
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/statusbackup.html")),
             },
-            statusbackup_operation
+            {
+                statusbackup_operation
+            }
         },
         {
             {
@@ -3606,7 +3692,9 @@ By default, the native transport is `running`.
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/statusbinary.html")),
             },
-            statusbinary_operation
+            {
+                statusbinary_operation
+            }
         },
         {
             {
@@ -3621,7 +3709,9 @@ By default, the gossip protocol is `running`.
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/statusgossip.html")),
             },
-            statusgossip_operation
+            {
+                statusgossip_operation
+            }
         },
         {
             {
@@ -3639,7 +3729,9 @@ For more information, see: {}"
                     typed_option<sstring>("compaction_type", "The type of compaction to be stopped", 1),
                 },
             },
-            stop_operation
+            {
+                stop_operation
+            }
         },
         {
             {
@@ -3660,7 +3752,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("table", "<keyspace> <table>, <keyspace>.<table> or <keyspace>-<table>", 2),
                 }
             },
-            tablehistograms_operation
+            {
+                tablehistograms_operation
+            }
         },
         {
             {
@@ -3679,7 +3773,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("tables", "List of tables (or keyspace) names", -1),
                 },
             },
-            table_stats_operation
+            {
+                table_stats_operation
+            }
         },
         {
             {
@@ -3702,7 +3798,9 @@ For more information, see: {}"
                     typed_option<int>("duration-milli", "Duration in milliseconds", 1),
                 },
             },
-            toppartitions_operation
+            {
+                toppartitions_operation
+            }
         },
         {
             {
@@ -3726,7 +3824,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("table", "Table to upgrade sstables for, if missing, all tables in the keyspace are upgraded", -1),
                 },
             },
-            upgradesstables_operation
+            {
+                upgradesstables_operation
+            }
         },
         {
             {
@@ -3740,7 +3840,9 @@ For more information, see: {}"
                     typed_option<std::vector<sstring>>("keyspace_view", "<keyspace> <view> | <keyspace.view>, The keyspace and view name ", -1),
                 },
             },
-            viewbuildstatus_operation
+            {
+                viewbuildstatus_operation
+            }
         },
         {
             {
@@ -3754,7 +3856,9 @@ run `scylla --version`.
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/version.html")),
             },
-            version_operation
+            {
+                version_operation
+            }
         },
     };
 
@@ -3869,7 +3973,7 @@ For more information, see: {})";
                     port = app_config["port"].as<uint16_t>();
                 }
                 scylla_rest_client client(app_config["host"].as<sstring>(), port);
-                get_operations_with_func().at(operation)(client, app_config);
+                get_operations_with_func().at(operation).func.value()(client, app_config);
             }
         } catch (std::invalid_argument& e) {
             fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
