@@ -325,6 +325,11 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
     }, so.value);
 }
 
+void sstables_manager::on_unlink(sstable* sst) {
+    // Remove the sst from manager's reclaimed list to prevent any attempts to reload its components.
+    _reclaimed.erase(*sst);
+}
+
 sstables_registry::~sstables_registry() = default;
 
 }   // namespace sstables
