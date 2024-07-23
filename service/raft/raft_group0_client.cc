@@ -252,16 +252,20 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
     auto [upgrade_lock_holder, upgrade_state] = co_await get_group0_upgrade_state();
     switch (upgrade_state) {
         case group0_upgrade_state::use_post_raft_procedures: {
+<<<<<<< HEAD
             auto operation_holder = co_await get_units(_operation_mutex, 1);
 <<<<<<< HEAD
             co_await _raft_gr.group0().read_barrier(as);
 =======
+=======
+            auto operation_holder = co_await get_units(_operation_mutex, 1, as);
+>>>>>>> 5dfc50d354 (raft: fix the shutdown phase being stuck)
             co_await _raft_gr.group0_with_timeouts().read_barrier(&as, timeout);
 >>>>>>> 2dbe9ef2f2 (raft: use the abort source reference in raft group0 client interface)
 
             // Take `_group0_read_apply_mutex` *after* read barrier.
             // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
-            auto read_apply_holder = co_await hold_read_apply_mutex();
+            auto read_apply_holder = co_await hold_read_apply_mutex(as);
 
             auto observed_group0_state_id = co_await _sys_ks.get_last_group0_state_id();
             auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
