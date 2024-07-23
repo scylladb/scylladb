@@ -11,6 +11,7 @@ import time
 import rest_api
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized, ConfigurationException
 from util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type
+from contextlib import contextmanager
 
 # Test that granting permissions to various resources works for the default user.
 # This case does not include functions, because due to differences in implementation
@@ -553,3 +554,180 @@ def test_native_functions_always_exeutable(cql):
                     assert list(user_session.execute(f"SELECT max(a) FROM {table}")) == [(84,)]
                     assert list(user_session.execute(f"SELECT min(a) FROM {table}")) == [(3,)]
                     assert list(user_session.execute(f"SELECT sum(a) FROM {table}")) == [(102,)]
+
+@contextmanager
+def eventually_new_named_table(cql, table, schema, extra=""):
+    eventually_authorized(lambda: cql.execute(f'CREATE TABLE {table} ({schema}) {extra}'))
+    try:
+        yield table
+    finally:
+        eventually_authorized(lambda: cql.execute(f'DROP TABLE {table}'))
+
+# When a role has permissions to create a table, the role is given full
+# access to the table it just created (we call this feature "auto-grant").
+# The following tests check the auto-grant feature. The first test checks
+# that the base table created by CREATE TABLE is usable by the role creating
+# it. The second test is about the view created by CREATE MATERIALIZED VIEW
+# being accessible. The third test is about newly created CDC being accessible.
+def test_auto_grant_base(cql, test_keyspace):
+    with new_user(cql) as username:
+        # Grant username CREATE permissions on test_keyspace, but no other
+        # permissions:
+        grant(cql, 'CREATE', 'KEYSPACE ' + test_keyspace, username)
+        with new_session(cql, username) as user_session:
+            schema = "p int primary key"
+            table = f'{test_keyspace}.{unique_name()}'
+            with eventually_new_named_table(user_session, table, schema):
+                # Check that the username was auto-granted SELECT permissions
+                eventually_authorized(lambda: user_session.execute(f'SELECT * FROM {table}'))
+                # Check that the username was auto-granted MODIFY permissions
+                eventually_authorized(lambda: user_session.execute(f'INSERT INTO {table}(p) VALUES(42)'))
+                # Check that the username was auto-granted ALTER permissions
+                eventually_authorized(lambda: user_session.execute(f"ALTER TABLE {table} WITH comment = 'hey'"))
+                # When this scope ends, table is dropped in user_session,
+                # so we check that DROP permissions were auto-granted as well.
+
+# Test that a role creating a materialized view is automatically granted
+# permissions to read it.
+def test_auto_grant_view(cql, test_keyspace):
+    with new_user(cql) as username:
+        # Grant username CREATE permissions on test_keyspace, but no other
+        # permissions:
+        grant(cql, 'CREATE', 'KEYSPACE ' + test_keyspace, username)
+        with new_session(cql, username) as user_session:
+            schema = "p int primary key, v int"
+            table = f'{test_keyspace}.{unique_name()}'
+            with eventually_new_named_table(user_session, table, schema):
+                # Because username has CREATE permissions, it can also use
+                # CREATE MATERIALIZED VIEW
+                mv = f'{test_keyspace}.{unique_name()}'
+                eventually_authorized(lambda: user_session.execute(f'CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table} WHERE p IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, p)'))
+                # Check that the username was auto-granted SELECT permissions
+                # on the newly created materialized view:
+                eventually_authorized(lambda: user_session.execute(f'SELECT * FROM {mv}'))
+                # Check that the username was auto-granted ALTER permissions
+                # on the materialized view
+                eventually_authorized(lambda: user_session.execute(f"ALTER MATERIALIZED VIEW {mv} WITH comment = 'hey'"))
+                # Check that the username was auto-granted DROP permissions
+                # on the materialized view
+                eventually_authorized(lambda: user_session.execute(f'DROP MATERIALIZED VIEW {mv}'))
+
+# Test that a role creating CDC is automatically granted permissions to access
+# the CDC log table.
+# This test has two variants - cdc_on_create=True creates the table immediately
+# with CDC enabled, while cdc_on_create=False creates a table first and only
+# then enables CDC. Both should work.
+# This is a scylla_only test because it tests the Scylla-only CDC feature.
+# Reproduces #19798:
+@pytest.mark.xfail(reason="issue #19798")
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+@pytest.mark.parametrize("cdc_on_create", [True, False])
+def test_auto_grant_cdc(cql, test_keyspace, cdc_on_create, scylla_only):
+    with new_user(cql) as username:
+        # Grant username CREATE permissions on test_keyspace, but no other
+        # permissions:
+        grant(cql, 'CREATE', 'KEYSPACE ' + test_keyspace, username)
+        with new_session(cql, username) as user_session:
+            schema = "p int primary key"
+            extra = "with cdc = {'enabled': true}"
+            table = f'{test_keyspace}.{unique_name()}'
+            with eventually_new_named_table(user_session, table, schema, extra if cdc_on_create else ''):
+                # If cdc_on_create=False, we created the table without CDC
+                # enabled and we'll enable it now. username should be allowed
+                # to do it (it is auto-granted ALTER permissions on the table
+                # it created)
+                if not cdc_on_create:
+                    eventually_authorized(lambda: user_session.execute(f'ALTER TABLE {table} {extra}'))
+                # Check that the username was auto-granted SELECT permissions
+                # on the newly created CDC log
+                # Note: While this test is xfailing, we use a lower timeout
+                # here to avoid a very slow failure. When the test begins
+                # to pass, the timeout_s doesn't matter and can be removed.
+                eventually_authorized(lambda: user_session.execute(f'SELECT * FROM {table}_scylla_cdc_log'), timeout_s=1)
+
+# In the above tests we checked the "auto-grant" feature - where a user that
+# creates table is automatically granted permissions on the new table, views
+# and CDC logs it created. If auto-grant is implemented, it is also critical
+# that auto-revoke is implemented - i.e., permissions are revoked when a
+# table, view or CDC log is deleted. If we forget to do that, it is possible
+# that a first user creates a table/view/cdc, deletes it, and when a second
+# user reuses the same name, the first user wrongly gets permission to access
+# the second user's data.
+# The goal of the following tests is the check this auto-revoke feature.
+
+def test_auto_revoke_base(cql, test_keyspace):
+    with new_user(cql) as user1, new_user(cql) as user2:
+        # Grant user1 and user2 CREATE permissions on test_keyspace, but no
+        # other permissions:
+        grant(cql, 'CREATE', 'KEYSPACE ' + test_keyspace, user1)
+        grant(cql, 'CREATE', 'KEYSPACE ' + test_keyspace, user2)
+        with new_session(cql, user1) as user1_session, new_session(cql, user2) as user2_session:
+            schema = "p int primary key"
+            table = f'{test_keyspace}.{unique_name()}'
+            with eventually_new_named_table(user1_session, table, schema):
+                # A minimal check that auto-grant actually worked for user1,
+                # user2 can't read the table.
+                eventually_authorized(lambda: user1_session.execute(f'SELECT * FROM {table}'))
+                eventually_unauthorized(lambda: user2_session.execute(f'SELECT * FROM {table}'))
+            # At this point, table was deleted by user1, so user2 can create
+            # a table with the same name "table".
+            with eventually_new_named_table(user2_session, table, schema):
+                # Now, permissions were auto-granted for user2, but user1
+                # no longer has permissions on this table.
+                eventually_authorized(lambda: user2_session.execute(f'SELECT * FROM {table}'))
+                eventually_unauthorized(lambda: user1_session.execute(f'SELECT * FROM {table}'))
+
+def test_auto_revoke_view(cql, test_keyspace):
+    with new_user(cql) as user1, new_user(cql) as user2:
+        # Grant user1 and user2 CREATE permissions on test_keyspace, but no
+        # other permissions:
+        grant(cql, 'CREATE', 'KEYSPACE ' + test_keyspace, user1)
+        grant(cql, 'CREATE', 'KEYSPACE ' + test_keyspace, user2)
+        with new_session(cql, user1) as user1_session, new_session(cql, user2) as user2_session:
+            schema = "p int primary key, v int"
+            mv = f'{test_keyspace}.{unique_name()}'
+            table = f'{test_keyspace}.{unique_name()}'
+            with eventually_new_named_table(user1_session, table, schema):
+                # Create a view with a pre-chosen name mv as user1:
+                eventually_authorized(lambda: user1_session.execute(f'CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table} WHERE p IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, p)'))
+                # user1 was auto-granted permissions to read this view, user2
+                # was not:
+                eventually_authorized(lambda: user1_session.execute(f'SELECT * FROM {mv}'))
+                eventually_unauthorized(lambda: user2_session.execute(f'SELECT * FROM {mv}'))
+                eventually_authorized(lambda: user1_session.execute(f'DROP MATERIALIZED VIEW {mv}'))
+                # After user1 dropped the view with name mv, we let user2
+                # create a different table but reuse the same view name mv.
+                # We want to check that user1 no longer has permissions on
+                # this view:
+                table2 = f'{test_keyspace}.{unique_name()}'
+                with eventually_new_named_table(user2_session, table2, schema):
+                    eventually_authorized(lambda: user2_session.execute(f'CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table2} WHERE p IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, p)'))
+                    eventually_authorized(lambda: user2_session.execute(f'SELECT * FROM {mv}'))
+                    eventually_unauthorized(lambda: user1_session.execute(f'SELECT * FROM {mv}'))
+                    eventually_authorized(lambda: user2_session.execute(f'DROP MATERIALIZED VIEW {mv}'))
+
+# This is a scylla_only test because it tests the Scylla-only CDC feature.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_auto_revoke_cdc(cql, test_keyspace, scylla_only):
+    with new_user(cql) as user1, new_user(cql) as user2:
+        # Grant user1 and user2 CREATE permissions on test_keyspace, but no
+        # other permissions:
+        grant(cql, 'CREATE', 'KEYSPACE ' + test_keyspace, user1)
+        grant(cql, 'CREATE', 'KEYSPACE ' + test_keyspace, user2)
+        with new_session(cql, user1) as user1_session, new_session(cql, user2) as user2_session:
+            schema = "p int primary key"
+            extra = "with cdc = {'enabled': true}"
+            table = f'{test_keyspace}.{unique_name()}'
+            with eventually_new_named_table(user1_session, table, schema, extra):
+                pass
+            # At this point, table was deleted by user1, so user2 can create
+            # a table with the same name "table" (and a CDC log for it)
+            with eventually_new_named_table(user2_session, table, schema, extra):
+                # Now, permissions were auto-granted for user2, but user1
+                # no longer has permissions on this table.
+                #eventually_authorized(lambda: user2_session.execute(f'SELECT * FROM {table}_scylla_cdc_log')) # Reproduces #19798
+                eventually_unauthorized(lambda: user1_session.execute(f'SELECT * FROM {table}_scylla_cdc_log'))
