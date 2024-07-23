@@ -20,6 +20,8 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm/find_if.hpp>
 #include <fmt/chrono.h>
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
@@ -1232,20 +1234,38 @@ void proxyhistograms_operation(scylla_rest_client& client, const bpo::variables_
     fmt::print(std::cout, "\n");
 }
 
+sstring get_command_name(const std::vector<sstring>& cmds) {
+    sstring res = "";
+    sstring delim = "";
+    for (const auto& cmd: cmds) {
+        res += delim + cmd;
+        delim = " ";
+    }
+    return res;
+}
+
 void help_operation(const tool_app_template::config& cfg, const bpo::variables_map& vm) {
     if (vm.count("command")) {
-        const auto command = vm["command"].as<sstring>();
-        auto ops = get_operations_with_func();
+        const auto command = vm["command"].as<std::vector<sstring>>();
+        const auto& ops = get_operations_with_func();
         auto keys = ops | boost::adaptors::map_keys;
-        auto it = std::ranges::find_if(keys, [&] (const operation& op) { return op.name() == command; });
+        auto it = std::ranges::find_if(keys, [&] (const operation& op) { return op.name() == command[0]; });
         if (it == keys.end()) {
-            throw std::invalid_argument(fmt::format("unknown command {}", command));
+            throw std::invalid_argument(fmt::format("unknown command {}", get_command_name(command)));
+        }
+        // Search the subcommands.
+        const operation* op = &*it;
+        for (size_t i = 1; i < command.size(); ++i) {
+            auto subcommand = op->suboperations();
+            auto it = std::ranges::find_if(subcommand, [&] (const operation& subop) { return subop.name() == command[i]; });
+            if (it == subcommand.end()) {
+                throw std::invalid_argument(fmt::format("unknown command {}", get_command_name(command)));
+            }
+            op = &*it;
         }
 
-        const auto& op = *it;
-
-        fmt::print(std::cout, "{}\n\n", op.summary());
-        fmt::print(std::cout, "{}\n\n", op.description());
+        fmt::print(std::cout, "{}\n\n", op->summary());
+        fmt::print(std::cout, "{}\n\n", op->description());
 
         // FIXME
         // The below code is needed because we don't have complete access to the
@@ -1268,14 +1288,14 @@ void help_operation(const tool_app_template::config& cfg, const bpo::variables_m
             }
         }
 
-        bpo::options_description op_opts_desc(op.name());
-        for (const auto& opt : op.options()) {
+        bpo::options_description op_opts_desc(op->name());
+        for (const auto& opt : op->options()) {
             opt.add_option(op_opts_desc);
         }
-        for (const auto& opt : op.positional_options()) {
+        for (const auto& opt : op->positional_options()) {
             opt.add_option(opts_desc);
         }
-        if (!op.options().empty()) {
+        if (!op->options().empty()) {
             opts_desc.add(op_opts_desc);
         }
 
@@ -3305,7 +3325,7 @@ For more information, see: {}"
                 "",
                 { },
                 {
-                    typed_option<sstring>("command", "The command to get more information about", 1),
+                    typed_option<std::vector<sstring>>("command", "The command to get more information about", -1),
                 },
             },
             {
@@ -3918,6 +3938,26 @@ std::vector<char*> massage_argv(int argc, char** argv) {
     return new_argv;
 }
 
+operation_func get_operation_function(const operation& op) noexcept {
+    auto operations_with_func = get_operations_with_func();
+    auto name = op.fullname();
+
+    // Find main operation's action.
+    auto it = std::find_if(operations_with_func.begin(), operations_with_func.end(), [&op_name = name.back()] (const auto& el) {
+        return el.first.name() == op_name;
+    });
+    assert(it != operations_with_func.end());
+    auto& action = it->second;
+    name.pop_back();
+
+    // Check suboperations.
+    for (auto n : name | boost::adaptors::reversed) {
+        action = action.suboperation_funcs.at(n);
+    }
+
+    return action.func.value();
+}
+
 } // anonymous namespace
 
 #if FMT_VERSION == 100000
@@ -3973,7 +4013,7 @@ For more information, see: {})";
                     port = app_config["port"].as<uint16_t>();
                 }
                 scylla_rest_client client(app_config["host"].as<sstring>(), port);
-                get_operations_with_func().at(operation).func.value()(client, app_config);
+                get_operation_function(operation)(client, app_config);
             }
         } catch (std::invalid_argument& e) {
             fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
