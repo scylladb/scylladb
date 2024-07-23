@@ -843,7 +843,7 @@ class ScyllaCluster:
 
     def _seeds(self) -> List[IPAddress]:
         # If the cluster is empty, all servers must use self.initial_seed to not start separate clusters.
-        if not self.servers:
+        if not self.running:
             return [self.initial_seed] if self.initial_seed else []
         return [server.ip_addr for server in self.running.values()]
 
@@ -856,11 +856,6 @@ class ScyllaCluster:
                          expected_error: Optional[str] = None) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
-
-        # If the cluster isn't empty and all servers are stopped,
-        # adding a new server would create a new cluster.
-        if self.servers and not self.running:
-            raise RuntimeError("Can't add the server: all servers in the cluster are stopped")
 
         assert start or not expected_error, \
             f"add_server: cannot add a stopped server and expect an error"
@@ -893,7 +888,7 @@ class ScyllaCluster:
             self.logger.info("Cluster %s obtained new IP: %s", self.name, ip_addr)
             self.leased_ips.add(ip_addr)
 
-        if not self.initial_seed:
+        if not self.initial_seed and not expected_error and start:
             self.initial_seed = ip_addr
 
         if not seeds:
