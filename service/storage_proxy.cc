@@ -422,12 +422,12 @@ public:
             co_await coroutine::parallel_for_each(all_endpoints, [&] (auto ep) {
                 return send_truncate(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
             });
-           } catch (rpc::timeout_error& e) {
-               slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
-               throw;
-           } catch (...) {
-               throw;
-           }
+        } catch (rpc::timeout_error& e) {
+            slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
+            throw;
+        } catch (...) {
+            throw;
+        }
     }
 
 private:
@@ -2926,8 +2926,10 @@ storage_proxy::~storage_proxy() {
 }
 
 storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory)
+        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory,
+        distributed<service::storage_service>& ss)
     : _db(db)
+    , _ss(ss)
     , _shared_token_metadata(stm)
     , _erm_factory(erm_factory)
     , _read_smp_service_group(cfg.read_smp_service_group)
@@ -6469,7 +6471,37 @@ db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
 }
 
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) {
-    return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
+    locator::effective_replication_map_ptr erm;
+    const auto& ks = _db.local().find_keyspace(keyspace);
+    if (ks.get_replication_strategy().uses_tablets()) {
+        slogger.debug("Running TRUNCATE TABLE (with tablets) on {}.{}", keyspace, cfname);
+        co_await utils::get_local_injector().inject("truncate_with_tablets_wait_before", [] (auto& handler) {
+            slogger.debug("truncate_with_tablets_wait_before: start");
+            return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+        });
+
+        // Holding the erm pointer will pause load balancing until the pointer is released
+        const auto wait_started = db::timeout_clock::now();
+        erm = co_await _ss.local().get_erm_when_table_has_no_migrations(keyspace, cfname);
+        slogger.debug("Holding ERM pointer for TRUNCATE TABLE (with tablets) on {}.{}", keyspace, cfname);
+        const auto wait_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(db::timeout_clock::now() - wait_started);
+        if (timeout_in_ms && wait_duration_ms >= timeout_in_ms) {
+            throw std::runtime_error(format("Timeout for TRUNCATE TABLE on {}.{}", keyspace, cfname));
+        }
+
+        co_await utils::get_local_injector().inject("truncate_with_tablets_wait_holding_erm", [] (auto& handler) {
+            slogger.debug("truncate_with_tablets_wait_holding_erm: start");
+            return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+        });
+
+        if (timeout_in_ms) {
+            timeout_in_ms = timeout_in_ms.value() - wait_duration_ms;
+        }
+    } else {
+        slogger.debug("Running TRUNCATE TABLE (without tablets) on {}.{}", keyspace, cfname);
+    }
+
+    co_await remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
 }
 
 void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks) {
