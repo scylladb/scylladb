@@ -907,6 +907,13 @@ class ScyllaCluster:
         )
 
         server = None
+
+        async def handle_join_failure():
+            if not replace_cfg or not replace_cfg.reuse_ip_addr:
+                self.leased_ips.remove(ip_addr)
+                await self.host_registry.release_host(Host(ip_addr))
+            self.stopped[server.server_id] = server
+
         try:
             server = self.create_server(params)
             self.logger.info("Cluster %s adding server...", self)
@@ -918,16 +925,18 @@ class ScyllaCluster:
             workdir = '<unknown>' if server is None else server.workdir.name
             self.logger.error("Failed to start Scylla server at host %s in %s: %s",
                           ip_addr, workdir, str(exc))
-            if not replace_cfg or not replace_cfg.reuse_ip_addr:
-                self.leased_ips.remove(ip_addr)
-                await self.host_registry.release_host(Host(ip_addr))
+            await handle_join_failure()
             raise
-        finally:
-            if start and not expected_error:
+
+        if expected_error:
+            await handle_join_failure()
+        else:
+            if start:
                 self.running[server.server_id] = server
             else:
                 self.stopped[server.server_id] = server
-        self.logger.info("Cluster %s added %s", self, server)
+            self.logger.info("Cluster %s added %s", self, server)
+
         return ServerInfo(server.server_id, server.ip_addr, server.rpc_address)
 
     async def add_servers(self, servers_num: int = 1,
