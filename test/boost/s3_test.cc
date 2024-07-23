@@ -17,13 +17,16 @@
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/core/units.hh>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/tmpdir.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
 #include "utils/exceptions.hh"
+#include "sstables/checksum_utils.hh"
 #include "gc_clock.hh"
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
@@ -190,6 +193,93 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_fallback) {
     testlog.info("Get object content");
     temporary_buffer<char> res = cln->get_object_contiguous(name).get();
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(res)), to_sstring(std::move(data)));
+}
+
+using with_remainder_t = bool_class<class with_remainder_tag>;
+
+future<> test_client_upload_file(std::string_view test_name, size_t total_size, size_t memory_size) {
+    tmpdir tmp;
+    const auto file_path = tmp.path() / "test";
+
+    uint32_t expected_checksum = crc32_utils::init_checksum();
+
+    // 1. prefill the data file to be uploaded
+    {
+        file f = co_await open_file_dma(file_path.native(), open_flags::create | open_flags::wo);
+        auto output = co_await make_file_output_stream(std::move(f));
+        std::string_view data = "1234567890ABCDEF";
+        // so we can test !with_remainder case properly with multiple writes
+        assert(total_size % data.size() == 0);
+
+        for (size_t bytes_written = 0;
+             bytes_written < total_size;
+             bytes_written += data.size()) {
+            co_await output.write(data.data(), data.size());
+            uint32_t chunk_checksum = crc32_utils::checksum(data.data(), data.size());
+            expected_checksum = checksum_combine_or_feed<crc32_utils>(
+                expected_checksum, chunk_checksum, data.data(), data.size());
+        }
+        co_await output.close();
+    }
+
+    const auto object_name = fmt::format("/{}/{}-{}",
+                                         tests::getenv_safe("S3_BUCKET_FOR_TEST"),
+                                         test_name,
+                                         ::getpid());
+
+    // 2. upload the file to s3
+    semaphore mem{memory_size};
+    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"),
+                                   make_minio_config(),
+                                   mem);
+    co_await client->upload_file(file_path, object_name);
+    // 3. retrieve the object from s3 and retrieve the object from S3 and
+    //    compare it with the pattern
+    uint32_t actual_checksum = crc32_utils::init_checksum();
+    auto readable_file = client->make_readable_file(object_name);
+    auto input = make_file_input_stream(readable_file);
+    size_t actual_size = 0;
+    for (;;) {
+        auto buf = co_await input.read();
+        if (buf.empty()) {
+            // empty() signifies the end of stream
+            break;
+        }
+        actual_size += buf.size();
+        bytes_view bv{reinterpret_cast<const int8_t*>(buf.get()), buf.size()};
+        //fmt::print("{}", fmt_hex(bv));
+        uint32_t chunk_checksum = crc32_utils::checksum(buf.get(), buf.size());
+        actual_checksum = checksum_combine_or_feed<crc32_utils>(
+            actual_checksum, chunk_checksum, buf.get(), buf.size());
+    }
+    BOOST_CHECK_EQUAL(total_size, actual_size);
+    BOOST_CHECK_EQUAL(expected_checksum, actual_checksum);
+
+    co_await readable_file.close();
+    co_await input.close();
+    co_await client->close();
+}
+
+SEASTAR_TEST_CASE(test_client_upload_file_multi_part_without_remainder) {
+    const size_t part_size = 5_MiB;
+    const size_t total_size = 4 * part_size;
+    const size_t memory_size = part_size;
+    co_await test_client_upload_file(seastar_test::get_name(), total_size, memory_size);
+}
+
+SEASTAR_TEST_CASE(test_client_upload_file_multi_part_with_remainder) {
+    const size_t part_size = 5_MiB;
+    const size_t remainder_size = part_size / 2;
+    const size_t total_size = 4 * part_size + remainder_size;
+    const size_t memory_size = part_size;
+    co_await test_client_upload_file(seastar_test::get_name(), total_size, memory_size);
+}
+
+SEASTAR_TEST_CASE(test_client_upload_file_single_part) {
+    const size_t part_size = 5_MiB;
+    const size_t total_size = part_size / 2;
+    const size_t memory_size = part_size;
+    co_await test_client_upload_file(seastar_test::get_name(), total_size, memory_size);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
