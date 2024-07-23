@@ -310,6 +310,14 @@ class ScyllaServer:
         self.config["alternator_address"] = ip_addr
         self._write_config_file()
 
+    def change_seeds(self, seeds: List[str]):
+        """Change seeds of the current server. Pre: the server is stopped"""
+        if self.is_running:
+            raise RuntimeError(f"Can't change seeds of a running server {self.ip_addr}.")
+        self.seeds = seeds
+        self.config['seed_provider'][0]['parameters'][0]['seeds'] = '{}'.format(','.join(seeds))
+        self._write_config_file()
+
     @property
     def rpc_address(self) -> IPAddress:
         return self.config["rpc_address"]
@@ -835,7 +843,7 @@ class ScyllaCluster:
 
     def _seeds(self) -> List[IPAddress]:
         # If the cluster is empty, all servers must use self.initial_seed to not start separate clusters.
-        if not self.servers:
+        if not self.running:
             return [self.initial_seed] if self.initial_seed else []
         return [server.ip_addr for server in self.running.values()]
 
@@ -848,11 +856,6 @@ class ScyllaCluster:
                          expected_error: Optional[str] = None) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
-
-        # If the cluster isn't empty and all servers are stopped,
-        # adding a new server would create a new cluster.
-        if self.servers and not self.running:
-            raise RuntimeError("Can't add the server: all servers in the cluster are stopped")
 
         assert start or not expected_error, \
             f"add_server: cannot add a stopped server and expect an error"
@@ -885,7 +888,7 @@ class ScyllaCluster:
             self.logger.info("Cluster %s obtained new IP: %s", self.name, ip_addr)
             self.leased_ips.add(ip_addr)
 
-        if not self.initial_seed:
+        if not self.initial_seed and not expected_error and start:
             self.initial_seed = ip_addr
 
         if not seeds:
@@ -904,6 +907,13 @@ class ScyllaCluster:
         )
 
         server = None
+
+        async def handle_join_failure():
+            if not replace_cfg or not replace_cfg.reuse_ip_addr:
+                self.leased_ips.remove(ip_addr)
+                await self.host_registry.release_host(Host(ip_addr))
+            self.stopped[server.server_id] = server
+
         try:
             server = self.create_server(params)
             self.logger.info("Cluster %s adding server...", self)
@@ -915,16 +925,18 @@ class ScyllaCluster:
             workdir = '<unknown>' if server is None else server.workdir.name
             self.logger.error("Failed to start Scylla server at host %s in %s: %s",
                           ip_addr, workdir, str(exc))
-            if not replace_cfg or not replace_cfg.reuse_ip_addr:
-                self.leased_ips.remove(ip_addr)
-                await self.host_registry.release_host(Host(ip_addr))
+            await handle_join_failure()
             raise
-        finally:
-            if start and not expected_error:
+
+        if expected_error:
+            await handle_join_failure()
+        else:
+            if start:
                 self.running[server.server_id] = server
             else:
                 self.stopped[server.server_id] = server
-        self.logger.info("Cluster %s added %s", self, server)
+            self.logger.info("Cluster %s added %s", self, server)
+
         return ServerInfo(server.server_id, server.ip_addr, server.rpc_address)
 
     async def add_servers(self, servers_num: int = 1,
@@ -1045,7 +1057,8 @@ class ScyllaCluster:
         self.logger.debug("Cluster %s marking server %s as removed", self, server_id)
         self.removed.add(server_id)
 
-    async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None) -> None:
+    async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
+                           seeds: Optional[List[IPAddress]] = None) -> None:
         """Start a server. No-op if already running."""
         if server_id in self.running:
             return
@@ -1054,7 +1067,11 @@ class ScyllaCluster:
         server = self.stopped.pop(server_id)
         self.logger.info("Cluster %s starting server %s ip %s", self,
                          server_id, server.ip_addr)
-        server.seeds = self._seeds()
+        if not seeds:
+            seeds = self._seeds()
+            if not seeds:
+                seeds = [server.ip_addr]
+        server.change_seeds(seeds)
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
@@ -1427,7 +1444,8 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(request.match_info["server_id"]))
         data = await request.json()
         expected_error = data["expected_error"]
-        await self.cluster.server_start(server_id, expected_error)
+        seeds = data["seeds"]
+        await self.cluster.server_start(server_id, expected_error, seeds)
 
     async def _cluster_server_pause(self, request) -> None:
         """Pause the specified server."""
