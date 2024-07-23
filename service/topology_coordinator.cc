@@ -1847,18 +1847,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 try {
                     // No need to stream data when the node is zero-token.
                     if (!node.rs->ring->tokens.empty()) {
-                    if (node.rs->state == node_state::removing) {
-                        // tell all token owners to stream data of the removed node to new range owners
-                        auto exclude_nodes = get_excluded_nodes(node);
-                        auto normal_zero_token_nodes = _topo_sm._topology.get_normal_zero_token_nodes();
-                        std::move(normal_zero_token_nodes.begin(), normal_zero_token_nodes.end(),
-                                std::inserter(exclude_nodes, exclude_nodes.begin()));
-                        node = retake_node(
-                                co_await exec_global_command(take_guard(std::move(node)), cmd, exclude_nodes), node.id);
-                    } else {
-                        // Tell joining/leaving/replacing node to stream its ranges
-                        node = co_await exec_direct_command(std::move(node), cmd);
-                    }
+                        if (node.rs->state == node_state::removing) {
+                            // tell all token owners to stream data of the removed node to new range owners
+                            auto exclude_nodes = get_excluded_nodes(node);
+                            auto normal_zero_token_nodes = _topo_sm._topology.get_normal_zero_token_nodes();
+                            std::move(normal_zero_token_nodes.begin(), normal_zero_token_nodes.end(),
+                                    std::inserter(exclude_nodes, exclude_nodes.begin()));
+                            node = retake_node(
+                                    co_await exec_global_command(take_guard(std::move(node)), cmd, exclude_nodes), node.id);
+                        } else {
+                            // Tell joining/leaving/replacing node to stream its ranges
+                            node = co_await exec_direct_command(std::move(node), cmd);
+                        }
                     }
                 } catch (term_changed_error&) {
                     throw;
