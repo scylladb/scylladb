@@ -750,6 +750,9 @@ database::init_commitlog() {
     if (utils::get_local_injector().enter("decrease_commitlog_base_segment_id")) {
         config.base_segment_id = 0;
     }
+    if (features().fragmented_commitlog_entries) {
+        config.allow_fragmented_entries = true;
+    }
     return db::commitlog::create_commitlog(std::move(config)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
@@ -842,6 +845,9 @@ void database::init_schema_commitlog() {
     c.extensions = &_cfg.extensions();
     c.use_o_dsync = _cfg.commitlog_use_o_dsync();
     c.allow_going_over_size_limit = true; // for lower latency
+    if (features().fragmented_commitlog_entries) {
+        c.allow_fragmented_entries = true;
+    }
 
     _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(std::move(c)).get());
     _schema_commitlog->add_flush_handler([this] (db::cf_id_type id, db::replay_position pos) {

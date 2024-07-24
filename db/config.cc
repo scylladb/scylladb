@@ -574,6 +574,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Whether or not to use O_DSYNC mode for commitlog segments IO. Can improve commitlog latency on some file systems.\n")
     , commitlog_use_hard_size_limit(this, "commitlog_use_hard_size_limit", value_status::Used, true,
         "Whether or not to use a hard size limit for commitlog disk usage. Default is true. Enabling this can cause latency spikes, whereas the default can lead to occasional disk usage peaks.\n")
+    , commitlog_use_fragmented_entries(this, "commitlog_use_fragmented_entries", value_status::Used, true,
+        "Whether or not to allow commitlog entries to fragment across segments, allowing for larger entry sizes.\n")
     /**
     * @Group Compaction settings
     * @GroupDescription Related information: Configuring compaction

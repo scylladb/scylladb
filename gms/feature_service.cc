@@ -92,6 +92,9 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     if (!cfg.table_digest_insensitive_to_expiry()) {
         fcfg._disabled_features.insert("TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"s);
     }
+    if (!cfg.commitlog_use_fragmented_entries()) {
+        fcfg._disabled_features.insert("FRAGMENTED_COMMITLOG_ENTRIES"s);
+    }
 
     if (!is_test_only_feature_enabled()) {
         fcfg._disabled_features.insert("TEST_ONLY_FEATURE"s);
