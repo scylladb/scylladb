@@ -706,7 +706,7 @@ future<> init_table_storage(const data_dictionary::storage_options& so, sstring 
     }, so.value);
 }
 
-future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir) {
+future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring dir) {
     co_await std::visit(overloaded_functor {
         [&dir] (const data_dictionary::storage_options::local&) -> future<> {
             co_await io_check([&dir] { return touch_directory(dir); });
