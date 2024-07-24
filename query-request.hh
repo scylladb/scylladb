@@ -83,21 +83,20 @@ typedef std::vector<clustering_range> clustering_row_ranges;
 /// Trim the clustering ranges.
 ///
 /// Equivalent of intersecting each clustering range with [pos, +inf) position
-/// in partition range, or (-inf, pos] position in partition range if
-/// reversed == true. Ranges that do not intersect are dropped. Ranges that
+/// in partition range. Ranges that do not intersect are dropped. Ranges that
 /// partially overlap are trimmed.
-/// Result: each range will overlap fully with [pos, +inf), or (-int, pos] if
-/// reversed is true.
-void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition pos, bool reversed = false);
+/// Result: each range will overlap fully with [pos, +inf).
+/// Works both with forward schema and ranges, and reversed schema and native reversed ranges
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition pos);
 
 /// Trim the clustering ranges.
 ///
 /// Equivalent of intersecting each clustering range with (key, +inf) clustering
-/// range, or (-inf, key) clustering range if reversed == true. Ranges that do
-/// not intersect are dropped. Ranges that partially overlap are trimmed.
-/// Result: each range will overlap fully with (key, +inf), or (-int, key) if
-/// reversed is true.
-void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key, bool reversed = false);
+/// range. Ranges that do not intersect are dropped. Ranges that partially overlap
+/// are trimmed.
+/// Result: each range will overlap fully with (key, +inf).
+/// Works both with forward schema and ranges, and reversed schema and native reversed ranges
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key);
 
 class specific_ranges {
 public:
@@ -148,13 +147,6 @@ constexpr auto max_rows_if_set = std::numeric_limits<uint32_t>::max();
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
 // Schema-dependent.
-//
-// COMPATIBILITY NOTE: the partition-slice for reverse queries has two different
-// format:
-// * legacy format
-// * native format
-// The wire format uses the legacy format. See docs/dev/reverse-reads.md
-// for more details on the formats.
 class partition_slice {
     friend class ::partition_slice_builder;
 public:
@@ -274,9 +266,6 @@ partition_slice native_reverse_slice_to_legacy_reverse_slice(const schema& schem
 // Fully reverse slice (forward to native reverse or native reverse to forward).
 // Also toggles the reversed bit in `partition_slice::options`.
 partition_slice reverse_slice(const schema& schema, partition_slice slice);
-// Half reverse slice (forward to legacy reverse or legacy reverse to forward).
-// Also toggles the reversed bit in `partition_slice::options`.
-partition_slice half_reverse_slice(const schema&, partition_slice);
 
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
 constexpr auto max_tombstones = std::numeric_limits<uint64_t>::max();
@@ -475,6 +464,11 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const read_command& r);
 };
 
+// Reverse read_command by reversing the schema version and transforming the slice from
+// the legacy reversed format to native reversed format. Shall be called with reversed
+// queries only.
+lw_shared_ptr<query::read_command> reversed(lw_shared_ptr<query::read_command>&& cmd);
+
 struct mapreduce_request {
     enum class reduction_type {
         count,
@@ -484,7 +478,7 @@ struct mapreduce_request {
         db::functions::function_name name;
         std::vector<sstring> column_names;
     };
-    struct reductions_info { 
+    struct reductions_info {
         // Used by selector_factries to prepare reductions information
         std::vector<reduction_type> types;
         std::vector<aggregation_info> infos;

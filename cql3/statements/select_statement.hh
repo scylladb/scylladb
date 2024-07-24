@@ -58,6 +58,7 @@ public:
 protected:
     static thread_local const lw_shared_ptr<const parameters> _default_parameters;
     schema_ptr _schema;
+    schema_ptr _query_schema;
     uint32_t _bound_terms;
     lw_shared_ptr<const parameters> _parameters;
     ::shared_ptr<selection::selection> _selection;

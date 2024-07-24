@@ -17,8 +17,6 @@ namespace mx {
 
 // Precondition: if the slice is reversed, the schema must be reversed as well
 // and the range must be singular (`range.is_singular()`).
-// Reversed slices must be provided in the 'half-reversed' format (the order of ranges
-// being reversed, but the ranges themselves are not).
 // Fast-forwarding is not supported in reversed queries (FIXME).
 mutation_reader make_reader(
         shared_sstable sstable,

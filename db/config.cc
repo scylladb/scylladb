@@ -1066,10 +1066,6 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "To preserve backwards compatibility on old clusters, Scylla's default setting is `warn`. "
         "New clusters have this option set to `true` by scylla.yaml (which overrides the default `warn`), "
         "to make sure that trying to create an invalid view causes an error.")
-    , reversed_reads_auto_bypass_cache(this, "reversed_reads_auto_bypass_cache", liveness::LiveUpdate, value_status::Used, false,
-            "Bypass in-memory data cache (the row cache) when performing reversed queries.")
-    , enable_optimized_reversed_reads(this, "enable_optimized_reversed_reads", liveness::LiveUpdate, value_status::Used, true,
-            "Use a new optimized algorithm for performing reversed reads.")
     , enable_cql_config_updates(this, "enable_cql_config_updates", liveness::LiveUpdate, value_status::Used, true,
             "Make the system.config table UPDATEable.")
     , enable_parallelized_aggregation(this, "enable_parallelized_aggregation", liveness::LiveUpdate, value_status::Used, true,
