@@ -1173,13 +1173,15 @@ scylla_core = (['message/messaging_service.cc',
                 'direct_failure_detector/failure_detector.cc',
                 'service/raft/raft_group0_client.cc',
                 'service/broadcast_tables/experimental/lang.cc',
+                'tasks/task_handler.cc',
                 'tasks/task_manager.cc',
                 'rust/wasmtime_bindings/src/lib.rs',
                 'utils/to_string.cc',
                 'service/topology_state_machine.cc',
                 'service/topology_mutation.cc',
                 'service/topology_coordinator.cc',
-                'node_ops/node_ops_ctl.cc'
+                'node_ops/node_ops_ctl.cc',
+                'node_ops/task_manager_module.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
                )

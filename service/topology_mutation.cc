@@ -274,11 +274,12 @@ topology_node_mutation_builder& topology_mutation_builder::with_node(raft::serve
     return *_node_builder;
 }
 
-topology_request_tracking_mutation_builder::topology_request_tracking_mutation_builder(utils::UUID id) :
+topology_request_tracking_mutation_builder::topology_request_tracking_mutation_builder(utils::UUID id, bool set_type) :
         _s(db::system_keyspace::topology_requests()),
         _m(_s, partition_key::from_singular(*_s, id)),
         _ts(utils::UUID_gen::micros_timestamp(id)),
-        _r(_m.partition().clustered_row(*_s, clustering_key::make_empty())) {
+        _r(_m.partition().clustered_row(*_s, clustering_key::make_empty())),
+        _set_type(set_type) {
     _r.apply(row_marker(_ts, *ttl(), gc_clock::now() + *ttl()));
 }
 
@@ -297,6 +298,10 @@ row& topology_request_tracking_mutation_builder::row() {
 
 api::timestamp_type topology_request_tracking_mutation_builder::timestamp() const {
     return _ts;
+}
+
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set(const char* cell, topology_request value) {
+    return _set_type ? builder_base::set(cell, value) : *this;
 }
 
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::done(std::optional<sstring> error) {

@@ -138,6 +138,7 @@ target_sources(scylla-main
     keys.cc
     multishard_mutation_query.cc
     mutation_query.cc
+    node_ops/task_manager_module.cc
     partition_slice_builder.cc
     querier.cc
     query.cc
@@ -151,6 +152,7 @@ target_sources(scylla-main
     serializer.cc
     sstables_loader.cc
     table_helper.cc
+    tasks/task_handler.cc
     tasks/task_manager.cc
     timeout_config.cc
     unimplemented.cc

@@ -138,6 +138,7 @@ class topology_request_tracking_mutation_builder :
     mutation _m;
     api::timestamp_type _ts;
     deletable_row& _r;
+    bool _set_type;
 
 public:
     row& row();
@@ -145,9 +146,10 @@ public:
     api::timestamp_type timestamp() const;
     ttl_opt ttl() const;
 
-    topology_request_tracking_mutation_builder(utils::UUID id);
+    topology_request_tracking_mutation_builder(utils::UUID id, bool set_type = false);
     using builder_base::set;
     using builder_base::del;
+    topology_request_tracking_mutation_builder& set(const char* cell, topology_request value);
     topology_request_tracking_mutation_builder& done(std::optional<sstring> error = std::nullopt);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };

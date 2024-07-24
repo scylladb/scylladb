@@ -6,17 +6,32 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <boost/range/adaptors.hpp>
+
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/when_all.hh>
+#include <seastar/rpc/rpc_types.hh>
 #include <seastar/util/defer.hh>
 
+#include <boost/range/adaptors.hpp>
+
 #include "db/timeout_clock.hh"
+#include "message/messaging_service.hh"
+#include "utils/overloaded_functor.hh"
+#include "tasks/task_handler.hh"
 #include "task_manager.hh"
 #include "utils/error_injection.hh"
 
 using namespace std::chrono_literals;
+
+template <typename T>
+std::vector<T> concat(std::vector<T> a, std::vector<T>&& b) {
+    std::move(b.begin(), b.end(), std::back_inserter(a));
+    return a;
+}
 
 namespace tasks {
 
@@ -92,8 +107,8 @@ task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_
     , _parent_id(parent_id)
     , _module(module)
 {
-    // Child tasks do not need to subscribe to abort source because they will be aborted recursively by their parents.
-    if (!parent_id) {
+    // Child tasks of regular tasks do not need to subscribe to abort source because they will be aborted recursively by their parents.
+    if (!parent_id || _parent_kind == task_kind::cluster) {
         _shutdown_subscription = module->abort_source().subscribe([this] () noexcept {
             abort();
         });
@@ -155,7 +170,7 @@ static future<> abort_children(task_manager::module_ptr module, task_id parent_i
         module->async_gate().leave();
     });
     co_await module->get_task_manager().container().invoke_on_all([parent_id] (task_manager& tm) {
-        for (auto& task : tm.get_all_tasks()) {
+        for (auto& task : tm.get_local_tasks()) {
             if (task.second->get_parent_id() == parent_id) {
                 task.second->abort();
             }
@@ -190,6 +205,10 @@ future<std::vector<task_manager::task::task_essentials>> task_manager::task::imp
     );
 }
 
+void task_manager::task::impl::set_virtual_parent() noexcept {
+    _parent_kind = task_kind::cluster;
+}
+
 void task_manager::task::impl::run_to_completion() {
     (void)run().then([this] {
         _as.check();
@@ -201,7 +220,7 @@ void task_manager::task::impl::run_to_completion() {
 
 future<> task_manager::task::impl::maybe_fold_into_parent() const noexcept {
     try {
-        if (is_internal() && _parent_id && _children.all_finished()) {
+        if (is_internal() && _parent_id && _parent_kind == task_kind::node && _children.all_finished()) {
             auto parent = co_await _module->get_task_manager().lookup_task_on_all_shards(_module->get_task_manager().container(), _parent_id);
             task_essentials child{
                 .task_status = _status,
@@ -294,7 +313,7 @@ void task_manager::task::start() {
         // Background fiber does not capture task ptr, so the task can be unregistered and destroyed independently in the foreground.
         // After the ttl expires, the task id will be used to unregister the task if that didn't happen in any other way.
         auto module = _impl->_module;
-        bool drop_after_complete = get_parent_id() || is_internal();
+        bool drop_after_complete = (get_parent_id() && _impl->_parent_kind == task_kind::node) || is_internal();
         (void)done().finally([module, drop_after_complete] {
             if (drop_after_complete) {
                 return make_ready_future<>();
@@ -364,6 +383,89 @@ future<std::vector<task_manager::task::task_essentials>> task_manager::task::get
     return _impl->get_failed_children();
 }
 
+void task_manager::task::set_virtual_parent() noexcept {
+    _impl->set_virtual_parent();
+}
+
+task_manager::virtual_task::impl::impl(module_ptr module) noexcept
+    : _module(std::move(module))
+{}
+
+future<std::vector<task_identity>> task_manager::virtual_task::impl::get_children(module_ptr module, task_id parent_id) {
+    auto ms = module->get_task_manager()._messaging;
+    if (!ms) {
+        auto ids = co_await module->get_task_manager().get_virtual_task_children(parent_id);
+        co_return boost::copy_range<std::vector<task_identity>>(ids | boost::adaptors::transformed([&tm = module->get_task_manager()] (auto id) {
+            return task_identity{
+                .node = tm.get_broadcast_address(),
+                .task_id = id
+            };
+        }));
+    }
+
+    auto nodes = module->get_nodes();
+    co_return co_await map_reduce(nodes, [ms, parent_id] (auto addr) -> future<std::vector<task_identity>> {
+        return ms->send_tasks_get_children(netw::msg_addr{addr}, parent_id).then([addr] (auto resp) {
+            return boost::copy_range<std::vector<task_identity>>(resp | boost::adaptors::transformed([addr] (auto id) {
+                return task_identity{
+                    .node = addr,
+                    .task_id = id
+                };
+            }));
+        });
+    }, std::vector<task_identity>{}, concat<task_identity>);
+}
+
+task_manager::module_ptr task_manager::virtual_task::impl::get_module() const noexcept {
+    return _module;
+}
+
+task_manager& task_manager::virtual_task::impl::get_task_manager() const noexcept {
+    return _module->get_task_manager();
+}
+
+future<tasks::is_abortable> task_manager::virtual_task::impl::is_abortable() const {
+    return make_ready_future<tasks::is_abortable>(is_abortable::no);
+}
+
+task_manager::virtual_task::virtual_task(virtual_task_impl_ptr&& impl) noexcept
+    : _impl(std::move(impl))
+{
+    assert(this_shard_id() == 0);
+}
+
+future<std::set<task_id>> task_manager::virtual_task::get_ids() const {
+    return _impl->get_ids();
+}
+
+task_manager::module_ptr task_manager::virtual_task::get_module() const noexcept {
+    return _impl->get_module();
+}
+
+task_manager::task_group task_manager::virtual_task::get_group() const noexcept {
+    return _impl->get_group();
+}
+
+future<tasks::is_abortable> task_manager::virtual_task::is_abortable() const {
+    return _impl->is_abortable();
+}
+
+future<std::optional<task_status>> task_manager::virtual_task::get_status(task_id id) {
+    return _impl->get_status(id);
+}
+
+future<std::optional<task_status>> task_manager::virtual_task::wait(task_id id) {
+    return _impl->wait(id);
+}
+
+future<> task_manager::virtual_task::abort(task_id id) noexcept {
+    return _impl->abort(id);
+}
+
+future<std::vector<task_stats>> task_manager::virtual_task::get_stats() {
+    return _impl->get_stats();
+}
+
 task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {
     _abort_subscription = _tm.abort_source().subscribe([this] () noexcept {
         abort_source().request_abort();
@@ -390,26 +492,89 @@ const std::string& task_manager::module::get_name() const noexcept {
     return _name;
 }
 
-task_manager::task_map& task_manager::module::get_tasks() noexcept {
+task_manager::task_map& task_manager::module::get_local_tasks() noexcept {
+    return _tasks._local_tasks;
+}
+
+const task_manager::task_map& task_manager::module::get_local_tasks() const noexcept {
+    return _tasks._local_tasks;
+}
+
+task_manager::virtual_task_map& task_manager::module::get_virtual_tasks() noexcept {
+    return _tasks._virtual_tasks;
+}
+
+const task_manager::virtual_task_map& task_manager::module::get_virtual_tasks() const noexcept {
+    return _tasks._virtual_tasks;
+}
+
+task_manager::tasks_collection& task_manager::module::get_tasks_collection() noexcept {
     return _tasks;
 }
 
-const task_manager::task_map& task_manager::module::get_tasks() const noexcept {
+const task_manager::tasks_collection& task_manager::module::get_tasks_collection() const noexcept {
     return _tasks;
+}
+
+std::set<gms::inet_address> task_manager::module::get_nodes() const noexcept {
+    return {_tm.get_broadcast_address()};
+}
+
+future<utils::chunked_vector<task_stats>> task_manager::module::get_stats(is_internal internal, std::function<bool(std::string& keyspace, std::string& table)> filter) const {
+    utils::chunked_vector<task_stats> stats;
+    for (auto [_, task]: get_local_tasks()) {
+        if ((internal || !task->is_internal()) && filter(task->get_status().keyspace, task->get_status().table)) {
+            stats.push_back(task_stats{
+                .task_id = task->id(),
+                .type = task->type(),
+                .kind = task_kind::node,
+                .scope = task->get_status().scope,
+                .state = task->get_status().state,
+                .sequence_number = task->get_sequence_number(),
+                .keyspace = task->get_status().keyspace,
+                .table = task->get_status().table,
+                .entity = task->get_status().entity
+            });
+        }
+    }
+    if (this_shard_id() == 0) {
+        auto virtual_tasks = get_virtual_tasks(); // Copy to make sure iterators are valid.
+        for (auto [_, vt]: virtual_tasks) {
+            auto vstats = co_await vt->get_stats();
+            for (auto&& s: vstats) {
+                if (filter(s.keyspace, s.table)) {
+                    stats.push_back(std::move(s));
+                }
+            }
+        }
+    }
+    co_return stats;
 }
 
 void task_manager::module::register_task(task_ptr task) {
-    _tasks[task->id()] = task;
+    get_local_tasks()[task->id()] = task;
     try {
         _tm.register_task(task);
     } catch (...) {
-        _tasks.erase(task->id());
+        get_local_tasks().erase(task->id());
+        throw;
+    }
+}
+
+void task_manager::module::register_virtual_task(virtual_task_ptr task) {
+    assert(this_shard_id() == 0);
+    auto group = task->get_group();
+    get_virtual_tasks()[group] = task;
+    try {
+        _tm.register_virtual_task(task);
+    } catch (...) {
+        get_virtual_tasks().erase(group);
         throw;
     }
 }
 
 void task_manager::module::unregister_task(task_id id) noexcept {
-    _tasks.erase(id);
+    get_local_tasks().erase(id);
     _tm.unregister_task(id);
 }
 
@@ -417,6 +582,12 @@ future<> task_manager::module::stop() noexcept {
     tmlogger.info("Stopping module {}", _name);
     abort_source().request_abort();
     co_await _gate.close();
+    if (this_shard_id() == 0) {
+        for (auto& [group, _]: _tasks._virtual_tasks) {
+            _tm.unregister_virtual_task(group);
+        }
+        _tasks._virtual_tasks = {};
+    }
     _tm.unregister_module(_name);
 }
 
@@ -424,16 +595,23 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
     auto task = make_lw_shared<task_manager::task>(std::move(task_impl_ptr), async_gate().hold());
     bool abort = false;
     if (parent_d) {
-        task->get_status().sequence_number = co_await _tm.container().invoke_on(parent_d.shard, coroutine::lambda([id = parent_d.id, task = make_foreign(task), &abort] (task_manager& tm) mutable -> future<uint64_t> {
-            const auto& all_tasks = tm.get_all_tasks();
+        // Regular task as a parent.
+        auto sequence_number = co_await _tm.container().invoke_on(parent_d.shard, coroutine::lambda([id = parent_d.id, task = make_foreign(task), &abort] (task_manager& tm) mutable -> future<std::optional<uint64_t>> {
+            const auto& all_tasks = tm.get_local_tasks();
             if (auto it = all_tasks.find(id); it != all_tasks.end()) {
                 co_await it->second->add_child(std::move(task));
                 abort = it->second->abort_requested();
                 co_return it->second->get_sequence_number();
-            } else {
-                throw task_manager::task_not_found(id);
             }
+            co_return std::nullopt;
         }));
+
+        if (sequence_number) {
+            task->get_status().sequence_number = sequence_number.value();
+        } else { // Virtual task as a parent.
+            sequence_number = new_sequence_number();
+            task->set_virtual_parent();
+        }
     }
     if (abort) {
         task->abort();
@@ -458,6 +636,10 @@ task_manager::task_manager() noexcept
     , _task_ttl(0)
 {}
 
+gms::inet_address task_manager::get_broadcast_address() const noexcept {
+    return _cfg.broadcast_address;
+}
+
 task_manager::modules& task_manager::get_modules() noexcept {
     return _modules;
 }
@@ -466,12 +648,37 @@ const task_manager::modules& task_manager::get_modules() const noexcept {
     return _modules;
 }
 
-task_manager::task_map& task_manager::get_all_tasks() noexcept {
-    return _all_tasks;
+task_manager::task_map& task_manager::get_local_tasks() noexcept {
+    return _tasks._local_tasks;
 }
 
-const task_manager::task_map& task_manager::get_all_tasks() const noexcept {
-    return _all_tasks;
+const task_manager::task_map& task_manager::get_local_tasks() const noexcept {
+    return _tasks._local_tasks;
+}
+
+task_manager::virtual_task_map& task_manager::get_virtual_tasks() noexcept {
+    return _tasks._virtual_tasks;
+}
+
+const task_manager::virtual_task_map& task_manager::get_virtual_tasks() const noexcept {
+    return _tasks._virtual_tasks;
+}
+
+task_manager::tasks_collection& task_manager::get_tasks_collection() noexcept {
+    return _tasks;
+}
+
+const task_manager::tasks_collection& task_manager::get_tasks_collection() const noexcept {
+    return _tasks;
+}
+
+future<std::vector<task_id>> task_manager::get_virtual_task_children(task_id parent_id) {
+    return container().map_reduce0([parent_id] (task_manager& tm) {
+        return boost::copy_range<std::vector<task_id>>(tm.get_local_tasks() |
+            boost::adaptors::map_values |
+            boost::adaptors::filtered([parent_id] (const auto& task) { return task->get_parent_id() == parent_id; }) |
+            boost::adaptors::transformed([] (const auto& task) { return task->id(); }));
+    }, std::vector<task_id>{}, concat<task_id>);
 }
 
 task_manager::module_ptr task_manager::make_module(std::string name) {
@@ -496,14 +703,31 @@ future<> task_manager::stop() noexcept {
 }
 
 future<task_manager::foreign_task_ptr> task_manager::lookup_task_on_all_shards(sharded<task_manager>& tm, task_id tid) {
-    return task_manager::invoke_on_task(tm, tid, std::function([] (task_ptr task) {
-        return make_ready_future<task_manager::foreign_task_ptr>(make_foreign(task));
+    return task_manager::invoke_on_task(tm, tid, std::function([tid] (task_variant task_v) {
+        return std::visit(overloaded_functor{
+            [] (tasks::task_manager::task_ptr task) {
+                return make_ready_future<task_manager::foreign_task_ptr>(make_foreign(task));
+            },
+            [tid] (tasks::task_manager::virtual_task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+                throw tasks::task_manager::task_not_found(tid); // The method is designed for regular tasks.
+            }
+        }, task_v);
     }));
 }
 
-future<> task_manager::invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<> (task_manager::task_ptr)> func) {
-    co_await task_manager::invoke_on_task(tm, id, std::function([func = std::move(func)] (task_manager::task_ptr task) -> future<bool> {
-        co_await func(task);
+future<task_manager::virtual_task_ptr> task_manager::lookup_virtual_task(task_manager& tm, task_id id) {
+    auto vts = tm.get_virtual_tasks();
+    for (auto [_, vt]: tm.get_virtual_tasks()) {
+        if ((co_await vt->get_ids()).contains(id)) {
+            co_return vt;
+        }
+    }
+    co_return nullptr;
+}
+
+future<> task_manager::invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<> (task_manager::task_variant)> func) {
+    co_await task_manager::invoke_on_task(tm, id, std::function([func = std::move(func)] (task_manager::task_variant task_v) -> future<bool> {
+        co_await func(task_v);
         co_return true;
     }));
 }
@@ -527,11 +751,34 @@ void task_manager::unregister_module(std::string name) noexcept {
 }
 
 void task_manager::register_task(task_ptr task) {
-    _all_tasks[task->id()] = task;
+    _tasks._local_tasks[task->id()] = task;
+}
+
+void task_manager::register_virtual_task(virtual_task_ptr task) {
+    _tasks._virtual_tasks[task->get_group()] = task;
 }
 
 void task_manager::unregister_task(task_id id) noexcept {
-    _all_tasks.erase(id);
+    _tasks._local_tasks.erase(id);
+}
+
+void task_manager::unregister_virtual_task(task_group group) noexcept {
+    _tasks._virtual_tasks.erase(group);
+}
+
+void task_manager::init_ms_handlers(netw::messaging_service& ms) {
+    _messaging = &ms;
+
+    ms.register_tasks_get_children([this] (const rpc::client_info& cinfo, tasks::get_children_request req) -> future<tasks::get_children_response> {
+        return get_virtual_task_children(task_id{req.id});
+    });
+}
+
+future<> task_manager::uninit_ms_handlers() {
+    if (auto* ms = std::exchange(_messaging, nullptr)) {
+        return ms->unregister_tasks_get_children().discard_result();
+    }
+    return make_ready_future();
 }
 
 }
