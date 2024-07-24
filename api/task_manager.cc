@@ -205,6 +205,11 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         }
         co_return json::json_return_type(ttl);
     });
+
+    tm::get_ttl.set(r, [&cfg] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        uint32_t ttl = cfg.task_ttl_seconds();
+        co_return json::json_return_type(ttl);
+    });
 }
 
 void unset_task_manager(http_context& ctx, routes& r) {
@@ -215,6 +220,7 @@ void unset_task_manager(http_context& ctx, routes& r) {
     tm::wait_task.unset(r);
     tm::get_task_status_recursively.unset(r);
     tm::get_and_update_ttl.unset(r);
+    tm::get_ttl.unset(r);
 }
 
 }

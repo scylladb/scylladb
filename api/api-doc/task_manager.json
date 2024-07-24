@@ -197,6 +197,17 @@
                      "paramType":"query"
                   }
                ]
+            },
+            {
+               "method":"GET",
+               "summary":"Get current ttl value",
+               "type":"long",
+               "nickname":"get_ttl",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
             }
          ]
       }
