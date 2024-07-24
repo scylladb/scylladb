@@ -115,6 +115,7 @@ future<> password_authenticator::migrate_legacy_metadata() const {
     });
 }
 
+<<<<<<< HEAD
 future<> password_authenticator::create_default_if_missing() const {
     return default_role_row_satisfies(_qp, &has_salted_hash, _superuser).then([this](bool exists) {
         if (!exists) {
@@ -134,6 +135,31 @@ future<> password_authenticator::create_default_if_missing() const {
 
         return make_ready_future<>();
     });
+=======
+future<> password_authenticator::create_default_if_missing() {
+    const auto exists = co_await default_role_row_satisfies(_qp, &has_salted_hash, _superuser);
+    if (exists) {
+        co_return;
+    }
+    std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
+    if (salted_pwd.empty()) {
+        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt);
+    }
+    const auto query = update_row_query();
+    if (legacy_mode(_qp)) {
+        co_await _qp.execute_internal(
+            query,
+            db::consistency_level::QUORUM,
+            internal_distributed_query_state(),
+            {salted_pwd, _superuser},
+            cql3::query_processor::cache_internal::no);
+        plogger.info("Created default superuser authentication record.");
+    } else {
+        co_await announce_mutations(_qp, _group0_client, query,
+            {salted_pwd, _superuser}, _as, ::service::raft_timeout{});
+        plogger.info("Created default superuser authentication record.");
+    }
+>>>>>>> 2dbe9ef2f2 (raft: use the abort source reference in raft group0 client interface)
 }
 
 future<> password_authenticator::start() {

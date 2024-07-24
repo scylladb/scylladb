@@ -188,10 +188,16 @@ future<> standard_role_manager::create_default_role_if_missing() const {
                     db::consistency_level::QUORUM,
                     internal_distributed_query_state(),
                     {_superuser},
+<<<<<<< HEAD
                     cql3::query_processor::cache_internal::no).then([this](auto&&) {
                 log.info("Created default superuser role '{}'.", _superuser);
                 return make_ready_future<>();
             });
+=======
+                    cql3::query_processor::cache_internal::no).discard_result();
+        } else {
+            co_await announce_mutations(_qp, _group0_client, query, {_superuser}, _as, ::service::raft_timeout{});
+>>>>>>> 2dbe9ef2f2 (raft: use the abort source reference in raft group0 client interface)
         }
 
         return make_ready_future<>();
