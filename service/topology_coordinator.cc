@@ -294,7 +294,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
      };
 
     future<group0_guard> start_operation() {
-        auto guard = co_await _group0.client().start_operation(&_as);
+        auto guard = co_await _group0.client().start_operation(_as);
 
         if (_term != _raft.get_current_term()) {
             throw term_changed_error{};
@@ -337,7 +337,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             rtlogger.trace("update_topology_state mutations: {}", updates);
             topology_change change{std::move(updates)};
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
-            co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), &_as);
+            co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         } catch (group0_concurrent_modification&) {
             rtlogger.info("race while changing state: {}. Retrying", reason);
             throw;
@@ -829,7 +829,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 mixed_change change{std::move(updates)};
                 group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
                 try {
-                    co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), &_as);
+                    co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
                     break;
                 } catch (group0_concurrent_modification&) {
                     rtlogger.info("handle_global_request(): concurrent modification, retrying");
@@ -2604,7 +2604,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     if (auth_version < db::system_keyspace::auth_version_t::v2) {
         rtlogger.info("migrating system_auth keyspace data");
         co_await auth::migrate_to_auth_v2(_sys_ks, _group0.client(),
-                [this] (abort_source*) { return start_operation();}, _as);
+                [this] (abort_source&) { return start_operation();}, _as);
     }
 
     auto tmptr = get_token_metadata_ptr();

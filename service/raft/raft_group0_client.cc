@@ -154,7 +154,7 @@ semaphore& raft_group0_client::operation_mutex() {
     return _operation_mutex;
 }
 
-future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as,
+future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source& as,
         std::optional<raft_timeout> timeout)
 {
     if (this_shard_id() != 0) {
@@ -238,7 +238,7 @@ static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
     return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
 }
 
-future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* as, std::optional<raft_timeout> timeout) {
+future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& as, std::optional<raft_timeout> timeout) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "start_group0_operation: must run on shard 0");
     }
@@ -251,7 +251,7 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* 
     switch (upgrade_state) {
         case group0_upgrade_state::use_post_raft_procedures: {
             auto operation_holder = co_await get_units(_operation_mutex, 1);
-            co_await _raft_gr.group0_with_timeouts().read_barrier(as, timeout);
+            co_await _raft_gr.group0_with_timeouts().read_barrier(&as, timeout);
 
             // Take `_group0_read_apply_mutex` *after* read barrier.
             // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
