@@ -14,6 +14,7 @@ on:
 
 jobs:
   build:
+    if: github.repository == 'scylladb/scylladb'
     runs-on: ubuntu-latest
     # be consistent with tools/toolchain/image
     container: scylladb/scylla-toolchain:fedora-40-20240621

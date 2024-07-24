@@ -19,6 +19,7 @@ jobs:
     with:
       build_mode: release
   compare-checksum:
+    if: github.repository == 'scylladb/scylladb'
     runs-on: ubuntu-latest
     needs:
       - build-a
