@@ -517,7 +517,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
         val_binders_str += ", ?";
     }
     
-    auto guard = co_await group0_client.start_operation(&as);
+    auto guard = co_await group0_client.start_operation(as);
 
     std::vector<mutation> migration_muts;
     for (const auto& row: *rows) {
@@ -552,7 +552,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
         .mutations{migration_muts.begin(), migration_muts.end()},
     };
     auto group0_cmd = group0_client.prepare_command(change, guard, "migrate service levels to v2");
-    co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), &as);
+    co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as);
 }
 
 future<> service_level_controller::do_remove_service_level(sstring name, bool remove_static) {
