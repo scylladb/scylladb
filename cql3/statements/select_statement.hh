@@ -152,13 +152,10 @@ public:
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
 protected:
-    uint64_t do_get_limit(const query_options& options, const std::optional<expr::expression>& limit, const expr::unset_bind_variable_guard& unset_guard, uint64_t default_limit) const;
-    uint64_t get_limit(const query_options& options) const {
-        return do_get_limit(options, _limit, _limit_unset_guard, query::max_rows);
-    }
-    uint64_t get_per_partition_limit(const query_options& options) const {
-        return do_get_limit(options, _per_partition_limit, _per_partition_limit_unset_guard, query::partition_max_rows);
-    }
+    using get_limit_result = bo::result<uint64_t, exceptions::invalid_request_exception>;
+    get_limit_result get_limit(const query_options& options, const std::optional<expr::expression>& limit) const;
+    static uint64_t get_inner_loop_limit(const select_statement::get_limit_result& limit, bool is_aggregate);
+
     bool needs_post_query_ordering() const;
     virtual void update_stats_rows_read(int64_t rows_read) const {
         _stats.rows_read += rows_read;
