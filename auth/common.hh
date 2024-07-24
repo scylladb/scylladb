@@ -84,16 +84,25 @@ future<> create_legacy_metadata_table_if_missing(
 // Execute update query via group0 mechanism, mutations will be applied on all nodes.
 // Use this function when need to perform read before write on a single guard or if
 // you have more than one mutation and potentially exceed single command size limit.
+<<<<<<< HEAD
 using start_operation_func_t = std::function<future<::service::group0_guard>(abort_source*)>;
 using mutations_generator = coroutine::experimental::generator<mutation>;
+=======
+using start_operation_func_t = std::function<future<::service::group0_guard>(abort_source&)>;
+>>>>>>> 2dbe9ef2f2 (raft: use the abort source reference in raft group0 client interface)
 future<> announce_mutations_with_batching(
         ::service::raft_group0_client& group0_client,
         // since we can operate also in topology coordinator context where we need stronger
         // guarantees than start_operation from group0_client gives we allow to inject custom
         // function here
         start_operation_func_t start_operation_func,
+<<<<<<< HEAD
         std::function<mutations_generator(api::timestamp_type& t)> gen,
         seastar::abort_source* as,
+=======
+        std::function<::service::mutations_generator(api::timestamp_type t)> gen,
+        seastar::abort_source& as,
+>>>>>>> 2dbe9ef2f2 (raft: use the abort source reference in raft group0 client interface)
         std::optional<::service::raft_timeout> timeout);
 
 // Execute update query via group0 mechanism, mutations will be applied on all nodes.
@@ -102,7 +111,7 @@ future<> announce_mutations(
         ::service::raft_group0_client& group0_client,
         const sstring query_string,
         std::vector<data_value_or_unset> values,
-        seastar::abort_source* as,
+        seastar::abort_source& as,
         std::optional<::service::raft_timeout> timeout);
 
 }

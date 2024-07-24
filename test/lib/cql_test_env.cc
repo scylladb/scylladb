@@ -969,11 +969,23 @@ private:
                 config.is_superuser = true;
                 config.can_login = true;
 
+<<<<<<< HEAD
+=======
+                auto& as   = abort_sources.local();
+                auto guard = group0_client.start_operation(as).get();
+                service::group0_batch mc{std::move(guard)};
+>>>>>>> 2dbe9ef2f2 (raft: use the abort source reference in raft group0 client interface)
                 auth::create_role(
                         _auth_service.local(),
                         testing_superuser,
                         config,
+<<<<<<< HEAD
                         auth::authentication_options()).get();
+=======
+                        auth::authentication_options(),
+                        mc).get();
+                std::move(mc).commit(group0_client, as, ::service::raft_timeout{}).get();
+>>>>>>> 2dbe9ef2f2 (raft: use the abort source reference in raft group0 client interface)
             } catch (const auth::role_already_exists&) {
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
@@ -1035,6 +1047,19 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
     }, std::move(cfg_in), std::move(init_configurables));
 }
 
+<<<<<<< HEAD
+=======
+// this function should be called in seastar thread
+void do_with_mc(cql_test_env& env, std::function<void(service::group0_batch&)> func) {
+    seastar::abort_source as;
+    auto& g0 = env.get_raft_group0_client();
+    auto guard = g0.start_operation(as).get();
+    auto mc = service::group0_batch(std::move(guard));
+    func(mc);
+    std::move(mc).commit(g0, as, std::nullopt).get();
+}
+
+>>>>>>> 2dbe9ef2f2 (raft: use the abort source reference in raft group0 client interface)
 reader_permit make_reader_permit(cql_test_env& env) {
     return env.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "test", db::no_timeout, {});
 }

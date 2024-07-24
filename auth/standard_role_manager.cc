@@ -190,7 +190,7 @@ future<> standard_role_manager::create_default_role_if_missing() {
                     {_superuser},
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
-            co_await announce_mutations(_qp, _group0_client, query, {_superuser}, &_as, ::service::raft_timeout{});
+            co_await announce_mutations(_qp, _group0_client, query, {_superuser}, _as, ::service::raft_timeout{});
         }
         log.info("Created default superuser role '{}'.", _superuser);
     } catch(const exceptions::unavailable_exception& e) {

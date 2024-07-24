@@ -136,7 +136,7 @@ future<> password_authenticator::create_default_if_missing() {
         plogger.info("Created default superuser authentication record.");
     } else {
         co_await announce_mutations(_qp, _group0_client, query,
-            {salted_pwd, _superuser}, &_as, ::service::raft_timeout{});
+            {salted_pwd, _superuser}, _as, ::service::raft_timeout{});
         plogger.info("Created default superuser authentication record.");
     }
 }

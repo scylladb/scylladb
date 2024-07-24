@@ -122,7 +122,7 @@ static future<> announce_mutations_with_guard(
         ::service::raft_group0_client& group0_client,
         std::vector<canonical_mutation> muts,
         ::service::group0_guard group0_guard,
-        seastar::abort_source* as,
+        seastar::abort_source& as,
         std::optional<::service::raft_timeout> timeout) {
     auto group0_cmd = group0_client.prepare_command(
         ::service::write_mutations{
@@ -137,8 +137,13 @@ static future<> announce_mutations_with_guard(
 future<> announce_mutations_with_batching(
         ::service::raft_group0_client& group0_client,
         start_operation_func_t start_operation_func,
+<<<<<<< HEAD
         std::function<mutations_generator(api::timestamp_type& t)> gen,
         seastar::abort_source* as,
+=======
+        std::function<::service::mutations_generator(api::timestamp_type t)> gen,
+        seastar::abort_source& as,
+>>>>>>> 2dbe9ef2f2 (raft: use the abort source reference in raft group0 client interface)
         std::optional<::service::raft_timeout> timeout) {
     // account for command's overhead, it's better to use smaller threshold than constantly bounce off the limit
     size_t memory_threshold = group0_client.max_command_size() * 0.75;
@@ -189,7 +194,7 @@ future<> announce_mutations(
         ::service::raft_group0_client& group0_client,
         const sstring query_string,
         std::vector<data_value_or_unset> values,
-        seastar::abort_source* as,
+        seastar::abort_source& as,
         std::optional<::service::raft_timeout> timeout) {
     auto group0_guard = co_await group0_client.start_operation(as, timeout);
     auto timestamp = group0_guard.write_timestamp();
