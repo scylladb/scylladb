@@ -2125,14 +2125,12 @@ keyspace::config
 database::make_keyspace_config(const keyspace_metadata& ksm) {
     keyspace::config cfg;
     if (_cfg.data_file_directories().size() > 0) {
-        cfg.datadir = format("{}/{}", _cfg.data_file_directories()[0], ksm.name());
         cfg.enable_disk_writes = !_cfg.enable_in_memory_data_store();
         cfg.enable_disk_reads = true; // we always read from disk
         cfg.enable_commitlog = _cfg.enable_commitlog() && !_cfg.enable_in_memory_data_store();
         cfg.enable_cache = _cfg.enable_cache();
 
     } else {
-        cfg.datadir = "";
         cfg.enable_disk_writes = false;
         cfg.enable_disk_reads = false;
         cfg.enable_commitlog = false;
