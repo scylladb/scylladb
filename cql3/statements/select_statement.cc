@@ -283,31 +283,42 @@ select_statement::make_partition_slice(const query_options& options) const
         std::reverse(bounds.begin(), bounds.end());
         ++_stats.reverse_queries;
     }
+
+    const uint64_t per_partition_limit = get_inner_loop_limit(get_limit(options, _per_partition_limit),
+        _selection->is_aggregate());
     return query::partition_slice(std::move(bounds),
-        std::move(static_columns), std::move(regular_columns), _opts, nullptr, get_per_partition_limit(options));
+        std::move(static_columns), std::move(regular_columns), _opts, nullptr, per_partition_limit);
 }
 
-uint64_t select_statement::do_get_limit(const query_options& options,
-                                        const std::optional<expr::expression>& limit,
-                                        const expr::unset_bind_variable_guard& limit_unset_guard,
-                                        uint64_t default_limit) const {
-    if (!limit.has_value() || limit_unset_guard.is_unset(options) || _selection->is_aggregate()) {
-        return default_limit;
-    }
-
-    auto val = expr::evaluate(*limit, options);
-    if (val.is_null()) {
-        throw exceptions::invalid_request_exception("Invalid null value of limit");
+select_statement::get_limit_result select_statement::get_limit(
+    const query_options& options, const std::optional<expr::expression>& limit) const
+{
+    if (!limit.has_value()) {
+        return bo::success(query::max_rows);
     }
     try {
+        auto val = expr::evaluate(*limit, options);
+        if (val.is_null()) {
+            return bo::failure(exceptions::invalid_request_exception("Invalid null value of limit"));
+        }
         auto l = val.view().validate_and_deserialize<int32_t>(*int32_type);
         if (l <= 0) {
-            throw exceptions::invalid_request_exception("LIMIT must be strictly positive");
+            return bo::failure(exceptions::invalid_request_exception("LIMIT must be strictly positive"));
         }
-        return l;
+        return bo::success(l);
     } catch (const marshal_exception& e) {
-        throw exceptions::invalid_request_exception("Invalid limit value");
+        return bo::failure(exceptions::invalid_request_exception("Invalid limit value"));
+    } catch (const exceptions::invalid_request_exception& e) {
+        return bo::failure(e);
     }
+}
+
+uint64_t select_statement::get_inner_loop_limit(const select_statement::get_limit_result& limit, bool is_aggregate)
+{
+    if (!limit.has_value() || is_aggregate) {
+        return query::max_rows;
+    }
+    return limit.value();
 }
 
 bool select_statement::needs_post_query_ordering() const {
@@ -358,7 +369,8 @@ select_statement::do_execute(query_processor& qp,
 
     validate_for_read(cl);
 
-    uint64_t limit = get_limit(options);
+    const auto parsed_limit = get_limit(options, _limit);
+    const uint64_t inner_loop_limit = get_inner_loop_limit(parsed_limit, _selection->is_aggregate());
     auto now = gc_clock::now();
 
     _stats.filtered_reads += _restrictions_need_filtering;
@@ -380,7 +392,7 @@ select_statement::do_execute(query_processor& qp,
             std::move(slice),
             max_result_size,
             query::tombstone_limit(qp.proxy().get_tombstone_limit()),
-            query::row_limit(limit),
+            query::row_limit(inner_loop_limit),
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
@@ -585,7 +597,7 @@ indexed_table_select_statement::prepare_command_for_base_query(query_processor& 
             std::move(slice),
             qp.proxy().get_max_result_size(slice),
             query::tombstone_limit(qp.proxy().get_tombstone_limit()),
-            query::row_limit(get_limit(options)),
+            query::row_limit(get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate())),
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
@@ -1367,7 +1379,8 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
     using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
-    return read_posting_list(qp, options, get_limit(options), state, now, timeout, false).then(utils::result_wrap(
+    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
+    return read_posting_list(qp, options, limit, state, now, timeout, false).then(utils::result_wrap(
             [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
         dht::partition_range_vector partition_ranges;
@@ -1416,7 +1429,8 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
     using value_type = std::tuple<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
-    return read_posting_list(qp, options, get_limit(options), state, now, timeout, true).then(utils::result_wrap(
+    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
+    return read_posting_list(qp, options, limit, state, now, timeout, true).then(utils::result_wrap(
             [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
 
         auto rs = cql3::untyped_result_set(rows);
@@ -1703,7 +1717,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
 
     auto cl = options.get_consistency();
 
-    uint64_t limit = get_limit(options);
+    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
     auto now = gc_clock::now();
 
     _stats.filtered_reads += _restrictions_need_filtering;
