@@ -706,17 +706,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto& db = ctx.db;
         auto params = req_params({
             std::pair("flush_memtables", mandatory::no),
+            std::pair("force_purge_tombstones", mandatory::no),
         });
         params.process(*req);
         auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        apilog.info("force_compaction: flush={}", flush);
+        auto force_purge_tombstones = params.get_as<bool>("force_purge_tombstones").value_or(false);
+        apilog.info("force_compaction: flush={} force_purge_tombstones={}", flush, force_purge_tombstones);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         std::optional<flush_mode> fmopt;
         if (!flush) {
             fmopt = flush_mode::skip;
         }
-        auto task = co_await compaction_module.make_and_start_task<global_major_compaction_task_impl>({}, db, fmopt);
+        auto task = co_await compaction_module.make_and_start_task<global_major_compaction_task_impl>({}, db, fmopt, force_purge_tombstones);
         try {
             co_await task->done();
         } catch (...) {
@@ -733,19 +735,21 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             std::pair("keyspace", mandatory::yes),
             std::pair("cf", mandatory::no),
             std::pair("flush_memtables", mandatory::no),
+            std::pair("force_purge_tombstones", mandatory::no),
         });
         params.process(*req);
         auto keyspace = validate_keyspace(ctx, *params.get("keyspace"));
         auto table_infos = parse_table_infos(keyspace, ctx, params.get("cf").value_or(""));
         auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        apilog.debug("force_keyspace_compaction: keyspace={} tables={}, flush={}", keyspace, table_infos, flush);
+        auto force_purge_tombstones = params.get_as<bool>("force_purge_tombstones").value_or(false);
+        apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} force_purge_tombstones={}", keyspace, table_infos, flush, force_purge_tombstones);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         std::optional<flush_mode> fmopt;
         if (!flush) {
             fmopt = flush_mode::skip;
         }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt);
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, force_purge_tombstones);
         try {
             co_await task->done();
         } catch (...) {

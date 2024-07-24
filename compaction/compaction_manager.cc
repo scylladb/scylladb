@@ -504,9 +504,10 @@ public:
     major_compaction_task_executor(compaction_manager& mgr,
             throw_if_stopping do_throw_if_stopping,
             table_state* t,
-            tasks::task_id parent_id)
+            tasks::task_id parent_id,
+            bool force_purge_tombstones)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, sstables::compaction_type::Compaction, "Major compaction")
-        , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
+        , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id, flush_mode::compacted_tables, force_purge_tombstones)
     {
         _status.progress_units = "bytes";
     }
@@ -607,13 +608,13 @@ std::optional<gate::holder> compaction_manager::start_compaction(table_state& t)
     return it->second.gate.hold();
 }
 
-future<> compaction_manager::perform_major_compaction(table_state& t, std::optional<tasks::task_info> info) {
+future<> compaction_manager::perform_major_compaction(table_state& t, std::optional<tasks::task_info> info, bool force_purge_tombstones) {
     auto gh = start_compaction(t);
     if (!gh) {
         co_return;
     }
 
-    co_await perform_compaction<major_compaction_task_executor>(throw_if_stopping::no, info, &t, info.value_or(tasks::task_info{}).id).discard_result();
+    co_await perform_compaction<major_compaction_task_executor>(throw_if_stopping::no, info, &t, info.value_or(tasks::task_info{}).id, force_purge_tombstones).discard_result();
 }
 
 namespace compaction {
