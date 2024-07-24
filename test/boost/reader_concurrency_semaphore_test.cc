@@ -742,7 +742,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // inactive readers
     {
-        auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+        auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
 
         require_can_admit(true, "!need_cpu");
         {
