@@ -1347,10 +1347,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
     }
 
     co_await create_in_memory_keyspace(ksm, erm_factory, system);
-    auto& ks = _keyspaces.at(ksm->name());
-    if (ks.datadir() != "") {
-        co_await get_sstables_manager(system).init_keyspace_storage(ks.metadata()->get_storage_options(), ks.datadir());
-    }
+    co_await get_sstables_manager(system).init_keyspace_storage(ksm->get_storage_options(), ksm->name());
 }
 
 future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata) {

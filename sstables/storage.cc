@@ -19,6 +19,7 @@
 #include <seastar/util/file.hh>
 #include <seastar/util/closeable.hh>
 
+#include "db/config.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
@@ -706,10 +707,14 @@ future<> init_table_storage(const data_dictionary::storage_options& so, sstring 
     }, so.value);
 }
 
-future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring dir) {
+future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring ks_name) {
     co_await std::visit(overloaded_functor {
-        [&dir] (const data_dictionary::storage_options::local&) -> future<> {
-            co_await io_check([&dir] { return touch_directory(dir); });
+        [&mgr, &ks_name] (const data_dictionary::storage_options::local&) -> future<> {
+            const auto& data_dirs = mgr.config().data_file_directories();
+            if (data_dirs.size() > 0) {
+                auto dir = format("{}/{}", data_dirs[0], ks_name);
+                co_await io_check([&dir] { return touch_directory(dir); });
+            }
         },
         [] (const data_dictionary::storage_options::s3&) -> future<> {
             co_return;
