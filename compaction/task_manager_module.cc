@@ -329,24 +329,32 @@ tasks::is_abortable compaction_task_impl::is_abortable() const noexcept {
     return tasks::is_abortable{!_parent_id};
 }
 
-static future<bool> maybe_flush_all_tables(sharded<replica::database>& db) {
-    auto interval = db.local().get_compaction_manager().flush_all_tables_before_major();
-    if (interval > 0s) {
+static future<bool> maybe_flush_all_tables(sharded<replica::database>& db, bool force_flush) {
+    // flush all tables either if
+    // (a) force_flush == true (or)
+    // (b) flush_all_tables_before_major > 0s and the configured seconds have elapsed since last all tables flush
+    if (!force_flush) {
+        auto interval = db.local().get_compaction_manager().flush_all_tables_before_major();
+        if (interval <= 0s) {
+            co_return false;
+        }
+
         auto when = db_clock::now() - interval;
-        if (co_await replica::database::get_all_tables_flushed_at(db) <= when) {
-            co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
-                co_await db.flush_all_tables();
-            });
-            co_return true;
+        if (co_await replica::database::get_all_tables_flushed_at(db) > when) {
+            co_return false;
         }
     }
-    co_return false;
+
+    co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
+        co_await db.flush_all_tables();
+    });
+    co_return true;
 }
 
 future<> global_major_compaction_task_impl::run() {
     bool flushed_all_tables = false;
     if (_flush_mode == flush_mode::all_tables) {
-        flushed_all_tables = co_await maybe_flush_all_tables(_db);
+        flushed_all_tables = co_await maybe_flush_all_tables(_db, false);
     }
 
     std::unordered_map<sstring, std::vector<table_info>> tables_by_keyspace;
@@ -379,7 +387,7 @@ future<> major_keyspace_compaction_task_impl::run() {
 
     bool flushed_all_tables = false;
     if (_flush_mode == flush_mode::all_tables) {
-        flushed_all_tables = co_await maybe_flush_all_tables(_db);
+        flushed_all_tables = co_await maybe_flush_all_tables(_db, false);
     }
 
     flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
