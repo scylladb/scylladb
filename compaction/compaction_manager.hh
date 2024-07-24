@@ -342,7 +342,7 @@ public:
     future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts, tasks::task_info info);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(compaction::table_state& t, tasks::task_info info);
+    future<> perform_major_compaction(compaction::table_state& t, tasks::task_info info, bool consider_only_existing_data = false);
 
     // Splits a compaction group by segregating all its sstable according to the classifier[1].
     // [1]: See sstables::compaction_type_options::splitting::classifier.

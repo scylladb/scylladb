@@ -62,9 +62,11 @@ public:
             std::string table,
             std::string entity,
             tasks::task_id parent_id,
-            flush_mode fm = flush_mode::compacted_tables) noexcept
+            flush_mode fm = flush_mode::compacted_tables,
+            bool consider_only_existing_data = false) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
         , _flush_mode(fm)
+        , _consider_only_existing_data(consider_only_existing_data)
     {
         // FIXME: add progress units
     }
@@ -75,6 +77,7 @@ public:
 
 protected:
     flush_mode _flush_mode;
+    bool _consider_only_existing_data;
 
     virtual future<> run() override = 0;
 };
@@ -85,9 +88,10 @@ private:
 public:
     global_major_compaction_task_impl(tasks::task_manager::module_ptr module,
             sharded<replica::database>& db,
-            std::optional<flush_mode> fm = std::nullopt) noexcept
+            std::optional<flush_mode> fm = std::nullopt,
+            bool consider_only_existing_data = false) noexcept
         : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "global", "", "", "", tasks::task_id::create_null_id(),
-                fm.value_or(flush_mode::all_tables))
+                fm.value_or(flush_mode::all_tables), consider_only_existing_data)
         , _db(db)
     {}
 protected:
@@ -109,12 +113,13 @@ public:
             sharded<replica::database>& db,
             std::vector<table_info> table_infos,
             std::optional<flush_mode> fm = std::nullopt,
+            bool consider_only_existing_data = false,
             seastar::condition_variable* cv = nullptr,
             tasks::task_manager::task_ptr* current_task = nullptr) noexcept
         : major_compaction_task_impl(module, tasks::task_id::create_random_id(),
                 parent_id ? 0 : module->new_sequence_number(),
                 "keyspace", std::move(keyspace), "", "", parent_id,
-                fm.value_or(flush_mode::all_tables))
+                fm.value_or(flush_mode::all_tables), consider_only_existing_data)
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _cv(cv)
@@ -134,8 +139,9 @@ public:
             tasks::task_id parent_id,
             replica::database& db,
             std::vector<table_info> local_tables,
-            flush_mode fm) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id, fm)
+            flush_mode fm,
+            bool consider_only_existing_data) noexcept
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id, fm, consider_only_existing_data)
         , _db(db)
         , _local_tables(std::move(local_tables))
     {}
@@ -158,8 +164,9 @@ public:
             table_info ti,
             seastar::condition_variable& cv,
             tasks::task_manager::task_ptr& current_task,
-            flush_mode fm) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id, fm)
+            flush_mode fm,
+            bool consider_only_existing_data) noexcept
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id, fm, consider_only_existing_data)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
