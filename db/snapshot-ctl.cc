@@ -19,6 +19,15 @@
 
 namespace db {
 
+snapshot_ctl::snapshot_ctl(sharded<replica::database>& db)
+    : _db(db)
+{
+}
+
+future<> snapshot_ctl::stop() {
+    co_await _ops.close();
+}
+
 future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter) {
     auto& ks = _db.local().find_keyspace(ks_name);
     return parallel_for_each(ks.metadata()->cf_meta_data(), [this, ks_name = std::move(ks_name), name = std::move(name), filter = std::move(filter)] (auto& pair) {

@@ -42,11 +42,9 @@ public:
 
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;
 
-    explicit snapshot_ctl(sharded<replica::database>& db) : _db(db) {}
+    explicit snapshot_ctl(sharded<replica::database>& db);
 
-    future<> stop() {
-        return _ops.close();
-    }
+    future<> stop();
 
     /**
      * Takes the snapshot for all keyspaces. A snapshot name must be specified.
