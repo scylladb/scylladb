@@ -810,7 +810,7 @@ SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
 SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
-        sc.start(std::ref(e.db()), std::ref(e.get_task_manager())).get();
+        sc.start(std::ref(e.db()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager())).get();
         auto stop_sc = deferred_stop(sc);
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
@@ -860,7 +860,7 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
 SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
-        sc.start(std::ref(e.db()), std::ref(e.get_task_manager())).get();
+        sc.start(std::ref(e.db()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager())).get();
         auto stop_sc = deferred_stop(sc);
 
         auto& cf = e.local_db().find_column_family("ks", "cf");

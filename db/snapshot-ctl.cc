@@ -16,14 +16,16 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db/snapshot-ctl.hh"
 #include "replica/database.hh"
+#include "sstables/sstables_manager.hh"
 
 logging::logger snap_log("snapshots");
 
 namespace db {
 
-snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm)
+snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm)
     : _db(db)
     , _task_manager_module(make_shared<snapshot::task_manager_module>(tm))
+    , _storage_manager(sstm)
 {
     tm.register_module("snapshot", _task_manager_module);
 }

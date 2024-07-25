@@ -23,6 +23,8 @@
 
 using namespace seastar;
 
+namespace sstables { class storage_manager; }
+
 namespace db {
 
 namespace snapshot {
@@ -52,7 +54,7 @@ public:
 
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;
 
-    snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm);
+    snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm);
 
     future<> stop();
 
@@ -107,6 +109,7 @@ private:
     seastar::rwlock _lock;
     seastar::gate _ops;
     shared_ptr<snapshot::task_manager_module> _task_manager_module;
+    sstables::storage_manager& _storage_manager;
 
     future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
 
