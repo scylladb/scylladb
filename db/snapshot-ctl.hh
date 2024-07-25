@@ -17,12 +17,22 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 #include "replica/database_fwd.hh"
+#include "tasks/task_manager.hh"
 #include <seastar/core/gate.hh>
 #include <seastar/core/rwlock.hh>
 
 using namespace seastar;
 
 namespace db {
+
+namespace snapshot {
+
+class task_manager_module : public tasks::task_manager::module {
+public:
+    task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "snapshot") {}
+};
+
+} // snapshot namespace
 
 class snapshot_ctl : public peering_sharded_service<snapshot_ctl> {
 public:
@@ -42,7 +52,7 @@ public:
 
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;
 
-    explicit snapshot_ctl(sharded<replica::database>& db);
+    snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm);
 
     future<> stop();
 
@@ -96,6 +106,7 @@ private:
     sharded<replica::database>& _db;
     seastar::rwlock _lock;
     seastar::gate _ops;
+    shared_ptr<snapshot::task_manager_module> _task_manager_module;
 
     future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
 

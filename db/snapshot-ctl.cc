@@ -21,13 +21,16 @@ logging::logger snap_log("snapshots");
 
 namespace db {
 
-snapshot_ctl::snapshot_ctl(sharded<replica::database>& db)
+snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm)
     : _db(db)
+    , _task_manager_module(make_shared<snapshot::task_manager_module>(tm))
 {
+    tm.register_module("snapshot", _task_manager_module);
 }
 
 future<> snapshot_ctl::stop() {
     co_await _ops.close();
+    co_await _task_manager_module->stop();
 }
 
 future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter) {

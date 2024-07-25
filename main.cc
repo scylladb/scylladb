@@ -1814,7 +1814,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 start_cql(cql_maintenance_server_ctl, stop_maintenance_cql, "maintenance native server");
             }
 
-            snapshot_ctl.start(std::ref(db)).get();
+            snapshot_ctl.start(std::ref(db), std::ref(task_manager)).get();
             auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
                 snapshot_ctl.stop().get();
             });
