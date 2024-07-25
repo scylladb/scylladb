@@ -3343,8 +3343,8 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
         // resume reloading sst1 filter
         utils::get_local_injector().receive_message("reload_reclaimed_components/pause");
         REQUIRE_EVENTUALLY_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+        REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst3_bf_memory);
         BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory);
-        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst3_bf_memory);
 
         utils::get_local_injector().disable("reload_reclaimed_components/pause");
     }, {
