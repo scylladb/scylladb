@@ -366,7 +366,7 @@ class BoostTestSuite(UnitTestSuite):
             return
         options = self.options
         allows_compaction_groups = self.all_can_run_compaction_groups_except != None and shortname not in self.all_can_run_compaction_groups_except
-        if options.parallel_cases and (shortname not in self.no_parallel_cases) and casename is None:
+        if options.parallel_cases and (shortname not in self.no_parallel_cases) and casename is not None:
             fqname = os.path.join(self.mode, self.name, shortname)
             if fqname not in self._case_cache:
                 process = await asyncio.create_subprocess_exec(
