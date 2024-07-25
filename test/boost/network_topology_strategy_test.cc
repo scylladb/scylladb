@@ -36,7 +36,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 #include <seastar/core/coroutine.hh>
-#include "db/schema_tables.hh"
+#include "db/schema_applier.hh"
 
 using namespace locator;
 

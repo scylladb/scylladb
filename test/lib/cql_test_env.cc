@@ -61,7 +61,7 @@
 #include "utils/cross-shard-barrier.hh"
 #include "streaming/stream_manager.hh"
 #include "debug.hh"
-#include "db/schema_tables.hh"
+#include "db/schema_applier.hh"
 #include "db/virtual_tables.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"

@@ -28,6 +28,7 @@
 #include "db/extensions.hh"
 #include "db/large_data_handler.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
 #include "partition_slice_builder.hh"

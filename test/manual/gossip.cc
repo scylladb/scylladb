@@ -19,7 +19,7 @@
 #include "log.hh"
 #include <seastar/core/thread.hh>
 #include <chrono>
-#include "db/schema_tables.hh"
+#include "db/schema_applier.hh"
 
 namespace bpo = boost::program_options;
 

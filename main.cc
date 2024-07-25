@@ -85,6 +85,7 @@
 #include "transport/controller.hh"
 #include "service/memory_limiter.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
 
 #include "redis/controller.hh"
