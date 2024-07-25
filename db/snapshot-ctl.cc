@@ -17,6 +17,8 @@
 #include "db/snapshot-ctl.hh"
 #include "replica/database.hh"
 
+logging::logger snap_log("snapshots");
+
 namespace db {
 
 snapshot_ctl::snapshot_ctl(sharded<replica::database>& db)
