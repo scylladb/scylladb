@@ -747,6 +747,54 @@
          ]
       },
       {
+          "path":"/storage_service/backup",
+          "operations":[
+              {
+                  "method":"POST",
+                  "summary":"Starts copying SSTables from a specified keyspace to a designated bucket in object storage",
+                  "type":"string",
+                  "nickname":"start_backup",
+                  "produces":[
+                      "application/json"
+                  ],
+                  "parameters":[
+                      {
+                          "name":"endpoint",
+                          "description":"ID of the configured object storage endpoint to copy sstables to",
+                          "required":true,
+                          "allowMultiple":false,
+                          "type":"string",
+                          "paramType":"query"
+                      },
+                      {
+                          "name":"bucket",
+                          "description":"Name of the bucket to backup sstables to",
+                          "required":true,
+                          "allowMultiple":false,
+                          "type":"string",
+                          "paramType":"query"
+                      },
+                      {
+                          "name":"keyspace",
+                          "description":"Name of a keyspace to copy sstables from",
+                          "required":true,
+                          "allowMultiple":false,
+                          "type":"string",
+                          "paramType":"query"
+                      },
+                      {
+                          "name":"snapshot",
+                          "description":"Name of a snapshot to copy sstables from",
+                          "required":false,
+                          "allowMultiple":false,
+                          "type":"string",
+                          "paramType":"query"
+                      }
+                  ]
+              }
+          ]
+      },
+      {
          "path":"/storage_service/keyspace_compaction/{keyspace}",
          "operations":[
             {

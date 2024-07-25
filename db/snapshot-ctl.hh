@@ -34,6 +34,8 @@ public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "snapshot") {}
 };
 
+class backup_task_impl;
+
 } // snapshot namespace
 
 class snapshot_ctl : public peering_sharded_service<snapshot_ctl> {
@@ -53,6 +55,7 @@ public:
     };
 
     struct config {
+        seastar::scheduling_group backup_sched_group;
     };
 
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;
@@ -103,6 +106,8 @@ public:
      */
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name);
 
+    future<tasks::task_id> start_backup(sstring endpoint, sstring bucket, sstring keyspace, sstring snapshot_name);
+
     future<std::unordered_map<sstring, db_snapshot_details>> get_snapshot_details();
 
     future<int64_t> true_snapshots_size();
@@ -128,6 +133,8 @@ private:
             });
         });
     }
+
+    friend class snapshot::backup_task_impl;
 
     future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf = skip_flush::no);
     future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snap_views, skip_flush sf = skip_flush::no);
