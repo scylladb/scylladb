@@ -44,15 +44,6 @@ std::invoke_result_t<Func> snapshot_ctl::run_snapshot_modify_operation(Func&& f)
     });
 }
 
-template <typename Func>
-std::invoke_result_t<Func> snapshot_ctl::run_snapshot_list_operation(Func&& f) {
-    return with_gate(_ops, [f = std::move(f), this] () {
-        return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
-            return with_lock(snap._lock.for_read(), std::move(f));
-        });
-    });
-}
-
 future<> snapshot_ctl::take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf) {
     if (tag.empty()) {
         throw std::runtime_error("You must supply a snapshot name.");

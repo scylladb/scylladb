@@ -105,7 +105,13 @@ private:
     std::invoke_result_t<Func> run_snapshot_modify_operation(Func&&);
 
     template <typename Func>
-    std::invoke_result_t<Func> run_snapshot_list_operation(Func&&);
+    std::invoke_result_t<Func> run_snapshot_list_operation(Func&& f) {
+        return with_gate(_ops, [f = std::move(f), this] () {
+            return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
+                return with_lock(snap._lock.for_read(), std::move(f));
+            });
+        });
+    }
 
     future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf = skip_flush::no);
     future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snap_views, skip_flush sf = skip_flush::no);
