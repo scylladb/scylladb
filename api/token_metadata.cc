@@ -21,6 +21,9 @@ using namespace json;
 void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_token_metadata>& tm) {
     ss::local_hostid.set(r, [&tm](std::unique_ptr<http::request> req) {
         auto id = tm.local().get()->get_my_id();
+        if (!bool(id)) {
+            throw not_found_exception("local host ID is not yet set");
+        }
         return make_ready_future<json::json_return_type>(id.to_sstring());
     });
 

@@ -931,6 +931,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // #293 - do not stop anything (unless snitch.on_all(start) fails)
             stop_snitch->cancel();
 
+            api::set_server_snitch(ctx, snitch).get();
+            auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
+                api::unset_server_snitch(ctx).get();
+            });
+
             if (auto opt_public_address = snitch.local()->get_public_address()) {
                 // Use the Public IP as broadcast_address to other nodes
                 // and the broadcast_rpc_address (for client CQL connections).
@@ -979,6 +984,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //auto stop_token_metadata = defer_verbose_shutdown("token metadata", [ &token_metadata ] {
             //    token_metadata.stop().get();
             //});
+
+            api::set_server_token_metadata(ctx, token_metadata).get();
+            auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
+                api::unset_server_token_metadata(ctx).get();
+            });
+
 
             supervisor::notify("starting effective_replication_map factory");
             erm_factory.start().get();
@@ -1487,13 +1498,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tablet_allocator.stop().get();
             });
 
-            // FIXME -- this can happen next to token_metadata start, but it needs "storage_service"
-            // API register, so it comes that late for now
-            api::set_server_token_metadata(ctx, token_metadata).get();
-            auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
-                api::unset_server_token_metadata(ctx).get();
-            });
-
             supervisor::notify("starting mapreduce service");
             mapreduce_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source())).get();
             auto stop_mapreduce_service_handlers = defer_verbose_shutdown("mapreduce service", [&mapreduce_service] {
@@ -1534,17 +1538,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.stop().get();
             });
 
+            api::set_server_storage_service(ctx, ss, group0_client).get();
+            auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
+                api::unset_server_storage_service(ctx).get();
+            });
+
             supervisor::notify("initializing query processor remote part");
             // TODO: do this together with proxy.start_remote(...)
             qp.invoke_on_all(&cql3::query_processor::start_remote, std::ref(mm), std::ref(mapreduce_service),
                              std::ref(ss), std::ref(group0_client)).get();
             auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [&qp] {
                 qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
-            });
-
-            api::set_server_storage_service(ctx, ss, group0_client).get();
-            auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
-                api::unset_server_storage_service(ctx).get();
             });
 
             supervisor::notify("initializing virtual tables");
@@ -1665,10 +1669,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             }).get();
 
-            api::set_server_snitch(ctx, snitch).get();
-            auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
-                api::unset_server_snitch(ctx).get();
-            });
             api::set_server_column_family(ctx, sys_ks).get();
             auto stop_cf_api = defer_verbose_shutdown("column family API", [&ctx] {
                 api::unset_server_column_family(ctx).get();
@@ -1828,8 +1828,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_tasks_compaction_module(ctx).get();
             });
 
-            //FIXME: discarded future
-            (void)api::set_server_cache(ctx);
+            api::set_server_cache(ctx).get();
+            auto stop_cache_api = defer_verbose_shutdown("cache API", [&ctx] {
+                api::unset_server_cache(ctx).get();
+            });
 
             if (cfg->maintenance_mode()) {
                 startlog.info("entering maintenance mode.");
