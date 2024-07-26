@@ -378,6 +378,10 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 future<> run_simulation(const params& p, const sstring& name = "") {
     testlog.info("[run {}] params: {}", name, p);
 
+    auto total_tablet_count = p.tablets1.value_or(0) * p.rf1 + p.tablets2.value_or(0) * p.rf2;
+    testlog.info("[run {}] tablet count: {}", name, total_tablet_count);
+    testlog.info("[run {}] tablet count / shard: {:.3f}", name, double(total_tablet_count) / (p.nodes * p.shards));
+
     auto res = co_await test_load_balancing_with_many_tables(p, true);
     testlog.info("[run {}] Overcommit       : init : {}", name, res.init);
     testlog.info("[run {}] Overcommit       : worst: {}", name, res.worst);
