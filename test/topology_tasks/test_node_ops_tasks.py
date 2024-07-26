@@ -22,8 +22,6 @@ from test.topology_tasks.task_manager_types import TaskID, TaskStats, TaskStatus
 
 logger = logging.getLogger(__name__)
 
-empty_task_id = "00000000-0000-0000-0000-000000000000"
-
 async def get_status_allow_peer_connection_failure(tm: TaskManagerClient, node_ip: IPAddress, task_id: TaskID) -> Optional[TaskStatus]:
     ret = await tm.api.client.get_json(f"/task_manager/task_status/{task_id}", host = node_ip, allow_failed = True)
     resp_status = ret.get("code", 200)
@@ -59,7 +57,7 @@ def check_virtual_task_status(virtual_task: TaskStatus, expected_state: str, exp
     assert virtual_task.kind == "cluster"
     assert virtual_task.scope == "cluster"
     assert not virtual_task.is_abortable
-    assert virtual_task.parent_id == empty_task_id
+    assert virtual_task.parent_id == "none"
     assert len(virtual_task.children_ids) == expected_children_num
 
 def check_regular_task_status(task: TaskStatus, expected_state: str, expected_type: str, expected_scope: str,

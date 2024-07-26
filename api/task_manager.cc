@@ -51,7 +51,7 @@ tm::task_status make_status(tasks::task_status status) {
     res.start_time = st;
     res.end_time = et;
     res.error = status.error;
-    res.parent_id = status.parent_id.to_sstring();
+    res.parent_id = status.parent_id ? status.parent_id.to_sstring() : "none";
     res.sequence_number = status.sequence_number;
     res.shard = status.shard;
     res.keyspace = status.keyspace;
