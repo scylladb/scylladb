@@ -61,7 +61,7 @@ public:
      * Takes the snapshot for the given keyspaces. A snapshot name must be specified.
      *
      * @param tag the tag given to the snapshot; may not be null or empty
-     * @param keyspaceNames the names of the keyspaces to snapshot; empty means "all."
+     * @param keyspace_names the names of the keyspaces to snapshot; empty means "all"
      */
     future<> take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf = skip_flush::no);
 
@@ -77,8 +77,8 @@ public:
     /**
      * Takes the snapshot of a specific column family. A snapshot name must be specified.
      *
-     * @param keyspaceName the keyspace which holds the specified column family
-     * @param columnFamilyName the column family to snapshot
+     * @param ks_name the keyspace which holds the specified column family
+     * @param cf_name the column family to snapshot
      * @param tag the tag given to the snapshot; may not be null or empty
      */
     future<> take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag, snap_views, skip_flush sf = skip_flush::no);
