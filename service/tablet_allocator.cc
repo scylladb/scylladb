@@ -1212,7 +1212,6 @@ public:
     //   target_info.id == dst.host
     //   src_node_info.shard_by_load.back() == src.shard
     //   nodes_by_load_dst.back().id == dst.host
-    //   nodes[dst.host].target_load_sketch has dst.shard recorded as if the movement happened
     //
     //   if drain_skipped == true:
     //     src_node_info.skipped_candidates.back().replica = src
@@ -1336,12 +1335,6 @@ public:
                 std::make_heap(src_node_info.shards_by_load.begin(), std::prev(src_node_info.shards_by_load.end()),
                                src_node_info.shards_by_load_cmp());
             }
-
-            auto& target_load_sketch = co_await nodes[dst.host].get_load_sketch(_tm);
-            target_load_sketch.unload(dst.host, dst.shard);
-
-            auto& new_target_load_sketch = co_await nodes[min_candidate.dst.host].get_load_sketch(_tm);
-            new_target_load_sketch.pick(min_candidate.dst.host, min_candidate.dst.shard);
         }
 
         co_return min_candidate;
@@ -1546,13 +1539,8 @@ public:
             // Pick best target shard.
 
             auto& target_load_sketch = co_await target_info.get_load_sketch(_tm);
-            auto dst = global_shard_id {target, target_load_sketch.next_shard(target)};
+            auto dst = global_shard_id {target, target_load_sketch.get_least_loaded_shard(target)};
             lblogger.trace("target shard: {}, load={}", dst.shard, target_info.shards[dst.shard].tablet_count);
-
-            // Should be canceled when the movement is finalized.
-            auto unload_target_load_sketch = seastar::defer([&] {
-                nodes[dst.host].target_load_sketch->unload(dst.host, dst.shard);
-            });
 
             if (lblogger.is_enabled(seastar::log_level::trace)) {
                 shard_id shard = 0;
@@ -1596,7 +1584,11 @@ public:
             auto mig = tablet_migration_info {kind, source_tablet, src, dst};
             auto& src_tinfo = tmap.get_tablet_info(source_tablet.tablet);
             auto mig_streaming_info = get_migration_streaming_info(topo, src_tinfo, mig);
-            unload_target_load_sketch.cancel();
+
+            {
+                load_sketch& load_sketch = co_await nodes[dst.host].get_load_sketch(_tm);
+                load_sketch.pick(dst.host, dst.shard);
+            }
 
             if (can_accept_load(nodes, mig_streaming_info)) {
                 apply_load(nodes, mig_streaming_info);
