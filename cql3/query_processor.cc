@@ -15,7 +15,6 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 
 #include "service/storage_proxy.hh"
-#include "service/topology_mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/mapreduce_service.hh"
 #include "service/raft/raft_group0_client.hh"
