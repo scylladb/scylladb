@@ -376,6 +376,8 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 }
 
 future<> run_simulation(const params& p, const sstring& name = "") {
+    testlog.info("[run {}] params: {}", name, p);
+
     auto res = co_await test_load_balancing_with_many_tables(p, true);
     testlog.info("[run {}] Overcommit       : init : {}", name, res.init);
     testlog.info("[run {}] Overcommit       : worst: {}", name, res.worst);
@@ -426,7 +428,6 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
         };
 
         auto name = format("#{}", i);
-        testlog.info("[run {}] params: {}", name, p);
         co_await run_simulation(p, name);
     }
 }
