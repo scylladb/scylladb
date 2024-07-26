@@ -27,9 +27,11 @@ namespace locator {
 /// on shards of the whole cluster.
 class load_sketch {
     using shard_id = seastar::shard_id;
+    using load_type = ssize_t; // In tablets.
+
     struct shard_load {
         shard_id id;
-        size_t load; // In tablets.
+        load_type load;
     };
     // Used in a max-heap to yield lower load first.
     struct shard_load_cmp {
@@ -39,7 +41,7 @@ class load_sketch {
     };
     struct node_load {
         std::vector<shard_load> _shards;
-        uint64_t _load = 0; // In tablets.
+        load_type _load = 0;
 
         node_load(size_t shard_count) : _shards(shard_count) {
             shard_id next_shard = 0;
@@ -49,10 +51,11 @@ class load_sketch {
             }
         }
 
-        uint64_t& load() noexcept {
+        load_type& load() noexcept {
             return _load;
         }
-        const uint64_t& load() const noexcept {
+
+        const load_type& load() const noexcept {
             return _load;
         }
     };
@@ -148,22 +151,22 @@ public:
         std::make_heap(n._shards.begin(), n._shards.end(), shard_load_cmp());
     }
 
-    uint64_t get_load(host_id node) const {
+    load_type get_load(host_id node) const {
         if (!_nodes.contains(node)) {
             return 0;
         }
         return _nodes.at(node).load();
     }
 
-    uint64_t total_load() const {
-        uint64_t total = 0;
+    load_type total_load() const {
+        load_type total = 0;
         for (auto&& n : _nodes) {
             total += n.second.load();
         }
         return total;
     }
 
-    uint64_t get_avg_shard_load(host_id node) const {
+    load_type get_avg_shard_load(host_id node) const {
         if (!_nodes.contains(node)) {
             return 0;
         }
@@ -189,13 +192,13 @@ public:
     // Returns the difference in tablet count between highest-loaded shard and lowest-loaded shard.
     // Returns 0 when shards are perfectly balanced.
     // Returns 1 when shards are imbalanced, but it's not possible to balance them.
-    uint64_t get_shard_imbalance(host_id node) const {
+    load_type get_shard_imbalance(host_id node) const {
         auto minmax = get_shard_minmax(node);
         return minmax.max() - minmax.max();
     }
 
-    min_max_tracker<uint64_t> get_shard_minmax(host_id node) const {
-        min_max_tracker<uint64_t> minmax;
+    min_max_tracker<load_type> get_shard_minmax(host_id node) const {
+        min_max_tracker<load_type> minmax;
         if (_nodes.contains(node)) {
             auto& n = _nodes.at(node);
             for (auto&& s: n._shards) {
