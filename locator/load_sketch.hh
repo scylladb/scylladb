@@ -154,6 +154,12 @@ public:
         return s.id;
     }
 
+    shard_id get_most_loaded_shard(host_id node) {
+        auto& n = ensure_node(node);
+        const shard_load& s = *std::prev(n._shards_by_load.end());
+        return s.id;
+    }
+
     void unload(host_id node, shard_id shard) {
         auto& n = _nodes.at(node);
         n.update_shard_load(shard, -1);
