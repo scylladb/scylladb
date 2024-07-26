@@ -194,6 +194,21 @@
                "parameters":[]
             }
          ]
+      },
+      {
+         "path":"/system/highest_supported_sstable_version",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get highest supported sstable version",
+               "type":"string",
+               "nickname":"get_highest_supported_sstable_version",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
       }
    ]
 }
