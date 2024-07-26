@@ -130,8 +130,14 @@ public:
     }
 
     shard_id next_shard(host_id node) {
-        const topology& topo = _tm->get_topology();
+        auto shard = get_least_loaded_shard(node);
+        pick(node, shard);
+        return shard;
+    }
+
+    node_load& ensure_node(host_id node) {
         if (!_nodes.contains(node)) {
+            const topology& topo = _tm->get_topology();
             auto shard_count = topo.find_node(node)->get_shard_count();
             if (shard_count == 0) {
                 throw std::runtime_error(format("Shard count not known for node {}", node));
@@ -139,11 +145,13 @@ public:
             auto [i, _] = _nodes.emplace(node, node_load{shard_count});
             i->second.populate_shards_by_load();
         }
-        auto& n = _nodes.at(node);
+        return _nodes.at(node);
+    }
+
+    shard_id get_least_loaded_shard(host_id node) {
+        auto& n = ensure_node(node);
         const shard_load& s = *n._shards_by_load.begin();
-        auto shard = s.id;
-        n.update_shard_load(shard, 1);
-        return shard;
+        return s.id;
     }
 
     void unload(host_id node, shard_id shard) {
