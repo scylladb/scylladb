@@ -1485,7 +1485,6 @@ future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
 
 future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<service::storage_proxy>& proxy,
-        sharded<gms::gossiper>& gossiper,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
@@ -2874,7 +2873,7 @@ bool storage_service::is_topology_coordinator_enabled() const {
 }
 
 future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
-        sharded<gms::gossiper>& gossiper, start_hint_manager start_hm, gms::generation_type new_generation) {
+        start_hint_manager start_hm, gms::generation_type new_generation) {
     assert(this_shard_id() == 0);
 
     if (_sys_ks.local().was_decommissioned()) {
@@ -2989,7 +2988,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         }
     }
 
-    co_return co_await join_token_ring(sys_dist_ks, proxy, gossiper, std::move(initial_contact_nodes),
+    co_return co_await join_token_ring(sys_dist_ks, proxy, std::move(initial_contact_nodes),
             std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm, new_generation);
 }
 
