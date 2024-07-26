@@ -202,7 +202,7 @@ void space_watchdog::on_timer() {
     }
 }
 
-future<> resource_manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
+future<> resource_manager::start(shared_ptr<const gms::gossiper> gossiper_ptr) {
     _gossiper_ptr = std::move(gossiper_ptr);
 
     return with_semaphore(_operation_lock, 1, [this] () {
