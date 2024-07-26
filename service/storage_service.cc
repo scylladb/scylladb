@@ -1783,8 +1783,8 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     // in the cluster -- either through gossiper, or by loading it from disk -- so it's safe
     // to start the hint managers.
     if (start_hm) {
-        co_await proxy.invoke_on_all([&gossiper] (storage_proxy& local_proxy) {
-            return local_proxy.start_hints_manager(gossiper.local().shared_from_this());
+        co_await proxy.invoke_on_all([] (storage_proxy& local_proxy) {
+            return local_proxy.start_hints_manager();
         });
     }
 
