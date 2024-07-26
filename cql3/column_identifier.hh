@@ -14,7 +14,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <iosfwd>
 
 namespace cql3 {
 

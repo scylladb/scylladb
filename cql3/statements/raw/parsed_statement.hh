@@ -16,7 +16,6 @@
 
 #include <seastar/core/shared_ptr.hh>
 
-#include <optional>
 #include <vector>
 
 namespace cql3 {

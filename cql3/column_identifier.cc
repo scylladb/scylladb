@@ -7,9 +7,7 @@
  */
 
 #include "cql3/column_identifier.hh"
-#include "exceptions/exceptions.hh"
 #include "cql3/util.hh"
-#include "cql3/query_options.hh"
 
 namespace cql3 {
 

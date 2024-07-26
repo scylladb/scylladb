@@ -11,7 +11,6 @@
 #pragma once
 
 #include "operation.hh"
-#include "utils/chunked_vector.hh"
 
 namespace cql3 {
 
