@@ -426,11 +426,11 @@ future<> run_simulation(const params& p, const sstring& name = "") {
 
 future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
     for (auto i = 0; i < app_cfg["runs"].as<int>(); i++) {
-        auto shards = 1 << tests::random::get_int(0, 6);
+        auto shards = 1 << tests::random::get_int(0, 8);
         auto rf1 = tests::random::get_int(1, 3);
         auto rf2 = tests::random::get_int(1, 3);
-        auto scale1 = 1 << tests::random::get_int(0, 3);
-        auto scale2 = 1 << tests::random::get_int(0, 3);
+        auto scale1 = 1 << tests::random::get_int(0, 5);
+        auto scale2 = 1 << tests::random::get_int(0, 5);
         auto nodes = tests::random::get_int(3, 6);
         params p {
             .iterations = app_cfg["iterations"].as<int>(),
