@@ -12,7 +12,6 @@
 
 #include "cql3/functions/function_name.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
-#include "query-request.hh"
 #include "cql3/cf_name.hh"
 
 #include <memory>

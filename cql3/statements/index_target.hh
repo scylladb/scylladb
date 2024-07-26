@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include <seastar/core/shared_ptr.hh>
 #include "cql3/column_identifier.hh"
 #include <variant>
 #include <boost/regex.hpp>

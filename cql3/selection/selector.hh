@@ -10,11 +10,6 @@
 
 #pragma once
 
-#include <vector>
-#include "query-request.hh"
-#include "types/types.hh"
-#include "schema/schema_fwd.hh"
-#include "counters.hh"
 #include "cql3/expr/expression.hh"
 
 namespace cql3 {
