@@ -12,7 +12,6 @@
 
 #include "exceptions/exceptions.hh"
 #include <seastar/core/print.hh>
-#include "utils/fmt-compat.hh"
 
 #include <boost/range/algorithm/count_if.hpp>
 
@@ -28,7 +27,7 @@ namespace request_validations {
 
 template <typename... MessageArgs>
 exceptions::invalid_request_exception
-invalid_request(const char* message_template, const MessageArgs&... message_args);
+invalid_request(fmt::format_string<MessageArgs...> message_template, MessageArgs&&... message_args);
 
 
     /**
@@ -42,10 +41,10 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
      */
     template <typename... MessageArgs>
     void check_true(bool expression,
-                    const char* message_template,
-                    const MessageArgs&... message_args) {
+                    fmt::format_string<MessageArgs...> message_template,
+                    MessageArgs&&... message_args) {
         if (!expression) {
-            throw exceptions::invalid_request_exception(fmt::format(fmt::runtime(message_template), message_args...));
+            throw exceptions::invalid_request_exception(fmt::format(message_template, std::forward<MessageArgs>(message_args)...));
         }
     }
 
@@ -57,7 +56,7 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
      * @throws InvalidRequestException if the specified list contains duplicates.
      */
     template <typename T>
-    void check_contains_no_duplicates(const std::vector<T>& list, const char* message) {
+    void check_contains_no_duplicates(const std::vector<T>& list, fmt::format_string<> message) {
         if (std::set<T>(list.begin(), list.end()).size() != list.size()) {
             throw invalid_request(message);
         }
@@ -74,7 +73,7 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
     template <typename E>
     void check_contains_only(const std::vector<E>& list,
                              const std::vector<E>& expected_elements,
-                             const char* message) {
+                             fmt::format_string<> message) {
         if (boost::count_if(list, [&] (const E& e) { return !boost::count_if(expected_elements, e); })) {
             throw invalid_request(message);
         }
@@ -91,9 +90,9 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
      */
     template <typename... MessageArgs>
     void check_false(bool expression,
-                     const char* message_template,
-                     const MessageArgs&... message_args) {
-        check_true(!expression, message_template, message_args...);
+                     fmt::format_string<MessageArgs...> message_template,
+                     MessageArgs&&... message_args) {
+        check_true(!expression, message_template, std::forward<MessageArgs>(message_args)...);
     }
 
     /**
@@ -107,8 +106,8 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
      * @throws InvalidRequestException if the specified object is <code>null</code>.
      */
     template <typename T, typename... MessageArgs>
-    T check_not_null(T object, const char* message_template, const MessageArgs&... message_args) {
-        check_true(bool(object), message_template, message_args...);
+    T check_not_null(T object, fmt::format_string<MessageArgs...> message_template, MessageArgs&... message_args) {
+        check_true(bool(object), message_template, std::forward<MessageArgs>(message_args)...);
         return object;
     }
 
@@ -123,8 +122,8 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
      * @throws InvalidRequestException if the specified object is not <code>null</code>.
      */
     template <typename T, typename... MessageArgs>
-    T check_null(T object, const char* message_template, const MessageArgs&... message_args) {
-        check_true(!bool(object), message_template, message_args...);
+    T check_null(T object, fmt::format_string<MessageArgs...> message_template, MessageArgs&&... message_args) {
+        check_true(!bool(object), message_template, std::forward<MessageArgs>(message_args)...);
         return object;
     }
 
@@ -137,8 +136,8 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
      */
     template <typename... MessageArgs>
     exceptions::invalid_request_exception
-    invalid_request(const char* message_template, const MessageArgs&... message_args) {
-        return exceptions::invalid_request_exception(fmt::format(fmt::runtime(message_template), message_args...));
+    invalid_request(fmt::format_string<MessageArgs...> message_template, MessageArgs&&... message_args) {
+        return exceptions::invalid_request_exception(fmt::format(message_template, std::forward<MessageArgs>(message_args)...));
     }
 }
 
