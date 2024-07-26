@@ -53,7 +53,7 @@ When reaching the kill limit, the semaphore will start throwing `std::bad_alloc`
 Permits are in one of the following states:
 * `waiting_for_admission` - the permit is waiting for admission;
 * `waiting_for_memory` - the permit is waiting for memory to become available to continue (see serialize limit);
-* `waiting_for_execution` - the permit is was admitted and is waiting to be executed in the execution stage (see admission via `with_permit()` and `with_ready_permit()`);
+* `waiting_for_execution` - the permit was admitted and is waiting to be executed in the execution stage (see admission via `with_permit()` and `with_ready_permit()`);
 * `active` - the permit was admitted and the read is in progress;
 * `active/need_cpu` - the permit was admitted and it participates in CPU based admission, i.e. it blocks other permits from admission while in this state;
 * `active/await` - a previously `active/need_cpu` permit, which needs something other than CPU to proceed, it is waiting on I/O or a remote shards, other permits can be admitted while the permit is in this state, pending resource availability;
