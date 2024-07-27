@@ -76,6 +76,8 @@ for pkg in $PKGS; do
         exit 1
     fi
     pkg="$(readlink -f $pkg)"
+    tar tzvf "$pkg"
+    ls -l "$BASEDIR"
     tar -C "$BASEDIR" -xpf "$pkg"
     dirname=$(basename "$pkg"| sed -e "s/-$VERSION_ESC-$RELEASE_ESC\.[^.]*\.tar\.gz//")
     dirname=${dirname/#$PRODUCT/scylla}
