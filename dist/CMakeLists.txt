@@ -121,7 +121,7 @@ add_custom_command(
     "${unified_dist_pkg}"
   COMMAND
     ${CMAKE_SOURCE_DIR}/unified/build_unified.sh
-      --build-dir ${CMAKE_BINARY_DIR}
+      --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
       --pkgs "${dist_pkgs}"
       --unified-pkg ${unified_dist_pkg}
   DEPENDS
