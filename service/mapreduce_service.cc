@@ -27,7 +27,6 @@
 #include "replica/database.hh"
 #include "schema/schema.hh"
 #include "schema/schema_registry.hh"
-#include <seastar/core/do_with.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/when_all.hh>
@@ -267,7 +266,7 @@ public:
     future<query::mapreduce_result> dispatch_to_node(netw::msg_addr id, query::mapreduce_request req) {
         auto my_address = _mapreducer._messaging.broadcast_address();
         if (id.addr == my_address) {
-            return _mapreducer.dispatch_to_shards(req, _tr_info);
+            co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
         }
 
         _mapreducer._stats.requests_dispatched_to_other_nodes += 1;
@@ -278,26 +277,29 @@ public:
         // invocation), so by performing this check, we can prevent hanging on
         // the RPC call.
         if (_mapreducer._shutdown) {
-            return make_exception_future<query::mapreduce_result>(std::runtime_error("mapreduce_service is shutting down"));
+            throw std::runtime_error("mapreduce_service is shutting down");
         }
 
         // Try to send this mapreduce_request to another node.
-        return do_with(id, req, [this] (netw::msg_addr& id, query::mapreduce_request& req) -> future<query::mapreduce_result> {
-            return ser::mapreduce_request_rpc_verbs::send_mapreduce_request(
+        try {
+            co_return co_await ser::mapreduce_request_rpc_verbs::send_mapreduce_request(
                 &_mapreducer._messaging, id, req, _tr_info
-            ).handle_exception_type([this, &req, &id] (rpc::closed_error& e) -> future<query::mapreduce_result> {
+            );
+        } catch (rpc::closed_error& e) {
                 if (_mapreducer._shutdown) {
                     // Do not retry if shutting down.
-                    return make_exception_future<query::mapreduce_result>(e);
+                    throw;
                 }
-
                 // In case of mapreduce failure, retry using super-coordinator as a coordinator
                 flogger.warn("retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
                 tracing::trace(_tr_state, "retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
+                // Fall through since we cannot co_await in a catch block.
+        }
+        {
 
-                return _mapreducer.dispatch_to_shards(req, _tr_info);
-            });
-        });
+
+                co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
+        }
     }
 };
 
@@ -577,7 +579,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     query::mapreduce_result result;
 
     co_await coroutine::parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
-        [&req, &result, &tr_state, &dispatcher] (
+        [&] (
             std::pair<const netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_with_addr
         ) -> future<> {
             netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
