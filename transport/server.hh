@@ -28,6 +28,7 @@
 #include "generic_server.hh"
 #include "service/query_state.hh"
 #include "cql3/query_options.hh"
+#include "cql3/dialect.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/chunked_vector.hh"
 #include "exceptions/coordinator_result.hh"
@@ -264,6 +265,8 @@ private:
         std::unique_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
 
+        cql3::dialect get_dialect() const;
+
         // Helper functions to encapsulate bounce_to_shard processing for query, execute and batch verbs
         template<typename Process>
         future<result_with_foreign_response_ptr>
@@ -272,7 +275,7 @@ private:
         template<typename Process>
         future<result_with_foreign_response_ptr>
         process_on_shard(::shared_ptr<messages::result_message::bounce_to_shard> bounce_msg, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
-                service_permit permit, tracing::trace_state_ptr trace_state, Process process_fn);
+                service_permit permit, tracing::trace_state_ptr trace_state, cql3::dialect dialect, Process process_fn);
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
 
