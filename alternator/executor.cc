@@ -9,6 +9,7 @@
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include "alternator/executor.hh"
+#include "cdc/log.hh"
 #include "db/config.hh"
 #include "log.hh"
 #include "schema/schema_builder.hh"
@@ -4439,8 +4440,10 @@ future<executor::request_return_type> executor::list_tables(client_state& client
 
     auto tables = _proxy.data_dictionary().get_tables(); // hold on to temporary, table_names isn't a container, it's a view
     auto table_names = tables
-            | boost::adaptors::filtered([] (data_dictionary::table t) {
-                        return t.schema()->ks_name().find(KEYSPACE_NAME_PREFIX) == 0 && !t.schema()->is_view();
+            | boost::adaptors::filtered([this] (data_dictionary::table t) {
+                        return t.schema()->ks_name().find(KEYSPACE_NAME_PREFIX) == 0 &&
+                            !t.schema()->is_view() &&
+                            !cdc::is_log_for_some_table(_proxy.local_db(), t.schema()->ks_name(), t.schema()->cf_name());
                     })
             | boost::adaptors::transformed([] (data_dictionary::table t) {
                         return t.schema()->cf_name();
