@@ -99,7 +99,8 @@ private:
 
 public:
     explicit filesystem_storage(sstring dir, sstable_state state)
-        : _dir(make_path(dir, state))
+        : storage(dir)
+        , _dir(make_path(dir, state))
     {}
 
     virtual future<> seal(const sstable& sst) override;
@@ -511,19 +512,21 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
 class filesystem_atomic_delete_ctx : public atomic_delete_context_impl {
 public:
     sstring log;
-    sstring directory;
-    filesystem_atomic_delete_ctx(sstring l, sstring dir) noexcept : log(std::move(l)), directory(std::move(dir)) {}
+    std::unordered_set<sstring> directories;
+    filesystem_atomic_delete_ctx(sstring l, std::unordered_set<sstring> dirs) noexcept : log(std::move(l)), directories(std::move(dirs)) {}
 };
 
 future<atomic_delete_context> filesystem_storage::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
-    auto [ pending_delete_log, sst_directory ] = co_await sstable_directory::create_pending_deletion_log(ssts);
-    co_return std::make_unique<filesystem_atomic_delete_ctx>(std::move(pending_delete_log), std::move(sst_directory));
+    auto [ pending_delete_log, directories ] = co_await sstable_directory::create_pending_deletion_log(base_dir(), ssts);
+    co_return std::make_unique<filesystem_atomic_delete_ctx>(std::move(pending_delete_log), std::move(directories));
 }
 
 future<> filesystem_storage::atomic_delete_complete(atomic_delete_context ctx_) const {
     auto& ctx = static_cast<filesystem_atomic_delete_ctx&>(*ctx_);
 
-    co_await sync_directory(ctx.directory);
+    for (const auto& dir : ctx.directories) {
+        co_await sync_directory(dir);
+    }
 
     // Once all sstables are deleted, the log file can be removed.
     // Note: the log file will be removed also if unlink failed to remove
@@ -553,7 +556,8 @@ class s3_storage : public sstables::storage {
 
 public:
     s3_storage(shared_ptr<s3::client> client, sstring bucket, sstring dir)
-        : _client(std::move(client))
+        : storage(dir)
+        , _client(std::move(client))
         , _bucket(std::move(bucket))
         , _location(std::move(dir))
     {
