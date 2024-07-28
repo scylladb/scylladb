@@ -44,9 +44,13 @@ private:
     cache_key_type _key;
 
 public:
+<<<<<<< HEAD
     prepared_cache_key_type() = default;
     explicit prepared_cache_key_type(cql_prepared_id_type cql_id) : _key(std::move(cql_id), std::numeric_limits<int64_t>::max()) {}
     explicit prepared_cache_key_type(thrift_prepared_id_type thrift_id) : _key(cql_prepared_id_type(), thrift_id) {}
+=======
+    explicit prepared_cache_key_type(cql_prepared_id_type cql_id) : _key(std::move(cql_id)) {}
+>>>>>>> f9322799af (cql3: prepared_statement_cache: drop cache key default constructor)
 
     cache_key_type& key() { return _key; }
     const cache_key_type& key() const { return _key; }
