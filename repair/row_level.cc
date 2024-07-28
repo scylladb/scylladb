@@ -978,13 +978,12 @@ public:
     // Get a list of row hashes in _working_row_buf
     future<repair_hash_set>
     working_row_hashes() {
-        return do_with(repair_hash_set(), [this] (repair_hash_set& hashes) {
-            return do_for_each(_working_row_buf, [&hashes] (repair_row& r) mutable {
-                hashes.emplace(r.hash());
-            }).then([&hashes] () mutable {
-                return std::move(hashes);
-            });
-        });
+        auto hashes = repair_hash_set();
+        for (auto& r : _working_row_buf) {
+            hashes.emplace(r.hash());
+            co_await coroutine::maybe_yield();
+        }
+        co_return std::move(hashes);
     }
 
     std::pair<std::optional<repair_sync_boundary>, bool>
