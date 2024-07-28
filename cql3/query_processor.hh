@@ -21,6 +21,7 @@
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/cql_statement.hh"
+#include "cql3/dialect.hh"
 #include "exceptions/exceptions.hh"
 #include "service/migration_listener.hh"
 #include "timestamp.hh"
@@ -137,14 +138,20 @@ public:
 
     static prepared_cache_key_type compute_id(
             std::string_view query_string,
-            std::string_view keyspace);
+            std::string_view keyspace,
+            dialect d);
 
+<<<<<<< HEAD
     static prepared_cache_key_type compute_thrift_id(
             const std::string_view& query_string,
             const sstring& keyspace);
 
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
+=======
+    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query, dialect d);
+    static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries, dialect d);
+>>>>>>> d69bf4f010 (cql3: introduce dialect infrastructure)
 
     query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, wasm::manager& wasm);
 
@@ -253,10 +260,12 @@ public:
     execute_direct(
             const std::string_view& query_string,
             service::query_state& query_state,
+            dialect d,
             query_options& options) {
         return execute_direct_without_checking_exception_message(
                 query_string,
                 query_state,
+                d,
                 options)
                 .then(cql_transport::messages::propagate_exception_as_future<::shared_ptr<cql_transport::messages::result_message>>);
     }
@@ -267,6 +276,7 @@ public:
     execute_direct_without_checking_exception_message(
             const std::string_view& query_string,
             service::query_state& query_state,
+            dialect d,
             query_options& options);
 
     future<::shared_ptr<cql_transport::messages::result_message>>
@@ -401,10 +411,14 @@ public:
 
 
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-    prepare(sstring query_string, service::query_state& query_state);
+    prepare(sstring query_string, service::query_state& query_state, dialect d);
 
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+<<<<<<< HEAD
     prepare(sstring query_string, const service::client_state& client_state, bool for_thrift);
+=======
+    prepare(sstring query_string, const service::client_state& client_state, dialect d);
+>>>>>>> d69bf4f010 (cql3: introduce dialect infrastructure)
 
     future<> stop();
 
@@ -451,7 +465,8 @@ public:
 
     std::unique_ptr<statements::prepared_statement> get_statement(
             const std::string_view& query,
-            const service::client_state& client_state);
+            const service::client_state& client_state,
+            dialect d);
 
     friend class migration_subscriber;
 
@@ -535,14 +550,15 @@ private:
     prepare_one(
             sstring query_string,
             const service::client_state& client_state,
+            dialect d,
             PreparedKeyGenerator&& id_gen,
             IdGetter&& id_getter) {
         return do_with(
                 id_gen(query_string, client_state.get_raw_keyspace()),
                 std::move(query_string),
-                [this, &client_state, &id_getter](const prepared_cache_key_type& key, const sstring& query_string) {
-            return _prepared_cache.get(key, [this, &query_string, &client_state] {
-                auto prepared = get_statement(query_string, client_state);
+                [this, &client_state, &id_getter, d](const prepared_cache_key_type& key, const sstring& query_string) {
+            return _prepared_cache.get(key, [this, &query_string, &client_state, d] {
+                auto prepared = get_statement(query_string, client_state, d);
                 auto bound_terms = prepared->statement->get_bound_terms();
                 if (bound_terms > std::numeric_limits<uint16_t>::max()) {
                     throw exceptions::invalid_request_exception(
