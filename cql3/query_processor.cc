@@ -566,10 +566,10 @@ query_processor::execute_maybe_with_guard(service::query_state& query_state, ::s
 }
 
 future<::shared_ptr<result_message>>
-query_processor::execute_direct_without_checking_exception_message(const sstring_view& query_string, service::query_state& query_state, query_options& options) {
+query_processor::execute_direct_without_checking_exception_message(const sstring_view& query_string, service::query_state& query_state, dialect d, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
-    auto p = get_statement(query_string, query_state.get_client_state());
+    auto p = get_statement(query_string, query_state.get_client_state(), d);
     auto statement = p->statement;
     const auto warnings = std::move(p->warnings);
     if (statement->get_bound_terms() != options.get_values_count()) {
@@ -653,18 +653,21 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 }
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-query_processor::prepare(sstring query_string, service::query_state& query_state) {
+query_processor::prepare(sstring query_string, service::query_state& query_state, cql3::dialect d) {
     auto& client_state = query_state.get_client_state();
-    return prepare(std::move(query_string), client_state);
+    return prepare(std::move(query_string), client_state, d);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-query_processor::prepare(sstring query_string, const service::client_state& client_state) {
+query_processor::prepare(sstring query_string, const service::client_state& client_state, cql3::dialect d) {
     using namespace cql_transport::messages;
     return prepare_one<result_message::prepared::cql>(
             std::move(query_string),
             client_state,
-            compute_id,
+            d,
+            [d] (std::string_view query_string, std::string_view keyspace) {
+                return compute_id(query_string, keyspace, d);
+            },
             prepared_cache_key_type::cql_id);
 }
 
@@ -676,13 +679,14 @@ static std::string hash_target(std::string_view query_string, std::string_view k
 
 prepared_cache_key_type query_processor::compute_id(
         std::string_view query_string,
-        std::string_view keyspace) {
-    return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace)));
+        std::string_view keyspace,
+        dialect d) {
+    return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace)), d);
 }
 
 std::unique_ptr<prepared_statement>
-query_processor::get_statement(const sstring_view& query, const service::client_state& client_state) {
-    std::unique_ptr<raw::parsed_statement> statement = parse_statement(query);
+query_processor::get_statement(const sstring_view& query, const service::client_state& client_state, dialect d) {
+    std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
 
     // Set keyspace for statement that require login
     auto cf_stmt = dynamic_cast<raw::cf_statement*>(statement.get());
@@ -696,7 +700,7 @@ query_processor::get_statement(const sstring_view& query, const service::client_
 }
 
 std::unique_ptr<raw::parsed_statement>
-query_processor::parse_statement(const sstring_view& query) {
+query_processor::parse_statement(const sstring_view& query, dialect d) {
     try {
         {
             const char* error_injection_key = "query_processor-parse_statement-test_failure";
@@ -706,7 +710,7 @@ query_processor::parse_statement(const sstring_view& query) {
                 }
             });
         }
-        auto statement = util::do_with_parser(query,  std::mem_fn(&cql3_parser::CqlParser::query));
+        auto statement = util::do_with_parser(query, d, std::mem_fn(&cql3_parser::CqlParser::query));
         if (!statement) {
             throw exceptions::syntax_exception("Parsing failed");
         }
@@ -722,9 +726,9 @@ query_processor::parse_statement(const sstring_view& query) {
 }
 
 std::vector<std::unique_ptr<raw::parsed_statement>>
-query_processor::parse_statements(std::string_view queries) {
+query_processor::parse_statements(std::string_view queries, dialect d) {
     try {
-        auto statements = util::do_with_parser(queries, std::mem_fn(&cql3_parser::CqlParser::queries));
+        auto statements = util::do_with_parser(queries, d, std::mem_fn(&cql3_parser::CqlParser::queries));
         if (statements.empty()) {
             throw exceptions::syntax_exception("Parsing failed");
         }
@@ -797,7 +801,7 @@ query_options query_processor::make_internal_options(
 statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
-        auto np = parse_statement(query_string)->prepare(_db, _cql_stats);
+        auto np = parse_statement(query_string, internal_dialect())->prepare(_db, _cql_stats);
         np->statement->raw_cql_statement = query_string;
         p = std::move(np); // inserts it into map
     }
@@ -903,7 +907,8 @@ query_processor::execute_internal(
         auto p = prepare_internal(query_string);
         return execute_with_params(std::move(p), cl, query_state, values);
     } else {
-        auto p = parse_statement(query_string)->prepare(_db, _cql_stats);
+        // For internal queries, we want the default dialect, not the user provided one
+        auto p = parse_statement(query_string, dialect{})->prepare(_db, _cql_stats);
         p->statement->raw_cql_statement = query_string;
         auto checked_weak_ptr = p->checked_weak_from_this();
         return execute_with_params(std::move(checked_weak_ptr), cl, query_state, values).finally([p = std::move(p)] {});

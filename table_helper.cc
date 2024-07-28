@@ -21,7 +21,7 @@ static logging::logger tlogger("table_helper");
 static schema_ptr parse_new_cf_statement(cql3::query_processor& qp, const sstring& create_cql) {
     auto db = qp.db();
 
-    auto parsed = cql3::query_processor::parse_statement(create_cql);
+    auto parsed = cql3::query_processor::parse_statement(create_cql, cql3::dialect{});
 
     cql3::statements::raw::cf_statement* parsed_cf_stmt = static_cast<cql3::statements::raw::cf_statement*>(parsed.get());
     (void)parsed_cf_stmt->keyspace(); // This will assert if cql statement did not contain keyspace
@@ -76,7 +76,7 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
         return now();
     }
 
-    return qp.prepare(_insert_cql, qs.get_client_state())
+    return qp.prepare(_insert_cql, qs.get_client_state(), cql3::internal_dialect())
             .then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) noexcept {
         _prepared_stmt = std::move(msg_ptr->get_prepared());
         shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
@@ -91,7 +91,7 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
             // we have already prepared the fallback statement
             return now();
         }
-        return qp.prepare(_insert_cql_fallback.value(), qs.get_client_state())
+        return qp.prepare(_insert_cql_fallback.value(), qs.get_client_state(), cql3::internal_dialect())
                 .then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) noexcept {
             _prepared_stmt = std::move(msg_ptr->get_prepared());
             shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
