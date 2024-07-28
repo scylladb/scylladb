@@ -591,10 +591,8 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
             tracing::trace(tr_state_, "Sending mapreduce_request to {}", addr);
             flogger.debug("dispatching mapreduce_request={} to address={}", req_with_modified_pr, addr);
 
-            return dispatcher_.dispatch_to_node(addr, std::move(req_with_modified_pr)).then(
-                [&req, addr = std::move(addr), &result_, tr_state_ = std::move(tr_state_)] (
-                    query::mapreduce_result partial_result
-                ) mutable {
+            query::mapreduce_result partial_result = co_await dispatcher_.dispatch_to_node(addr, std::move(req_with_modified_pr));
+            {
                     auto partial_printer = seastar::value_of([&req, &partial_result] {
                         return query::mapreduce_result::printer {
                             .functions = get_functions(req),
@@ -604,12 +602,13 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
                     tracing::trace(tr_state_, "Received mapreduce_result={} from {}", partial_printer, addr);
                     flogger.debug("received mapreduce_result={} from {}", partial_printer, addr);
 
-                    return do_with(mapreduce_aggregates(req), [&result_, partial_result = std::move(partial_result)] (mapreduce_aggregates& aggrs) mutable {
-                        return aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
+                    auto aggrs = mapreduce_aggregates(req);
+                    {
+                        co_return co_await aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
                             aggrs.merge(result_, std::move(partial_result));
                         });
-                    });
-            });
+                    }
+            }
         });
 
         mapreduce_aggregates aggrs(req);
