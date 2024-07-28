@@ -472,3 +472,63 @@ def test_allow_filtering_compound_clustering_key_multicolumn_syntax(cql, table3)
     check_af_mandatory(cql, table3, 'c2=10', lambda row: row.c2==10)
     # Reproduces #13250:
     check_af_mandatory(cql, table3, '(c2)=(10)', lambda row: row.c2==10)
+
+# Intersecting two indexes requires ALLOW FILTERING, because no matter how
+# efficient we implement index intersection (and Scylla doesn't...), there
+# is always a worst case like the following:
+#   * Imagine we have a million rows, we set x=1 on the even rows, y=1 on odd.
+#   * We create a secondary index on x and y.
+#   * We select WHERE x=1 AND y=1.
+# This query needs to process at least half a million rows before returning
+# no matches. This is ALLOW FILTERING par excellence.
+def test_allow_filtering_index_intersection(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, x int, y int, primary key(p)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(x)')
+        cql.execute(f'CREATE INDEX ON {table}(y)')
+        cql.execute(f'INSERT INTO {table}(p, x, y) VALUES (0, 0, 0)')
+        cql.execute(f'INSERT INTO {table}(p, x, y) VALUES (1, 0, 1)')
+        cql.execute(f'INSERT INTO {table}(p, x, y) VALUES (2, 1, 0)')
+        cql.execute(f'INSERT INTO {table}(p, x, y) VALUES (3, 1, 1)')
+        everything = list(cql.execute(f"SELECT * FROM {table}"))
+        wait_for_index(cql, table, 'x', everything)
+        wait_for_index(cql, table, 'y', everything)
+        # If we search on just one index, ALLOW FILTERING is not needed:
+        check_af_optional(cql, (table, everything),
+            "x = 1",
+            lambda r : r.x == 1)
+        check_af_optional(cql, (table, everything),
+            "y = 1",
+            lambda r : r.y == 1)
+        # But intersecting two indexes, ALLOW FILTERING is required:
+        check_af_mandatory(cql, (table, everything),
+            "x = 1 AND y = 1",
+            lambda r : r.x == 1 and r.y == 1)
+
+# Exactly the same test as the above, but using the "SAI" indexer, which
+# reproduces a regression in Cassandra 5's SAI compared to their classic
+# index (tested in the above test) - reported as CASSANDRA-19795.
+# Since Scylla doesn't support SAI, we skip the test on Scylla (and also
+# on older Cassandra).
+def test_allow_filtering_index_intersection_sai(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int, x int, y int, primary key(p)') as table:
+        try:
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(x) USING 'SAI'")
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(y) USING 'SAI'")
+        except (InvalidRequest, ConfigurationException):
+            pytest.skip('SAI test skipped, SAI not supported')
+        cql.execute(f'INSERT INTO {table}(p, x, y) VALUES (0, 0, 0)')
+        cql.execute(f'INSERT INTO {table}(p, x, y) VALUES (1, 0, 1)')
+        cql.execute(f'INSERT INTO {table}(p, x, y) VALUES (2, 1, 0)')
+        cql.execute(f'INSERT INTO {table}(p, x, y) VALUES (3, 1, 1)')
+        everything = list(cql.execute(f"SELECT * FROM {table}"))
+        wait_for_index(cql, table, 'x', everything)
+        wait_for_index(cql, table, 'y', everything)
+        check_af_optional(cql, (table, everything),
+            "x = 1",
+            lambda r : r.x == 1)
+        check_af_optional(cql, (table, everything),
+            "y = 1",
+            lambda r : r.y == 1)
+        check_af_mandatory(cql, (table, everything),
+            "x = 1 AND y = 1",
+            lambda r : r.x == 1 and r.y == 1)
