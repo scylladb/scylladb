@@ -14,7 +14,7 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
-from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, freeze
+from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, freeze, list_tables
 
 # All tests in this file are expected to fail with tablets due to #16317.
 # To ensure that Alternator Streams is still being tested, instead of
@@ -1580,6 +1580,26 @@ def test_stream_arn_unchanging(dynamodb, dynamodbstreams):
         assert 'Streams' in streams
         assert len(streams['Streams']) == 1
         assert streams['Streams'][0]['StreamArn'] == arn
+
+# Enabling a stream shouldn't cause any extra table to appear in ListTables.
+# In issue #19911, enabling streams on a table called xyz caused the name
+# "xyz_scylla_cdc_log" to appear in ListTables. The following test creates
+# a table with a long unique name, and ensures that only one table containing
+# this name as a substring is listed.
+# In test_gsi.py and test_lsi.py we have similar tests for GSI and LSI.
+# Reproduces #19911
+def test_stream_list_tables(dynamodb):
+    with new_test_table(dynamodb,
+        Tags=TAGS,
+        StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, ]
+    ) as table:
+            # Check that the long and unique table name (created by
+            # unique_table_name()) isn't a substring of any table name,
+            # except of course the table itself:
+            for listed_name in list_tables(dynamodb):
+                assert table.name == listed_name or table.name not in listed_name
 
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
