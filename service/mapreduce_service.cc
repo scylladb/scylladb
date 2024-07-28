@@ -286,20 +286,16 @@ public:
                 &_mapreducer._messaging, id, req, _tr_info
             );
         } catch (rpc::closed_error& e) {
-                if (_mapreducer._shutdown) {
-                    // Do not retry if shutting down.
-                    throw;
-                }
-                // In case of mapreduce failure, retry using super-coordinator as a coordinator
-                flogger.warn("retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
-                tracing::trace(_tr_state, "retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
-                // Fall through since we cannot co_await in a catch block.
+            if (_mapreducer._shutdown) {
+                // Do not retry if shutting down.
+                throw;
+            }
+            // In case of mapreduce failure, retry using super-coordinator as a coordinator
+            flogger.warn("retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
+            tracing::trace(_tr_state, "retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
+            // Fall through since we cannot co_await in a catch block.
         }
-        {
-
-
-                co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
-        }
+        co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
     }
 };
 
@@ -579,61 +575,55 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     query::mapreduce_result result;
 
     co_await coroutine::parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
-        [&] (
-            std::pair<const netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_with_addr
-        ) -> future<> {
-            netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
-            query::mapreduce_result& result_ = result;
-            tracing::trace_state_ptr& tr_state_ = tr_state;
-            retrying_dispatcher& dispatcher_ = dispatcher;
+            [&] (std::pair<const netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
+        netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
+        query::mapreduce_result& result_ = result;
+        tracing::trace_state_ptr& tr_state_ = tr_state;
+        retrying_dispatcher& dispatcher_ = dispatcher;
 
-            query::mapreduce_request req_with_modified_pr = req;
-            req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
+        query::mapreduce_request req_with_modified_pr = req;
+        req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
 
-            tracing::trace(tr_state_, "Sending mapreduce_request to {}", addr);
-            flogger.debug("dispatching mapreduce_request={} to address={}", req_with_modified_pr, addr);
+        tracing::trace(tr_state_, "Sending mapreduce_request to {}", addr);
+        flogger.debug("dispatching mapreduce_request={} to address={}", req_with_modified_pr, addr);
 
-            query::mapreduce_result partial_result = co_await dispatcher_.dispatch_to_node(addr, std::move(req_with_modified_pr));
-            {
-                    auto partial_printer = seastar::value_of([&req, &partial_result] {
-                        return query::mapreduce_result::printer {
-                            .functions = get_functions(req),
-                            .res = partial_result
-                        };
-                    });
-                    tracing::trace(tr_state_, "Received mapreduce_result={} from {}", partial_printer, addr);
-                    flogger.debug("received mapreduce_result={} from {}", partial_printer, addr);
-
-                    auto aggrs = mapreduce_aggregates(req);
-                    {
-                        co_return co_await aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
-                            aggrs.merge(result_, std::move(partial_result));
-                        });
-                    }
-            }
+        query::mapreduce_result partial_result = co_await dispatcher_.dispatch_to_node(addr, std::move(req_with_modified_pr));
+        auto partial_printer = seastar::value_of([&req, &partial_result] {
+            return query::mapreduce_result::printer {
+                .functions = get_functions(req),
+                .res = partial_result
+            };
         });
+        tracing::trace(tr_state_, "Received mapreduce_result={} from {}", partial_printer, addr);
+        flogger.debug("received mapreduce_result={} from {}", partial_printer, addr);
 
-        mapreduce_aggregates aggrs(req);
-        const bool requires_thread = aggrs.requires_thread();
+        auto aggrs = mapreduce_aggregates(req);
+        co_return co_await aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
+            aggrs.merge(result_, std::move(partial_result));
+        });
+    });
 
-        auto merge_result = [&result, &req, &tr_state, aggrs = std::move(aggrs)] () mutable {
-            auto printer = seastar::value_of([&req, &result] {
-                return query::mapreduce_result::printer {
-                    .functions = get_functions(req),
-                    .res = result
-                };
-            });
-            tracing::trace(tr_state, "Merged result is {}", printer);
-            flogger.debug("merged result is {}", printer);
+    mapreduce_aggregates aggrs(req);
+    const bool requires_thread = aggrs.requires_thread();
 
-            aggrs.finalize(result);
-            return result;
-        };
-        if (requires_thread) {
-            co_return co_await seastar::async(std::move(merge_result));
-        } else {
-            co_return merge_result();
-        }
+    auto merge_result = [&result, &req, &tr_state, aggrs = std::move(aggrs)] () mutable {
+        auto printer = seastar::value_of([&req, &result] {
+            return query::mapreduce_result::printer {
+                .functions = get_functions(req),
+                .res = result
+            };
+        });
+        tracing::trace(tr_state, "Merged result is {}", printer);
+        flogger.debug("merged result is {}", printer);
+
+        aggrs.finalize(result);
+        return result;
+    };
+    if (requires_thread) {
+        co_return co_await seastar::async(std::move(merge_result));
+    } else {
+        co_return merge_result();
+    }
 }
 
 void mapreduce_service::register_metrics() {
