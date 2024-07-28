@@ -44,7 +44,6 @@ private:
     cache_key_type _key;
 
 public:
-    prepared_cache_key_type() = default;
     explicit prepared_cache_key_type(cql_prepared_id_type cql_id) : _key(std::move(cql_id), std::numeric_limits<int64_t>::max()) {}
     explicit prepared_cache_key_type(thrift_prepared_id_type thrift_id) : _key(cql_prepared_id_type(), thrift_id) {}
 
