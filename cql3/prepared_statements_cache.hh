@@ -14,6 +14,7 @@
 #include "utils/hash.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/dialect.hh"
 
 namespace cql3 {
 
@@ -38,14 +39,20 @@ typedef int32_t thrift_prepared_id_type;
 /// and for Thrift - {CQL_PREP_ID_TYPE(0), THRIFT_PREP_ID}. This way CQL and Thrift keys' values will never collide.
 class prepared_cache_key_type {
 public:
-    using cache_key_type = std::pair<cql_prepared_id_type, int64_t>;
+    // derive from cql_prepared_id_type so we can customize the formatter of
+    // cache_key_type
+    struct cache_key_type : public std::pair<cql_prepared_id_type, int64_t> {
+        cache_key_type(std::pair<cql_prepared_id_type, int64_t>&& id, cql3::dialect d) : pair(std::move(id)), dialect(d) {}
+        cql3::dialect dialect; // Not part of hash, but we don't expect collisions because of that
+        bool operator==(const cache_key_type& other) const = default;
+    };
 
 private:
     cache_key_type _key;
 
 public:
-    explicit prepared_cache_key_type(cql_prepared_id_type cql_id) : _key(std::move(cql_id), std::numeric_limits<int64_t>::max()) {}
-    explicit prepared_cache_key_type(thrift_prepared_id_type thrift_id) : _key(cql_prepared_id_type(), thrift_id) {}
+    explicit prepared_cache_key_type(cql_prepared_id_type cql_id, dialect d) : _key({std::move(cql_id), std::numeric_limits<int64_t>::max()}, d) {}
+    explicit prepared_cache_key_type(thrift_prepared_id_type thrift_id, dialect d) : _key({cql_prepared_id_type(), thrift_id}, d) {}
 
     cache_key_type& key() { return _key; }
     const cache_key_type& key() const { return _key; }
@@ -172,7 +179,7 @@ struct hash<cql3::prepared_cache_key_type> final {
 template <> struct fmt::formatter<cql3::prepared_cache_key_type::cache_key_type> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const cql3::prepared_cache_key_type::cache_key_type& p, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{{cql_id: {}, thrift_id: {}}}", p.first, p.second);
+        return fmt::format_to(ctx.out(), "{{cql_id: {}, thrift_id: {}, dialect: {}}}", p.first, p.second, p.dialect);
     }
 };
 
