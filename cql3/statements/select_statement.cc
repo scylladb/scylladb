@@ -2581,7 +2581,9 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
     if (!where_clause.empty()) {
         out << " WHERE " << where_clause << " ALLOW FILTERING";
     }
-    return do_with_parser(out.str(), std::mem_fn(&cql3_parser::CqlParser::selectStatement));
+    // In general it's not a good idea to use the default dialect, but here the database is talking to
+    // itself, so we can hope the dialects are mutually compatible here.
+    return do_with_parser(out.str(), dialect{}, std::mem_fn(&cql3_parser::CqlParser::selectStatement));
 }
 
 }
