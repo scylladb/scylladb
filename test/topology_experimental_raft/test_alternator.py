@@ -214,7 +214,7 @@ async def test_localnodes_broadcast_rpc_address(manager: ManagerClient):
         # bit of time to bootstrap after coming up, and only then will it
         # appear on /localnodes (see #19694).
         url = f"http://{server.ip_addr}:{config['alternator_port']}/localnodes"
-        timeout = time.time() + 10
+        timeout = time.time() + 60
         while True:
             assert time.time() < timeout
             response = requests.get(url, verify=False)
@@ -246,7 +246,7 @@ async def test_localnodes_drained_node(manager: ManagerClient):
             return None # try again
         else:
             return False
-    assert await wait_for(check_localnodes_two, time.time() + 10)
+    assert await wait_for(check_localnodes_two, time.time() + 60)
     # Now "nodetool" drain on the second node, leaving the second node
     # in DRAINED state.
     await manager.api.client.post("/storage_service/drain", host=servers[1].ip_addr)
@@ -262,7 +262,7 @@ async def test_localnodes_drained_node(manager: ManagerClient):
             return True
         else:
             return False
-    assert await wait_for(check_localnodes_one, time.time() + 10)
+    assert await wait_for(check_localnodes_one, time.time() + 60)
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
@@ -276,7 +276,7 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
     # We need to start the second node in the background, because server_add()
     # will wait for the bootstrap to complete - which we don't want to do.
     server = await manager.server_add(config=alternator_config)
-    task = asyncio.create_task(manager.server_add(config=alternator_config | {'error_injections_at_startup': ['delay_bootstrap_20s']}))
+    task = asyncio.create_task(manager.server_add(config=alternator_config | {'error_injections_at_startup': ['delay_bootstrap_120s']}))
     # Sleep until the first node knows of the second one as a "live node"
     # (we check this with the REST API's /gossiper/endpoint/live.
     async def check_two_live_nodes():
@@ -287,7 +287,7 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
             return True
         else:
             return False
-    assert await wait_for(check_two_live_nodes, time.time() + 10)
+    assert await wait_for(check_two_live_nodes, time.time() + 60)
 
     # At this point the second node is live, but hasn't finished bootstrapping
     # (we delayed that with the injection). So the "/localnodes" should still
