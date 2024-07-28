@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <exception>
+
 #include <boost/intrusive/unordered_set.hpp>
 
 #include "utils/small_vector.hh"
@@ -15,6 +17,9 @@
 #include "utils/xx_hasher.hh"
 
 #include "db/timeout_clock.hh"
+#include "log.hh"
+
+extern logging::logger cell_locker_log;
 
 class cells_range {
     using ids_vector_type = utils::small_vector<column_id, 5>;
@@ -229,14 +234,24 @@ private:
         static constexpr size_t compute_rehash_at_size(size_t bucket_count) {
             return bucket_count * max_load_factor::num / max_load_factor::den;
         }
+
+        // Try to rehash the set, if needed.
+        // The function may fail silently on bad_alloc (logging a warning).
+        // Rehashing would be retried at a later time on failure.
         void maybe_rehash() {
             if (_cell_count >= _rehash_at_size) {
                 auto new_bucket_count = std::min(_cells.bucket_count() * 2, _cells.bucket_count() + 1024);
+                try {
                 auto buckets = std::make_unique<cells_type::bucket_type[]>(new_bucket_count);
 
                 _cells.rehash(cells_type::bucket_traits(buckets.get(), new_bucket_count));
                 _buckets = std::move(buckets);
-
+                } catch (const std::bad_alloc&) {
+                    cell_locker_log.warn("Could not rehash cell_locker partition cells set: bucket_count={} new_bucket_count={}: {}", _cells.bucket_count(), new_bucket_count, std::current_exception());
+                }
+                // Attempt rehash at the new size in both success and failure paths.
+                // On failure, we don't want to retry too soon since it may take some time
+                // for memory to free up.
                 _rehash_at_size = compute_rehash_at_size(new_bucket_count);
             }
         }
@@ -320,14 +335,24 @@ private:
     static constexpr size_t compute_rehash_at_size(size_t bucket_count) {
         return bucket_count * max_load_factor::num / max_load_factor::den;
     }
+
+    // Try to rehash the set, if needed.
+    // The function may fail silently on bad_alloc (logging a warning).
+    // Rehashing would be retried at a later time on failure.
     void maybe_rehash() {
         if (_partition_count >= _rehash_at_size) {
             auto new_bucket_count = std::min(_partitions.bucket_count() * 2, _partitions.bucket_count() + 64 * 1024);
+            try {
             auto buckets = std::make_unique<partitions_type::bucket_type[]>(new_bucket_count);
 
             _partitions.rehash(partitions_type::bucket_traits(buckets.get(), new_bucket_count));
             _buckets = std::move(buckets);
-
+            } catch (const std::bad_alloc&) {
+                cell_locker_log.warn("Could not rehash cell_locker partitions set: bucket_count={} new_bucket_count={}: {}", _partitions.bucket_count(), new_bucket_count, std::current_exception());
+            }
+            // Attempt rehash at the new size in both success and failure paths.
+            // On failure, we don't want to retry too soon since it may take some time
+            // for memory to free up.
             _rehash_at_size = compute_rehash_at_size(new_bucket_count);
         }
     }
