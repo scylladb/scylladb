@@ -1782,7 +1782,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 
     set_mode(mode::JOINING);
 
-    co_await utils::get_local_injector().inject("delay_bootstrap_20s", std::chrono::seconds(20));
+    co_await utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120));
 
     if (raft_server) { // Raft is enabled. Check if we need to bootstrap ourself using raft
         rtlogger.info("topology changes are using raft");
@@ -3822,7 +3822,7 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
         // Step 3: Prepare to sync data
         ctl.prepare(node_ops_cmd::bootstrap_prepare).get();
 
-        utils::get_local_injector().inject("delay_bootstrap_20s", std::chrono::seconds(20)).get();
+        utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120)).get();
 
         // Step 5: Sync data for bootstrap
         _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), bootstrap_tokens).get();
@@ -5501,7 +5501,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                             if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
                                 co_await retrier(_bootstrap_result, coroutine::lambda([&] () -> future<> {
                                     if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
-                                        co_await utils::get_local_injector().inject("delay_bootstrap_20s", std::chrono::seconds(20));
+                                        co_await utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120));
 
                                         co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens);
                                     } else {
