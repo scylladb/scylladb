@@ -43,7 +43,6 @@ private:
     cache_key_type _key;
 
 public:
-    prepared_cache_key_type() = default;
     explicit prepared_cache_key_type(cql_prepared_id_type cql_id) : _key(std::move(cql_id)) {}
 
     cache_key_type& key() { return _key; }
