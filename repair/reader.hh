@@ -7,6 +7,11 @@
 #include "utils/phased_barrier.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include <fmt/core.h>
+#include "sstables/sstables.hh"
+#include "sstables/sstable_set.hh"
+#include <vector>
+#include <seastar/core/sharded.hh>
+#include "./utils/chunked_vector.hh"
 
 class repair_reader {
 public:
@@ -21,6 +26,7 @@ private:
     schema_ptr _schema;
     reader_permit _permit;
     dht::partition_range _range;
+    dht::token_range _token_range;
     // Used to find the range that repair master will work on
     dht::selective_token_range_sharder _sharder;
     // Seed for the repair row hashing
@@ -29,21 +35,34 @@ private:
     // Only needed for local readers, the multishard reader takes care
     // of pinning tables on used shards.
     std::optional<utils::phased_barrier::operation> _local_read_op;
+
+    read_strategy _read_strategy;
+    const dht::static_sharder& _remote_sharder;
+    unsigned _remote_shard;
+    std::vector<foreign_ptr<lw_shared_ptr<utils::chunked_vector<sstables::sstable_files_snapshot>>>> _sstable_snapshots;
+    lw_shared_ptr<sstables::sstable_set> _sstable_set;
+    gc_clock::time_point _compaction_time;
+    seastar::sharded<replica::database>& _db;
+
     std::optional<evictable_reader_handle_v2> _reader_handle;
     // Fragment stream of either local or multishard reader for the range
-    mutation_fragment_v1_stream _reader;
+    std::optional<mutation_fragment_v1_stream> _reader;
     // Current partition read from disk
     lw_shared_ptr<const decorated_key_with_hash> _current_dk;
     uint64_t _reads_issued = 0;
     uint64_t _reads_finished = 0;
 
-    mutation_reader make_reader(
+
+    future<mutation_reader> make_reader(
         seastar::sharded<replica::database>& db,
         replica::column_family& cf,
         read_strategy strategy,
         const dht::sharder& remote_sharder,
         unsigned remote_shard,
         gc_clock::time_point compaction_time);
+
+public:
+    future<> init();
 
 public:
     repair_reader(

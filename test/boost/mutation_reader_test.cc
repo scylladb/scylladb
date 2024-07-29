@@ -2438,12 +2438,96 @@ SEASTAR_THREAD_TEST_CASE(test_perf_multishard_streaming_reader) {
             utils::clear_gently(tested_muts).get();
 
         }
+        testlog.info("Before flush memtable");
+        env.db().invoke_on_all([] (auto& db) -> future<> {
+            auto s = db.find_column_family("multishard_streaming_reader_ks", "test").schema();
+            auto& t = db.find_column_family(s);
+            return t.flush();
+        }).get();
+        testlog.info("After flush memtable");
         auto t3 = std::chrono::steady_clock::now();
+        {
+            const auto compaction_time = gc_clock::time_point();
+
+            struct sst_and_shard {
+                unsigned shard;
+                sstring filename;
+            };
+
+            std::vector<foreign_ptr<lw_shared_ptr<utils::chunked_vector<sstables::sstable_files_snapshot>>>> ptrs;
+            ptrs.resize(smp::count);
+
+            auto sstable_filenames = env.db().map_reduce0(
+                [token_range, &ptrs] (auto& db) -> future<std::vector<sst_and_shard>> {
+                    std::vector<sst_and_shard> res;
+                    auto s = db.find_column_family("multishard_streaming_reader_ks", "test").schema();
+                    auto& t = db.find_column_family(s);
+                    auto sstables = co_await t.take_storage_snapshot(token_range);
+                    for (auto& sst : sstables) {
+                        testlog.info("Get sst filename={}", sst.sst->get_filename());
+                        res.push_back(sst_and_shard{this_shard_id(), sst.sst->get_filename()});
+                    }
+                    ptrs[this_shard_id()] = make_foreign(make_lw_shared<utils::chunked_vector<sstables::sstable_files_snapshot>>(std::move(sstables)));
+                    co_return res;
+                },
+                std::vector<sst_and_shard>{},
+                [] (std::vector<sst_and_shard> a, std::vector<sst_and_shard> b) { std::move(b.begin(), b.end(), std::back_inserter(a)); return a;
+            }).get();
+
+            auto s = env.local_db().find_column_family("multishard_streaming_reader_ks", "test").schema();
+            auto& t = env.db().local().find_column_family(s);
+            auto erm = t.get_effective_replication_map();
+            auto& sstm = t.get_sstables_manager();
+            auto sstable_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
+
+            size_t nr_local_sstables = 0;
+            size_t nr_remote_sstables = 0;
+            // Load sst from this shard into _sstable_set
+            auto& sstables_on_this_shard = ptrs[this_shard_id()];
+            if (sstables_on_this_shard) {
+                for (auto& sst : *sstables_on_this_shard) {
+                    auto insert = sstable_set->insert(sst.sst);
+                    testlog.debug("Add local sst filename={} insert={}", sst.sst->get_filename(), insert);
+                    ++nr_local_sstables;
+
+                }
+            }
+
+            // Load sstables from other shard into _sstable_set
+            for (auto& _sst_and_shard: sstable_filenames) {
+                if (_sst_and_shard.shard == this_shard_id()) {
+                    continue;
+                }
+                auto& filename = _sst_and_shard.filename;
+                auto data_path = std::filesystem::path(filename);
+                auto desc = sstables::parse_path(data_path, s->ks_name(), s->cf_name());
+                auto sst = sstm.make_sstable(t.schema(), t.dir(), t.get_storage_options(), desc.generation, sstables::sstable_state::normal, desc.version, desc.format);
+                sst->load(erm->get_sharder(*s)).get();
+                auto insert = sstable_set->insert(sst);
+                testlog.info("Add remote sst filename={} insert={}", sst->get_filename(), insert);
+            }
+            testlog.info("Created sstable reader table={}.{} range={} nr_sstables={} nr_local_sstables={} nr_remote_sstables={}",
+                    s->ks_name(), s->cf_name(), token_range, nr_local_sstables + nr_remote_sstables, nr_local_sstables, nr_remote_sstables);
+
+            auto reader = t.make_streaming_reader(s, make_reader_permit(env), partition_range, sstable_set, compaction_time);
+            auto close_reference_reader = deferred_close(reader);
+            std::vector<mutation> muts;
+            while (auto mut_opt = read_mutation_from_mutation_reader(reader).get()) {
+                muts.push_back(std::move(*mut_opt));
+                seastar::thread::maybe_yield();
+            }
+            testlog.info("snapshot_muts={} smp={} sst={}", muts.size(), smp::count, sstable_filenames.size());
+            assert(muts.size() == muts_cnt);
+            utils::clear_gently(muts).get();
+        }
+        auto t4 = std::chrono::steady_clock::now();
 
         auto d1 = std::chrono::duration<float>(t2 - t1);
         auto d2 = std::chrono::duration<float>(t3 - t2);
+        auto d3 = std::chrono::duration<float>(t4 - t3);
 
-        testlog.info("mutations={} reader1={} reader2={} diff={}", partition_count, d1, d2, d2 / d1);
+        testlog.info("smp={} mutations={} local_reader(1)={} multishard_reader(2)={} sst_reader(3)={} diff2/1={} diff3/1={}",
+                smp::count, partition_count, d1, d2, d3, d2 / d1, d3 / d1);
 
         return make_ready_future<>();
     }).get();
