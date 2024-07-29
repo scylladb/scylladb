@@ -359,6 +359,8 @@ class load_balancer {
         // The average shard load on this node.
         load_type avg_load = 0;
 
+        absl::flat_hash_map<table_id, size_t> tablet_count_per_table;
+
         // heap which tracks most-loaded shards using shards_by_load_cmp().
         // Valid during intra-node plan-making for nodes which are in the source node set.
         std::vector<shard_id> shards_by_load;
@@ -1608,6 +1610,7 @@ public:
                 auto& target_info = nodes[dst.host];
                 target_info.shards[dst.shard].tablet_count++;
                 target_info.shards[dst.shard].tablet_count_per_table[source_tablet.table]++;
+                target_info.tablet_count_per_table[source_tablet.table]++;
                 target_info.tablet_count += 1;
                 target_info.update();
             }
@@ -1615,6 +1618,7 @@ public:
             auto& src_shard_info = src_node_info.shards[src.shard];
             src_shard_info.tablet_count -= 1;
             src_shard_info.tablet_count_per_table[source_tablet.table]--;
+            src_node_info.tablet_count_per_table[source_tablet.table]--;
 
             src_node_info.tablet_count -= 1;
             src_node_info.update();
@@ -1833,6 +1837,7 @@ public:
                     }
                     shard_load_info.tablet_count += 1;
                     shard_load_info.tablet_count_per_table[table]++;
+                    node_load_info.tablet_count_per_table[table]++;
                     if (!trinfo) { // migrating tablets are not candidates
                         add_candidate(shard_load_info, global_tablet_id {table, tid});
                     }
