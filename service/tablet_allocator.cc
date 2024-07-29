@@ -557,6 +557,7 @@ class load_balancer {
 
     token_metadata_ptr _tm;
     std::optional<locator::load_sketch> _load_sketch;
+    absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
@@ -1816,9 +1817,11 @@ public:
 
         _load_sketch = locator::load_sketch(_tm);
         co_await _load_sketch->populate_dc(dc);
+        _tablet_count_per_table.clear();
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = tmap_;
+            uint64_t total_load = 0;
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
@@ -1838,6 +1841,7 @@ public:
                     shard_load_info.tablet_count += 1;
                     shard_load_info.tablet_count_per_table[table]++;
                     node_load_info.tablet_count_per_table[table]++;
+                    total_load++;
                     if (!trinfo) { // migrating tablets are not candidates
                         add_candidate(shard_load_info, global_tablet_id {table, tid});
                     }
@@ -1845,6 +1849,7 @@ public:
 
                 return make_ready_future<>();
             });
+            _tablet_count_per_table[table] = total_load;
         }
 
         if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || max_load != min_load))) {
