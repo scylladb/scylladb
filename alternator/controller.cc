@@ -132,10 +132,10 @@ future<> controller::start_server() {
         }
         bool alternator_enforce_authorization = _config.alternator_enforce_authorization();
         _server.invoke_on_all(
-                [this, addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization] (server& server) mutable {
+                [this, addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, _config.alternator_listen_backlog()] (server& server) mutable {
             return server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization,
                     &_memory_limiter.local().get_semaphore(),
-                    _config.max_concurrent_requests_per_shard);
+                    _config.max_concurrent_requests_per_shard, listen_backlogs);
         }).handle_exception([this, addr, alternator_port, alternator_https_port] (std::exception_ptr ep) {
             logger.error("Failed to set up Alternator HTTP server on {} port {}, TLS port {}: {}",
                     addr, alternator_port ? std::to_string(*alternator_port) : "OFF", alternator_https_port ? std::to_string(*alternator_https_port) : "OFF", ep);
