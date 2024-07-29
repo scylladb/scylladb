@@ -542,6 +542,7 @@ protected:
         table_state* t = _compacting_table;
         sstables::compaction_strategy cs = t->get_compaction_strategy();
         sstables::compaction_descriptor descriptor = cs.get_major_compaction_job(*t, _cm.get_candidates(*t));
+        descriptor.gc_check_only_compacting_sstables = _force_purge_tombstones;
         auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(t), descriptor.sstables);
         auto on_replace = compacting.update_on_sstable_replacement();
         setup_new_compaction(descriptor.run_identifier);
