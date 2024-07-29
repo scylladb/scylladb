@@ -46,6 +46,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/tags/utils.hh"
 #include "db/tags/extension.hh"
+#include "dht/sharder.hh"
 #include "gms/inet_address.hh"
 #include "keys.hh"
 #include "locator/network_topology_strategy.hh"
@@ -65,6 +66,8 @@
 #include "query-result-writer.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/evictable.hh"
+#include "readers/multishard.hh"
+#include "readers/filtering.hh"
 #include "delete_ghost_rows_visitor.hh"
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
@@ -2623,7 +2626,69 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
 }
 
 void view_builder::upgrade_to_v2() {
+    if (_view_build_status_on_group0) {
+        return;
+    }
+
     _view_build_status_on_group0 = true;
+
+    if (_init_virtual_table_on_upgrade) {
+        init_virtual_table();
+    }
+}
+
+void view_builder::init_virtual_table() {
+    if (!_view_build_status_on_group0) {
+        // we didn't upgrade to v2 yet. defer the operation
+        _init_virtual_table_on_upgrade = true;
+        return;
+    }
+
+    // We set the old system_distributed.view_build_status table to read virtually
+    // from system.view_build_status_v2 in order to make the transition transparent for
+    // readers of the table and maintain compatibility.
+
+    auto ms_v2 = mutation_source([this] (schema_ptr s,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& ps,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding,
+            mutation_reader::forwarding fwd_mr) {
+
+        // The v1 distributed table and the v2 system local table have different shard mapping.
+        // The v2 table uses the null sharder, everything is on shard zero, while the v1 table
+        // has the normal sharder.
+        // So to simulate a read in v1 table in some shard, we need to read all the rows
+        // belonging to this shard from v2 table in shard zero.
+        // In order to read the table in a different shard we use the multishard reader. It is
+        // set to read from all the shards, but actually it only has rows to read in shard zero.
+        // Then we also need to filter only the keys belonging to this shard according to v1 sharder.
+
+        auto& table_v2 = _db.find_column_family(db::system_keyspace::view_build_status_v2());
+
+        mutation_reader ms_reader = make_multishard_combining_reader_v2(
+                seastar::make_shared<streaming_reader_lifecycle_policy>(_db.container(), table_v2.schema()->id(), gc_clock::now()),
+                table_v2.schema(),
+                table_v2.get_effective_replication_map(),
+                std::move(permit),
+                pr, ps, trace_state, fwd_mr);
+
+        auto& sharder_v1 = s->get_sharder();
+        auto filter_fn = [&sharder_v1, shard_id = this_shard_id()] (const dht::decorated_key& dk) {
+            return sharder_v1.shard_for_reads(dk.token()) == shard_id;
+        };
+
+        return make_filtering_reader(std::move(ms_reader), std::move(filter_fn));
+    });
+
+    auto& table_v1 = _db.find_column_family(db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS);
+    table_v1.set_virtual_reader(std::move(ms_v2));
+
+    // ignore writes to the table
+    table_v1.set_virtual_writer([&] (const frozen_mutation&) -> future<> {
+        return make_ready_future<>();
+    });
 }
 
 // Called in the context of a seastar::thread.

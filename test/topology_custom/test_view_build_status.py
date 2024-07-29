@@ -71,6 +71,83 @@ async def test_view_build_status_v2_table(manager: ManagerClient):
 
     await asyncio.gather(*(wait_for_view_v2(cql, 'ks', 'vt', node_count, host=h) for h in hosts))
 
+# The table system_distributed.view_build_status is set to be a virtual table reading
+# from system.view_build_status_v2, so verify that reading from each of them provides
+# the same output.
+@pytest.mark.asyncio
+async def test_view_build_status_virtual_table(manager: ManagerClient):
+    node_count = 3
+    servers = await manager.servers_add(node_count)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async def select_v1():
+        r = await cql.run_async("SELECT * FROM system_distributed.view_build_status")
+        return r
+
+    async def select_v2():
+        r = await cql.run_async("SELECT * FROM system.view_build_status_v2")
+        return r
+
+    async def assert_v1_eq_v2():
+        r1, r2 = await select_v1(), await select_v2()
+        assert r1 == r2
+
+    async def wait_for_view_on_host(cql, name, node_count, host, timeout: int = 120):
+        async def view_is_built():
+            done = await cql.run_async(f"SELECT COUNT(*) FROM system.view_build_status_v2 WHERE status = 'SUCCESS' AND view_name = '{name}' ALLOW FILTERING", host=host)
+            return done[0][0] == node_count or None
+        deadline = time.time() + timeout
+        await wait_for(view_is_built, deadline)
+
+    ks_name = await create_keyspace(cql)
+    await create_table(cql)
+
+    await assert_v1_eq_v2()
+
+    await create_mv(cql, 'vt1')
+    await asyncio.gather(*(wait_for_view_on_host(cql, 'vt1', node_count, h) for h in hosts))
+    await assert_v1_eq_v2()
+    assert len(await select_v2()) == node_count
+
+    await create_mv(cql, 'vt2')
+    await asyncio.gather(*(wait_for_view_on_host(cql, 'vt2', node_count, h) for h in hosts))
+    await assert_v1_eq_v2()
+    assert len(await select_v2()) == node_count * 2
+
+    # verify SELECT ... WHERE works
+    r1 = await cql.run_async("SELECT * FROM system_distributed.view_build_status WHERE keyspace_name='{ks_name}' AND view_name='vt1'")
+    r2 = await cql.run_async("SELECT * FROM system.view_build_status_v2 WHERE keyspace_name='{ks_name}' AND view_name='vt1'")
+    assert r1 == r2
+
+    # verify SELECT COUNT(*) works
+    r1 = await cql.run_async("SELECT COUNT(*) FROM system_distributed.view_build_status")
+    r2 = await cql.run_async("SELECT COUNT(*) FROM system.view_build_status_v2")
+    assert r1 == r2
+
+    # verify paging
+    r1 = await cql.run_async(SimpleStatement(f"SELECT * FROM system_distributed.view_build_status", fetch_size=1))
+    r2 = await cql.run_async(SimpleStatement(f"SELECT * FROM system.view_build_status_v2", fetch_size=1))
+    assert r1 == r2
+
+    # select with range
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+    r1 = await cql.run_async(f"SELECT * FROM system_distributed.view_build_status WHERE keyspace_name='{ks_name}' AND view_name='vt1' AND host_id >= {s0_host_id}")
+    r2 = await cql.run_async(f"SELECT * FROM system.view_build_status_v2 WHERE keyspace_name='{ks_name}' AND view_name='vt1' AND host_id >= {s0_host_id}")
+    assert r1 == r2
+
+    # select with allow filtering
+    r1 = await cql.run_async(f"SELECT * FROM system_distributed.view_build_status WHERE status='SUCCESS' ALLOW FILTERING")
+    r2 = await cql.run_async(f"SELECT * FROM system.view_build_status_v2 WHERE status='SUCCESS' ALLOW FILTERING")
+    assert r1 == r2
+
+    await cql.run_async(f"DROP MATERIALIZED VIEW {ks_name}.vt1")
+
+    async def view_rows_removed(host):
+        r = await cql.run_async("SELECT * FROM system.view_build_status_v2", host=host)
+        return (len(r) == node_count) or None
+    await asyncio.gather(*(wait_for(lambda: view_rows_removed(h), time.time() + 60) for h in hosts))
+    await assert_v1_eq_v2()
+
 # Cluster with 3 nodes.
 # Create materialized views. Start new server and it should get a snapshot on bootstrap.
 # Stop 3 `old` servers and query the new server to validate if it has the same view build status.

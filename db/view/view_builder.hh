@@ -173,6 +173,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     stats _stats;
     metrics::metric_groups _metrics;
     bool _view_build_status_on_group0 = false;
+    bool _init_virtual_table_on_upgrade = false;
 
     struct view_builder_init_state {
         std::vector<future<>> bookkeeping_ops;
@@ -217,6 +218,7 @@ public:
     static future<> migrate_to_v2(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard);
 
     void upgrade_to_v2();
+    void init_virtual_table();
 
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override;
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override;
