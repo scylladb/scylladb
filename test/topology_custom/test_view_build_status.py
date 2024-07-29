@@ -71,6 +71,62 @@ async def test_view_build_status_v2_table(manager: ManagerClient):
 
     await asyncio.gather(*(wait_for(lambda: view_is_built_v2(cql, 'ks', 'vt', node_count, host=h), time.time() + 60) for h in hosts))
 
+# The table system_distributed.view_build_status is set to be a virtual table reading
+# from system.view_build_status_v2, so verify that reading from each of them provides
+# the same output.
+@pytest.mark.asyncio
+async def test_view_build_status_virtual_table(manager: ManagerClient):
+    node_count = 3
+    servers = await manager.servers_add(node_count)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async def select_v1():
+        r = await cql.run_async("SELECT * FROM system_distributed.view_build_status")
+        return r
+
+    async def select_v2():
+        r = await cql.run_async("SELECT * FROM system.view_build_status_v2")
+        return r
+
+    async def assert_v1_eq_v2():
+        r1, r2 = await select_v1(), await select_v2()
+        assert r1 == r2
+
+    ks_name = await create_keyspace(cql)
+    await create_table(cql)
+
+    await assert_v1_eq_v2()
+
+    await create_mv(cql, "vt1")
+    await wait_for_view(cql, "vt1", node_count)
+    await assert_v1_eq_v2()
+    assert len(await select_v2()) == node_count
+
+    await create_mv(cql, "vt2")
+    await wait_for_view(cql, "vt2", node_count)
+    await assert_v1_eq_v2()
+    assert len(await select_v2()) == node_count * 2
+
+    # verify SELECT ... WHERE works
+    r1 = await cql.run_async("SELECT * FROM system_distributed.view_build_status WHERE keyspace_name='{ks_name}' AND view_name='vt1'")
+    r2 = await cql.run_async("SELECT * FROM system.view_build_status_v2 WHERE keyspace_name='{ks_name}' AND view_name='vt1'")
+    assert r1 == r2
+
+    # verify SELECT COUNT(*) works
+    r1 = await cql.run_async("SELECT COUNT(*) FROM system_distributed.view_build_status")
+    r2 = await cql.run_async("SELECT COUNT(*) FROM system.view_build_status_v2")
+    assert r1 == r2
+
+    await cql.run_async(f"DROP MATERIALIZED VIEW {ks_name}.vt1")
+
+    async def view_rows_removed():
+        r = await select_v2()
+        return (len(r) == node_count) or None
+    await wait_for(view_rows_removed, time.time() + 60)
+
+    await assert_v1_eq_v2()
+    assert len(await select_v2()) == node_count
+
 # Cluster with 3 nodes.
 # Create materialized views. Start new server and it should get a snapshot on bootstrap.
 # Stop 3 `old` servers and query the new server to validate if it has the same view build status.

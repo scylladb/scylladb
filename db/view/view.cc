@@ -46,6 +46,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/tags/utils.hh"
 #include "db/tags/extension.hh"
+#include "dht/sharder.hh"
 #include "gms/inet_address.hh"
 #include "keys.hh"
 #include "locator/network_topology_strategy.hh"
@@ -65,6 +66,8 @@
 #include "query-result-writer.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/evictable.hh"
+#include "readers/multishard.hh"
+#include "readers/filtering.hh"
 #include "delete_ghost_rows_visitor.hh"
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
@@ -2639,7 +2642,137 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
 }
 
 void view_builder::upgrade_to_v2() {
+    if (_view_build_status_on_group0) {
+        return;
+    }
+
     _view_build_status_on_group0 = true;
+
+    if (_init_virtual_table_on_upgrade) {
+        init_virtual_table();
+    }
+}
+
+// policy for the multishard reader below which is used to read system.view_build_status_v2 table
+class view_build_status_policy
+    : public reader_lifecycle_policy_v2
+    , public enable_shared_from_this<view_build_status_policy> {
+
+    template <typename T>
+    using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
+
+    struct reader_context {
+        foreign_ptr<lw_shared_ptr<const dht::partition_range>> range;
+        foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
+        reader_concurrency_semaphore* semaphore;
+    };
+
+    distributed<replica::database>& _db;
+    table_id _table_id;
+    std::vector<reader_context> _contexts;
+public:
+    view_build_status_policy(distributed<replica::database>& db, table_id table_id)
+        : _db(db)
+        , _table_id(table_id)
+        , _contexts(smp::count) {
+    }
+    virtual mutation_reader create_reader(
+            schema_ptr schema,
+            reader_permit permit,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            tracing::trace_state_ptr trace_state,
+            mutation_reader::forwarding fwd_mr) override {
+        const auto shard = this_shard_id();
+        auto& cf = _db.local().find_column_family(_table_id);
+
+        _contexts[shard].range = make_foreign(make_lw_shared<const dht::partition_range>(range));
+        _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
+        _contexts[shard].semaphore = &_db.local().get_reader_concurrency_semaphore();
+
+        return cf.as_mutation_source().make_reader_v2(
+                cf.schema(),
+                std::move(permit),
+                range,
+                slice,
+                std::move(trace_state),
+                streamed_mutation::forwarding::no,
+                fwd_mr);
+    }
+    virtual const dht::partition_range* get_read_range() const override {
+        const auto shard = this_shard_id();
+        return _contexts[shard].range.get();
+    }
+    virtual void update_read_range(lw_shared_ptr<const dht::partition_range> range) override {
+        const auto shard = this_shard_id();
+        _contexts[shard].range = make_foreign(std::move(range));
+    }
+    virtual future<> destroy_reader(stopped_reader reader) noexcept override {
+        auto ctx = std::move(_contexts[this_shard_id()]);
+        auto reader_opt = ctx.semaphore->unregister_inactive_read(std::move(reader.handle));
+        if  (!reader_opt) {
+            return make_ready_future<>();
+        }
+        return reader_opt->close().finally([ctx = std::move(ctx)] {});
+    }
+    virtual reader_concurrency_semaphore& semaphore() override {
+        const auto shard = this_shard_id();
+        if (!_contexts[shard].semaphore) {
+            _contexts[shard].semaphore = &_db.local().get_reader_concurrency_semaphore();
+        }
+        return *_contexts[shard].semaphore;
+    }
+    virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) override {
+        return make_ready_future<reader_permit>(semaphore().make_tracking_only_permit(schema, description, timeout, std::move(trace_ptr)));
+    }
+};
+
+void view_builder::init_virtual_table() {
+    if (_view_build_status_on_group0) {
+        // We set the old system_distributed.view_build_status table to read virtually
+        // from system.view_build_status_v2 in order to make the transition transparent for
+        // readers of the table and maintain compatibility.
+
+        auto ms_v2 = mutation_source([this] (schema_ptr s,
+                reader_permit permit,
+                const dht::partition_range& pr,
+                const query::partition_slice& ps,
+                tracing::trace_state_ptr trace_state,
+                streamed_mutation::forwarding,
+                mutation_reader::forwarding fwd_mr) {
+
+            // The v1 distributed table and the v2 system local table have different shard mapping.
+            // The v2 table uses the null sharder, everything is on shard zero, while the v1 table
+            // has the normal sharder.
+            // So to simulate a read in v1 table in some shard, we need to read all the rows
+            // belonging to this shard from v2 table in shard zero.
+            // In order to read the table in a different shard we use the multishard reader. It is
+            // set to read from all the shards, but actually it only has rows to read in shard zero.
+            // Then we also need to filter only the keys belonging to this shard according to v1 sharder.
+
+            auto& table_v2 = _db.find_column_family(db::system_keyspace::view_build_status_v2());
+
+            mutation_reader ms_reader = make_multishard_combining_reader_v2(
+                    seastar::make_shared<view_build_status_policy>(_db.container(), table_v2.schema()->id()),
+                    table_v2.schema(),
+                    table_v2.get_effective_replication_map(),
+                    std::move(permit),
+                    pr, ps, trace_state, fwd_mr);
+
+            auto& sharder_v1 = _db.find_column_family(db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS).schema()->get_sharder();
+            auto filter_fn = [&sharder_v1, shard_id = this_shard_id()] (const dht::decorated_key& dk) {
+                return sharder_v1.shard_for_reads(dk.token()) == shard_id;
+            };
+
+            return make_filtering_reader(std::move(ms_reader), std::move(filter_fn));
+        });
+
+        auto& table_v1 = _db.find_column_family(db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS);
+        table_v1.set_virtual_reader(std::move(ms_v2));
+    } else {
+        // we didn't upgrade to v2 yet. defer the operation
+        _init_virtual_table_on_upgrade = true;
+    }
 }
 
 // Called in the context of a seastar::thread.
