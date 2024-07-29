@@ -87,7 +87,7 @@ private:
         return trinfo ? trinfo->next : ti.replicas;
     }
 
-    future<> populate_table(const tablet_map& tmap, std::optional<host_id> host) {
+    future<> populate_table(const tablet_map& tmap, std::optional<host_id> host, std::optional<sstring> only_dc) {
         const topology& topo = _tm->get_topology();
         co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
             for (auto&& replica : get_replicas_for_tablet_load(ti, tmap.get_tablet_transition_info(tid))) {
@@ -95,7 +95,11 @@ private:
                     continue;
                 }
                 if (!_nodes.contains(replica.host)) {
-                    _nodes.emplace(replica.host, node_load{topo.find_node(replica.host)->get_shard_count()});
+                    auto node = topo.find_node(replica.host);
+                    if (only_dc && node->dc_rack().dc != *only_dc) {
+                        continue;
+                    }
+                    _nodes.emplace(replica.host, node_load{node->get_shard_count()});
                 }
                 node_load& n = _nodes.at(replica.host);
                 if (replica.shard < n._shards.size()) {
@@ -112,21 +116,27 @@ public:
         : _tm(std::move(tm)) {
     }
 
-    future<> populate(std::optional<host_id> host = std::nullopt, std::optional<table_id> only_table = std::nullopt) {
+    future<> populate(std::optional<host_id> host = std::nullopt,
+                      std::optional<table_id> only_table = std::nullopt,
+                      std::optional<sstring> only_dc = std::nullopt) {
         co_await utils::clear_gently(_nodes);
 
         if (only_table) {
             auto& tmap = _tm->tablets().get_tablet_map(*only_table);
-            co_await populate_table(tmap, host);
+            co_await populate_table(tmap, host, only_dc);
         } else {
             for (auto&& [table, tmap]: _tm->tablets().all_tables()) {
-                co_await populate_table(tmap, host);
+                co_await populate_table(tmap, host, only_dc);
             }
         }
 
         for (auto&& [id, n] : _nodes) {
             n.populate_shards_by_load();
         }
+    }
+
+    future<> populate_dc(const sstring& dc) {
+        return populate(std::nullopt, std::nullopt, dc);
     }
 
     shard_id next_shard(host_id node) {
