@@ -477,6 +477,8 @@ protected:
     // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
     std::vector<shared_sstable> _used_garbage_collected_sstables;
     utils::observable<> _stop_request_observable;
+    // optional tombstone_gc_state that is used when gc has to check only the compacting sstables to collect tombstones.
+    std::optional<tombstone_gc_state> _tombstone_gc_state_with_commitlog_check_disabled;
 private:
     // Keeps track of monitors for input sstable.
     // If _update_backlog_tracker is set to true, monitors are responsible for adjusting backlog as compaction progresses.
@@ -525,6 +527,7 @@ protected:
         , _owned_ranges(std::move(descriptor.owned_ranges))
         , _sharder(descriptor.sharder)
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
+        , _tombstone_gc_state_with_commitlog_check_disabled(descriptor.gc_check_only_compacting_sstables ? std::make_optional(_table_s.get_tombstone_gc_state().with_commitlog_check_disabled()) : std::nullopt)
         , _progress_monitor(progress_monitor)
     {
         std::unordered_set<run_id> ssts_run_ids;
@@ -723,6 +726,10 @@ private:
         return _table_s.get_compaction_strategy().make_sstable_set(_schema);
     }
 
+    const tombstone_gc_state& get_tombstone_gc_state() const {
+        return _tombstone_gc_state_with_commitlog_check_disabled ? _tombstone_gc_state_with_commitlog_check_disabled.value() : _table_s.get_tombstone_gc_state();
+    }
+
     future<> setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(make_sstable_set_for_input());
         auto fully_expired = _table_s.fully_expired_sstables(_sstables, gc_clock::now());
@@ -756,7 +763,7 @@ private:
             // for a better estimate for the number of partitions in the merged
             // sstable than just adding up the lengths of individual sstables.
             _estimated_partitions += sst->get_estimated_key_count();
-            sum_of_estimated_droppable_tombstone_ratio += sst->estimate_droppable_tombstone_ratio(gc_clock::now(), _table_s.get_tombstone_gc_state(), _schema);
+            sum_of_estimated_droppable_tombstone_ratio += sst->estimate_droppable_tombstone_ratio(gc_clock::now(), get_tombstone_gc_state(), _schema);
             _compacting_data_file_size += sst->ondisk_data_size();
             _compacting_max_timestamp = std::max(_compacting_max_timestamp, sst->get_stats_metadata().max_timestamp);
             if (sst->originated_on_this_node().value_or(false) && sst_stats.position.shard_id() == this_shard_id()) {
@@ -788,7 +795,7 @@ private:
                 reader.consume_in_thread(std::move(cfc));
             });
         });
-        const auto& gc_state = _table_s.get_tombstone_gc_state();
+        const auto& gc_state = get_tombstone_gc_state();
         return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
     }
 
@@ -809,7 +816,7 @@ private:
                     using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, compacted_fragments_writer>;
                     auto cfc = compact_mutations(*schema(), now,
                         max_purgeable_func(),
-                        _table_s.get_tombstone_gc_state(),
+                        get_tombstone_gc_state(),
                         get_compacted_fragments_writer(),
                         get_gc_compacted_fragments_writer());
 
@@ -819,7 +826,7 @@ private:
                 using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, noop_compacted_fragments_consumer>;
                 auto cfc = compact_mutations(*schema(), now,
                     max_purgeable_func(),
-                    _table_s.get_tombstone_gc_state(),
+                    get_tombstone_gc_state(),
                     get_compacted_fragments_writer(),
                     noop_compacted_fragments_consumer());
                 reader.consume_in_thread(std::move(cfc));
