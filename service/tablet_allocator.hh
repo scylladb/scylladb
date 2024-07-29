@@ -32,6 +32,26 @@ struct load_balancer_dc_stats {
     uint64_t stop_no_candidates = 0;
     uint64_t stop_skip_limit = 0;
     uint64_t stop_batch_size = 0;
+
+    load_balancer_dc_stats operator-(const load_balancer_dc_stats& other) const {
+        return {
+            calls - other.calls,
+            migrations_produced - other.migrations_produced,
+            migrations_from_skiplist - other.migrations_from_skiplist,
+            candidates_evaluated - other.candidates_evaluated,
+            bad_first_candidates - other.bad_first_candidates,
+            bad_migrations - other.bad_migrations,
+            intranode_migrations_produced - other.intranode_migrations_produced,
+            migrations_skipped - other.migrations_skipped,
+            tablets_skipped_node - other.tablets_skipped_node,
+            tablets_skipped_rack - other.tablets_skipped_rack,
+            stop_balance - other.stop_balance,
+            stop_load_inversion - other.stop_load_inversion,
+            stop_no_candidates - other.stop_no_candidates,
+            stop_skip_limit - other.stop_skip_limit,
+            stop_batch_size - other.stop_batch_size,
+        };
+    }
 };
 
 struct load_balancer_node_stats {
@@ -172,6 +192,8 @@ public:
     /// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
     ///
     future<migration_plan> balance_tablets(locator::token_metadata_ptr, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
+
+    load_balancer_stats_manager& stats();
 
     void set_use_table_aware_balancing(bool);
 

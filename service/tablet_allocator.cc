@@ -1934,6 +1934,10 @@ public:
         _load_balancer_stats.unregister();
     }
 
+    load_balancer_stats_manager& stats() {
+        return _load_balancer_stats;
+    }
+
     // The splitting of tablets today is completely based on the power-of-two constraint.
     // A tablet of id X is split into 2 new tablets, which new ids are (x << 1) and
     // (x << 1) + 1.
@@ -1990,6 +1994,10 @@ tablet_allocator_impl& tablet_allocator::impl() {
 
 void tablet_allocator::on_leadership_lost() {
     impl().on_leadership_lost();
+}
+
+load_balancer_stats_manager& tablet_allocator::stats() {
+    return impl().stats();
 }
 
 }

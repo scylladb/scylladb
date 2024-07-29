@@ -38,6 +38,8 @@ using namespace service;
 
 static seastar::abort_source aborted;
 
+static const sstring dc = "dc1";
+
 static
 cql_test_config tablet_cql_test_config() {
     cql_test_config c;
@@ -119,9 +121,11 @@ rebalance_stats rebalance_tablets(tablet_allocator& talloc, shared_token_metadat
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
     for (size_t i = 0; i < max_iterations; ++i) {
+        auto prev_lb_stats = talloc.stats().for_dc(dc);
         auto start_time = std::chrono::steady_clock::now();
         auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
         auto end_time = std::chrono::steady_clock::now();
+        auto lb_stats = talloc.stats().for_dc(dc) - prev_lb_stats;
 
         auto elapsed = std::chrono::duration_cast<seconds_double>(end_time - start_time);
         rebalance_stats iteration_stats = {
@@ -130,7 +134,16 @@ rebalance_stats rebalance_tablets(tablet_allocator& talloc, shared_token_metadat
             .rebalance_count = 1,
         };
         stats += iteration_stats;
-        testlog.debug("Rebalance iteration {} took {:.3f} [s]", i + 1, elapsed.count());
+        testlog.debug("Rebalance iteration {} took {:.3f} [s]: mig={}, bad={}, first_bad={}, eval={}, skiplist={}, skip: (load={}, rack={}, node={})",
+                      i + 1, elapsed.count(),
+                      lb_stats.migrations_produced,
+                      lb_stats.bad_migrations,
+                      lb_stats.bad_first_candidates,
+                      lb_stats.candidates_evaluated,
+                      lb_stats.migrations_from_skiplist,
+                      lb_stats.migrations_skipped,
+                      lb_stats.tablets_skipped_rack,
+                      lb_stats.tablets_skipped_node);
 
         if (plan.empty()) {
             testlog.info("Rebalance took {:.3f} [s] after {} iteration(s)", stats.elapsed_time.count(), i + 1);
@@ -214,7 +227,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         const shard_id shard_count = p.shards;
         const int cycles = p.iterations;
 
-        auto rack1 = endpoint_dc_rack{ "dc1", "rack-1" };
+        auto rack1 = endpoint_dc_rack{ dc, "rack-1" };
 
         std::vector<host_id> hosts;
         std::vector<inet_address> ips;
