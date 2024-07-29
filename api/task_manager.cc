@@ -162,11 +162,17 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     tm::wait_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         tasks::task_status status;
+        std::optional<std::chrono::seconds> timeout = std::nullopt;
+        if (auto it = req->query_parameters.find("timeout"); it != req->query_parameters.end()) {
+            timeout = std::chrono::seconds(boost::lexical_cast<uint32_t>(it->second));
+        }
         try {
             auto task = tasks::task_handler{tm.local(), id};
-            status = co_await task.wait_for_task();
+            status = co_await task.wait_for_task(timeout);
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
+        } catch (timed_out_error& e) {
+            throw httpd::base_exception{e.what(), http::reply::status_type::request_timeout};
         }
         co_return make_status(status);
     });

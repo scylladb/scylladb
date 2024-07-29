@@ -6,8 +6,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "db/timeout_clock.hh"
 #include "tasks/task_handler.hh"
 #include "utils/overloaded_functor.hh"
+
+#include <seastar/core/with_timeout.hh>
 
 #include <queue>
 
@@ -105,8 +108,8 @@ future<task_status> task_handler::get_status() {
     co_return s.status;
 }
 
-future<task_status> task_handler::wait_for_task() {
-    return task_manager::invoke_on_task(_tm.container(), _id, std::function([id = _id] (task_manager::task_variant task_v) -> future<task_status> {
+future<task_status> task_handler::wait_for_task(std::optional<std::chrono::seconds> timeout) {
+    auto wait = task_manager::invoke_on_task(_tm.container(), _id, std::function([id = _id] (task_manager::task_variant task_v) -> future<task_status> {
         return std::visit(overloaded_functor{
             [] (task_manager::task_ptr task) {
                 return task->done().then_wrapped([task] (auto f) {
@@ -123,6 +126,7 @@ future<task_status> task_handler::wait_for_task() {
             }
         }, task_v);
     }));
+    return with_timeout(timeout ? db::timeout_clock::now() + timeout.value() : db::no_timeout, std::move(wait));
 }
 
 future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(bool local) {
