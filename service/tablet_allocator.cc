@@ -563,6 +563,8 @@ class load_balancer {
     std::optional<locator::load_sketch> _load_sketch;
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     dc_name _dc;
+    size_t _total_capacity_shards; // Total number of non-drained shards in the balanced node set.
+    size_t _total_capacity_nodes; // Total number of non-drained nodes in the balanced node set.
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
@@ -830,40 +832,15 @@ public:
     }
 
     // Evaluates impact on load balance of migrating a single tablet of a given table from src to dst.
-    future<migration_badness> evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst) {
+    migration_badness evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst) {
         _stats.for_dc(_dc).candidates_evaluated++;
 
         // Load is measured in tablet count.
-        size_t total_load = 0;
-        size_t new_load_dst_node = 0;
-        size_t new_load_src_node = 0;
-
-        size_t total_shard_count = 0;
-        size_t node_count = 0;
-
-        for (auto&& [node_id, node] : nodes) {
-            co_await coroutine::maybe_yield();
-
-            if (!node.drained) {
-                // Don't consider drained nodes when calculating capacity
-                // since we want to compute expected load for the post-drain topology.
-                total_shard_count += node.shard_count;
-                node_count++;
-            }
-
-            size_t node_load = 0;
-            for (shard_id shard = 0; shard < node.shard_count; shard++) {
-                auto count = node.shards[shard].tablet_count_per_table[table];
-                total_load += count;
-                node_load += count;
-            }
-
-            if (node_id == dst.host) {
-                new_load_dst_node = node_load + 1;
-            } else if (node_id == src.host) {
-                new_load_src_node = node_load - 1;
-            }
-        }
+        size_t total_load = _tablet_count_per_table[table];
+        size_t total_shard_count = _total_capacity_shards;
+        size_t node_count = _total_capacity_nodes;
+        size_t new_load_dst_node = nodes[dst.host].tablet_count_per_table[table] + 1;
+        size_t new_load_src_node = nodes[src.host].tablet_count_per_table[table] - 1;
 
         // max number of tablets per shard to keep perfect distribution.
         // Rounded up because we don't want to consider movement which is within the best possible
@@ -902,7 +879,7 @@ public:
         lblogger.trace("Table {} node balance threshold: {}, src: {} ({:.4f}), dst: {} ({:.4f})", table,
                        node_balance_threshold, new_load_src_node, src_node_badness, new_load_dst_node, dst_node_badness);
 
-        co_return migration_badness{
+        return migration_badness{
             src_shard_badness,
             src_node_badness,
             dst_shard_badness,
@@ -923,7 +900,7 @@ public:
 
         for (auto&& [table, tablets] : shard_info.candidates) {
             if (!tablets.empty()) {
-                auto badness = co_await evaluate_candidate(nodes, table, src, dst);
+                auto badness = evaluate_candidate(nodes, table, src, dst);
                 auto candidate = migration_candidate{*tablets.begin(), src, dst, badness};
                 lblogger.trace("Candidate: {}", candidate);
                 if (!best_candidate || candidate.badness < best_candidate->badness) {
@@ -1243,7 +1220,7 @@ public:
                 -> future<migration_candidate> {
             if (drain_skipped) {
                 auto source_tablet = src_node_info.skipped_candidates.back().tablet;
-                auto badness = co_await evaluate_candidate(nodes, source_tablet.table, src, dst);
+                auto badness = evaluate_candidate(nodes, source_tablet.table, src, dst);
                 co_return migration_candidate{source_tablet, src, dst, badness};
             } else {
                 auto&& src_shard_info = src_node_info.shards[src.shard];
@@ -1793,6 +1770,8 @@ public:
 
         // Compute load imbalance.
 
+        _total_capacity_shards = 0;
+        _total_capacity_nodes = 0;
         load_type max_load = 0;
         load_type min_load = 0;
         std::optional<host_id> min_load_node = std::nullopt;
@@ -1808,6 +1787,8 @@ public:
                 if (load.avg_load > max_load) {
                     max_load = load.avg_load;
                 }
+                _total_capacity_shards += load.shard_count;
+                _total_capacity_nodes++;
             }
         }
 
