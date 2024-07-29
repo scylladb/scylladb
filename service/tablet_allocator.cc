@@ -831,59 +831,84 @@ public:
         return *shard_info.candidates_all_tables.begin();
     }
 
-    // Evaluates impact on load balance of migrating a single tablet of a given table from src to dst.
-    migration_badness evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst) {
+    // Evaluates impact on load balance of migrating a single tablet of a given table to dst.
+    migration_badness evaluate_dst_badness(node_load_map& nodes, table_id table, tablet_replica dst) {
         _stats.for_dc(_dc).candidates_evaluated++;
 
-        // Load is measured in tablet count.
+        auto& node_info = nodes[dst.host];
         size_t total_load = _tablet_count_per_table[table];
         size_t total_shard_count = _total_capacity_shards;
         size_t node_count = _total_capacity_nodes;
-        size_t new_load_dst_node = nodes[dst.host].tablet_count_per_table[table] + 1;
-        size_t new_load_src_node = nodes[src.host].tablet_count_per_table[table] - 1;
 
         // max number of tablets per shard to keep perfect distribution.
         // Rounded up because we don't want to consider movement which is within the best possible
         // per-shard distribution as bad.
         double shard_balance_threshold = div_ceil(total_load, total_shard_count);
-        // For determining impact on leaving, round down, because we don't want to consider movement which is within
-        // the best possible per-shard distribution as bad.
-        double leaving_shard_balance_threshold = total_load / total_shard_count;
-
-        auto new_shard_load_dst = nodes[dst.host].shards[dst.shard].tablet_count_per_table[table] + 1;
-        auto new_shard_load_src = nodes[src.host].shards[src.shard].tablet_count_per_table[table] - 1;
-
-        auto dst_shard_badness = (new_shard_load_dst - shard_balance_threshold) / total_load;
-
-        auto src_shard_badness = nodes[src.host].drained
-                ? 0 // Moving a tablet away from a drained node is always good.
-                : (leaving_shard_balance_threshold - new_shard_load_src) / total_load;
-
-        lblogger.trace("Table {} shard balance threshold: {}, src: {} ({:.4f}), dst: {} ({:.4f})", table,
-                       shard_balance_threshold, new_shard_load_src, src_shard_badness, new_shard_load_dst, dst_shard_badness);
+        auto new_shard_load = node_info.shards[dst.shard].tablet_count_per_table[table] + 1;
+        auto dst_shard_badness = (new_shard_load - shard_balance_threshold) / total_load;
+        lblogger.trace("Table {} @{} shard balance threshold: {}, dst: {} ({:.4f})", table, dst,
+                       shard_balance_threshold, new_shard_load, dst_shard_badness);
 
         // max number of tablets per node to keep perfect distribution.
         double node_balance_threshold = div_ceil(total_load, node_count);
-        double leaving_node_balance_threshold = total_load / node_count;
-        auto dst_node_badness = (new_load_dst_node - node_balance_threshold) / total_load;
+        size_t new_node_load = node_info.tablet_count_per_table[table] + 1;
+        auto dst_node_badness = (new_node_load - node_balance_threshold) / total_load;
+        lblogger.trace("Table {} @{} node balance threshold: {}, dst: {} ({:.4f})", table, dst,
+                       node_balance_threshold, new_node_load, dst_node_badness);
 
-        auto src_node_badness = nodes[src.host].drained
+        return migration_badness{0, 0, dst_shard_badness, dst_node_badness};
+    }
+
+    // Evaluates impact on load balance of migrating a single tablet of a given table from src.
+    migration_badness evaluate_src_badness(node_load_map& nodes, table_id table, tablet_replica src) {
+        _stats.for_dc(_dc).candidates_evaluated++;
+
+        auto& node_info = nodes[src.host];
+        size_t total_load = _tablet_count_per_table[table];
+        size_t total_shard_count = _total_capacity_shards;
+        size_t node_count = _total_capacity_nodes;
+
+        // For determining impact on leaving, round down, because we don't want to consider movement which is within
+        // the best possible per-shard distribution as bad.
+        double leaving_shard_balance_threshold = total_load / total_shard_count;
+        auto new_shard_load = node_info.shards[src.shard].tablet_count_per_table[table] - 1;
+
+        auto src_shard_badness = node_info.drained
                 ? 0 // Moving a tablet away from a drained node is always good.
-                : (leaving_node_balance_threshold - new_load_src_node) / total_load;
+                : (leaving_shard_balance_threshold - new_shard_load) / total_load;
+
+        lblogger.trace("Table {} @{} shard balance threshold: {}, src: {} ({:.4f})", table, src,
+                       leaving_shard_balance_threshold, new_shard_load, src_shard_badness);
+
+        // max number of tablets per node to keep perfect distribution.
+        double leaving_node_balance_threshold = total_load / node_count;
+        size_t new_node_load = node_info.tablet_count_per_table[table] - 1;
+
+        auto src_node_badness = node_info.drained
+                ? 0 // Moving a tablet away from a drained node is always good.
+                : (leaving_node_balance_threshold - new_node_load) / total_load;
+
+        lblogger.trace("Table {} @{} node balance threshold: {}, src: {} ({:.4f})", table, src,
+                       leaving_node_balance_threshold, new_node_load, src_node_badness);
+
+        return migration_badness{src_shard_badness, src_node_badness, 0, 0};
+    }
+
+    // Evaluates impact on load balance of migrating a single tablet of a given table from src to dst.
+    migration_badness evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst) {
+        auto src_badness = evaluate_src_badness(nodes, table, src);
+        auto dst_badness = evaluate_dst_badness(nodes, table, dst);
 
         if (src.host == dst.host) {
-            src_node_badness = 0;
-            dst_node_badness = 0;
+            src_badness.src_node_badness = 0;
+            dst_badness.dst_node_badness = 0;
         }
 
-        lblogger.trace("Table {} node balance threshold: {}, src: {} ({:.4f}), dst: {} ({:.4f})", table,
-                       node_balance_threshold, new_load_src_node, src_node_badness, new_load_dst_node, dst_node_badness);
-
-        return migration_badness{
-            src_shard_badness,
-            src_node_badness,
-            dst_shard_badness,
-            dst_node_badness
+        return {
+            src_badness.shard_badness(),
+            src_badness.node_badness(),
+            dst_badness.shard_badness(),
+            dst_badness.node_badness()
         };
     }
 
