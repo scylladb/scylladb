@@ -27,115 +27,75 @@ namespace service {
 
 seastar::logger lblogger("load_balancer");
 
-struct load_balancer_dc_stats {
-    uint64_t calls = 0;
-    uint64_t migrations_produced = 0;
-    uint64_t migrations_from_skiplist = 0;
-    uint64_t candidates_evaluated = 0;
-    uint64_t bad_first_candidates = 0;
-    uint64_t bad_migrations = 0;
-    uint64_t intranode_migrations_produced = 0;
-    uint64_t migrations_skipped = 0;
-    uint64_t tablets_skipped_node = 0;
-    uint64_t tablets_skipped_rack = 0;
-    uint64_t stop_balance = 0;
-    uint64_t stop_load_inversion = 0;
-    uint64_t stop_no_candidates = 0;
-    uint64_t stop_skip_limit = 0;
-    uint64_t stop_batch_size = 0;
-};
+void load_balancer_stats_manager::setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
+    namespace sm = seastar::metrics;
+    auto dc_lb = dc_label(dc);
+    _metrics.add_group(group_name, {
+        sm::make_counter("calls", sm::description("number of calls to the load balancer"),
+                         stats.calls)(dc_lb),
+        sm::make_counter("migrations_produced", sm::description("number of migrations produced by the load balancer"),
+                         stats.migrations_produced)(dc_lb),
+        sm::make_counter("migrations_skipped", sm::description("number of migrations skipped by the load balancer due to load limits"),
+                         stats.migrations_skipped)(dc_lb),
+    });
+}
 
-struct load_balancer_node_stats {
-    double load = 0;
-};
+void load_balancer_stats_manager::setup_metrics(const dc_name& dc, host_id node, load_balancer_node_stats& stats) {
+    namespace sm = seastar::metrics;
+    auto dc_lb = dc_label(dc);
+    auto node_lb = node_label(node);
+    _metrics.add_group(group_name, {
+        sm::make_gauge("load", sm::description("node load during last load balancing"),
+                       stats.load)(dc_lb)(node_lb)
+    });
+}
 
-struct load_balancer_cluster_stats {
-    uint64_t resizes_emitted = 0;
-    uint64_t resizes_revoked = 0;
-    uint64_t resizes_finalized = 0;
-};
+void load_balancer_stats_manager::setup_metrics(load_balancer_cluster_stats& stats) {
+    namespace sm = seastar::metrics;
+    // FIXME: we can probably improve it by making it per resize type (split, merge or none).
+    _metrics.add_group(group_name, {
+        sm::make_counter("resizes_emitted", sm::description("number of resizes produced by the load balancer"),
+            stats.resizes_emitted),
+        sm::make_counter("resizes_revoked", sm::description("number of resizes revoked by the load balancer"),
+            stats.resizes_revoked),
+        sm::make_counter("resizes_finalized", sm::description("number of resizes finalized by the load balancer"),
+            stats.resizes_finalized)
+    });
+}
 
-using dc_name = sstring;
+load_balancer_stats_manager::load_balancer_stats_manager(sstring group_name):
+    group_name(std::move(group_name))
+{
+    setup_metrics(_cluster_stats);
+}
 
-class load_balancer_stats_manager {
-    sstring group_name;
-    std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
-    std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
-    load_balancer_cluster_stats _cluster_stats;
-    seastar::metrics::label dc_label{"target_dc"};
-    seastar::metrics::label node_label{"target_node"};
-    seastar::metrics::metric_groups _metrics;
-
-    void setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
-        namespace sm = seastar::metrics;
-        auto dc_lb = dc_label(dc);
-        _metrics.add_group(group_name, {
-            sm::make_counter("calls", sm::description("number of calls to the load balancer"),
-                             stats.calls)(dc_lb),
-            sm::make_counter("migrations_produced", sm::description("number of migrations produced by the load balancer"),
-                             stats.migrations_produced)(dc_lb),
-            sm::make_counter("migrations_skipped", sm::description("number of migrations skipped by the load balancer due to load limits"),
-                             stats.migrations_skipped)(dc_lb),
-        });
+load_balancer_dc_stats& load_balancer_stats_manager::for_dc(const dc_name& dc) {
+    auto it = _dc_stats.find(dc);
+    if (it == _dc_stats.end()) {
+        auto stats = std::make_unique<load_balancer_dc_stats>();
+        setup_metrics(dc, *stats);
+        it = _dc_stats.emplace(dc, std::move(stats)).first;
     }
+    return *it->second;
+}
 
-    void setup_metrics(const dc_name& dc, host_id node, load_balancer_node_stats& stats) {
-        namespace sm = seastar::metrics;
-        auto dc_lb = dc_label(dc);
-        auto node_lb = node_label(node);
-        _metrics.add_group(group_name, {
-            sm::make_gauge("load", sm::description("node load during last load balancing"),
-                           stats.load)(dc_lb)(node_lb)
-        });
+load_balancer_node_stats& load_balancer_stats_manager::for_node(const dc_name& dc, host_id node) {
+    auto it = _node_stats.find(node);
+    if (it == _node_stats.end()) {
+        auto stats = std::make_unique<load_balancer_node_stats>();
+        setup_metrics(dc, node, *stats);
+        it = _node_stats.emplace(node, std::move(stats)).first;
     }
+    return *it->second;
+}
 
-    void setup_metrics(load_balancer_cluster_stats& stats) {
-        namespace sm = seastar::metrics;
-        // FIXME: we can probably improve it by making it per resize type (split, merge or none).
-        _metrics.add_group(group_name, {
-            sm::make_counter("resizes_emitted", sm::description("number of resizes produced by the load balancer"),
-                stats.resizes_emitted),
-            sm::make_counter("resizes_revoked", sm::description("number of resizes revoked by the load balancer"),
-                stats.resizes_revoked),
-            sm::make_counter("resizes_finalized", sm::description("number of resizes finalized by the load balancer"),
-                stats.resizes_finalized)
-        });
-    }
-public:
-    load_balancer_stats_manager(sstring group_name):
-        group_name(std::move(group_name))
-    {
-        setup_metrics(_cluster_stats);
-    }
+load_balancer_cluster_stats& load_balancer_stats_manager::for_cluster() {
+    return _cluster_stats;
+}
 
-    load_balancer_dc_stats& for_dc(const dc_name& dc) {
-        auto it = _dc_stats.find(dc);
-        if (it == _dc_stats.end()) {
-            auto stats = std::make_unique<load_balancer_dc_stats>();
-            setup_metrics(dc, *stats);
-            it = _dc_stats.emplace(dc, std::move(stats)).first;
-        }
-        return *it->second;
-    }
-
-    load_balancer_node_stats& for_node(const dc_name& dc, host_id node) {
-        auto it = _node_stats.find(node);
-        if (it == _node_stats.end()) {
-            auto stats = std::make_unique<load_balancer_node_stats>();
-            setup_metrics(dc, node, *stats);
-            it = _node_stats.emplace(node, std::move(stats)).first;
-        }
-        return *it->second;
-    }
-
-    load_balancer_cluster_stats& for_cluster() {
-        return _cluster_stats;
-    }
-
-    void unregister() {
-        _metrics.clear();
-    }
-};
+void load_balancer_stats_manager::unregister() {
+    _metrics.clear();
+}
 
 // Used to compare different migration choices in regard to impact on load imbalance.
 // There is a total order on migration_badness such that better migrations are ordered before worse ones.
