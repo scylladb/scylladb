@@ -69,6 +69,9 @@ public:
     gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const;
 
     void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
+
+    // returns a tombstone_gc_state copy with the commitlog check disabled (i.e.) without _gc_min_source.
+    tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_repair_history_maps); }
 };
 
 std::map<sstring, sstring> get_default_tombstonesonte_gc_mode(data_dictionary::database db, sstring ks_name);
