@@ -4,7 +4,6 @@ import asyncio
 import os
 import requests
 import pytest
-import xml.etree.ElementTree as ET
 import shutil
 import logging
 
@@ -12,6 +11,7 @@ from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
 from test.pylib.manager_client import ManagerClient
 from test.topology.util import reconnect_driver
+from test.object_store.conftest import get_s3_resource
 
 logger = logging.getLogger(__name__)
 
@@ -99,17 +99,6 @@ async def test_basic(manager: ManagerClient, s3_server):
 async def test_garbage_collect(manager: ManagerClient, s3_server):
     '''verify ownership table is garbage-collected on boot'''
 
-    def list_bucket(s3_server):
-        r = requests.get(f'http://{s3_server.address}:{s3_server.port}/{s3_server.bucket_name}')
-        bucket_list_res = ET.fromstring(r.content)
-        objects = []
-        for elem in bucket_list_res:
-            if elem.tag.endswith('Contents'):
-                for opt in elem:
-                    if opt.tag.endswith('Key'):
-                        objects.append(opt.text)
-        return objects
-
     sstable_entries = []
 
     cfg = {'enable_user_defined_functions': False,
@@ -141,11 +130,11 @@ async def test_garbage_collect(manager: ManagerClient, s3_server):
     # Must be empty as no sstables should have been picked up
     assert not have_res, f'Sstables not cleaned, got {have_res}'
     # Make sure objects also disappeared
-    objects = list_bucket(s3_server)
+    objects = get_s3_resource(s3_server).Bucket(s3_server.bucket_name).objects.all()
     print(f'Found objects: {[ objects ]}')
     for o in objects:
         for ent in sstable_entries:
-            assert not o.startswith(str(ent[1])), f'Sstable object not cleaned, found {o}'
+            assert not o.key.startswith(str(ent[1])), f'Sstable object not cleaned, found {o.key}'
 
 
 @pytest.mark.asyncio
