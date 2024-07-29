@@ -330,18 +330,17 @@ future<> controller::do_stop_server() {
 }
 
 future<> controller::subscribe_server(sharded<cql_server>& server) {
-    return server.invoke_on_all([this] (cql_server& server) {
+    return server.invoke_on_all([this] (cql_server& server) -> future<> {
         _mnotifier.local().register_listener(server.get_migration_listener());
         _lifecycle_notifier.local().register_subscriber(server.get_lifecycle_listener());
-        return make_ready_future<>();
+        co_return;
     });
 }
 
 future<> controller::unsubscribe_server(sharded<cql_server>& server) {
-    return server.invoke_on_all([this] (cql_server& server) {
-        return _mnotifier.local().unregister_listener(server.get_migration_listener()).then([this, &server]{
-            return _lifecycle_notifier.local().unregister_subscriber(server.get_lifecycle_listener());
-        });
+    return server.invoke_on_all([this] (cql_server& server) -> future<> {
+        co_await _mnotifier.local().unregister_listener(server.get_migration_listener());
+        co_await _lifecycle_notifier.local().unregister_subscriber(server.get_lifecycle_listener());
     });
 }
 
