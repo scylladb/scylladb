@@ -144,6 +144,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
+                  },
+                  {
+                     "name":"timeout",
+                     "description":"Timeout for waiting; if times out, 408 status code is returned",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
                   }
                ]
             }
