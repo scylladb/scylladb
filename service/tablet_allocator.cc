@@ -30,6 +30,10 @@ seastar::logger lblogger("load_balancer");
 struct load_balancer_dc_stats {
     uint64_t calls = 0;
     uint64_t migrations_produced = 0;
+    uint64_t migrations_from_skiplist = 0;
+    uint64_t candidates_evaluated = 0;
+    uint64_t bad_first_candidates = 0;
+    uint64_t bad_migrations = 0;
     uint64_t intranode_migrations_produced = 0;
     uint64_t migrations_skipped = 0;
     uint64_t tablets_skipped_node = 0;
@@ -558,6 +562,7 @@ class load_balancer {
     token_metadata_ptr _tm;
     std::optional<locator::load_sketch> _load_sketch;
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
+    dc_name _dc;
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
@@ -826,6 +831,8 @@ public:
 
     // Evaluates impact on load balance of migrating a single tablet of a given table from src to dst.
     future<migration_badness> evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst) {
+        _stats.for_dc(_dc).candidates_evaluated++;
+
         // Load is measured in tablet count.
         size_t total_load = 0;
         size_t new_load_dst_node = 0;
@@ -1276,6 +1283,8 @@ public:
         };
 
         if (min_candidate.badness.is_bad() && _use_table_aware_balancing) {
+            _stats.for_dc(_dc).bad_first_candidates++;
+
             // Consider better alternatives.
             if (drain_skipped) {
                 co_await evaluate_targets(src);
@@ -1571,6 +1580,14 @@ public:
                 }
             }
 
+            if (candidate.badness.is_bad()) {
+                _stats.for_dc(_dc).bad_migrations++;
+            }
+
+            if (drain_skipped) {
+                _stats.for_dc(_dc).migrations_from_skiplist++;
+            }
+
             tablet_transition_kind kind = (src_node_info.state() == locator::node::state::being_removed
                                            || src_node_info.state() == locator::node::state::left)
                        ? tablet_transition_kind::rebuild : tablet_transition_kind::migration;
@@ -1659,6 +1676,8 @@ public:
 
     future<migration_plan> make_plan(dc_name dc) {
         migration_plan plan;
+
+        _dc = dc;
 
         // Causes load balancer to move some tablet even though load is balanced.
         auto shuffle = in_shuffle_mode();
