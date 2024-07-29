@@ -143,12 +143,9 @@ void service_level_controller::abort_group0_operations() {
 }
 
 future<> service_level_controller::update_service_levels_cache() {
+    SCYLLA_ASSERT(this_shard_id() == global_controller);
 
     if (!_sl_data_accessor) {
-        return make_ready_future();
-    }
-
-    if (this_shard_id() != global_controller) {
         return make_ready_future();
     }
 
