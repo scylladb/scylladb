@@ -365,8 +365,6 @@ class load_balancer {
 
         std::vector<shard_load> shards; // Indexed by shard_id to which a given shard_load corresponds.
 
-        std::optional<locator::load_sketch> target_load_sketch;
-
         utils::chunked_vector<skipped_candidate> skipped_candidates;
 
         const sstring& dc() const {
@@ -379,14 +377,6 @@ class load_balancer {
 
         locator::node::state state() const {
             return node->get_state();
-        }
-
-        future<load_sketch&> get_load_sketch(const token_metadata_ptr& tm) {
-            if (!target_load_sketch) {
-                target_load_sketch.emplace(tm);
-                co_await target_load_sketch->populate(id);
-            }
-            co_return *target_load_sketch;
         }
 
         // Call when tablet_count changes.
@@ -564,6 +554,7 @@ class load_balancer {
     const size_t max_read_streaming_load = 4;
 
     token_metadata_ptr _tm;
+    std::optional<locator::load_sketch> _load_sketch;
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
@@ -997,7 +988,7 @@ public:
             co_return plan;
         }
 
-        auto& sketch = co_await node_load.get_load_sketch(_tm);
+        auto& sketch = *_load_sketch;
 
         // Keeps candidate source shards in a heap which yields highest-loaded shard first.
         std::vector<shard_id> src_shards;
@@ -1538,8 +1529,7 @@ public:
 
             // Pick best target shard.
 
-            auto& target_load_sketch = co_await target_info.get_load_sketch(_tm);
-            auto dst = global_shard_id {target, target_load_sketch.get_least_loaded_shard(target)};
+            auto dst = global_shard_id {target, _load_sketch->get_least_loaded_shard(target)};
             lblogger.trace("target shard: {}, load={}", dst.shard, target_info.shards[dst.shard].tablet_count);
 
             if (lblogger.is_enabled(seastar::log_level::trace)) {
@@ -1585,10 +1575,7 @@ public:
             auto& src_tinfo = tmap.get_tablet_info(source_tablet.tablet);
             auto mig_streaming_info = get_migration_streaming_info(topo, src_tinfo, mig);
 
-            {
-                load_sketch& load_sketch = co_await nodes[dst.host].get_load_sketch(_tm);
-                load_sketch.pick(dst.host, dst.shard);
-            }
+            _load_sketch->pick(dst.host, dst.shard);
 
             if (can_accept_load(nodes, mig_streaming_info)) {
                 apply_load(nodes, mig_streaming_info);
@@ -1822,6 +1809,9 @@ public:
         // FIXME: To handle the above, we should rebalance the target node before migrating tablets from other nodes.
 
         // Compute per-shard load and candidate tablets.
+
+        _load_sketch = locator::load_sketch(_tm);
+        co_await _load_sketch->populate_dc(dc);
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = tmap_;
