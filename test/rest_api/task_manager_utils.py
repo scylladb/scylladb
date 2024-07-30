@@ -70,6 +70,8 @@ def check_child_parent_relationship(rest_api, status_tree, parent, allow_no_chil
 def drain_module_tasks(rest_api, module_name):
     tasks = [task for task in list_tasks(rest_api, module_name, True)]
     for task in tasks:
+        # Wait for task and unregister it.
         resp = rest_api.send("GET", f"task_manager/wait_task/{task['task_id']}")
+        resp = rest_api.send("GET", f"task_manager/task_status/{task['task_id']}")
         # The task may be already unregistered.
         assert resp.status_code == requests.codes.ok or resp.status_code == requests.codes.bad_request, "Invalid status code"

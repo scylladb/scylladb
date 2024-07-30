@@ -108,8 +108,6 @@ def test_task_manager_wait(rest_api):
 
             x.join()
 
-            assert_task_does_not_exist(rest_api, task0)
-
 def test_task_manager_ttl(rest_api):
     with new_test_module(rest_api):
         args0 = {"keyspace": "keyspace0", "table": "table0"}
