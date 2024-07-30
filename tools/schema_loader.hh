@@ -58,4 +58,22 @@ schema_ptr load_system_schema(std::string_view keyspace, std::string_view table)
 /// directory, which is usually /var/lib/scylla/data.
 future<schema_ptr> load_schema_from_schema_tables(std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table);
 
+/// Load the schema from the sstable's serialization header.
+///
+/// This schema is incomplete:
+/// * The names of the partition key and clustering key columns are not known
+///   and are given placeholder names when the schema is loaded.
+/// * Only the compression options are contained in the sstable, other options
+///   like compaction, etc. are missing and defaults are used instead in the
+///   returned schema object.
+/// * Encryption options are likewise not contained in the sstable, if the
+///   sstable is encrypted, the schema load will fail.
+///
+/// That said, this schema is enough to parse and display the sstable's content.
+///
+/// The keyspace and table parameters are optional. If known, provide them so
+/// the schema is created with the proper names, otherwise placeholder names
+/// will be used.
+future<schema_ptr> load_schema_from_sstable(const db::config& dbcfg, std::filesystem::path sstable_path, std::string_view keyspace = "", std::string_view table = "");
+
 } // namespace tools
