@@ -1535,6 +1535,7 @@ private:
     // PutItem: engaged _cells, write these cells to item (_pk, _ck).
     // DeleteItem: disengaged _cells, delete the entire item (_pk, _ck).
     std::optional<std::vector<cell>> _cells;
+    uint64_t _message_length_in_bytes = 0;
 public:
     struct delete_item {};
     struct put_item {};
@@ -1545,6 +1546,9 @@ public:
     mutation build(schema_ptr schema, api::timestamp_type ts) const;
     const partition_key& pk() const { return _pk; }
     const clustering_key& ck() const { return _ck; }
+    uint64_t length_in_bytes() const noexcept {
+        return _message_length_in_bytes;
+    }
 };
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
@@ -1576,14 +1580,32 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         bytes column_name = to_bytes(it->name.GetString());
         validate_value(it->value, "PutItem");
         const column_definition* cdef = find_attribute(*schema, column_name);
+        _message_length_in_bytes += column_name.size();
         if (!cdef) {
             bytes value = serialize_item(it->value);
+            if (value.size()) {
+                // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+                _message_length_in_bytes += value.size() - 1;
+            }
             _cells->push_back({std::move(column_name), serialize_item(it->value)});
         } else if (!cdef->is_primary_key()) {
             // Fixed-type regular column can be used for GSI key
+            bytes value = get_key_from_typed_value(it->value, *cdef);
             _cells->push_back({std::move(column_name),
-                    get_key_from_typed_value(it->value, *cdef)});
+                    value});
+            if (value.size()) {
+                // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+                _message_length_in_bytes += value.size() - 1;
+            }
         }
+    }
+    if (_pk.representation().size() > 2) {
+        // ScyllaDB uses two extra bytes compared to DynamoDB for the key bytes length
+        _message_length_in_bytes += _pk.representation().size() - 2;
+    }
+    if (_ck.representation().size() > 2) {
+        // ScyllaDB uses two extra bytes compared to DynamoDB for the key bytes length
+        _message_length_in_bytes += _ck.representation().size() - 2;
     }
 }
 
@@ -1726,6 +1748,7 @@ rmw_operation::parse_returnvalues_on_condition_check_failure(const rjson::value&
         throw api_error::validation(fmt::format("Unrecognized value for ReturnValuesOnConditionCheckFailure: {}", s));
     }
 }
+
 static replica::table_stats& get_table_stats_from_schema(service::storage_proxy& sp, const schema& schema) {
     replica::table& table = sp.local_db().find_column_family(schema.id());
     return table.get_stats();
@@ -1735,6 +1758,7 @@ rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& reque
     : _request(std::move(request))
     , _schema(get_table(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
+    , _consumed_capacity(_request)
     , _returnvalues(parse_returnvalues(_request))
     , _returnvalues_on_condition_check_failure(parse_returnvalues_on_condition_check_failure(_request))
 {
@@ -1790,8 +1814,10 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
 // Build the return value from the different RMW operations (UpdateItem,
 // PutItem, DeleteItem). All these return nothing by default, but can
 // optionally return Attributes if requested via the ReturnValues option.
-static future<executor::request_return_type> rmw_operation_return(rjson::value&& attributes) {
+static future<executor::request_return_type> rmw_operation_return(rjson::value&& attributes, const consumed_capacity_counter& consumed_capacity, replica::consumption_unit_counter& metric) {
     rjson::value ret = rjson::empty_object();
+    consumed_capacity.add_consumed_capacity_to_response_if_needed(ret);
+    consumed_capacity.update_metric(metric);
     if (!attributes.IsNull()) {
         rjson::add(ret, "Attributes", std::move(attributes));
     }
@@ -1843,16 +1869,18 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
                 }
-                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
-                    return rmw_operation_return(std::move(_return_attributes));
+                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this, &proxy] () mutable {
+                    replica::consumption_unit_counter& metric = get_table_stats_from_schema(proxy, *_schema).consumed_write_units;
+                    return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, metric);
                 });
             });
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
-            return rmw_operation_return(std::move(_return_attributes));
+        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this, &proxy] () mutable {
+            replica::consumption_unit_counter& metric = get_table_stats_from_schema(proxy, *_schema).consumed_write_units;
+            return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, metric);
         });
     }
     // If we're still here, we need to do this write using LWT:
@@ -1864,11 +1892,12 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             nullptr;
     return proxy.cas(schema(), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
             {timeout, std::move(permit), client_state, trace_state},
-            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command] (bool is_applied) mutable {
+            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command, &proxy] (bool is_applied) mutable {
         if (!is_applied) {
             return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
         }
-        return rmw_operation_return(std::move(_return_attributes));
+        replica::consumption_unit_counter& metric = get_table_stats_from_schema(proxy, *_schema).consumed_write_units;
+        return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, metric);
     });
 }
 
@@ -1946,6 +1975,7 @@ public:
                 throw api_error::validation("ExpressionAttributeValues cannot be used without ConditionExpression");
             }
         }
+        _consumed_capacity += _mutation_builder.length_in_bytes();
     }
     bool needs_read_before_write() const {
         return _request.HasMember("Expected") ||
