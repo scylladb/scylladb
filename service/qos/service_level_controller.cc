@@ -119,10 +119,8 @@ future<> service_level_controller::stop() {
         co_return;
     }
 
-    if (*_early_abort_subscription) {
-        // Abort source didn't fire, so do it now
-        do_abort();
-    }
+    // If abort source didn't fire, do it now
+    _early_abort_subscription->on_abort(std::nullopt);
     
     _global_controller_db->notifications_serializer.broken();
     try {
