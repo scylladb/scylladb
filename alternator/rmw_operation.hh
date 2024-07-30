@@ -15,6 +15,8 @@
 
 namespace alternator {
 
+class consumed_capacity;
+
 // An rmw_operation encapsulates the common logic of all the item update
 // operations which may involve a read of the item before the write
 // (so-called Read-Modify-Write operations). These operations include PutItem,
@@ -63,7 +65,7 @@ protected:
     partition_key _pk = partition_key::make_empty();
     clustering_key _ck = clustering_key::make_empty();
     write_isolation _write_isolation;
-
+    std::unique_ptr<consumed_capacity_counter> _consumed_capacity;
     // All RMW operations can have a ReturnValues parameter from the following
     // choices. But note that only UpdateItem actually supports all of them:
     enum class returnvalues {
