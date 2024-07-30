@@ -1360,26 +1360,25 @@ private:
     future<> advance_to_next_partition() {
         sstlog.trace("reader {}: advance_to_next_partition()", fmt::ptr(this));
         _before_partition = true;
-        auto& consumer = _consumer;
-        if (consumer.is_mutation_end()) {
+        if (_consumer.is_mutation_end()) {
             sstlog.trace("reader {}: already at partition boundary", fmt::ptr(this));
             _index_in_current_partition = false;
-            return make_ready_future<>();
+            co_return;
         }
-        return (_index_in_current_partition
-                ? _index_reader->advance_to_next_partition()
-                : get_index_reader().advance_to(dht::ring_position_view::for_after_key(*_current_partition_key))).then([this] {
-            _index_in_current_partition = true;
-            auto [start, end] = _index_reader->data_file_positions();
-            if (end && start > *end) {
-                _read_enabled = false;
-                return make_ready_future<>();
-            }
-            assert(_index_reader->element_kind() == indexable_element::partition);
-            return skip_to(_index_reader->element_kind(), start).then([this] {
-                _sst->get_stats().on_partition_seek();
-            });
-        });
+        if (_index_in_current_partition) {
+            co_await _index_reader->advance_to_next_partition();
+        } else {
+            co_await get_index_reader().advance_to(dht::ring_position_view::for_after_key(*_current_partition_key));
+        }
+        _index_in_current_partition = true;
+        auto [start, end] = _index_reader->data_file_positions();
+        if (end && start > *end) {
+            _read_enabled = false;
+            co_return;
+        }
+        assert(_index_reader->element_kind() == indexable_element::partition);
+        co_await skip_to(_index_reader->element_kind(), start);
+        _sst->get_stats().on_partition_seek();
     }
     future<> read_from_index() {
         sstlog.trace("reader {}: read from index", fmt::ptr(this));
@@ -1453,65 +1452,58 @@ private:
     }
     future<> advance_context(std::optional<position_in_partition_view> pos) {
         if (!pos || pos->is_before_all_fragments(*_schema)) {
-            return make_ready_future<>();
+            co_return;
         }
         assert (_current_partition_key);
-        return [this] {
-            if (!_index_in_current_partition) {
-                _index_in_current_partition = true;
-                // FIXME reversed multi partition reads
-                return get_index_reader().advance_to(*_current_partition_key);
-            }
-            return make_ready_future();
-        }().then([this, pos = *pos] {
-            if (reversed()) {
-                // The position `pos` conforms to the query schema (it is the start of a reversed range),
-                // which is reversed w.r.t. the table schema. We use the table schema in index_reader,
-                // so we need to unreverse `pos` before passing it into index_reader.
-                auto rev_pos = pos.reversed();
-                return get_index_reader().advance_reverse(std::move(rev_pos)).then([this] {
-                    // The reversing data source will notice the skip and update the data ranges
-                    // from which it prepares the data given to us.
+        if (!_index_in_current_partition) {
+            _index_in_current_partition = true;
+            // FIXME reversed multi partition reads
+            co_await get_index_reader().advance_to(*_current_partition_key);
+        }
 
-                    assert(_reversed_read_sstable_position);
-                    auto ip = _index_reader->data_file_positions();
-                    if (ip.end >= *_reversed_read_sstable_position) {
-                        // The reversing data source was already ahead (in reverse - its position was smaller)
-                        // than the index. We must not update the current range tombstone in this case
-                        // or reset the context since all fragments up to the new position of the index
-                        // will be (or already have been) provided to the context by the source.
-                        return;
-                    }
+        if (reversed()) {
+            // The position `pos` conforms to the query schema (it is the start of a reversed range),
+            // which is reversed w.r.t. the table schema. We use the table schema in index_reader,
+            // so we need to unreverse `pos` before passing it into index_reader.
+            auto rev_pos = pos->reversed();
+            co_await get_index_reader().advance_reverse(std::move(rev_pos));
+            // The reversing data source will notice the skip and update the data ranges
+            // from which it prepares the data given to us.
 
-                    _context->reset_after_reversed_read_skip();
-
-                    _sst->get_stats().on_partition_seek();
-                    auto open_end_marker = _index_reader->reverse_end_open_marker();
-                    if (open_end_marker) {
-                        _consumer.set_range_tombstone(open_end_marker->tomb);
-                    } else {
-                        _consumer.set_range_tombstone({});
-                    }
-                });
+            assert(_reversed_read_sstable_position);
+            auto ip = _index_reader->data_file_positions();
+            if (ip.end >= *_reversed_read_sstable_position) {
+                // The reversing data source was already ahead (in reverse - its position was smaller)
+                // than the index. We must not update the current range tombstone in this case
+                // or reset the context since all fragments up to the new position of the index
+                // will be (or already have been) provided to the context by the source.
             } else {
-                return get_index_reader().advance_to(pos).then([this] {
-                    index_reader& idx = *_index_reader;
-                    auto index_position = idx.data_file_positions();
-                    if (index_position.start <= _context->position()) {
-                        return make_ready_future<>();
-                    }
-                    return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
-                        _sst->get_stats().on_partition_seek();
-                        auto open_end_marker = idx.end_open_marker();
-                        if (open_end_marker) {
-                            _consumer.set_range_tombstone(open_end_marker->tomb);
-                        } else {
-                            _consumer.set_range_tombstone({});
-                        }
-                    });
-                });
+                _context->reset_after_reversed_read_skip();
+
+                _sst->get_stats().on_partition_seek();
+                auto open_end_marker = _index_reader->reverse_end_open_marker();
+                if (open_end_marker) {
+                    _consumer.set_range_tombstone(open_end_marker->tomb);
+                } else {
+                    _consumer.set_range_tombstone({});
+                }
             }
-        });
+        } else {
+            co_await get_index_reader().advance_to(*pos);
+            index_reader& idx = *_index_reader;
+            auto index_position = idx.data_file_positions();
+            if (index_position.start <= _context->position()) {
+                co_return;
+            }
+            co_await skip_to(idx.element_kind(), index_position.start);
+            _sst->get_stats().on_partition_seek();
+            auto open_end_marker = idx.end_open_marker();
+            if (open_end_marker) {
+                _consumer.set_range_tombstone(open_end_marker->tomb);
+            } else {
+                _consumer.set_range_tombstone({});
+            }
+        }
     }
     bool is_initialized() const {
         return bool(_context);
