@@ -1367,7 +1367,7 @@ public:
                 }
             }
 
-            if (host != target && (nodes_to_drain.empty() || nodes_to_drain.contains(host))) {
+            if (host != target && (nodes_to_drain.empty() || node_load.drained)) {
                 nodes_by_load.push_back(host);
                 std::make_heap(node_load.shards_by_load.begin(), node_load.shards_by_load.end(),
                                node_load.shards_by_load_cmp());
@@ -1764,7 +1764,7 @@ public:
             load.update();
             _stats.for_node(dc, host).load = load.avg_load;
 
-            if (!nodes_to_drain.contains(host)) {
+            if (!load.drained) {
                 if (!min_load_node || load.avg_load < min_load) {
                     min_load = load.avg_load;
                     min_load_node = host;
