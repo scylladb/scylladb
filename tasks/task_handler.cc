@@ -117,8 +117,9 @@ future<task_status> task_handler::wait_for_task() {
                 });
             },
             [id] (task_manager::virtual_task_ptr task) -> future<task_status> {
-                auto status = co_await task->get_status(id);
-                co_return get_virtual_task_info(id, status);
+                auto id_ = id;
+                auto status = co_await task->wait(id_);
+                co_return get_virtual_task_info(id_, status);
             }
         }, task_v);
     }));
@@ -165,6 +166,7 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
                 auto status = task_status{
                     .task_id = task.task_status.id,
                     .type = task.type,
+                    .kind = task_kind::node,
                     .scope = task.task_status.scope,
                     .state = task.task_status.state,
                     .is_abortable = task.abortable,
