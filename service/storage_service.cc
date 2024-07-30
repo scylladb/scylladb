@@ -5615,8 +5615,10 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 break;
             }
         }
+    } catch (const raft::request_aborted& e) {
+        rtlogger.warn("raft_topology_cmd {} failed with: {}", cmd.cmd, e);
     } catch (...) {
-        rtlogger.error("raft_topology_cmd failed with: {}", std::current_exception());
+        rtlogger.error("raft_topology_cmd {} failed with: {}", cmd.cmd, std::current_exception());
     }
     co_return result;
 }
