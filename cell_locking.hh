@@ -242,10 +242,10 @@ private:
             if (_cell_count >= _rehash_at_size) {
                 auto new_bucket_count = std::min(_cells.bucket_count() * 2, _cells.bucket_count() + 1024);
                 try {
-                auto buckets = std::make_unique<cells_type::bucket_type[]>(new_bucket_count);
+                    auto buckets = std::make_unique<cells_type::bucket_type[]>(new_bucket_count);
 
-                _cells.rehash(cells_type::bucket_traits(buckets.get(), new_bucket_count));
-                _buckets = std::move(buckets);
+                    _cells.rehash(cells_type::bucket_traits(buckets.get(), new_bucket_count));
+                    _buckets = std::move(buckets);
                 } catch (const std::bad_alloc&) {
                     cell_locker_log.warn("Could not rehash cell_locker partition cells set: bucket_count={} new_bucket_count={}: {}", _cells.bucket_count(), new_bucket_count, std::current_exception());
                 }
@@ -343,10 +343,10 @@ private:
         if (_partition_count >= _rehash_at_size) {
             auto new_bucket_count = std::min(_partitions.bucket_count() * 2, _partitions.bucket_count() + 64 * 1024);
             try {
-            auto buckets = std::make_unique<partitions_type::bucket_type[]>(new_bucket_count);
+                auto buckets = std::make_unique<partitions_type::bucket_type[]>(new_bucket_count);
 
-            _partitions.rehash(partitions_type::bucket_traits(buckets.get(), new_bucket_count));
-            _buckets = std::move(buckets);
+                _partitions.rehash(partitions_type::bucket_traits(buckets.get(), new_bucket_count));
+                _buckets = std::move(buckets);
             } catch (const std::bad_alloc&) {
                 cell_locker_log.warn("Could not rehash cell_locker partitions set: bucket_count={} new_bucket_count={}: {}", _partitions.bucket_count(), new_bucket_count, std::current_exception());
             }
