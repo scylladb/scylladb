@@ -403,7 +403,6 @@ private:
             std::chrono::milliseconds,
             start_hint_manager start_hm,
             gms::generation_type new_generation);
-    future<> start_sys_dist_ks();
 public:
 
     future<> rebuild(sstring source_dc);
