@@ -165,10 +165,6 @@ class view_builder final : public service::migration_listener::only_view_notific
     future<> _started = make_ready_future<>();
     // Used to coordinate between shards the conclusion of the build process for a particular view.
     std::unordered_set<table_id> _built_views;
-    // Counter and promise (both on shard 0 only!) allowing to wait for all
-    // shards to have read the view build statuses
-    unsigned _shards_finished_read = 0;
-    seastar::shared_promise<> _shards_finished_read_promise;
     // Used for testing.
     std::unordered_map<std::pair<sstring, sstring>, seastar::shared_promise<>, utils::tuple_hash> _build_notifiers;
     stats _stats;
