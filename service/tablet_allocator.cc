@@ -995,7 +995,7 @@ public:
             } else {
                 std::pop_heap(src_shards.begin(), src_shards.end(), node_load.shards_by_load_cmp());
                 src = src_shards.back();
-                dst = sketch.next_shard(host);
+                dst = sketch.get_least_loaded_shard(host);
             }
 
             auto push_back = seastar::defer([&] {
@@ -1057,6 +1057,8 @@ public:
             src_info.tablet_count--;
             dst_info.tablet_count_per_table[tablet.table]++;
             src_info.tablet_count_per_table[tablet.table]--;
+            sketch.pick(host, dst);
+            sketch.unload(host, src);
         }
 
         co_return plan;
