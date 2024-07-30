@@ -20,10 +20,13 @@
   params:
     stat_name: ["exclusive_row", "shared_row", "exclusive_partition", "shared_partition"]
 "replica/database.cc":
+  allowmismatch: true
   params:
     "_dirty_memory_manager.throttle_threshold()": "throttle threshold"
 "seastar/apps/metrics_tester/metrics_tester.cc": skip
 "seastar/tests/unit/metrics_test.cc": skip
+"seastar/tests/unit/metrics_tester.cc": skip
+"seastar/tests/unit/prometheus_http_test.cc": skip
 "service/storage_proxy.cc":
   params:
     COORDINATOR_STATS_CATEGORY: "storage_proxy_coordinator"
@@ -33,6 +36,7 @@
     _long_description_prefix: ["total number of write requests", "number of write requests that failed", "background_replica_writes_failed", "number of write operations in a read repair context"]
     _category: "storage_proxy_coordinator"
   allowmismatch: true
+"thrift/server.cc": skip
 "tracing/tracing.cc":
   params:
     "max_pending_trace_records + write_event_records_threshold": "max_pending_trace_records + write_event_records_threshold"
@@ -50,7 +54,7 @@
         "100": execution_stages
 "seastar/src/core/fair_queue.cc":
     groups:
-        "400": io_queue
+        "300": io_queue
 "seastar/src/net/net.cc":
     params:
         _stats_plugin_name: ["stats_plugin_name"]
