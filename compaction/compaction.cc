@@ -137,12 +137,18 @@ std::string_view to_string(compaction_type_options::scrub::quarantine_mode quara
 
 static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
-        const api::timestamp_type compacting_max_timestamp) {
+        const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
         return api::min_timestamp;
     }
 
     auto timestamp = api::max_timestamp;
+    if (gc_check_only_compacting_sstables) {
+        // If gc_check_only_compacting_sstables is enabled, do not
+        // check memtables and other sstables not being compacted.
+        return timestamp;
+    }
+
     auto memtable_min_timestamp = table_s.min_memtable_timestamp();
     // Use memtable timestamp if it contains data older than the sstables being compacted,
     // and if the memtable also contains the key we're calculating max purgeable timestamp for.
@@ -890,7 +896,7 @@ private:
             };
         }
         return [this] (const dht::decorated_key& dk) {
-            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp);
+            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, _tombstone_gc_state_with_commitlog_check_disabled.has_value());
         };
     }
 
