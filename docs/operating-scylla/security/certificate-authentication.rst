@@ -11,7 +11,7 @@ Procedure
 
 #. Enable authentication
 
-   Enable authentication and define authorized roles in the cluster as described in the `Enable Authentication </operating-scylla/security/authentication/>`_ document. 
+   Enable authentication and define authorized roles in the cluster as described in the :doc:`Enable Authentication </operating-scylla/security/authentication/>` document. 
 
 #. Enable CQL transport TLS using client certificate verification
    
