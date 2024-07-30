@@ -50,7 +50,7 @@
         "100": execution_stages
 "seastar/src/core/fair_queue.cc":
     groups:
-        "400": io_queue
+        "350": io_queue
 "seastar/src/net/net.cc":
     params:
         _stats_plugin_name: ["stats_plugin_name"]
@@ -62,3 +62,4 @@
         "_queue_name + \"_rx_bytes\"": ["queue"]
         "_queue_name + \"_tx_frags\"": ["queue"]
         "_queue_name + \"_rx_frags\"": ["queue"]
+"seastar/tests/unit/metrics_tester.cc": skip
