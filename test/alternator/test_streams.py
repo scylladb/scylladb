@@ -1595,11 +1595,14 @@ def test_stream_list_tables(dynamodb):
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, ]
     ) as table:
-            # Check that the long and unique table name (created by
-            # unique_table_name()) isn't a substring of any table name,
-            # except of course the table itself:
-            for listed_name in list_tables(dynamodb):
-                assert table.name == listed_name or table.name not in listed_name
+            # Check that the test table is listed by ListTable, but its long
+            # and unique name (created by unique_table_name()) isn't a proper
+            # substring of any other table's name.
+            tables = list_tables(dynamodb)
+            assert table.name in tables
+            for listed_name in tables:
+                if table.name != listed_name:
+                    assert table.name not in listed_name
 
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
