@@ -1915,7 +1915,7 @@ void view_builder::setup_metrics() {
     });
 }
 
-future<> view_builder::start(service::migration_manager& mm) {
+future<> view_builder::start(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
     _started = do_with(view_builder_init_state{}, [this, &mm] (view_builder_init_state& vbi) {
         return seastar::async([this, &mm, &vbi] {
             // Guard the whole startup routine with a semaphore,

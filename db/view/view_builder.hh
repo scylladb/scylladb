@@ -11,6 +11,7 @@
 #include "query-request.hh"
 #include "service/migration_listener.hh"
 #include "utils/serialized_action.hh"
+#include "utils/cross-shard-barrier.hh"
 #include "replica/database.hh"
 
 #include <seastar/core/abort_source.hh>
@@ -198,7 +199,7 @@ public:
      * Requires that all views have been loaded from the system tables and are accessible
      * through the database, and that the commitlog has been replayed.
      */
-    future<> start(service::migration_manager&);
+    future<> start(service::migration_manager&, utils::cross_shard_barrier b = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}));
 
     /**
      * Drains view building in order to prepare it for shutdown.
