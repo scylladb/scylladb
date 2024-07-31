@@ -90,15 +90,13 @@ future<std::vector<partition_key>> index_read(schema_ptr schema, sstring path) {
 }
 
 SEASTAR_TEST_CASE(simple_index_read) {
-    return index_read(uncompressed_schema(), uncompressed_dir()).then([] (auto vec) {
-        BOOST_REQUIRE(vec.size() == 4);
-    });
+    auto vec = co_await index_read(uncompressed_schema(), uncompressed_dir());
+    BOOST_REQUIRE(vec.size() == 4);
 }
 
 SEASTAR_TEST_CASE(composite_index_read) {
-    return index_read(composite_schema(), "test/resource/sstables/composite").then([] (auto vec) {
-        BOOST_REQUIRE(vec.size() == 20);
-    });
+    auto vec = co_await index_read(composite_schema(), "test/resource/sstables/composite");
+    BOOST_REQUIRE(vec.size() == 20);
 }
 
 template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
