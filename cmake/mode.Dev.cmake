@@ -11,7 +11,8 @@ set(Seastar_DEFINITIONS_DEV
   SCYLLA_BUILD_MODE=${scylla_build_mode_Dev}
   DEVEL
   SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION
-  SCYLLA_ENABLE_ERROR_INJECTION)
+  SCYLLA_ENABLE_ERROR_INJECTION
+  SCYLLA_ENABLE_PREEMPTION_SOURCE)
 foreach(definition ${Seastar_DEFINITIONS_DEV})
   add_compile_definitions(
     $<$<CONFIG:Dev>:${definition}>)
