@@ -610,14 +610,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return ss.local().get_schema_version();
     });
 
-    ss::get_all_data_file_locations.set(r, [&ctx](const_req req) {
-        return container_to_vec(ctx.db.local().get_config().data_file_directories());
-    });
-
-    ss::get_saved_caches_location.set(r, [&ctx](const_req req) {
-        return ctx.db.local().get_config().saved_caches_directory();
-    });
-
     ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req);
         auto table = req->get_query_param("cf");
@@ -1559,8 +1551,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_release_version.unset(r);
     ss::get_scylla_release_version.unset(r);
     ss::get_schema_version.unset(r);
-    ss::get_all_data_file_locations.unset(r);
-    ss::get_saved_caches_location.unset(r);
     ss::get_range_to_endpoint_map.unset(r);
     ss::get_pending_range_to_endpoint_map.unset(r);
     ss::describe_ring.unset(r);
