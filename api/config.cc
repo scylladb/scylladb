@@ -10,6 +10,7 @@
 #include "api/config.hh"
 #include "api/api-doc/config.json.hh"
 #include "api/api-doc/storage_proxy.json.hh"
+#include "api/api-doc/storage_service.json.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
 #include <sstream>
@@ -19,6 +20,7 @@
 namespace api {
 using namespace seastar::httpd;
 namespace sp = httpd::storage_proxy_json;
+namespace ss = httpd::storage_service_json;
 
 template<class T>
 json::json_return_type get_json_return_type(const T& val) {
@@ -183,6 +185,14 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         return make_ready_future<json::json_return_type>(seastar::json::json_void());
     });
 
+    ss::get_all_data_file_locations.set(r, [&cfg](const_req req) {
+        return container_to_vec(cfg.data_file_directories());
+    });
+
+    ss::get_saved_caches_location.set(r, [&cfg](const_req req) {
+        return cfg.saved_caches_directory();
+    });
+
 }
 
 void unset_config(http_context& ctx, routes& r) {
@@ -201,6 +211,8 @@ void unset_config(http_context& ctx, routes& r) {
     sp::set_range_rpc_timeout.unset(r);
     sp::get_truncate_rpc_timeout.unset(r);
     sp::set_truncate_rpc_timeout.unset(r);
+    ss::get_all_data_file_locations.unset(r);
+    ss::get_saved_caches_location.unset(r);
 }
 
 }
