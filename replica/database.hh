@@ -1881,6 +1881,8 @@ public:
     future<> clear_inactive_reads_for_tablet(table_id table, dht::token_range tablet_range);
 };
 
+sstring format_table_directory_name(sstring name, table_id id);
+
 } // namespace replica
 
 future<> start_large_data_handler(sharded<replica::database>& db);

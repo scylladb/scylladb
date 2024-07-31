@@ -1200,9 +1200,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     const db::config& db_config = db.get_config();
 
     for (auto& extra : db_config.data_file_directories()) {
-        auto uuid_sstring = s.id().to_sstring();
-        boost::erase_all(uuid_sstring, "-");
-        cfg.all_datadirs.push_back(format("{}/{}/{}-{}", extra, s.ks_name(), s.cf_name(), uuid_sstring));
+        cfg.all_datadirs.push_back(format("{}/{}/{}", extra, s.ks_name(), format_table_directory_name(s.cf_name(), s.id())));
     }
     cfg.datadir = cfg.all_datadirs[0];
     cfg.enable_disk_reads = _config.enable_disk_reads;
@@ -2601,6 +2599,12 @@ static std::pair<sstring, table_id> extract_cf_name_and_uuid(const sstring& dire
         on_internal_error(dblog, format("table directory entry name '{}' is invalid: no '-' separator found at pos {}", directory_name, pos));
     }
     return std::make_pair(directory_name.substr(0, pos), table_id(utils::UUID(directory_name.substr(pos + 1))));
+}
+
+sstring format_table_directory_name(sstring name, table_id id) {
+    auto uuid_sstring = id.to_sstring();
+    boost::erase_all(uuid_sstring, "-");
+    return format("{}-{}", name, uuid_sstring);
 }
 
 future<std::unordered_map<sstring, database::snapshot_details>> database::get_snapshot_details() {
