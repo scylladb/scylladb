@@ -1217,10 +1217,16 @@ public:
 
         migration_candidate min_candidate = co_await get_candidate(src, dst);
 
-        // Given new_src as the source replica, evaluate all destinations.
+        // Given src as the source replica, evaluate all destinations.
         // Updates min_candidate with the best candidate, if better is found.
-        auto evaluate_targets = [&] (tablet_replica new_src) -> future<> {
+        auto evaluate_targets = [&] (global_tablet_id tablet, tablet_replica src, migration_badness src_badness) -> future<> {
+            migration_badness min_dst_badness;
+            std::optional<host_id> min_dst_host;
+            std::vector<host_id> best_hosts;
+
+            // First, find the best target nodes in terms of node badness.
             for (auto& new_target : nodes_by_load_dst) {
+                co_await coroutine::maybe_yield();
                 auto& new_target_info = nodes[new_target];
 
                 // Skip movements which may harm convergence.
@@ -1228,21 +1234,57 @@ public:
                     continue;
                 }
 
-                for (shard_id new_dst_shard = 0; new_dst_shard < new_target_info.shard_count; new_dst_shard++) {
+                auto badness = evaluate_dst_badness(nodes, tablet.table, tablet_replica{new_target, 0});
+                if (!min_dst_host || badness.dst_node_badness < min_dst_badness.dst_node_badness) {
+                    min_dst_badness = badness;
+                    min_dst_host = new_target;
+                    best_hosts.clear();
+                }
+                if (badness.dst_node_badness == min_dst_badness.dst_node_badness) {
+                    best_hosts.push_back(new_target);
+                }
+            }
+
+            if (!min_dst_host) {
+                lblogger.debug("No viable targets for src node {}", src.host);
+                co_return;
+            }
+
+            std::optional<tablet_replica> min_dst;
+
+            // Find the best shards on best targets.
+
+            for (auto host : best_hosts) {
+                for (shard_id new_dst_shard = 0; new_dst_shard < nodes[host].shard_count; new_dst_shard++) {
                     co_await coroutine::maybe_yield();
-                    auto new_dst = tablet_replica{new_target, new_dst_shard};
-                    auto candidate = co_await get_candidate(new_src, new_dst);
-                    lblogger.trace("candidate: {}", candidate);
-                    if (candidate.badness < min_candidate.badness) {
-                        min_candidate = candidate;
-                        if (!min_candidate.badness.is_bad()) {
-                            break;
-                        }
+                    auto new_dst = tablet_replica{host, new_dst_shard};
+                    auto badness = evaluate_dst_badness(nodes, tablet.table, new_dst);
+                    if (!min_dst || badness < min_dst_badness) {
+                        min_dst_badness = badness;
+                        min_dst = new_dst;
                     }
                 }
-                if (!min_candidate.badness.is_bad()) {
+                if (min_dst && !min_dst_badness.is_bad()) {
                     break;
                 }
+            }
+
+            if (!min_dst) {
+                on_internal_error(lblogger, format("No destination shards on {}", best_hosts));
+            }
+
+            auto candidate = migration_candidate{
+                    tablet, src, *min_dst,
+                    migration_badness{src_badness.shard_badness(),
+                                      src_badness.node_badness(),
+                                      min_dst_badness.shard_badness(),
+                                      min_dst_badness.node_badness()}
+            };
+
+            lblogger.trace("candidate: {}", candidate);
+
+            if (candidate.badness < min_candidate.badness) {
+                min_candidate = candidate;
             }
         };
 
@@ -1251,20 +1293,42 @@ public:
 
             // Consider better alternatives.
             if (drain_skipped) {
-                co_await evaluate_targets(src);
+                auto source_tablet = src_node_info.skipped_candidates.back().tablet;
+                auto badness = evaluate_src_badness(nodes, source_tablet.table, src);
+                co_await evaluate_targets(source_tablet, src, badness);
             } else {
-                // Consider different source shards.
-                for (auto new_src_shard: src_node_info.shards_by_load) {
-                    co_await coroutine::maybe_yield();
+                // Find a better candidate.
+                // Consider different tables. For each table, first find the best source shard.
+                // Then find the best target node. Then find the best shard on the target node.
+                for (auto [table, load] : src_node_info.tablet_count_per_table) {
+                    migration_badness min_src_badness;
+                    std::optional<tablet_replica> min_src;
 
-                    auto& new_src_shard_info = src_node_info.shards[new_src_shard];
-                    if (!new_src_shard_info.has_candidates()) {
+                    if (load == 0) {
+                        lblogger.trace("No src candidates for table {} on node {}", table, src.host);
                         continue;
                     }
 
-                    auto new_src = tablet_replica{src.host, new_src_shard};
-                    co_await evaluate_targets(new_src);
+                    for (auto new_src_shard: src_node_info.shards_by_load) {
+                        auto new_src = tablet_replica{src.host, new_src_shard};
+                        if (src_node_info.shards[new_src_shard].candidates[table].empty()) {
+                            lblogger.trace("No src candidates for table {} on shard {}", table, new_src);
+                            continue;
+                        }
+                        auto badness = evaluate_src_badness(nodes, table, new_src);
+                        if (!min_src || badness < min_src_badness) {
+                            min_src_badness = badness;
+                            min_src = new_src;
+                        }
+                    }
 
+                    if (!min_src) {
+                        lblogger.debug("No candidates for table {} on {}", table, src.host);
+                        continue;
+                    }
+
+                    auto tablet = *src_node_info.shards[min_src->shard].candidates[table].begin();
+                    co_await evaluate_targets(tablet, *min_src, min_src_badness);
                     if (!min_candidate.badness.is_bad()) {
                         break;
                     }
