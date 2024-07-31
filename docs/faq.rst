@@ -207,7 +207,7 @@ If you are creating a production cluster or if your cluster is going to have mor
 
 Our general recommendation is to always use a :code:`NetworkTopologyStrategy` and use :code:`Ec2XXX` snitches on AWS based clusters and :code:`GossipingPropertyFileSnitch` in all other cases.
 
-A description of all snitch options we support may be found here: `Snitches <https://github.com/scylladb/scylla/wiki/Snitches>`_.
+A description of all snitch options we support may be found in :doc:`Snitches </operating-scylla/system-configuration/snitch>`.
 
 Note: trying to mix a :code:`SimpleSnitch` with a :code:`DC-aware strategy` or a :code:`DC-aware snitch` with a :code:`SimpleStrategy` may cause your cluster not to work as intended therefore we **strongly discourage** these types of configurations in general.
 
