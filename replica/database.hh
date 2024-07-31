@@ -1881,7 +1881,11 @@ public:
     future<> clear_inactive_reads_for_tablet(table_id table, dht::token_range tablet_range);
 };
 
+// A pair of helper functions to make directory name for a table
+// out of its name and uuid, and to parse the directory name back
+// into name and uuid of the table
 sstring format_table_directory_name(sstring name, table_id id);
+std::pair<sstring, table_id> parse_table_directory_name(const sstring&);
 
 } // namespace replica
 
