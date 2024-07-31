@@ -20,6 +20,12 @@ from test.topology.util import wait_until_topology_upgrade_finishes, enter_recov
 def auth_data():
     return [
         {
+            "statement": "INSERT INTO system_distributed.service_levels (service_level, timeout, workload_type) VALUES (?, ?, ?)",
+            "rows": [
+                ("sl1", None, None),
+            ]
+        },
+        {
             "statement": "INSERT INTO system_auth.roles (role, can_login, is_superuser, member_of, salted_hash) VALUES (?, ?, ?, ?, ?)",
             "rows": [
                 ("user 1", True, False, frozenset({'users'}), "salt1?"),
@@ -37,7 +43,7 @@ def auth_data():
         {
             "statement": "INSERT INTO system_auth.role_attributes (role, name, value) VALUES (?, ?, ?)",
             "rows": [
-                ("users", "service_level", "sl:fefe"),
+                ("users", "service_level", "sl1"),
             ]
         },
     ]
@@ -103,17 +109,17 @@ async def check_auth_v2_data_migration(manager: ManagerClient, hosts):
             continue
         member_of = frozenset(row.member_of) if row.member_of else None
         roles.add((row.role, row.can_login, row.is_superuser, member_of, row.salted_hash))
-    assert roles == set(data[0]["rows"])
+    assert roles == set(data[1]["rows"])
 
     role_members = set()
     for row in await cql.run_async("SELECT * FROM system.role_members"):
         role_members.add((row.role, row.member))
-    assert role_members == set(data[1]["rows"])
+    assert role_members == set(data[2]["rows"])
 
     role_attributes = set()
     for row in await cql.run_async("SELECT * FROM system.role_attributes"):
         role_attributes.add((row.role, row.name, row.value))
-    assert role_attributes == set(data[2]["rows"])
+    assert role_attributes == set(data[3]["rows"])
 
 
 async def check_auth_v2_works(manager: ManagerClient, hosts):
