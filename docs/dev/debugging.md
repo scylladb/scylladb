@@ -980,3 +980,51 @@ $1 = (seastar::sharded<replica::database> *) 0x7fffffffbdc0
 (gdb) p $local_db
 $2 = (replica::database *) 0x60000575e010
 ```
+
+#### Getting Linux process info
+
+Some information is often placed in the notes of the ELF file. Those can be read
+with the help of `eu-readelf --notes $core`. The information includes
+
+Process IDs
+```
+    pid: 42359, ppid: 28633, pgrp: 42359, sid: 42359
+    uid: 1000, gid: 1000, pid: 42359, ppid: 28633, pgrp: 42359, sid: 42359
+```
+
+CLI parameters including name and arguments
+```
+    fname: scylla
+    psargs: /home/xemul/src/scylla/build/dev/scylla --smp 2 -m 1G --collectd 0 --overprovis
+```
+
+Signals information
+```
+    info.si_signo: 6, info.si_code: 0, info.si_errno: 0, cursig: 6
+    sigpend: <>
+    sighold: ~<1-4,6,8-9,11,14-15,18-22,32-33,35>
+```
+
+Runtime process information like times and states
+```
+    utime: 1.207371, stime: 1.736005, cutime: 0.000000, cstime: 0.000000
+    state: 0, sname: R, zomb: 0, nice: 0, flag: 0x0000000000400600
+```
+
+File mappings
+```
+    238 files:
+      7ff5815e2000-7ff5815f2000 00000000 65536       /[aio] (deleted)
+      7ff5815f2000-7ff581603000 00000000 69632       /[aio] (deleted)
+      7ff581603000-7ff581613000 00000000 65536       /[aio] (deleted)
+      7ff581613000-7ff58163b000 00000000 163840      /usr/lib64/libc.so.6
+      7ff58163b000-7ff5817a4000 00028000 1478656     /usr/lib64/libc.so.6
+      7ff5817a4000-7ff5817f2000 00191000 319488      /usr/lib64/libc.so.6
+      7ff5817f2000-7ff5817f6000 001de000 16384       /usr/lib64/libc.so.6
+      7ff5817f6000-7ff5817f8000 001e2000 8192        /usr/lib64/libc.so.6
+      7ff581800000-7ff58189d000 00000000 643072      /usr/lib64/libstdc++.so.6.0.33
+      7ff58189d000-7ff5819d5000 0009d000 1277952     /usr/lib64/libstdc++.so.6.0.33
+      7ff5819d5000-7ff581a51000 001d5000 507904      /usr/lib64/libstdc++.so.6.0.33
+      7ff581a51000-7ff581a5e000 00251000 53248       /usr/lib64/libstdc++.so.6.0.33
+      7ff581a5e000-7ff581a5f000 0025e000 4096        /usr/lib64/libstdc++.so.6.0.33
+```
