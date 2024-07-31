@@ -209,8 +209,8 @@ Two time series helper tables were introduced that will help simplify the queryi
 
 ``sessions_time_idx`` is for querying regular traces. Another table, the ``node_slow_log_time_idx`` table, is for querying slow query records.
 
-``sessions_time_idx`` and ``node_slow_log_time`` table column descriptions
-==========================================================================
+``sessions_time_idx`` and ``node_slow_log_time_idx`` table column descriptions
+===============================================================================
 
 * ``minute``: the minute, from epoch time, from when the record was taken.
 * ``started_at``: a timestamp taken when the tracing session has begun.
