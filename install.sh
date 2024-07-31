@@ -481,13 +481,16 @@ EOS
 EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-housekeeping
 EOS
-            if ! $packaging; then
-                cat << EOS > "$retc"/systemd/system/scylla-housekeeping-$i.service.d/offline.conf
+        done
+    fi
+    if ! $packaging; then
+        for i in daily restart; do
+            install -d -m755 "$retc"/systemd/system/scylla-housekeeping-$i.service.d
+            cat << EOS > "$retc"/systemd/system/scylla-housekeeping-$i.service.d/offline.conf
 [Service]
 ExecStart=
 ExecStart=$rprefix/scripts/scylla-housekeeping --uuid-file \$UUID_FILE -q -c \$CONFIG_FILE version --mode ${i:0:1}
 EOS
-            fi
         done
     fi
 elif ! $without_systemd; then
