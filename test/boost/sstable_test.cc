@@ -187,16 +187,12 @@ static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring writ
 }
 
 static future<> check_component_integrity(component_type component) {
-    auto tmp = make_lw_shared<tmpdir>();
-    auto s = make_schema_for_compressed_sstable();
-    sstables::generation_type gen(1);
-    return write_sst_info(s, "test/resource/sstables/compressed", tmp->path().string(), gen).then([component, tmp] {
-        auto file_path_a = sstable::filename("test/resource/sstables/compressed", "ks", "cf", la, sstables::generation_type(1), big, component);
-        auto file_path_b = sstable::filename(tmp->path().string(), "ks", "cf", la, sstables::generation_type(2), big, component);
-        return tests::compare_files(file_path_a, file_path_b).then([] (auto eq) {
-            BOOST_REQUIRE(eq);
-        });
-    }).then([tmp] {});
+    tmpdir tmp;
+    co_await write_sst_info(make_schema_for_compressed_sstable(), "test/resource/sstables/compressed", tmp.path().string(), sstables::generation_type(1));
+    auto file_path_a = sstable::filename("test/resource/sstables/compressed", "ks", "cf", la, sstables::generation_type(1), big, component);
+    auto file_path_b = sstable::filename(tmp.path().string(), "ks", "cf", la, sstables::generation_type(2), big, component);
+    auto eq = co_await tests::compare_files(file_path_a, file_path_b);
+    BOOST_REQUIRE(eq);
 }
 
 SEASTAR_TEST_CASE(check_compressed_info_func) {
