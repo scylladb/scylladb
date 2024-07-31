@@ -514,11 +514,11 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
 }
 
 future<> raft_server_with_timeouts::add_entry(raft::command command, raft::wait_type type,
-        seastar::abort_source* as, std::optional<raft_timeout> timeout)
+        seastar::abort_source& as, std::optional<raft_timeout> timeout)
 {
     return run_with_timeout([&](abort_source* as) {
             return _group_server.server->add_entry(std::move(command), type, as);
-        }, "add_entry", as, timeout);
+        }, "add_entry", &as, timeout);
 }
 
 future<> raft_server_with_timeouts::modify_config(std::vector<raft::config_member> add, std::vector<raft::server_id> del,
