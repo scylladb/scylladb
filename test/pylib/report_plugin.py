@@ -1,9 +1,12 @@
-import logging
+#
+# Copyright (C) 2024-present ScyllaDB
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 
 import allure
 import pytest
 
-logger = logging.getLogger(name=__name__)
 
 
 class ReportPlugin:
