@@ -102,11 +102,9 @@ SEASTAR_TEST_CASE(composite_index_read) {
 template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
 future<> summary_query(schema_ptr schema, sstring path, sstables::generation_type::int_t generation) {
     return test_using_reusable_sst(std::move(schema), path, generation, [] (test_env& env, sstable_ptr ptr) {
-        return sstables::test(ptr).read_summary_entry(Position).then([ptr] (auto entry) {
-            BOOST_REQUIRE(entry.position == EntryPosition);
-            BOOST_REQUIRE(entry.key.size() == EntryKeySize);
-            return make_ready_future<>();
-        });
+        auto entry = sstables::test(ptr).read_summary_entry(Position).get();
+        BOOST_REQUIRE(entry.position == EntryPosition);
+        BOOST_REQUIRE(entry.key.size() == EntryKeySize);
     });
 }
 
