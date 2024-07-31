@@ -116,6 +116,7 @@ json::json_return_type make_streamed(rjson::value&& value) {
             elogger.error("Exception during streaming HTTP response: {}", ex);
         }
         co_await los.close();
+        co_await rjson::destroy_gently(std::move(*lrs));
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }

@@ -416,6 +416,12 @@ public:
     }
 };
 
+inline bool is_leaf(const rjson::value& value) {
+    return !value.IsObject() && !value.IsArray();
+}
+
+future<> destroy_gently(rjson::value&& value);
+
 } // end namespace rjson
 
 template <> struct fmt::formatter<rjson::value> {
