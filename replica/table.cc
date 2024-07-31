@@ -34,6 +34,7 @@
 #include "compaction/table_state.hh"
 #include "sstables/sstable_directory.hh"
 #include "db/system_keyspace.hh"
+#include "db/extensions.hh"
 #include "query-result-writer.hh"
 #include "db/view/view_update_generator.hh"
 #include <boost/range/adaptor/transformed.hpp>
@@ -1299,6 +1300,8 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
                     allowed_retries = should_retry(ep) ? default_retries : 0;
                 } else if (auto ep = try_catch<storage_io_error>(ex)) {
                     allowed_retries = should_retry(ep) ? default_retries : 0;
+                } else if (try_catch<db::extension_storage_exception>(ex)) {
+                    allowed_retries = default_retries;
                 } else {
                     allowed_retries = 0;
                 }
