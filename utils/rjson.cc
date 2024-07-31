@@ -556,4 +556,36 @@ sstring quote_json_string(const sstring& value) {
     return oss.str();
 }
 
+static future<> destroy_gently_nonleaf(rjson::value&& value_in) {
+    // We want the caller to move the value into this function, so 'value_in' is an rvalue reference.
+    // We want to hold the value while it's being destroyed, so we move it into the coroutine frame
+    // as the local 'value'.
+    auto value = std::move(value_in);
+
+    if (value.IsObject()) {
+        for (auto it = value.MemberBegin(); it != value.MemberEnd();) {
+            co_await destroy_gently(std::move(it->value));
+            it = value.EraseMember(it);
+        }
+    } else if (value.IsArray()) {
+        for (auto i = value.Size(); i > 0; --i) {
+            auto index = i - 1;
+            co_await destroy_gently(std::move(value[index]));
+            value.Erase(value.Begin() + index);
+        }
+    }
+}
+
+future<> destroy_gently(rjson::value&& value) {
+    // Most nodes will be leaves, so we use a non-coroutine destroy_gently() for them. The
+    // few non-leaves will be handled by the coroutine destroy_gently_nonleaf(). We could have
+    // coded the whole thing as a non-coroutine, but that's more difficult and not worth the
+    // marginal improvement.
+    if (rjson::is_leaf(value)) {
+        return make_ready_future<>();
+    } else {
+        return destroy_gently_nonleaf(std::move(value));
+    }
+}
+
 } // end namespace rjson
