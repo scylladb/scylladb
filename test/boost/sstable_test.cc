@@ -167,7 +167,6 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
         BOOST_REQUIRE(summary.entries.size() == 1);
         BOOST_REQUIRE(bytes_view(summary.first_key) == as_bytes("vinna"));
         BOOST_REQUIRE(bytes_view(summary.last_key) == as_bytes("finna"));
-        return make_ready_future<>();
     });
 }
 
