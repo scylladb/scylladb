@@ -2097,7 +2097,7 @@ void compaction_manager::add(table_state& t) {
     }
 }
 
-future<> compaction_manager::remove(table_state& t) noexcept {
+future<> compaction_manager::remove(table_state& t, future<> cg_closed_gate_fut) noexcept {
     auto& c_state = get_compaction_state(&t);
     auto erase_state = defer([&t, &c_state, this] () noexcept {
        c_state.backlog_tracker->disable();
@@ -2116,6 +2116,9 @@ future<> compaction_manager::remove(table_state& t) noexcept {
         co_await stop_ongoing_compactions("table removal", &t);
         co_await std::move(close_gate);
     }
+
+    // Compaction group's gate should be closed before compaction state is erased.
+    co_await std::move(cg_closed_gate_fut);
 
 #ifdef DEBUG
     auto found = false;

@@ -2185,12 +2185,11 @@ future<> compaction_group::stop() noexcept {
     auto closed_gate_fut = _async_gate.close();
 
     auto flush_future = co_await seastar::coroutine::as_future(flush());
-    co_await _t._compaction_manager.remove(as_table_state());
+    co_await _t._compaction_manager.remove(as_table_state(), std::move(closed_gate_fut));
 
     if (flush_future.failed()) {
         co_await seastar::coroutine::return_exception_ptr(flush_future.get_exception());
     }
-    co_await std::move(closed_gate_fut);
 }
 
 bool compaction_group::empty() const noexcept {
