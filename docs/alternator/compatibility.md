@@ -123,10 +123,6 @@ the secret key is the `salted_hash`, i.e., the secret key can be found by
 
 <!--- REMOVE IN FUTURE VERSIONS - Remove the note below in version 6.1 -->
 
-(Note: If you upgraded from version 5.4 to version 6.0 without 
-[enabling consistent topology updates](../upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology.rst), 
-the table name is `system_auth.roles`.)
-
 By default, authorization is not enforced at all. It can be turned on
 by providing an entry in Scylla configuration:
     `alternator_enforce_authorization: true`

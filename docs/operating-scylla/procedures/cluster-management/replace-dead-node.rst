@@ -1,8 +1,6 @@
 Replace a Dead Node in a ScyllaDB Cluster 
 ******************************************
 
-.. scylladb_include_flag:: upgrade-note-replace-node.rst
-
 Replace dead node operation will cause the other nodes in the cluster to stream data to the node that was replaced. This operation can take some time (depending on the data size and network bandwidth).
 
 This procedure is for replacing one dead node. You can replace more than one dead node in parallel.
@@ -194,7 +192,3 @@ In this case, the node's data will be cleaned after restart. To remedy this, you
 
 Sometimes the public/ private IP of instance is changed after restart. If so refer to the Replace Procedure_ above.
 
-
-.. _replace-node-upgrade-info:
-
-.. scylladb_include_flag:: upgrade-warning-replace-node.rst
