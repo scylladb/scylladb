@@ -55,7 +55,7 @@ In ScyllaDB 6.1, the Raft-based *consistent topology changes* feature is mandato
   cluster with version 6.0, no action is required before upgrading to 6.1.
 * If you did not enable the feature after upgrading from 5.4 to 6.0, you must
   enable the feature before upgrading to 6.1 by following
-  the `Enable Consistent Topology Updates <https://opensource.docs.scylladb.com/stable/upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology.html>`_
+  the `Enable Consistent Topology Updates <https://opensource.docs.scylladb.com/branch-6.0/upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology.html>`_
   procedure.
 
 To verify if the *consistent topology changes* feature is enabled on your cluster,
