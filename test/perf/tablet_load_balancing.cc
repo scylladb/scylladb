@@ -221,7 +221,7 @@ struct fmt::formatter<params> : fmt::formatter<string_view> {
     }
 };
 
-future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware) {
+future<results> test_load_balancing_with_many_tables(params p, bool table_aware) {
     auto cfg = tablet_cql_test_config();
     results global_res;
     co_await do_with_cql_env_thread([&] (auto& e) {
@@ -371,7 +371,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         testlog.debug("tablet metadata: {}", stm.get()->tablets());
 
-        e.get_tablet_allocator().local().set_use_table_aware_balancing(tablet_aware);
+        e.get_tablet_allocator().local().set_use_table_aware_balancing(table_aware);
 
         check_balance();
 
