@@ -1770,31 +1770,27 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     auto slice = query::partition_slice(std::move(cr_ranges), std::move(static_columns),
         std::move(regular_columns), { }, { }, query::max_rows);
 
-    return do_with(std::move(slice), std::move(m), cf.write_in_progress(), std::vector<locked_cell>(),
-                   [this, &cf, timeout, trace_state = std::move(trace_state)] (const query::partition_slice& slice, mutation& m, const utils::phased_barrier::operation& op, std::vector<locked_cell>& locks) mutable {
-        tracing::trace(trace_state, "Acquiring counter locks");
-        return cf.lock_counter_cells(m, timeout).then([&, m_schema = cf.schema(), trace_state = std::move(trace_state), timeout, this] (std::vector<locked_cell> lcs) mutable {
-            locks = std::move(lcs);
+    auto op = cf.write_in_progress();
 
-            // Before counter update is applied it needs to be transformed from
-            // deltas to counter shards. To do that, we need to read the current
-            // counter state for each modified cell...
+    tracing::trace(trace_state, "Acquiring counter locks");
+    auto locks = co_await cf.lock_counter_cells(m, timeout);
 
-            tracing::trace(trace_state, "Reading counter values from the CF");
-            auto permit = get_reader_concurrency_semaphore().make_tracking_only_permit(m_schema, "counter-read-before-write", timeout, trace_state);
-            return counter_write_query(m_schema, cf.as_mutation_source(), std::move(permit), m.decorated_key(), slice, trace_state)
-                    .then([this, &cf, &m, m_schema, timeout, trace_state] (auto mopt) {
-                // ...now, that we got existing state of all affected counter
-                // cells we can look for our shard in each of them, increment
-                // its clock and apply the delta.
-                transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable(), get_token_metadata().get_my_id());
-                tracing::trace(trace_state, "Applying counter update");
-                return this->apply_with_commitlog(cf, m, timeout);
-            }).then([&m] {
-                return std::move(m);
-            });
-        });
-    });
+    // Before counter update is applied it needs to be transformed from
+    // deltas to counter shards. To do that, we need to read the current
+    // counter state for each modified cell...
+
+    tracing::trace(trace_state, "Reading counter values from the CF");
+    auto permit = get_reader_concurrency_semaphore().make_tracking_only_permit(cf.schema(), "counter-read-before-write", timeout, trace_state);
+    auto mopt = co_await counter_write_query(cf.schema(), cf.as_mutation_source(), std::move(permit), m.decorated_key(), slice, trace_state);
+
+    // ...now, that we got existing state of all affected counter
+    // cells we can look for our shard in each of them, increment
+    // its clock and apply the delta.
+    transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable(), get_token_metadata().get_my_id());
+    tracing::trace(trace_state, "Applying counter update");
+    co_await apply_with_commitlog(cf, m, timeout);
+
+    co_return m;
 }
 
 future<> memtable_list::flush() {
