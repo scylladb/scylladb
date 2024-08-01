@@ -88,12 +88,6 @@ def datadir_p():
     else:
         return Path('/var/lib/scylla')
 
-def housekeepingdatadir_p():
-    if is_nonroot():
-        return scylladir_p() / 'scylla-housekeeping'
-    else:
-        return Path('/var/lib/scylla-housekeeping')
-
 def scyllabindir_p():
     return scylladir_p() / 'bin'
 
@@ -114,9 +108,6 @@ def etcdir():
 
 def datadir():
     return str(datadir_p())
-
-def housekeepingdatadir():
-    return str(housekeepingdatadir_p())
 
 def scyllabindir():
     return str(scyllabindir_p())
