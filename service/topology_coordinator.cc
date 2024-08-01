@@ -2901,6 +2901,12 @@ future<> topology_coordinator::run() {
                 co_await await_event();
                 rtlogger.debug("topology coordinator fiber got an event");
             }
+            co_await utils::get_local_injector().inject("wait-after-topology-coordinator-gets-event", [] (auto& handler) -> future<> {
+                rtlogger.info("wait-after-topology-coordinator-gets-event injection hit");
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{30});
+                rtlogger.info("wait-after-topology-coordinator-gets-event injection done");
+            });
+
         } catch (...) {
             sleep = handle_topology_coordinator_error(std::current_exception());
         }
