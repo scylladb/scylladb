@@ -2987,7 +2987,8 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         }
 
     } catch (exceptions::configuration_exception const& e) {
-        thread_local boost::regex re("Datacenter [0-9]+ doesn't have enough nodes for replication_factor=[0-9]+");
+        thread_local boost::regex re(
+                "Datacenter [0-9]+ doesn't have enough token-owning nodes for replication_factor=[0-9]+");
         boost::cmatch what;
         if (!boost::regex_search(e.what(), what, re)) {
             BOOST_FAIL("Unexpected exception: " + std::string(e.what()));

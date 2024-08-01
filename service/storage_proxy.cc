@@ -3895,10 +3895,10 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                             auto local_addr = _p.my_address();
                             auto& topology = _ermp->get_topology();
                             auto local_dc = topology.get_datacenter();
-                            auto& local_endpoints = topology.get_datacenter_racks().at(local_dc);
+                            auto local_token_owners = _ermp->get_token_metadata().get_datacenter_racks_token_owners_ips().at(local_dc);
                             auto local_rack = topology.get_rack();
                             auto chosen_endpoints = endpoint_filter(std::bind_front(&storage_proxy::is_alive, &_p), local_addr,
-                                                                    local_rack, local_endpoints);
+                                                                    local_rack, local_token_owners);
 
                             if (chosen_endpoints.empty()) {
                                 if (_cl == db::consistency_level::ANY) {

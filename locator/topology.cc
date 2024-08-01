@@ -565,6 +565,26 @@ void topology::for_each_node(std::function<void(const node*)> func) const {
     }
 }
 
+std::unordered_set<const node*> topology::get_nodes() const {
+    std::unordered_set<const node*> nodes;
+    for (const auto& np : _nodes) {
+        if (np && !np->left() && !np->is_none()) {
+            nodes.insert(np.get());
+        }
+    }
+    return nodes;
+}
+
+std::unordered_set<gms::inet_address> topology::get_all_ips() const {
+    std::unordered_set<gms::inet_address> ips;
+    for (const auto& np : _nodes) {
+        if (np && !np->left() && !np->is_none()) {
+            ips.insert(np->endpoint());
+        }
+    }
+    return ips;
+}
+
 } // namespace locator
 
 namespace std {

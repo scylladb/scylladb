@@ -2485,16 +2485,15 @@ future<bool> topology_coordinator::maybe_start_tablet_split_finalization(group0_
 
 future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
     auto tm = get_token_metadata_ptr();
-    auto& topology = tm->get_topology();
 
     locator::load_stats stats;
     static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
     std::unordered_map<table_id, size_t> total_replicas;
 
-    for (auto& [dc, nodes] : topology.get_datacenter_nodes()) {
+    for (auto& [dc, nodes] : tm->get_datacenter_token_owners_nodes()) {
         locator::load_stats dc_stats;
-        rtlogger.info("raft topology: Refreshing table load stats for DC {} that has {} endpoints", dc, nodes.size());
+        rtlogger.info("raft topology: Refreshing table load stats for DC {} that has {} token owners", dc, nodes.size());
         co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
             auto dst = node->host_id();
 
@@ -2662,27 +2661,29 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     std::set<sstring> enabled_features;
 
     // Build per-node state
-    for (const auto& host_id: tmptr->get_normal_token_owners()) {
-        const auto ep = tmptr->get_endpoint_for_host_id_if_known(host_id);
-        if (!ep) {
-            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node with ID {}, as its IP is not known", host_id));
+    for (const auto* node: tmptr->get_topology().get_nodes()) {
+        if (!node->is_member()) {
+            continue;
         }
-        const auto eptr = _gossiper.get_endpoint_state_ptr(*ep);
+
+        const auto& host_id = node->host_id();
+        const auto& ep = node->endpoint();
+        const auto eptr = _gossiper.get_endpoint_state_ptr(ep);
         if (!eptr) {
-            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{} as gossip contains no data for it", host_id, *ep));
+            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{} as gossip contains no data for it", host_id, ep));
         }
 
         const auto& epmap = eptr->get_application_state_map();
 
-        const auto datacenter = get_application_state(host_id, *ep, epmap, gms::application_state::DC);
-        const auto rack = get_application_state(host_id, *ep, epmap, gms::application_state::RACK);
+        const auto datacenter = get_application_state(host_id, ep, epmap, gms::application_state::DC);
+        const auto rack = get_application_state(host_id, ep, epmap, gms::application_state::RACK);
         const auto tokens_v = tmptr->get_tokens(host_id);
         const std::unordered_set<dht::token> tokens(tokens_v.begin(), tokens_v.end());
-        const auto release_version = get_application_state(host_id, *ep, epmap, gms::application_state::RELEASE_VERSION);
+        const auto release_version = get_application_state(host_id, ep, epmap, gms::application_state::RELEASE_VERSION);
         const auto num_tokens = tokens.size();
-        const auto shard_count = get_application_state(host_id, *ep, epmap, gms::application_state::SHARD_COUNT);
-        const auto ignore_msb = get_application_state(host_id, *ep, epmap, gms::application_state::IGNORE_MSB_BITS);
-        const auto supported_features_s = get_application_state(host_id, *ep, epmap, gms::application_state::SUPPORTED_FEATURES);
+        const auto shard_count = get_application_state(host_id, ep, epmap, gms::application_state::SHARD_COUNT);
+        const auto ignore_msb = get_application_state(host_id, ep, epmap, gms::application_state::IGNORE_MSB_BITS);
+        const auto supported_features_s = get_application_state(host_id, ep, epmap, gms::application_state::SUPPORTED_FEATURES);
         const auto supported_features = gms::feature_service::to_feature_set(supported_features_s);
 
         if (enabled_features.empty()) {

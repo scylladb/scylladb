@@ -172,14 +172,14 @@ class natural_endpoints_tracker {
     endpoint_dc_rack_set _seen_racks;
 
     //
-    // all endpoints in each DC, so we can check when we have exhausted all
-    // the members of a DC
+    // all token owners in each DC, so we can check when we have exhausted all
+    // the token-owning members of a DC
     //
-    std::unordered_map<sstring, std::unordered_set<inet_address>> _all_endpoints;
+    std::unordered_map<sstring, std::unordered_set<inet_address>> _token_owners;
 
     //
-    // all racks in a DC so we can check when we have exhausted all racks in a
-    // DC
+    // all racks (with non-token owners filtered out) in a DC so we can check
+    // when we have exhausted all racks in a DC
     //
     std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>> _racks;
 
@@ -192,11 +192,11 @@ public:
         : _tm(tm)
         , _tp(_tm.get_topology())
         , _dc_rep_factor(dc_rep_factor)
-        , _all_endpoints(_tp.get_datacenter_endpoints())
-        , _racks(_tp.get_datacenter_racks())
+        , _token_owners(_tm.get_datacenter_token_owners_ips())
+        , _racks(_tm.get_datacenter_racks_token_owners_ips())
     {
         // not aware of any cluster members
-        SCYLLA_ASSERT(!_all_endpoints.empty() && !_racks.empty());
+        SCYLLA_ASSERT(!_token_owners.empty() && !_racks.empty());
 
         auto size_for = [](auto& map, auto& k) {
             auto i = map.find(k);
@@ -205,7 +205,7 @@ public:
 
         // Create a data_center_endpoints object for each non-empty DC.
         for (auto& [dc, rf] : _dc_rep_factor) {
-            auto node_count = size_for(_all_endpoints, dc);
+            auto node_count = size_for(_token_owners, dc);
 
             if (rf == 0 || node_count == 0) {
                 continue;
@@ -234,14 +234,15 @@ public:
     }
 
     static void check_enough_endpoints(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rf) {
-        const auto& dc_endpoints = tm.get_topology().get_datacenter_endpoints();
+        auto dc_endpoints = tm.get_datacenter_token_owners_ips();
         auto endpoints_in = [&dc_endpoints](sstring dc) {
             auto i = dc_endpoints.find(dc);
             return i != dc_endpoints.end() ? i->second.size() : size_t(0);
         };
         for (const auto& [dc, rf] : dc_rf) {
             if (rf > endpoints_in(dc)) {
-                throw exceptions::configuration_exception(fmt::format("Datacenter {} doesn't have enough nodes for replication_factor={}", dc, rf));
+                throw exceptions::configuration_exception(fmt::format(
+                        "Datacenter {} doesn't have enough token-owning nodes for replication_factor={}", dc, rf));
             }
         }
     }
@@ -305,14 +306,14 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
 //    initial_tablets = max(nr_shards_in(dc) / RF_in(dc) for dc in datacenters)
 //
 
-static unsigned calculate_initial_tablets_from_topology(const schema& s, const topology& topo, const std::unordered_map<sstring, size_t>& rf) {
+static unsigned calculate_initial_tablets_from_topology(const schema& s, token_metadata_ptr tm, const std::unordered_map<sstring, size_t>& rf) {
     unsigned initial_tablets = std::numeric_limits<unsigned>::min();
-    for (const auto& dc : topo.get_datacenter_endpoints()) {
+    for (const auto& dc : tm->get_datacenter_token_owners_ips()) {
         unsigned shards_in_dc = 0;
         unsigned rf_in_dc = 1;
 
         for (const auto& ep : dc.second) {
-            const auto* node = topo.find_node(ep);
+            const auto* node = tm->get_topology().find_node(ep);
             if (node != nullptr) {
                 shards_in_dc += node->get_shard_count();
             }
@@ -332,7 +333,7 @@ static unsigned calculate_initial_tablets_from_topology(const schema& s, const t
 future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, unsigned initial_scale) const {
     auto tablet_count = get_initial_tablets();
     if (tablet_count == 0) {
-        tablet_count = calculate_initial_tablets_from_topology(*s, tm->get_topology(), _dc_rep_factor) * initial_scale;
+        tablet_count = calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor) * initial_scale;
     }
     auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
     if (tablet_count != aligned_tablet_count) {
@@ -350,9 +351,8 @@ future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, t
 
     tablet_logger.debug("Allocating tablets for {}.{} ({}): dc_rep_factor={} tablet_count={}", s->ks_name(), s->cf_name(), s->id(), _dc_rep_factor, tablets.tablet_count());
 
-    const auto& topo = tm->get_topology();
     for (tablet_id tb : tablets.tablet_ids()) {
-        auto replicas = co_await reallocate_tablets(s, topo, load, tablets, tb);
+        auto replicas = co_await reallocate_tablets(s, tm, load, tablets, tb);
         tablets.set_tablet(tb, tablet_info{std::move(replicas)});
     }
 
@@ -360,7 +360,7 @@ future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, t
     co_return tablets;
 }
 
-future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_ptr s, const locator::topology& topo, load_sketch& load, const tablet_map& cur_tablets, tablet_id tb) const {
+future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, load_sketch& load, const tablet_map& cur_tablets, tablet_id tb) const {
     tablet_replica_set replicas;
     // Current number of replicas per dc
     std::unordered_map<sstring, size_t> nodes_per_dc;
@@ -369,7 +369,7 @@ future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_
 
     replicas = cur_tablets.get_tablet_info(tb).replicas;
     for (const auto& tr : replicas) {
-        const auto& node = topo.get_node(tr.host);
+        const auto& node = tm->get_topology().get_node(tr.host);
         replicas_per_dc_rack[node.dc_rack().dc][node.dc_rack().rack].insert(tr.host);
         ++nodes_per_dc[node.dc_rack().dc];
     }
@@ -380,16 +380,16 @@ future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_
             continue;
         }
         if (dc_rf > dc_node_count) {
-            replicas = co_await add_tablets_in_dc(s, topo, load, tb, replicas_per_dc_rack[dc], replicas, dc, dc_node_count, dc_rf);
+            replicas = co_await add_tablets_in_dc(s, tm, load, tb, replicas_per_dc_rack[dc], replicas, dc, dc_node_count, dc_rf);
         } else {
-            replicas = drop_tablets_in_dc(s, topo, load, tb, replicas, dc, dc_node_count, dc_rf);
+            replicas = drop_tablets_in_dc(s, tm->get_topology(), load, tb, replicas, dc, dc_node_count, dc_rf);
         }
     }
 
     co_return replicas;
 }
 
-future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_ptr s, const locator::topology& topo, load_sketch& load, tablet_id tb,
+future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_ptr s, token_metadata_ptr tm, load_sketch& load, tablet_id tb,
         std::map<sstring, std::unordered_set<locator::host_id>>& replicas_per_rack,
         const tablet_replica_set& cur_replicas,
         sstring dc, size_t dc_node_count, size_t dc_rf) const {
@@ -397,7 +397,8 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
 
     auto replicas = cur_replicas;
     // all_dc_racks is ordered lexicographically on purpose
-    auto all_dc_racks = boost::copy_range<std::map<sstring, std::unordered_set<const node*>>>(topo.get_datacenter_rack_nodes().at(dc));
+    auto all_dc_racks = boost::copy_range<std::map<sstring, std::unordered_set<const node*>>>(
+            tm->get_datacenter_racks_token_owners_nodes().at(dc));
 
     // Track all nodes with no replicas on them for this tablet, per rack.
     struct node_load {
@@ -486,7 +487,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
         }
         auto host_id = nodes.back().host;
         auto replica = tablet_replica{host_id, load.next_shard(host_id)};
-        const auto& node = topo.get_node(host_id);
+        const auto& node = tm->get_topology().get_node(host_id);
         auto inserted = replicas_per_rack[node.dc_rack().rack].insert(host_id).second;
         // Sanity check that a node is not used more than once
         if (!inserted) {

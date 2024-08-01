@@ -765,17 +765,12 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     // endpoints. We cannot rely on seeds alone, since it is not guaranteed that seeds
     // will be up to date and reachable at the time of restart.
     const auto tmptr = get_token_metadata_ptr();
-    for (const auto& e: tmptr->get_normal_token_owners()) {
-        if (is_me(e)) {
+    for (const auto* node : tmptr->get_topology().get_nodes()) {
+        const auto& host_id = node->host_id();
+        const auto& ep = node->endpoint();
+        if (is_me(host_id)) {
             continue;
         }
-        const auto& topo = tmptr->get_topology();
-        const auto* node = topo.find_node(e);
-        // node must exist in topology if it's in tmptr->get_normal_token_owners
-        if (!node) {
-            on_internal_error(slogger, format("Found no node for {} in topology", e));
-        }
-        const auto& ep = node->endpoint();
         if (ep == inet_address{}) {
             continue;
         }
@@ -786,14 +781,14 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         if (!_gossiper.get_endpoint_state_ptr(ep)) {
             gms::loaded_endpoint_state st;
             st.endpoint = ep;
-            st.tokens = boost::copy_range<std::unordered_set<dht::token>>(tmptr->get_tokens(e));
+            st.tokens = boost::copy_range<std::unordered_set<dht::token>>(tmptr->get_tokens(host_id));
             st.opt_dc_rack = node->dc_rack();
             // Save tokens, not needed for raft topology management, but needed by legacy
             // Also ip -> id mapping is needed for address map recreation on reboot
             if (node->is_this_node() && !st.tokens.empty()) {
                 st.opt_status = gms::versioned_value::normal(st.tokens);
             }
-            co_await _gossiper.add_saved_endpoint(e, std::move(st), permit.id());
+            co_await _gossiper.add_saved_endpoint(host_id, std::move(st), permit.id());
         }
     }
 
@@ -1443,7 +1438,7 @@ future<> storage_service::start_upgrade_to_raft_topology() {
                 "all nodes in the cluster are upgraded to the same version. Refusing to continue.");
     }
 
-    if (auto unreachable = _gossiper.get_unreachable_token_owners(); !unreachable.empty()) {
+    if (auto unreachable = _gossiper.get_unreachable_nodes(); !unreachable.empty()) {
         throw std::runtime_error(fmt::format(
             "Nodes {} are seen as down. All nodes must be alive in order to start the upgrade. "
             "Refusing to continue.",
@@ -2602,12 +2597,12 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     const auto& tm = get_token_metadata();
     const auto tm_host_id_opt = tm.get_host_id_if_known(endpoint);
     slogger.debug("endpoint={}/{} on_alive: permit_id={}", endpoint, tm_host_id_opt, pid);
-    bool is_normal_token_owner = tm_host_id_opt && tm.is_normal_token_owner(*tm_host_id_opt);
-    if (is_normal_token_owner) {
+    const auto* node = tm.get_topology().find_node(endpoint);
+    if (node && node->is_member()) {
         co_await notify_up(endpoint);
     } else if (raft_topology_change_enabled()) {
         slogger.debug("ignore on_alive since topology changes are using raft and "
-                      "endpoint {}/{} is not a normal token owner", endpoint, tm_host_id_opt);
+                      "endpoint {}/{} is not a topology member", endpoint, tm_host_id_opt);
     } else {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
@@ -2655,14 +2650,15 @@ future<> storage_service::on_change(gms::inet_address endpoint, const gms::appli
     }
     const auto host_id = _gossiper.get_host_id(endpoint);
     const auto& tm = get_token_metadata();
-    const auto ep = tm.get_endpoint_for_host_id_if_known(host_id);
-    // The check *ep == endpoint is needed when a node changes
+    const auto* node = tm.get_topology().find_node(host_id);
+    // The check node->endpoint() == endpoint is needed when a node changes
     // its IP - on_change can be called by the gossiper for old IP as part
     // of its removal, after handle_state_normal has already been called for
     // the new one. Without the check, the do_update_system_peers_table call
     // overwrites the IP back to its old value.
-    // In essence, the code under the 'if' should fire if the given IP is a normal_token_owner.
-    if (ep && *ep == endpoint && tm.is_normal_token_owner(host_id)) {
+    // In essence, the code under the 'if' should fire if the given IP belongs
+    // to a cluster member.
+    if (node && node->is_member() && node->endpoint() == endpoint) {
         if (!is_me(endpoint)) {
             slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
             co_await _sys_ks.local().update_peer_info(endpoint, host_id, get_peer_info_for_update(endpoint, states));
