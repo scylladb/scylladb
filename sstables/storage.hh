@@ -14,12 +14,14 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/reactor.hh>
 
 #include "data_dictionary/storage_options.hh"
 #include "seastarx.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
+#include "utils/disk-error-handler.hh"
 
 namespace data_dictionary {
 class storage_options;
@@ -34,6 +36,39 @@ class sstables_manager;
 class entry_descriptor;
 
 using atomic_delete_context = std::unordered_map<sstring, sstring>;
+
+class opened_directory final {
+    std::filesystem::path _pathname;
+    file _file;
+
+public:
+    explicit opened_directory(std::filesystem::path pathname) : _pathname(std::move(pathname)) {};
+    explicit opened_directory(const sstring &dir) : _pathname(std::string_view(dir)) {};
+    opened_directory(const opened_directory&) = delete;
+    opened_directory& operator=(const opened_directory&) = delete;
+    opened_directory(opened_directory&&) = default;
+    opened_directory& operator=(opened_directory&&) = default;
+    ~opened_directory() = default;
+
+    const std::filesystem::path::string_type& native() const noexcept {
+        return _pathname.native();
+    }
+
+    const std::filesystem::path& path() const noexcept {
+        return _pathname;
+    }
+
+    future<> sync(io_error_handler error_handler) {
+        if (!_file) {
+            _file = co_await do_io_check(error_handler, open_directory, _pathname.native());
+        }
+        co_await do_io_check(error_handler, std::mem_fn(&file::flush), _file);
+    };
+
+    future<> close() {
+        return _file ? _file.close() : make_ready_future<>();
+    }
+};
 
 class storage {
     friend class test;
