@@ -115,7 +115,7 @@ private:
     node_to_hint_store_factory_type _store_factory;
     host_filter _host_filter;
     service::storage_proxy& _proxy;
-    shared_ptr<gms::gossiper> _gossiper_anchor;
+    shared_ptr<const gms::gossiper> _gossiper_anchor;
     int64_t _max_hint_window_us = 0;
     replica::database& _local_db;
 
@@ -172,7 +172,7 @@ public:
 
 public:
     void register_metrics(const sstring& group_name);
-    future<> start(shared_ptr<gms::gossiper> gossiper_ptr);
+    future<> start(shared_ptr<const gms::gossiper> gossiper_ptr);
     future<> stop();
     bool store_hint(endpoint_id host_id, gms::inet_address ip, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
             tracing::trace_state_ptr tr_state) noexcept;
@@ -294,7 +294,7 @@ private:
         return _proxy;
     }
 
-    gms::gossiper& local_gossiper() const noexcept {
+    const gms::gossiper& local_gossiper() const noexcept {
         return *_gossiper_anchor;
     }
 

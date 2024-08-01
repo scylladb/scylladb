@@ -937,7 +937,7 @@ private:
             group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
 
             try {
-                _ss.local().join_cluster(_sys_dist_ks, _proxy, _gossiper, service::start_hint_manager::no, generation_number).get();
+                _ss.local().join_cluster(_sys_dist_ks, _proxy, service::start_hint_manager::no, generation_number).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error

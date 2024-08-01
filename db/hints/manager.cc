@@ -196,7 +196,7 @@ void manager::register_metrics(const sstring& group_name) {
     });
 }
 
-future<> manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
+future<> manager::start(shared_ptr<const gms::gossiper> gossiper_ptr) {
     _gossiper_anchor = std::move(gossiper_ptr);
 
     if (_proxy.features().host_id_based_hinted_handoff) {
