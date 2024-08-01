@@ -287,8 +287,9 @@ public:
 
     // Creates the deletion log for atomic deletion of sstables (helper for the
     // above function that's also used by tests)
-    // Returns a pair of "logilfe name" and "directory with sstables"
-    static future<std::pair<sstring, sstring>> create_pending_deletion_log(const std::vector<shared_sstable>& ssts);
+    // Returns an unordered_map of <directory with sstables, logfile_name> for every sstable prefix.
+    // Currently, atomicity is guranteed only within each unique prefix and not across prefixes (See #18862)
+    static future<std::unordered_map<sstring, sstring>> create_pending_deletion_log(const std::vector<shared_sstable>& ssts);
 
     static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;
 };
