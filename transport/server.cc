@@ -2037,4 +2037,20 @@ future<> cql_server::update_connections_service_level_params() {
     });
 }
 
+future<std::vector<connection_service_level_params>> cql_server::get_connections_service_level_params() {
+    std::vector<connection_service_level_params> sl_params;
+    co_await for_each_gently([&sl_params] (const generic_server::connection& conn) -> future<> {
+        auto& cql_conn = dynamic_cast<const connection&>(conn);
+        auto& client_state = cql_conn.get_client_state();
+        auto& user = client_state.user();
+        auto role_name = user 
+                ? (user->name ? *(user->name) : "ANONYMOUS") 
+                : "UNAUTHENTICATED";
+
+        sl_params.emplace_back(std::move(role_name), client_state.get_timeout_config(), client_state.get_workload_type());
+        co_return;
+    });
+    co_return sl_params;
+}
+
 }

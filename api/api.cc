@@ -10,6 +10,7 @@
 #include <seastar/http/file_handler.hh>
 #include <seastar/http/transformers.hh>
 #include <seastar/http/api_docs.hh>
+#include "cql_server_test.hh"
 #include "storage_service.hh"
 #include "token_metadata.hh"
 #include "commitlog.hh"
@@ -327,6 +328,16 @@ future<> set_server_task_manager_test(http_context& ctx, sharded<tasks::task_man
 
 future<> unset_server_task_manager_test(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_task_manager_test(ctx, r); });
+}
+
+future<> set_server_cql_server_test(http_context& ctx, cql_transport::controller& ctl) {
+    return register_api(ctx, "cql_server_test", "The CQL server test API", [&ctl] (http_context& ctx, routes& r) {
+        set_cql_server_test(ctx, r, ctl);
+    });
+}
+
+future<> unset_server_cql_server_test(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_cql_server_test(ctx, r); });
 }
 
 #endif

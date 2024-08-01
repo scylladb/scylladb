@@ -133,6 +133,12 @@ private:
     std::vector<request_kind_stats> _cql_requests_stats;
 };
 
+struct connection_service_level_params {
+    sstring role_name;
+    timeout_config timeout_config;
+    qos::service_level_options::workload_type workload_type;
+};
+
 class cql_server : public seastar::peering_sharded_service<cql_server>, public generic_server::server {
 private:
     struct transport_stats {
@@ -187,6 +193,7 @@ public:
 
     future<utils::chunked_vector<client_data>> get_client_data();
     future<> update_connections_service_level_params();
+    future<std::vector<connection_service_level_params>> get_connections_service_level_params();
 private:
     class fmt_visitor;
     friend class connection;

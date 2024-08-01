@@ -358,4 +358,19 @@ future<utils::chunked_vector<client_data>> controller::get_client_data() {
     return _server ? _server->local().get_client_data() : protocol_server::get_client_data();
 }
 
+future<std::vector<connection_service_level_params>> controller::get_connections_service_level_params() {
+    if (!_server) {
+        co_return std::vector<connection_service_level_params>();
+    }
+
+    auto sl_params_vectors = co_await _server->map([] (cql_server& server) {
+        return server.get_connections_service_level_params();
+    });    
+    std::vector<connection_service_level_params> sl_params;
+    for (auto& vec: sl_params_vectors) {
+        sl_params.insert(sl_params.end(), std::make_move_iterator(vec.begin()), std::make_move_iterator(vec.end()));
+    }
+    co_return sl_params;
+}
+
 } // namespace cql_transport

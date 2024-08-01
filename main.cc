@@ -2089,6 +2089,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_thrift_controller(ctx).get();
             });
 
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+            api::set_server_cql_server_test(ctx, cql_server_ctl).get();
+            auto stop_cql_server_test_api = defer_verbose_shutdown("cql server API", [&ctx] {
+                api::unset_server_cql_server_test(ctx).get();
+            });
+#endif
+
             ss.local().register_protocol_server(alternator_ctl, cfg->alternator_port() || cfg->alternator_https_port()).get();
 
             ss.local().register_protocol_server(redis_ctl, cfg->redis_port() || cfg->redis_ssl_port()).get();
