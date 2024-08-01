@@ -397,31 +397,34 @@ future<> run_simulation(const params& p, const sstring& name = "") {
     testlog.info("[run {}] tablet count: {}", name, total_tablet_count);
     testlog.info("[run {}] tablet count / shard: {:.3f}", name, double(total_tablet_count) / (p.nodes * p.shards));
 
-    auto res = co_await test_load_balancing_with_many_tables(p, true);
-    testlog.info("[run {}] Overcommit       : init : {}", name, res.init);
-    testlog.info("[run {}] Overcommit       : worst: {}", name, res.worst);
-    testlog.info("[run {}] Overcommit       : last : {}", name, res.last);
-    testlog.info("[run {}] Overcommit       : time : {:.3f} [s], max={:.3f} [s], count={}", name,
-                 res.stats.elapsed_time.count(), res.stats.max_rebalance_time.count(), res.stats.rebalance_count);
+    auto check_results = [&] (const results& res, const sstring& tag) {
+        testlog.info("[run {}] Overcommit {:<5} : init : {}", name, tag, res.init);
+        testlog.info("[run {}] Overcommit {:<5} : worst: {}", name, tag, res.worst);
+        testlog.info("[run {}] Overcommit {:<5} : last : {}", name, tag, res.last);
+        testlog.info("[run {}] Overcommit {:<5} : time : {:.3f} [s], max={:.3f} [s], count={}", name, tag,
+                     res.stats.elapsed_time.count(), res.stats.max_rebalance_time.count(), res.stats.rebalance_count);
 
-    if (res.stats.elapsed_time > seconds_double(1)) {
-        testlog.warn("[run {}] Scheduling took longer than 1s!", name);
-    }
+        if (res.stats.elapsed_time > seconds_double(1)) {
+            testlog.warn("[run {}] Scheduling took longer than 1s!", name);
+        }
+
+        for (int i = 0; i < nr_tables; ++i) {
+            auto overcommit = res.worst.tables[i].shard_overcommit;
+            if (overcommit > 1.2) {
+                testlog.warn("[run {}] table{} shard overcommit {:.2f} > 1.2!", name, i + 1, overcommit);
+            }
+        }
+    };
+
+    auto res = co_await test_load_balancing_with_many_tables(p, true);
+    check_results(res, "");
 
     auto old_res = co_await test_load_balancing_with_many_tables(p, false);
-    testlog.info("[run {}] Overcommit (old) : init : {}", name, old_res.init);
-    testlog.info("[run {}] Overcommit (old) : worst: {}", name, old_res.worst);
-    testlog.info("[run {}] Overcommit (old) : last : {}", name, old_res.last);
-    testlog.info("[run {}] Overcommit       : time : {:.3f} [s], max={:.3f} [s], count={}", name,
-                 old_res.stats.elapsed_time.count(), old_res.stats.max_rebalance_time.count(), old_res.stats.rebalance_count);
+    check_results(old_res, "(old)");
 
     for (int i = 0; i < nr_tables; ++i) {
         if (res.worst.tables[i].shard_overcommit > old_res.worst.tables[i].shard_overcommit) {
             testlog.warn("[run {}] table{} shard overcommit worse!", name, i + 1);
-        }
-        auto overcommit = res.worst.tables[i].shard_overcommit;
-        if (overcommit > 1.2) {
-            testlog.warn("[run {}] table{} shard overcommit {:.2f} > 1.2!", name, i + 1, overcommit);
         }
     }
 }
