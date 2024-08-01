@@ -12,8 +12,83 @@
 #include "locator/tablets.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
+#include <seastar/core/metrics.hh>
 
 namespace service {
+
+struct load_balancer_dc_stats {
+    uint64_t calls = 0;
+    uint64_t migrations_produced = 0;
+    uint64_t migrations_from_skiplist = 0;
+    uint64_t candidates_evaluated = 0;
+    uint64_t bad_first_candidates = 0;
+    uint64_t bad_migrations = 0;
+    uint64_t intranode_migrations_produced = 0;
+    uint64_t migrations_skipped = 0;
+    uint64_t tablets_skipped_node = 0;
+    uint64_t tablets_skipped_rack = 0;
+    uint64_t stop_balance = 0;
+    uint64_t stop_load_inversion = 0;
+    uint64_t stop_no_candidates = 0;
+    uint64_t stop_skip_limit = 0;
+    uint64_t stop_batch_size = 0;
+
+    load_balancer_dc_stats operator-(const load_balancer_dc_stats& other) const {
+        return {
+            calls - other.calls,
+            migrations_produced - other.migrations_produced,
+            migrations_from_skiplist - other.migrations_from_skiplist,
+            candidates_evaluated - other.candidates_evaluated,
+            bad_first_candidates - other.bad_first_candidates,
+            bad_migrations - other.bad_migrations,
+            intranode_migrations_produced - other.intranode_migrations_produced,
+            migrations_skipped - other.migrations_skipped,
+            tablets_skipped_node - other.tablets_skipped_node,
+            tablets_skipped_rack - other.tablets_skipped_rack,
+            stop_balance - other.stop_balance,
+            stop_load_inversion - other.stop_load_inversion,
+            stop_no_candidates - other.stop_no_candidates,
+            stop_skip_limit - other.stop_skip_limit,
+            stop_batch_size - other.stop_batch_size,
+        };
+    }
+};
+
+struct load_balancer_node_stats {
+    double load = 0;
+};
+
+struct load_balancer_cluster_stats {
+    uint64_t resizes_emitted = 0;
+    uint64_t resizes_revoked = 0;
+    uint64_t resizes_finalized = 0;
+};
+
+using dc_name = sstring;
+
+class load_balancer_stats_manager {
+    using host_id = locator::host_id;
+
+    sstring group_name;
+    std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
+    std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
+    load_balancer_cluster_stats _cluster_stats;
+    seastar::metrics::label dc_label{"target_dc"};
+    seastar::metrics::label node_label{"target_node"};
+    seastar::metrics::metric_groups _metrics;
+
+    void setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats);
+    void setup_metrics(const dc_name& dc, host_id node, load_balancer_node_stats& stats);
+    void setup_metrics(load_balancer_cluster_stats& stats);
+public:
+    load_balancer_stats_manager(sstring group_name);
+
+    load_balancer_dc_stats& for_dc(const dc_name& dc);
+    load_balancer_node_stats& for_node(const dc_name& dc, host_id node);
+    load_balancer_cluster_stats& for_cluster();
+
+    void unregister();
+};
 
 using tablet_migration_info = locator::tablet_migration_info;
 
@@ -117,6 +192,8 @@ public:
     /// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
     ///
     future<migration_plan> balance_tablets(locator::token_metadata_ptr, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
+
+    load_balancer_stats_manager& stats();
 
     void set_use_table_aware_balancing(bool);
 

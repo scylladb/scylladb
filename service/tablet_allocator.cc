@@ -18,6 +18,7 @@
 #include "locator/load_sketch.hh"
 #include <utility>
 #include <fmt/ranges.h>
+#include <absl/container/flat_hash_map.h>
 
 using namespace locator;
 using namespace replica;
@@ -26,111 +27,157 @@ namespace service {
 
 seastar::logger lblogger("load_balancer");
 
-struct load_balancer_dc_stats {
-    uint64_t calls = 0;
-    uint64_t migrations_produced = 0;
-    uint64_t intranode_migrations_produced = 0;
-    uint64_t migrations_skipped = 0;
-    uint64_t tablets_skipped_node = 0;
-    uint64_t tablets_skipped_rack = 0;
-    uint64_t stop_balance = 0;
-    uint64_t stop_load_inversion = 0;
-    uint64_t stop_no_candidates = 0;
-    uint64_t stop_skip_limit = 0;
-    uint64_t stop_batch_size = 0;
-};
+void load_balancer_stats_manager::setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
+    namespace sm = seastar::metrics;
+    auto dc_lb = dc_label(dc);
+    _metrics.add_group(group_name, {
+        sm::make_counter("calls", sm::description("number of calls to the load balancer"),
+                         stats.calls)(dc_lb),
+        sm::make_counter("migrations_produced", sm::description("number of migrations produced by the load balancer"),
+                         stats.migrations_produced)(dc_lb),
+        sm::make_counter("migrations_skipped", sm::description("number of migrations skipped by the load balancer due to load limits"),
+                         stats.migrations_skipped)(dc_lb),
+    });
+}
 
-struct load_balancer_node_stats {
-    double load = 0;
-};
+void load_balancer_stats_manager::setup_metrics(const dc_name& dc, host_id node, load_balancer_node_stats& stats) {
+    namespace sm = seastar::metrics;
+    auto dc_lb = dc_label(dc);
+    auto node_lb = node_label(node);
+    _metrics.add_group(group_name, {
+        sm::make_gauge("load", sm::description("node load during last load balancing"),
+                       stats.load)(dc_lb)(node_lb)
+    });
+}
 
-struct load_balancer_cluster_stats {
-    uint64_t resizes_emitted = 0;
-    uint64_t resizes_revoked = 0;
-    uint64_t resizes_finalized = 0;
-};
+void load_balancer_stats_manager::setup_metrics(load_balancer_cluster_stats& stats) {
+    namespace sm = seastar::metrics;
+    // FIXME: we can probably improve it by making it per resize type (split, merge or none).
+    _metrics.add_group(group_name, {
+        sm::make_counter("resizes_emitted", sm::description("number of resizes produced by the load balancer"),
+            stats.resizes_emitted),
+        sm::make_counter("resizes_revoked", sm::description("number of resizes revoked by the load balancer"),
+            stats.resizes_revoked),
+        sm::make_counter("resizes_finalized", sm::description("number of resizes finalized by the load balancer"),
+            stats.resizes_finalized)
+    });
+}
 
-using dc_name = sstring;
+load_balancer_stats_manager::load_balancer_stats_manager(sstring group_name):
+    group_name(std::move(group_name))
+{
+    setup_metrics(_cluster_stats);
+}
 
-class load_balancer_stats_manager {
-    sstring group_name;
-    std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
-    std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
-    load_balancer_cluster_stats _cluster_stats;
-    seastar::metrics::label dc_label{"target_dc"};
-    seastar::metrics::label node_label{"target_node"};
-    seastar::metrics::metric_groups _metrics;
+load_balancer_dc_stats& load_balancer_stats_manager::for_dc(const dc_name& dc) {
+    auto it = _dc_stats.find(dc);
+    if (it == _dc_stats.end()) {
+        auto stats = std::make_unique<load_balancer_dc_stats>();
+        setup_metrics(dc, *stats);
+        it = _dc_stats.emplace(dc, std::move(stats)).first;
+    }
+    return *it->second;
+}
 
-    void setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
-        namespace sm = seastar::metrics;
-        auto dc_lb = dc_label(dc);
-        _metrics.add_group(group_name, {
-            sm::make_counter("calls", sm::description("number of calls to the load balancer"),
-                             stats.calls)(dc_lb),
-            sm::make_counter("migrations_produced", sm::description("number of migrations produced by the load balancer"),
-                             stats.migrations_produced)(dc_lb),
-            sm::make_counter("migrations_skipped", sm::description("number of migrations skipped by the load balancer due to load limits"),
-                             stats.migrations_skipped)(dc_lb),
-        });
+load_balancer_node_stats& load_balancer_stats_manager::for_node(const dc_name& dc, host_id node) {
+    auto it = _node_stats.find(node);
+    if (it == _node_stats.end()) {
+        auto stats = std::make_unique<load_balancer_node_stats>();
+        setup_metrics(dc, node, *stats);
+        it = _node_stats.emplace(node, std::move(stats)).first;
+    }
+    return *it->second;
+}
+
+load_balancer_cluster_stats& load_balancer_stats_manager::for_cluster() {
+    return _cluster_stats;
+}
+
+void load_balancer_stats_manager::unregister() {
+    _metrics.clear();
+}
+
+// Used to compare different migration choices in regard to impact on load imbalance.
+// There is a total order on migration_badness such that better migrations are ordered before worse ones.
+struct migration_badness {
+    double src_shard_badness = 0;
+    double src_node_badness = 0;
+    double dst_shard_badness = 0;
+    double dst_node_badness = 0;
+    bool bad;
+
+    migration_badness()
+        : bad(false)
+    {}
+
+    migration_badness(double src_shard_badness, double src_node_badness, double dst_shard_badness, double dst_node_badness)
+        : src_shard_badness(src_shard_badness)
+        , src_node_badness(src_node_badness)
+        , dst_shard_badness(dst_shard_badness)
+        , dst_node_badness(dst_node_badness)
+        , bad(src_shard_badness > 0 || src_node_badness > 0 || dst_shard_badness > 0 || dst_node_badness > 0)
+    {}
+
+    double node_badness() const {
+        return std::max(src_node_badness, dst_node_badness);
     }
 
-    void setup_metrics(const dc_name& dc, host_id node, load_balancer_node_stats& stats) {
-        namespace sm = seastar::metrics;
-        auto dc_lb = dc_label(dc);
-        auto node_lb = node_label(node);
-        _metrics.add_group(group_name, {
-            sm::make_gauge("load", sm::description("node load during last load balancing"),
-                           stats.load)(dc_lb)(node_lb)
-        });
+    double shard_badness() const {
+        return std::max(src_shard_badness, dst_shard_badness);
     }
 
-    void setup_metrics(load_balancer_cluster_stats& stats) {
-        namespace sm = seastar::metrics;
-        // FIXME: we can probably improve it by making it per resize type (split, merge or none).
-        _metrics.add_group(group_name, {
-            sm::make_counter("resizes_emitted", sm::description("number of resizes produced by the load balancer"),
-                stats.resizes_emitted),
-            sm::make_counter("resizes_revoked", sm::description("number of resizes revoked by the load balancer"),
-                stats.resizes_revoked),
-            sm::make_counter("resizes_finalized", sm::description("number of resizes finalized by the load balancer"),
-                stats.resizes_finalized)
-        });
-    }
-public:
-    load_balancer_stats_manager(sstring group_name):
-        group_name(std::move(group_name))
-    {
-        setup_metrics(_cluster_stats);
+    bool is_bad() const {
+        return bad;
     }
 
-    load_balancer_dc_stats& for_dc(const dc_name& dc) {
-        auto it = _dc_stats.find(dc);
-        if (it == _dc_stats.end()) {
-            auto stats = std::make_unique<load_balancer_dc_stats>();
-            setup_metrics(dc, *stats);
-            it = _dc_stats.emplace(dc, std::move(stats)).first;
+    bool operator<(const migration_badness& other) const {
+        // Prefer candidates with no across-node badness to those with across-node badness.
+        // Then, prefer those with lowest shard badness.
+        // We want to balance nodes first as balancing nodes internally between shards is cheap.
+        if (node_badness() == other.node_badness()) {
+            return shard_badness() < other.shard_badness();
         }
-        return *it->second;
-    }
-
-    load_balancer_node_stats& for_node(const dc_name& dc, host_id node) {
-        auto it = _node_stats.find(node);
-        if (it == _node_stats.end()) {
-            auto stats = std::make_unique<load_balancer_node_stats>();
-            setup_metrics(dc, node, *stats);
-            it = _node_stats.emplace(node, std::move(stats)).first;
+        if (node_badness() > 0 || other.node_badness() > 0) {
+            return node_badness() < other.node_badness();
         }
-        return *it->second;
+        return shard_badness() < other.shard_badness();
     }
 
-    load_balancer_cluster_stats& for_cluster() {
-        return _cluster_stats;
-    }
+    bool operator<=>(const migration_badness& other) const = default;
+};
 
-    void unregister() {
-        _metrics.clear();
+struct migration_candidate {
+    global_tablet_id tablet;
+    tablet_replica src;
+    tablet_replica dst;
+    migration_badness badness;
+};
+
+}
+
+template<>
+struct fmt::formatter<service::migration_badness> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const service::migration_badness& badness, FormatContext& ctx) {
+        return fmt::format_to(ctx.out(), "{{s: {:.4f}, n: {:.4f}}}", badness.shard_badness(), badness.node_badness());
     }
 };
+
+template<>
+struct fmt::formatter<service::migration_candidate> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const service::migration_candidate& candidate, FormatContext& ctx) {
+        fmt::format_to(ctx.out(), "{{tablet: {}, {} -> {}, badness: {}", candidate.tablet, candidate.src,
+                       candidate.dst, candidate.badness);
+        if (candidate.badness.is_bad()) {
+            fmt::format_to(ctx.out(), " (bad!)");
+        }
+        fmt::format_to(ctx.out(), "}}");
+        return ctx.out();
+    }
+};
+
+namespace service {
 
 /// The algorithm aims to equalize tablet count on each shard.
 /// This goal is based on the assumption that every shard has similar processing power and space capacity,
@@ -160,15 +207,25 @@ public:
 /// The outline of the inter-node balancing algorithm is as follows:
 ///
 ///   1. Determine the set of nodes whose load should be balanced.
-///   2. Pick the least-loaded node (target)
-///   3. Keep moving tablets to the target until balance is achieved with the highest-loaded node,
-///              or we hit a limit for plan size:
-///      3.1. Pick the most-loaded node (source)
-///      3.2. Pick the most-loaded shard on the source
-///      3.3. Pick one of the candidate tablets on the source shard
-///      3.4. Evaluate collocation constraints for tablet replicas, if they pass:
-///           3.4.1 Pick the least-loaded shard on the target
-///           3.4.2 Generate a migration for the candidate tablet from the source shard to the target shard
+///   2. Divide the nodes into two sets, sources and destinations.
+///      Tablets are only moved from sources to destinations.
+///      When nodes are drained (e.g. on decommission), the drained nodes are sources and all other
+///      nodes are destinations.
+///      During free load balancing, we pick a single destination node which is the least loaded node
+///      and all other nodes are sources.
+///   3. Move tablets from sources to destinations until load order between nodes would get inverted after the movement:
+///      3.1. Pick the most-loaded source node (src.host)
+///           3.1.1 Pick the most-loaded shard (src.shard) on src.host
+///      3.2. Pick the least-loaded destination node (dst.host)
+///      3.3. Pick the least-loaded shard (dst.shard) on dst.host
+///      3.4. If candidate is not chosen, pick the best candidate tablet on src to move to dst.
+///      3.5. If movement impact is bad:
+///           3.5.1. Consider moving from other shards on src.host and to other destination hosts and shards.
+///                  Picks the best candidate according to the impact of the movement on load imbalance.
+///      3.6. Evaluate collocation constraints for tablet replicas
+///           3.6.1. If met, schedule migration
+///           3.6.2. If not, add the tablet to the list of skipped tablets on src.host
+///
 ///
 /// Even though the algorithm focuses on a single target, the fact the the produced plan is just an increment
 /// means that many under-loaded nodes can be driven forward to balance concurrently because the load balancer
@@ -212,6 +269,8 @@ class load_balancer {
     struct shard_load {
         size_t tablet_count = 0;
 
+        absl::flat_hash_map<table_id, size_t> tablet_count_per_table;
+
         // Number of tablets which are streamed from this shard.
         size_t streaming_read_load = 0;
 
@@ -248,14 +307,23 @@ class load_balancer {
         }
     };
 
+    struct skipped_candidate {
+        tablet_replica replica;
+        global_tablet_id tablet;
+        std::unordered_set<host_id> viable_targets;
+    };
+
     struct node_load {
         host_id id;
         uint64_t shard_count = 0;
         uint64_t tablet_count = 0;
+        bool drained = false;
         const locator::node* node; // never nullptr
 
         // The average shard load on this node.
         load_type avg_load = 0;
+
+        absl::flat_hash_map<table_id, size_t> tablet_count_per_table;
 
         // heap which tracks most-loaded shards using shards_by_load_cmp().
         // Valid during intra-node plan-making for nodes which are in the source node set.
@@ -263,7 +331,7 @@ class load_balancer {
 
         std::vector<shard_load> shards; // Indexed by shard_id to which a given shard_load corresponds.
 
-        std::optional<locator::load_sketch> target_load_sketch;
+        utils::chunked_vector<skipped_candidate> skipped_candidates;
 
         const sstring& dc() const {
             return node->dc_rack().dc;
@@ -275,14 +343,6 @@ class load_balancer {
 
         locator::node::state state() const {
             return node->get_state();
-        }
-
-        future<load_sketch&> get_load_sketch(const token_metadata_ptr& tm) {
-            if (!target_load_sketch) {
-                target_load_sketch.emplace(tm);
-                co_await target_load_sketch->populate(id);
-            }
-            co_return *target_load_sketch;
         }
 
         // Call when tablet_count changes.
@@ -301,12 +361,22 @@ class load_balancer {
         }
 
         future<> clear_gently() {
-            return utils::clear_gently(shards);
+            co_await utils::clear_gently(shards);
+            co_await utils::clear_gently(skipped_candidates);
         }
     };
 
     // Data structure used for making load-balancing decisions over a set of nodes.
     using node_load_map = std::unordered_map<host_id, node_load>;
+
+    // Less-comparator which orders nodes by load.
+    struct nodes_by_load_cmp {
+        node_load_map& nodes;
+
+        bool operator()(host_id a, host_id b) const {
+            return nodes[a].avg_load < nodes[b].avg_load;
+        }
+    };
 
     // We have split and merge thresholds, which work respectively as (target) upper and lower
     // bound for average size of tablets.
@@ -450,6 +520,11 @@ class load_balancer {
     const size_t max_read_streaming_load = 4;
 
     token_metadata_ptr _tm;
+    std::optional<locator::load_sketch> _load_sketch;
+    absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
+    dc_name _dc;
+    size_t _total_capacity_shards; // Total number of non-drained shards in the balanced node set.
+    size_t _total_capacity_nodes; // Total number of non-drained nodes in the balanced node set.
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
@@ -716,6 +791,117 @@ public:
         return *shard_info.candidates_all_tables.begin();
     }
 
+    // Evaluates impact on load balance of migrating a single tablet of a given table to dst.
+    migration_badness evaluate_dst_badness(node_load_map& nodes, table_id table, tablet_replica dst) {
+        _stats.for_dc(_dc).candidates_evaluated++;
+
+        auto& node_info = nodes[dst.host];
+        size_t total_load = _tablet_count_per_table[table];
+        size_t total_shard_count = _total_capacity_shards;
+        size_t node_count = _total_capacity_nodes;
+
+        // max number of tablets per shard to keep perfect distribution.
+        // Rounded up because we don't want to consider movement which is within the best possible
+        // per-shard distribution as bad.
+        double shard_balance_threshold = div_ceil(total_load, total_shard_count);
+        auto new_shard_load = node_info.shards[dst.shard].tablet_count_per_table[table] + 1;
+        auto dst_shard_badness = (new_shard_load - shard_balance_threshold) / total_load;
+        lblogger.trace("Table {} @{} shard balance threshold: {}, dst: {} ({:.4f})", table, dst,
+                       shard_balance_threshold, new_shard_load, dst_shard_badness);
+
+        // max number of tablets per node to keep perfect distribution.
+        double node_balance_threshold = div_ceil(total_load, node_count);
+        size_t new_node_load = node_info.tablet_count_per_table[table] + 1;
+        auto dst_node_badness = (new_node_load - node_balance_threshold) / total_load;
+        lblogger.trace("Table {} @{} node balance threshold: {}, dst: {} ({:.4f})", table, dst,
+                       node_balance_threshold, new_node_load, dst_node_badness);
+
+        return migration_badness{0, 0, dst_shard_badness, dst_node_badness};
+    }
+
+    // Evaluates impact on load balance of migrating a single tablet of a given table from src.
+    migration_badness evaluate_src_badness(node_load_map& nodes, table_id table, tablet_replica src) {
+        _stats.for_dc(_dc).candidates_evaluated++;
+
+        auto& node_info = nodes[src.host];
+        size_t total_load = _tablet_count_per_table[table];
+        size_t total_shard_count = _total_capacity_shards;
+        size_t node_count = _total_capacity_nodes;
+
+        // For determining impact on leaving, round down, because we don't want to consider movement which is within
+        // the best possible per-shard distribution as bad.
+        double leaving_shard_balance_threshold = total_load / total_shard_count;
+        auto new_shard_load = node_info.shards[src.shard].tablet_count_per_table[table] - 1;
+
+        auto src_shard_badness = node_info.drained
+                ? 0 // Moving a tablet away from a drained node is always good.
+                : (leaving_shard_balance_threshold - new_shard_load) / total_load;
+
+        lblogger.trace("Table {} @{} shard balance threshold: {}, src: {} ({:.4f})", table, src,
+                       leaving_shard_balance_threshold, new_shard_load, src_shard_badness);
+
+        // max number of tablets per node to keep perfect distribution.
+        double leaving_node_balance_threshold = total_load / node_count;
+        size_t new_node_load = node_info.tablet_count_per_table[table] - 1;
+
+        auto src_node_badness = node_info.drained
+                ? 0 // Moving a tablet away from a drained node is always good.
+                : (leaving_node_balance_threshold - new_node_load) / total_load;
+
+        lblogger.trace("Table {} @{} node balance threshold: {}, src: {} ({:.4f})", table, src,
+                       leaving_node_balance_threshold, new_node_load, src_node_badness);
+
+        return migration_badness{src_shard_badness, src_node_badness, 0, 0};
+    }
+
+    // Evaluates impact on load balance of migrating a single tablet of a given table from src to dst.
+    migration_badness evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst) {
+        auto src_badness = evaluate_src_badness(nodes, table, src);
+        auto dst_badness = evaluate_dst_badness(nodes, table, dst);
+
+        if (src.host == dst.host) {
+            src_badness.src_node_badness = 0;
+            dst_badness.dst_node_badness = 0;
+        }
+
+        return {
+            src_badness.shard_badness(),
+            src_badness.node_badness(),
+            dst_badness.shard_badness(),
+            dst_badness.node_badness()
+        };
+    }
+
+    future<migration_candidate> peek_candidate(node_load_map& nodes, shard_load& shard_info, tablet_replica src, tablet_replica dst) {
+        if (!_use_table_aware_balancing) {
+            co_return migration_candidate{peek_candidate(shard_info), src, dst, migration_badness{}};
+        }
+
+        if (shard_info.candidates.empty()) {
+            on_internal_error(lblogger, format("No candidates for migration on {}", src));
+        }
+
+        std::optional<migration_candidate> best_candidate;
+
+        for (auto&& [table, tablets] : shard_info.candidates) {
+            if (!tablets.empty()) {
+                auto badness = evaluate_candidate(nodes, table, src, dst);
+                auto candidate = migration_candidate{*tablets.begin(), src, dst, badness};
+                lblogger.trace("Candidate: {}", candidate);
+                if (!best_candidate || candidate.badness < best_candidate->badness) {
+                    best_candidate = candidate;
+                }
+            }
+        }
+
+        if (!best_candidate) {
+            on_internal_error(lblogger, format("No candidates for migration on {}", src));
+        }
+
+        lblogger.trace("Best candidate: {}", *best_candidate);
+        co_return *best_candidate;
+    }
+
     void erase_candidate(shard_load& shard_info, global_tablet_id tablet) {
         if (_use_table_aware_balancing) {
             shard_info.candidates[tablet.table].erase(tablet);
@@ -735,6 +921,35 @@ public:
         }
     }
 
+    // Checks whether moving a tablet from src_info to target_info would go against convergence.
+    // Returns false if the tablet should not be moved, and true if it may be moved.
+    //
+    // Moving tablets only when this method returns true ensures that balancing nodes will reach convergence.
+    // Otherwise, oscillations of tablet load between nodes across different plan making rounds could happen,
+    // where tablets are moved back and forth between nodes and convergence is never reached.
+    //
+    // The assumption is that the algorithm moves tablets from more loaded nodes to less loaded nodes,
+    // so convergence is reached where the node we picked as source has lower load, or will have lower
+    // load post-movement, than the node we picked as the destination.
+    bool check_convergence(node_load& src_info, node_load& dst_info) {
+        // Allow migrating only from candidate nodes which have higher load than the target.
+        if (src_info.avg_load <= dst_info.avg_load) {
+            lblogger.trace("Load inversion: src={} (avg_load={}), dst={} (avg_load={})",
+                           src_info.id, src_info.avg_load, dst_info.id, dst_info.avg_load);
+            return false;
+        }
+
+        // Prevent load inversion post-movement which can lead to oscillations.
+        if (src_info.get_avg_load(src_info.tablet_count - 1) <
+            dst_info.get_avg_load(dst_info.tablet_count + 1)) {
+            lblogger.trace("Load inversion post-movement: src={} (avg_load={}), dst={} (avg_load={})",
+                           src_info.id, src_info.avg_load, dst_info.id, dst_info.avg_load);
+            return false;
+        }
+
+        return true;
+    }
+
     future<migration_plan> make_node_plan(node_load_map& nodes, host_id host, node_load& node_load) {
         migration_plan plan;
         const tablet_metadata& tmeta = _tm->tablets();
@@ -745,7 +960,7 @@ public:
             co_return plan;
         }
 
-        auto& sketch = co_await node_load.get_load_sketch(_tm);
+        auto& sketch = *_load_sketch;
 
         // Keeps candidate source shards in a heap which yields highest-loaded shard first.
         std::vector<shard_id> src_shards;
@@ -780,7 +995,7 @@ public:
             } else {
                 std::pop_heap(src_shards.begin(), src_shards.end(), node_load.shards_by_load_cmp());
                 src = src_shards.back();
-                dst = sketch.next_shard(host);
+                dst = sketch.get_least_loaded_shard(host);
             }
 
             auto push_back = seastar::defer([&] {
@@ -809,7 +1024,8 @@ public:
                 continue;
             }
 
-            global_tablet_id tablet = peek_candidate(src_info);
+            auto candidate = co_await peek_candidate(nodes, src_info, tablet_replica{host, src}, tablet_replica{host, dst});
+            auto tablet = candidate.tablet;
 
             // Emit migration.
 
@@ -839,6 +1055,10 @@ public:
 
             dst_info.tablet_count++;
             src_info.tablet_count--;
+            dst_info.tablet_count_per_table[tablet.table]++;
+            src_info.tablet_count_per_table[tablet.table]--;
+            sketch.pick(host, dst);
+            sketch.unload(host, src);
         }
 
         co_return plan;
@@ -857,6 +1077,325 @@ public:
         }
 
         co_return plan;
+    }
+
+    struct skip_info {
+        std::unordered_set<host_id> viable_targets;
+    };
+
+    // Verifies if moving a given tablet from src_info.id to dst_info.id would not violate
+    // replication constraints (no increase in replica co-location on nodes, racks).
+    // Returns std::nullopt if it does not and the movement is allowed.
+    std::optional<skip_info> check_constraints(node_load_map& nodes,
+                                               const locator::tablet_map& tmap,
+                                               node_load& src_info,
+                                               node_load& dst_info,
+                                               global_tablet_id tablet,
+                                               bool need_viable_targets)
+    {
+        int max_rack_load;
+        std::unordered_map<sstring, int> rack_load;
+
+        auto get_viable_targets = [&] () {
+            std::unordered_set<host_id> viable_targets;
+
+            for (auto&& [id, node] : nodes) {
+                if (node.dc() != src_info.dc() || node.drained) {
+                    continue;
+                }
+                viable_targets.emplace(id);
+            }
+
+            for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas) {
+                viable_targets.erase(r.host);
+                auto i = nodes.find(r.host);
+                if (i != nodes.end()) {
+                    auto& node = i->second;
+                    if (node.dc() == src_info.dc()) {
+                        rack_load[node.rack()] += 1;
+                    }
+                }
+            }
+
+            // Drop targets which would increase max rack load.
+
+            max_rack_load = std::max_element(rack_load.begin(), rack_load.end(),
+                                                  [] (auto& a, auto& b) { return a.second < b.second; })->second;
+
+            for (auto i = viable_targets.begin(); i != viable_targets.end(); ) {
+                auto target = *i;
+                auto& t_info = nodes[target];
+                auto old_i = i++;
+                if (src_info.rack() != t_info.rack()) {
+                    auto new_rack_load = rack_load[t_info.rack()] + 1;
+                    if (new_rack_load > max_rack_load) {
+                        viable_targets.erase(old_i);
+                    }
+                }
+            }
+
+            return viable_targets;
+        };
+
+        if (dst_info.rack() != src_info.rack()) {
+            auto targets = get_viable_targets();
+            if (!targets.contains(dst_info.id)) {
+                auto new_rack_load = rack_load[dst_info.rack()] + 1;
+                lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
+                               tablet, dst_info.rack(), new_rack_load, max_rack_load);
+                _stats.for_dc(src_info.dc()).tablets_skipped_rack++;
+                return skip_info{std::move(targets)};
+            }
+        }
+
+        for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas) {
+            if (r.host == dst_info.id) {
+                _stats.for_dc(src_info.dc()).tablets_skipped_node++;
+                lblogger.debug("candidate tablet {} skipped because it has a replica on target node", tablet);
+                if (need_viable_targets) {
+                    return skip_info{get_viable_targets()};
+                }
+                return skip_info{};
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    // Picks best tablet replica to move and its new destination.
+    // The destination host is picked among nodes_by_load_dst, with dst being the preferred destination.
+    //
+    // If drain_skipped is false, the replica is picked among tablets on src.host,
+    // with src.shard as the preferred source shard.
+    //
+    // If drain_skipped is true, the chosen replica is src_node_info.skipped_candidates.back()
+    // and src must match its location.
+    //
+    // Pre-conditions:
+    //
+    //   src_node_info.id == src.host
+    //   target_info.id == dst.host
+    //   src_node_info.shard_by_load.back() == src.shard
+    //   nodes_by_load_dst.back().id == dst.host
+    //
+    //   if drain_skipped == true:
+    //     src_node_info.skipped_candidates.back().replica = src
+    //
+    //   if drain_skipped == false:
+    //     src_node_info.shards_by_load
+    //
+    // Invariants:
+    //
+    //   nodes_by_load_dst[:-1] is a valid heap
+    //   src_node_info.shard_by_load[:-1] is a valid heap
+    //
+    // Post-conditions:
+    //
+    //   src_node_info.shard_by_load.back() == result.src.shard
+    //   nodes_by_load_dst.back().id == result.dst.host
+    //   result.tablet is removed from candidate lists in src_node_info.
+    //
+    future<migration_candidate> pick_candidate(node_load_map& nodes,
+                                               node_load& src_node_info,
+                                               node_load& target_info,
+                                               tablet_replica src,
+                                               tablet_replica dst,
+                                               std::vector<host_id>& nodes_by_load_dst,
+                                               bool drain_skipped)
+    {
+        auto get_candidate = [this, drain_skipped, &nodes, &src_node_info] (tablet_replica src, tablet_replica dst)
+                -> future<migration_candidate> {
+            if (drain_skipped) {
+                auto source_tablet = src_node_info.skipped_candidates.back().tablet;
+                auto badness = evaluate_candidate(nodes, source_tablet.table, src, dst);
+                co_return migration_candidate{source_tablet, src, dst, badness};
+            } else {
+                auto&& src_shard_info = src_node_info.shards[src.shard];
+                co_return co_await peek_candidate(nodes, src_shard_info, src, dst);
+            }
+        };
+
+        migration_candidate min_candidate = co_await get_candidate(src, dst);
+
+        // Given src as the source replica, evaluate all destinations.
+        // Updates min_candidate with the best candidate, if better is found.
+        auto evaluate_targets = [&] (global_tablet_id tablet, tablet_replica src, migration_badness src_badness) -> future<> {
+            migration_badness min_dst_badness;
+            std::optional<host_id> min_dst_host;
+            std::vector<host_id> best_hosts;
+
+            // First, find the best target nodes in terms of node badness.
+            for (auto& new_target : nodes_by_load_dst) {
+                co_await coroutine::maybe_yield();
+                auto& new_target_info = nodes[new_target];
+
+                // Skip movements which may harm convergence.
+                if (!src_node_info.drained && !check_convergence(src_node_info, new_target_info)) {
+                    continue;
+                }
+
+                auto badness = evaluate_dst_badness(nodes, tablet.table, tablet_replica{new_target, 0});
+                if (!min_dst_host || badness.dst_node_badness < min_dst_badness.dst_node_badness) {
+                    min_dst_badness = badness;
+                    min_dst_host = new_target;
+                    best_hosts.clear();
+                }
+                if (badness.dst_node_badness == min_dst_badness.dst_node_badness) {
+                    best_hosts.push_back(new_target);
+                }
+            }
+
+            if (!min_dst_host) {
+                lblogger.debug("No viable targets for src node {}", src.host);
+                co_return;
+            }
+
+            std::optional<tablet_replica> min_dst;
+
+            // Find the best shards on best targets.
+
+            for (auto host : best_hosts) {
+                for (shard_id new_dst_shard = 0; new_dst_shard < nodes[host].shard_count; new_dst_shard++) {
+                    co_await coroutine::maybe_yield();
+                    auto new_dst = tablet_replica{host, new_dst_shard};
+                    auto badness = evaluate_dst_badness(nodes, tablet.table, new_dst);
+                    if (!min_dst || badness < min_dst_badness) {
+                        min_dst_badness = badness;
+                        min_dst = new_dst;
+                    }
+                }
+                if (min_dst && !min_dst_badness.is_bad()) {
+                    break;
+                }
+            }
+
+            if (!min_dst) {
+                on_internal_error(lblogger, format("No destination shards on {}", best_hosts));
+            }
+
+            auto candidate = migration_candidate{
+                    tablet, src, *min_dst,
+                    migration_badness{src_badness.shard_badness(),
+                                      src_badness.node_badness(),
+                                      min_dst_badness.shard_badness(),
+                                      min_dst_badness.node_badness()}
+            };
+
+            lblogger.trace("candidate: {}", candidate);
+
+            if (candidate.badness < min_candidate.badness) {
+                min_candidate = candidate;
+            }
+        };
+
+        if (min_candidate.badness.is_bad() && _use_table_aware_balancing) {
+            _stats.for_dc(_dc).bad_first_candidates++;
+
+            // Consider better alternatives.
+            if (drain_skipped) {
+                auto source_tablet = src_node_info.skipped_candidates.back().tablet;
+                auto badness = evaluate_src_badness(nodes, source_tablet.table, src);
+                co_await evaluate_targets(source_tablet, src, badness);
+            } else {
+                // Find a better candidate.
+                // Consider different tables. For each table, first find the best source shard.
+                // Then find the best target node. Then find the best shard on the target node.
+                for (auto [table, load] : src_node_info.tablet_count_per_table) {
+                    migration_badness min_src_badness;
+                    std::optional<tablet_replica> min_src;
+
+                    if (load == 0) {
+                        lblogger.trace("No src candidates for table {} on node {}", table, src.host);
+                        continue;
+                    }
+
+                    for (auto new_src_shard: src_node_info.shards_by_load) {
+                        auto new_src = tablet_replica{src.host, new_src_shard};
+                        if (src_node_info.shards[new_src_shard].candidates[table].empty()) {
+                            lblogger.trace("No src candidates for table {} on shard {}", table, new_src);
+                            continue;
+                        }
+                        auto badness = evaluate_src_badness(nodes, table, new_src);
+                        if (!min_src || badness < min_src_badness) {
+                            min_src_badness = badness;
+                            min_src = new_src;
+                        }
+                    }
+
+                    if (!min_src) {
+                        lblogger.debug("No candidates for table {} on {}", table, src.host);
+                        continue;
+                    }
+
+                    auto tablet = *src_node_info.shards[min_src->shard].candidates[table].begin();
+                    co_await evaluate_targets(tablet, *min_src, min_src_badness);
+                    if (!min_candidate.badness.is_bad()) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        lblogger.trace("best candidate: {}", min_candidate);
+
+        if (drain_skipped) {
+            src_node_info.skipped_candidates.pop_back();
+        } else {
+            erase_candidate(src_node_info.shards[min_candidate.src.shard], min_candidate.tablet);
+        }
+
+        // Restore invariants.
+
+        if (min_candidate.dst != dst) {
+            lblogger.trace("dst changed.");
+
+            if (min_candidate.dst.host != dst.host) {
+                auto i = std::find(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), min_candidate.dst.host);
+                std::swap(*i, nodes_by_load_dst.back());
+
+                auto nodes_dst_cmp = [cmp = nodes_by_load_cmp(nodes)] (const host_id& a, const host_id& b) {
+                    return cmp(b, a);
+                };
+                std::make_heap(nodes_by_load_dst.begin(), std::prev(nodes_by_load_dst.end()), nodes_dst_cmp);
+            }
+
+            if (min_candidate.src.shard != src.shard) {
+                lblogger.trace("src changed.");
+                auto i = std::find(src_node_info.shards_by_load.begin(), src_node_info.shards_by_load.end(), min_candidate.src.shard);
+                std::swap(src_node_info.shards_by_load.back(), *i);
+                std::make_heap(src_node_info.shards_by_load.begin(), std::prev(src_node_info.shards_by_load.end()),
+                               src_node_info.shards_by_load_cmp());
+            }
+        }
+
+        co_return min_candidate;
+    }
+
+    future<> log_table_load(node_load_map& nodes, table_id table) {
+        size_t total_load = 0;
+        size_t shard_count = 0;
+        size_t max_shard_load = 0;
+
+        for (auto&& [host, node] : nodes) {
+            if (node.drained) {
+                continue;
+            }
+            shard_count += node.shard_count;
+            size_t this_node_max_shard_load = 0;
+            size_t node_load = 0;
+            for (shard_id shard = 0; shard < node.shard_count; shard++) {
+                co_await coroutine::maybe_yield();
+                auto load = node.shards[shard].tablet_count_per_table[table];
+                total_load += load;
+                node_load += load;
+                max_shard_load = std::max(max_shard_load, load);
+                this_node_max_shard_load = std::max(this_node_max_shard_load, load);
+            }
+            lblogger.debug("Load on host {} for table {}: total={}, max={}", host, table, node_load, this_node_max_shard_load);
+        }
+        auto avg_load = double(total_load) / shard_count;
+        auto overcommit = max_shard_load / avg_load;
+        lblogger.debug("Table {} shard overcommit: {}", table, overcommit);
     }
 
     future<migration_plan> make_internode_plan(const dc_name& dc, node_load_map& nodes,
@@ -879,9 +1418,7 @@ public:
         std::vector<host_id> nodes_by_load_dst;
         nodes_by_load_dst.reserve(nodes.size());
 
-        auto nodes_cmp = [&] (const host_id& a, const host_id& b) {
-            return nodes[a].avg_load < nodes[b].avg_load;
-        };
+        auto nodes_cmp = nodes_by_load_cmp(nodes);
         auto nodes_dst_cmp = [&] (const host_id& a, const host_id& b) {
             return nodes_cmp(b, a);
         };
@@ -890,13 +1427,13 @@ public:
             if (lblogger.is_enabled(seastar::log_level::debug)) {
                 shard_id shard = 0;
                 for (auto&& shard_load : node_load.shards) {
-                    lblogger.debug("shard {}: all tablets: {}, candidates: {}", tablet_replica {host, shard},
-                                   shard_load.tablet_count, shard_load.candidate_count());
+                    lblogger.debug("shard {}: all tablets: {}, candidates: {}, tables: {}", tablet_replica {host, shard},
+                                   shard_load.tablet_count, shard_load.candidate_count(), shard_load.tablet_count_per_table);
                     shard++;
                 }
             }
 
-            if (host != target && (nodes_to_drain.empty() || nodes_to_drain.contains(host))) {
+            if (host != target && (nodes_to_drain.empty() || node_load.drained)) {
                 nodes_by_load.push_back(host);
                 std::make_heap(node_load.shards_by_load.begin(), node_load.shards_by_load.end(),
                                node_load.shards_by_load_cmp());
@@ -918,48 +1455,76 @@ public:
         while (plan.size() < batch_size) {
             co_await coroutine::maybe_yield();
 
-            // Pick a source tablet.
-
             if (nodes_by_load.empty()) {
                 lblogger.debug("No more candidate nodes");
                 _stats.for_dc(dc).stop_no_candidates++;
                 break;
             }
 
+            // Pick source node.
+
             std::pop_heap(nodes_by_load.begin(), nodes_by_load.end(), nodes_cmp);
             auto src_host = nodes_by_load.back();
             auto& src_node_info = nodes[src_host];
 
-            if (src_node_info.shards_by_load.empty()) {
-                lblogger.debug("candidate node {} ran out of candidate shards with {} tablets remaining.",
+            bool drain_skipped = src_node_info.shards_by_load.empty() && src_node_info.drained
+                    && !src_node_info.skipped_candidates.empty();
+
+            lblogger.debug("source node: {}, avg_load={:.2f}, skipped={}, drain_skipped={}", src_host,
+                           src_node_info.avg_load, src_node_info.skipped_candidates.size(), drain_skipped);
+
+            if (src_node_info.shards_by_load.empty() && !drain_skipped) {
+                lblogger.debug("candidate node {} ran out of candidate shards with {} tablets remaining",
                                src_host, src_node_info.tablet_count);
                 max_off_candidate_load = std::max(max_off_candidate_load, src_node_info.avg_load);
                 nodes_by_load.pop_back();
                 continue;
             }
+
             auto push_back_node_candidate = seastar::defer([&] {
                 std::push_heap(nodes_by_load.begin(), nodes_by_load.end(), nodes_cmp);
             });
 
-            std::pop_heap(src_node_info.shards_by_load.begin(), src_node_info.shards_by_load.end(), src_node_info.shards_by_load_cmp());
-            auto src_shard = src_node_info.shards_by_load.back();
-            auto src = tablet_replica{src_host, src_shard};
-            auto&& src_shard_info = src_node_info.shards[src_shard];
-            if (!src_shard_info.has_candidates()) {
-                lblogger.debug("shard {} ran out of candidates with {} tablets remaining.", src, src_shard_info.tablet_count);
-                src_node_info.shards_by_load.pop_back();
-                continue;
-            }
+            tablet_replica src;
+
             auto push_back_shard_candidate = seastar::defer([&] {
                 std::push_heap(src_node_info.shards_by_load.begin(), src_node_info.shards_by_load.end(), src_node_info.shards_by_load_cmp());
             });
 
-            global_tablet_id source_tablet = peek_candidate(src_shard_info);
-            erase_candidate(src_shard_info, source_tablet);
+            if (drain_skipped) {
+                push_back_shard_candidate.cancel();
+                auto& candidate = src_node_info.skipped_candidates.back();
+                src = candidate.replica;
+                lblogger.debug("Skipped candidate: tablet={}, replica={}, targets={}", candidate.tablet, src, candidate.viable_targets);
 
-            auto& tmap = tmeta.get_tablet_map(source_tablet.table);
+                // When draining, need to narrow down targets to viable targets before choosing the best target.
+                nodes_by_load_dst.clear();
+                for (auto&& h : candidate.viable_targets) {
+                    nodes_by_load_dst.push_back(h);
+                }
+                std::make_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
+            } else {
+                // Pick best source shard.
 
-            // Pick a target node.
+                std::pop_heap(src_node_info.shards_by_load.begin(), src_node_info.shards_by_load.end(),
+                              src_node_info.shards_by_load_cmp());
+                auto src_shard = src_node_info.shards_by_load.back();
+                src = tablet_replica {src_host, src_shard};
+                auto&& src_shard_info = src_node_info.shards[src_shard];
+                if (!src_shard_info.has_candidates()) {
+                    lblogger.debug("shard {} ran out of candidates with {} tablets remaining.", src,
+                                   src_shard_info.tablet_count);
+                    src_node_info.shards_by_load.pop_back();
+                    push_back_shard_candidate.cancel();
+                    if (src_node_info.shards_by_load.empty()) {
+                        lblogger.debug("candidate node {} ran out of candidate shards with {} tablets remaining, {} skipped.",
+                                       src_host, src_node_info.tablet_count, src_node_info.skipped_candidates.size());
+                    }
+                    continue;
+                }
+            }
+
+            // Pick best target node.
 
             if (nodes_by_load_dst.empty()) {
                 lblogger.debug("No more target nodes");
@@ -967,63 +1532,9 @@ public:
                 break;
             }
 
-            // The post-condition of this block is that nodes_by_load_dst.back() is a viable target node
-            // for the source tablet.
-            if (nodes_to_drain.empty()) {
-                std::pop_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
-            } else {
-                std::unordered_set<host_id> replicas;
-                std::unordered_map<sstring, int> rack_load;
-                int max_rack_load = 0;
-                for (auto&& r : tmap.get_tablet_info(source_tablet.tablet).replicas) {
-                    replicas.insert(r.host);
-                    if (nodes.contains(r.host)) {
-                        const node_load& node = nodes[r.host];
-                        rack_load[node.rack()] += 1;
-                        max_rack_load = std::max(max_rack_load, rack_load[node.rack()]);
-                    }
-                }
-
-                auto end = nodes_by_load_dst.end();
-                while (true) {
-                    if (nodes_by_load_dst.begin() == end) {
-                        throw std::runtime_error(format("Unable to find new replica for tablet {} on {} when draining {} (nodes {}, replicas {})",
-                                                        source_tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
-                    }
-
-                    pop_heap(nodes_by_load_dst.begin(), end, nodes_dst_cmp);
-                    --end;
-                    auto new_target = *end;
-
-                    if (replicas.contains(new_target)) {
-                        lblogger.debug("next best target {} (avg_load={}) skipped because it is already a replica for {}",
-                                       new_target, nodes[new_target].avg_load, source_tablet);
-                        continue;
-                    }
-
-                    const node_load& target_node = nodes[new_target];
-                    const node_load& source_node = nodes[src_host];
-                    if (target_node.rack() != source_node.rack() && (rack_load[target_node.rack()] + 1 > max_rack_load)) {
-                        lblogger.debug("next best target {} (avg_load={}) skipped because it would overload rack {} "
-                                       "with {} replicas of {}, current max is {}",
-                                       new_target, nodes[new_target].avg_load, target_node.rack(),
-                                       rack_load[target_node.rack()] + 1, source_tablet, max_rack_load);
-                        continue;
-                    }
-
-                    // Found a viable target, restore the heap
-                    std::swap(*end, nodes_by_load_dst.back());
-                    while (end != std::prev(nodes_by_load_dst.end())) {
-                        ++end;
-                        push_heap(nodes_by_load_dst.begin(), end, nodes_dst_cmp);
-                    }
-                    break;
-                }
-            }
-
+            std::pop_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
             target = nodes_by_load_dst.back();
             auto& target_info = nodes[target];
-            auto& src_info = nodes[src.host];
             auto push_back_target_node = seastar::defer([&] {
                 std::push_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
             });
@@ -1049,76 +1560,70 @@ public:
                     break;
                 }
 
-                // If balance is not achieved, still consider migrating from candidate nodes which have higher load than the target.
-                // max_off_candidate_load may be higher than the load of current candidate.
-                if (src_node_info.avg_load <= target_info.avg_load) {
-                    lblogger.debug("No more candidate nodes. Next candidate is {} with avg_load={}, target's avg_load={}",
-                            src_host, src_node_info.avg_load, target_info.avg_load);
-                    _stats.for_dc(dc).stop_no_candidates++;
-                    break;
-                }
-
-                // Prevent load inversion which can lead to oscillations.
-                if (src_node_info.get_avg_load(nodes[src_host].tablet_count - 1) <
-                        target_info.get_avg_load(target_info.tablet_count + 1)) {
-                    lblogger.debug("No more candidate nodes, load would be inverted. Next candidate is {} with "
-                                   "avg_load={}, target's avg_load={}",
-                            src_host, src_node_info.avg_load, target_info.avg_load);
+                if (!check_convergence(src_node_info, target_info)) {
+                    lblogger.debug("No more candidates. Load would be inverted.");
                     _stats.for_dc(dc).stop_load_inversion++;
                     break;
                 }
             }
 
-            // Check replication strategy constraints.
+            // Pick best target shard.
 
-            bool check_rack_load = false;
-            bool has_replica_on_target = false;
-            std::unordered_map<sstring, int> rack_load; // Will be built if check_rack_load
+            auto dst = global_shard_id {target, _load_sketch->get_least_loaded_shard(target)};
+            lblogger.trace("target shard: {}, load={}", dst.shard, target_info.shards[dst.shard].tablet_count);
 
-            if (nodes_to_drain.empty()) {
-                check_rack_load = target_info.rack() != src_info.rack();
-                for (auto&& r: tmap.get_tablet_info(source_tablet.tablet).replicas) {
-                    if (r.host == target) {
-                        has_replica_on_target = true;
-                        break;
-                    }
-                    if (check_rack_load) {
-                        const locator::node& node = topo.get_node(r.host);
-                        if (node.dc_rack().dc == dc) {
-                            rack_load[node.dc_rack().rack] += 1;
-                        }
-                    }
+            if (lblogger.is_enabled(seastar::log_level::trace)) {
+                shard_id shard = 0;
+                for (auto&& shard_load : target_info.shards) {
+                    lblogger.trace("shard {}: all tablets: {}, candidates: {}, tables: {}", tablet_replica {dst.host, shard},
+                                   shard_load.tablet_count, shard_load.candidate_count(), shard_load.tablet_count_per_table);
+                    shard++;
                 }
             }
 
-            if (has_replica_on_target) {
-                _stats.for_dc(dc).tablets_skipped_node++;
-                lblogger.debug("candidate tablet {} skipped because it has a replica on target node", source_tablet);
-                continue;
-            }
+            // Pick tablet movement.
 
-            // Make sure we don't increase level of duplication of racks in the replica list.
-            if (check_rack_load) {
-                auto max_rack_load = std::max_element(rack_load.begin(), rack_load.end(),
-                                                 [] (auto& a, auto& b) { return a.second < b.second; })->second;
-                auto new_rack_load = rack_load[target_info.rack()] + 1;
-                if (new_rack_load > max_rack_load) {
-                    lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
-                                   source_tablet, target_info.rack(), new_rack_load, max_rack_load);
-                    _stats.for_dc(dc).tablets_skipped_rack++;
+            // May choose a different source shard than src.shard or different destination host/shard than dst.
+            auto candidate = co_await pick_candidate(nodes, src_node_info, target_info, src, dst, nodes_by_load_dst,
+                                                     drain_skipped);
+            auto source_tablet = candidate.tablet;
+            src = candidate.src;
+            dst = candidate.dst;
+
+            auto& tmap = tmeta.get_tablet_map(source_tablet.table);
+
+            // Check replication strategy constraints.
+
+            // When drain_skipped is true, we already picked movement to a viable target.
+            if (!drain_skipped) {
+                auto skip = check_constraints(nodes, tmap, src_node_info, nodes[dst.host], source_tablet, src_node_info.drained);
+                if (skip) {
+                    if (src_node_info.drained && skip->viable_targets.empty()) {
+                        auto replicas = tmap.get_tablet_info(source_tablet.tablet).replicas;
+                        throw std::runtime_error(format("Unable to find new replica for tablet {} on {} when draining {} (nodes {}, replicas {})",
+                                                        source_tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
+                    }
+                    src_node_info.skipped_candidates.emplace_back(src, source_tablet, std::move(skip->viable_targets));
                     continue;
                 }
             }
 
-            auto& target_load_sketch = co_await target_info.get_load_sketch(_tm);
-            auto dst = global_shard_id {target, target_load_sketch.next_shard(target)};
+            if (candidate.badness.is_bad()) {
+                _stats.for_dc(_dc).bad_migrations++;
+            }
 
-            tablet_transition_kind kind = (src_info.state() == locator::node::state::being_removed
-                                           || src_info.state() == locator::node::state::left)
+            if (drain_skipped) {
+                _stats.for_dc(_dc).migrations_from_skiplist++;
+            }
+
+            tablet_transition_kind kind = (src_node_info.state() == locator::node::state::being_removed
+                                           || src_node_info.state() == locator::node::state::left)
                        ? tablet_transition_kind::rebuild : tablet_transition_kind::migration;
             auto mig = tablet_migration_info {kind, source_tablet, src, dst};
             auto& src_tinfo = tmap.get_tablet_info(source_tablet.tablet);
             auto mig_streaming_info = get_migration_streaming_info(topo, src_tinfo, mig);
+
+            _load_sketch->pick(dst.host, dst.shard);
 
             if (can_accept_load(nodes, mig_streaming_info)) {
                 apply_load(nodes, mig_streaming_info);
@@ -1147,21 +1652,29 @@ public:
                 }
             }
 
-            target_info.shards[dst.shard].tablet_count++;
-            target_info.tablet_count += 1;
-            target_info.update();
-
-            src_shard_info.tablet_count -= 1;
-            if (src_shard_info.tablet_count == 0) {
-                push_back_shard_candidate.cancel();
-                src_node_info.shards_by_load.pop_back();
+            {
+                auto& target_info = nodes[dst.host];
+                target_info.shards[dst.shard].tablet_count++;
+                target_info.shards[dst.shard].tablet_count_per_table[source_tablet.table]++;
+                target_info.tablet_count_per_table[source_tablet.table]++;
+                target_info.tablet_count += 1;
+                target_info.update();
             }
+
+            auto& src_shard_info = src_node_info.shards[src.shard];
+            src_shard_info.tablet_count -= 1;
+            src_shard_info.tablet_count_per_table[source_tablet.table]--;
+            src_node_info.tablet_count_per_table[source_tablet.table]--;
 
             src_node_info.tablet_count -= 1;
             src_node_info.update();
             if (src_node_info.tablet_count == 0) {
                 push_back_node_candidate.cancel();
                 nodes_by_load.pop_back();
+            }
+
+            if (lblogger.is_enabled(seastar::log_level::debug)) {
+                co_await log_table_load(nodes, source_tablet.table);
             }
         }
 
@@ -1191,6 +1704,8 @@ public:
 
     future<migration_plan> make_plan(dc_name dc) {
         migration_plan plan;
+
+        _dc = dc;
 
         // Causes load balancer to move some tablet even though load is balanced.
         auto shuffle = in_shuffle_mode();
@@ -1234,6 +1749,7 @@ public:
                     ensure_node(node_ptr->host_id());
                     lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc);
                     nodes_to_drain.emplace(node_ptr->host_id());
+                    nodes[node_ptr->host_id()].drained = true;
                 } else if (node_ptr->is_excluded() || _skiplist.contains(node_ptr->host_id())) {
                     // Excluded nodes should not be chosen as targets for migration.
                     lblogger.debug("Ignoring excluded or dead node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
@@ -1262,6 +1778,7 @@ public:
                     if (node->left() && node->dc_rack().dc == dc) {
                         ensure_node(r.host);
                         nodes_to_drain.insert(r.host);
+                        nodes[r.host].drained = true;
                     }
                 }
 
@@ -1304,6 +1821,8 @@ public:
 
         // Compute load imbalance.
 
+        _total_capacity_shards = 0;
+        _total_capacity_nodes = 0;
         load_type max_load = 0;
         load_type min_load = 0;
         std::optional<host_id> min_load_node = std::nullopt;
@@ -1311,7 +1830,7 @@ public:
             load.update();
             _stats.for_node(dc, host).load = load.avg_load;
 
-            if (!nodes_to_drain.contains(host)) {
+            if (!load.drained) {
                 if (!min_load_node || load.avg_load < min_load) {
                     min_load = load.avg_load;
                     min_load_node = host;
@@ -1319,6 +1838,8 @@ public:
                 if (load.avg_load > max_load) {
                     max_load = load.avg_load;
                 }
+                _total_capacity_shards += load.shard_count;
+                _total_capacity_nodes++;
             }
         }
 
@@ -1345,8 +1866,13 @@ public:
 
         // Compute per-shard load and candidate tablets.
 
+        _load_sketch = locator::load_sketch(_tm);
+        co_await _load_sketch->populate_dc(dc);
+        _tablet_count_per_table.clear();
+
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = tmap_;
+            uint64_t total_load = 0;
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
@@ -1364,6 +1890,9 @@ public:
                         node_load_info.shards_by_load.push_back(replica.shard);
                     }
                     shard_load_info.tablet_count += 1;
+                    shard_load_info.tablet_count_per_table[table]++;
+                    node_load_info.tablet_count_per_table[table]++;
+                    total_load++;
                     if (!trinfo) { // migrating tablets are not candidates
                         add_candidate(shard_load_info, global_tablet_id {table, tid});
                     }
@@ -1371,6 +1900,7 @@ public:
 
                 return make_ready_future<>();
             });
+            _tablet_count_per_table[table] = total_load;
         }
 
         if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || max_load != min_load))) {
@@ -1470,6 +2000,10 @@ public:
         _load_balancer_stats.unregister();
     }
 
+    load_balancer_stats_manager& stats() {
+        return _load_balancer_stats;
+    }
+
     // The splitting of tablets today is completely based on the power-of-two constraint.
     // A tablet of id X is split into 2 new tablets, which new ids are (x << 1) and
     // (x << 1) + 1.
@@ -1526,6 +2060,10 @@ tablet_allocator_impl& tablet_allocator::impl() {
 
 void tablet_allocator::on_leadership_lost() {
     impl().on_leadership_lost();
+}
+
+load_balancer_stats_manager& tablet_allocator::stats() {
+    return impl().stats();
 }
 
 }
