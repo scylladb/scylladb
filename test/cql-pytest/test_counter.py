@@ -10,6 +10,7 @@
 import pytest
 from util import new_test_table, unique_key_int
 from cassandra.protocol import InvalidRequest
+from rest_api import scylla_inject_error
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -67,3 +68,14 @@ def test_blobascounter_wrong_size(cql, table1):
     cql.execute(f'UPDATE {table1} SET v = 1000 WHERE p = {p}')
     with pytest.raises(InvalidRequest, match='blobascounter'):
         cql.execute(f"SELECT blobascounter(intasblob(v)) FROM {table1} WHERE p={p}")
+
+# Drop a table while there is a counter update operation in progress.
+# Verify the table waits for the operation to complete before it's destroyed.
+# Reproduces scylladb/scylla-enterprise#4475
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
+                         indirect=True)
+def test_counter_update_while_table_dropped(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, c counter") as table, \
+         scylla_inject_error(cql, "apply_counter_update_delay_5s", one_shot=True):
+        cql.execute_async(f'UPDATE {table} SET c = c + 1 WHERE p = 0')

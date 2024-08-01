@@ -1790,6 +1790,10 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     tracing::trace(trace_state, "Applying counter update");
     co_await apply_with_commitlog(cf, m, timeout);
 
+    if (utils::get_local_injector().enter("apply_counter_update_delay_5s")) {
+        co_await seastar::sleep(std::chrono::seconds(5));
+    }
+
     co_return m;
 }
 
