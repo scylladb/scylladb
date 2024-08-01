@@ -64,17 +64,25 @@ SEASTAR_TEST_CASE(composite_index) {
 }
 
 template<typename Func>
-inline auto
+inline future<>
 test_using_reusable_sst(schema_ptr s, sstring dir, sstables::generation_type::int_t gen, Func&& func) {
-    return test_env::do_with([s = std::move(s), dir = std::move(dir), gen, func = std::move(func)] (test_env& env) {
-        return env.reusable_sst(std::move(s), std::move(dir), generation_from_value(gen)).then([&env, func = std::move(func)] (sstable_ptr sst) mutable {
-            return func(env, std::move(sst));
-        });
+    return test_env::do_with_async([s = std::move(s), dir = std::move(dir), gen, func = std::move(func)] (test_env& env) {
+        auto sst = env.reusable_sst(std::move(s), std::move(dir), generation_from_value(gen)).get();
+        futurize_invoke(func, env, std::move(sst)).get();
+    });
+}
+
+template<typename T, typename Func>
+inline future<T>
+test_using_reusable_sst_returning(schema_ptr s, sstring dir, sstables::generation_type::int_t gen, Func&& func) {
+    return test_env::do_with_async_returning<T>([s = std::move(s), dir = std::move(dir), gen, func = std::move(func)] (test_env& env) {
+        auto sst = env.reusable_sst(std::move(s), std::move(dir), generation_from_value(gen)).get();
+        return futurize_invoke(func, env, std::move(sst)).get();
     });
 }
 
 future<std::vector<partition_key>> index_read(schema_ptr schema, sstring path) {
-    return test_using_reusable_sst(std::move(schema), std::move(path), 1, [] (test_env& env, sstable_ptr ptr) {
+    return test_using_reusable_sst_returning<std::vector<partition_key>>(std::move(schema), std::move(path), 1, [] (test_env& env, sstable_ptr ptr) {
         return sstables::test(ptr).read_indexes(env.make_reader_permit()).then([] (auto&& indexes) {
             return boost::copy_range<std::vector<partition_key>>(
                     indexes | boost::adaptors::transformed([] (const sstables::test::index_entry& e) { return e.key; }));
