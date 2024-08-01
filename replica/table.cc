@@ -485,6 +485,14 @@ inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracke
 }
 
 void compaction_group::backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables) {
+    // If group was closed / is being closed, it's ok to ignore request to adjust backlog tracker,
+    // since that might result in an exception due to the group being deregistered from compaction
+    // manager already. And the group is being removed anyway, so that won't have any practical
+    // impact.
+    if (_async_gate.is_closed()) {
+        return;
+    }
+
     auto& tracker = get_backlog_tracker();
     tracker.replace_sstables(old_sstables, new_sstables);
 }
@@ -3628,7 +3636,13 @@ future<> storage_group::stop() noexcept {
     auto closed_gate_fut = _async_gate.close();
 
     // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
-    co_await coroutine::parallel_for_each(compaction_groups(), [] (const compaction_group_ptr& cg_ptr) {
+
+    // The reason we have to stop main cg first, is because an ongoing split always run in main cg
+    // and output will be written to left and right groups. If either left or right are stopped before
+    // main, split completion will add sstable to a closed group, and that might in turn trigger an
+    // exception while running under row_cache::external_updater::execute, resulting in node crash.
+    co_await _main_cg->stop();
+    co_await coroutine::parallel_for_each(_split_ready_groups, [] (const compaction_group_ptr& cg_ptr) {
         return cg_ptr->stop();
     });
     co_await std::move(closed_gate_fut);
