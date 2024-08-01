@@ -418,6 +418,10 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         params["flush_memtables"] = vm["flush-memtables"].as<bool>() ? "true" : "false";
     }
 
+    if (vm.count("force-purge-tombstones")) {
+        params["force_purge_tombstones"] = vm["force-purge-tombstones"].as<bool>() ? "true" : "false";
+    }
+
     if (vm.count("compaction_arg")) {
         const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "compaction_arg");
         if (!tables.empty()) {
@@ -2910,6 +2914,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/compact.html")),
                 {
                     typed_option<bool>("flush-memtables", "Control flushing of tables before major compaction (true by default)"),
+                    typed_option<bool>("force-purge-tombstones", "Force garbage collection to check only the sstables being compacted to collect tombstones (false by default). Enabling this will also force flush all memtables before major compaction."),
 
                     typed_option<>("split-output,s", "Don't create a single big file (unused)"),
                     typed_option<>("user-defined", "Submit listed SStable files for user-defined compaction (unused)"),
