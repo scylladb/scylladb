@@ -390,7 +390,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool table_aware)
     co_return global_res;
 }
 
-future<> run_simulation(const params& p, const sstring& name = "") {
+future<> run_simulation(const params& p, bool check_table_unaware, const sstring& name = "") {
     testlog.info("[run {}] params: {}", name, p);
 
     auto total_tablet_count = p.tablets1.value_or(0) * p.rf1 + p.tablets2.value_or(0) * p.rf2;
@@ -419,12 +419,14 @@ future<> run_simulation(const params& p, const sstring& name = "") {
     auto res = co_await test_load_balancing_with_many_tables(p, true);
     check_results(res, "");
 
-    auto old_res = co_await test_load_balancing_with_many_tables(p, false);
-    check_results(old_res, "(old)");
+    if (check_table_unaware) {
+        auto old_res = co_await test_load_balancing_with_many_tables(p, false);
+        check_results(old_res, "(old)");
 
-    for (int i = 0; i < nr_tables; ++i) {
-        if (res.worst.tables[i].shard_overcommit > old_res.worst.tables[i].shard_overcommit) {
-            testlog.warn("[run {}] table{} shard overcommit worse!", name, i + 1);
+        for (int i = 0; i < nr_tables; ++i) {
+            if (res.worst.tables[i].shard_overcommit > old_res.worst.tables[i].shard_overcommit) {
+                testlog.warn("[run {}] table{} shard overcommit worse!", name, i + 1);
+            }
         }
     }
 }
@@ -450,7 +452,7 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
         };
 
         auto name = format("#{}", i);
-        co_await run_simulation(p, name);
+        co_await run_simulation(p, app_cfg["check-table-unaware"].as<bool>(), name);
     }
 }
 
@@ -461,6 +463,7 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
     app_template app;
     app.add_options()
             ("runs", bpo::value<int>(), "Number of simulation runs.")
+            ("check-table-unaware", bpo::value<bool>()->default_value(false), "Compare with table-unaware load balancer.")
             ("iterations", bpo::value<int>()->default_value(8), "Number of topology-changing cycles in each run.")
             ("nodes", bpo::value<int>(), "Number of nodes in the cluster.")
             ("tablets1", bpo::value<int>(), "Number of tablets for the first table.")
@@ -495,7 +498,7 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
                         .rf2 = app.configuration()["rf2"].as<int>(),
                         .shards = app.configuration()["shards"].as<int>(),
                     };
-                    run_simulation(p).get();
+                    run_simulation(p, app.configuration()["check-table-unaware"].as<bool>()).get();
                 }
             } catch (seastar::abort_requested_exception&) {
                 // Ignore
