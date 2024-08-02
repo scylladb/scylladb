@@ -925,7 +925,7 @@ public:
     // Start a compaction of all sstables in a process known as major compaction
     // Active memtable is flushed first to guarantee that data like tombstone,
     // sitting in the memtable, will be compacted with shadowed data.
-    future<> compact_all_sstables(std::optional<tasks::task_info> info = std::nullopt, do_flush = do_flush::yes);
+    future<> compact_all_sstables(tasks::task_info info, do_flush = do_flush::yes);
 
     future<bool> snapshot_exists(sstring name);
 
@@ -997,9 +997,9 @@ public:
     // Performs offstrategy compaction, if needed, returning
     // a future<bool> that is resolved when offstrategy_compaction completes.
     // The future value is true iff offstrategy compaction was required.
-    future<bool> perform_offstrategy_compaction(std::optional<tasks::task_info> info = std::nullopt);
+    future<bool> perform_offstrategy_compaction(tasks::task_info info);
     future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges,
-                                        std::optional<tasks::task_info> info = std::nullopt,
+                                        tasks::task_info info,
                                         do_flush = do_flush::yes);
     unsigned estimate_pending_compactions() const;
 

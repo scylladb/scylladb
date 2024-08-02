@@ -170,15 +170,13 @@ private:
     // Return nullopt if compaction cannot be started
     std::optional<gate::holder> start_compaction(table_state& t);
 
-    // parent_info set to std::nullopt means that task manager should not register this task executor.
-    // To create a task manager task with no parent, parent_info argument should contain empty task_info.
     template<typename TaskExecutor, typename... Args>
     requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
             std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
     requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&... args) {
         {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
     }
-    future<compaction_manager::compaction_stats_opt> perform_compaction(throw_if_stopping do_throw_if_stopping, std::optional<tasks::task_info> parent_info, Args&&... args);
+    future<compaction_manager::compaction_stats_opt> perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
 
     future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason);
     future<> update_throughput(uint32_t value_mbs);
@@ -229,7 +227,7 @@ private:
     // similar-sized compaction.
     void postpone_compaction_for_table(compaction::table_state* t);
 
-    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::table_state& t, std::optional<tasks::task_info> info);
+    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::table_state& t, tasks::task_info info);
     future<> update_static_shares(float shares);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
@@ -239,9 +237,9 @@ private:
     template<typename TaskType, typename... Args>
     requires std::derived_from<TaskType, compaction_task_executor> &&
             std::derived_from<TaskType, compaction_task_impl>
-    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(std::optional<tasks::task_info> info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args);
+    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(tasks::task_info info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args);
 
-    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, std::optional<tasks::task_info> info,
+    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, tasks::task_info info,
                                                   can_purge_tombstones can_purge = can_purge_tombstones::yes, sstring options_desc = "");
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
@@ -314,7 +312,7 @@ public:
 
     // Submit a table to be off-strategy compacted.
     // Returns true iff off-strategy compaction was required and performed.
-    future<bool> perform_offstrategy(compaction::table_state& t, std::optional<tasks::task_info> info);
+    future<bool> perform_offstrategy(compaction::table_state& t, tasks::task_info info);
 
     // Submit a table to be cleaned up and wait for its termination.
     //
@@ -323,9 +321,9 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, std::optional<tasks::task_info> info);
+    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, tasks::task_info info);
 private:
-    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, std::optional<tasks::task_info> info);
+    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, tasks::task_info info);
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
     bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
@@ -333,19 +331,19 @@ private:
     future<> on_compaction_completion(table_state& t, sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy);
 public:
     // Submit a table to be upgraded and wait for its termination.
-    future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version, std::optional<tasks::task_info> info = std::nullopt);
+    future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version, tasks::task_info info);
 
     // Submit a table to be scrubbed and wait for its termination.
-    future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts, std::optional<tasks::task_info> info = std::nullopt);
+    future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts, tasks::task_info info);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(compaction::table_state& t, std::optional<tasks::task_info> info = std::nullopt);
+    future<> perform_major_compaction(compaction::table_state& t, tasks::task_info info);
 
     // Splits a compaction group by segregating all its sstable according to the classifier[1].
     // [1]: See sstables::compaction_type_options::splitting::classifier.
     // Returns when all sstables in the main sstable set are split. The only exception is shutdown
     // or user aborted splitting using stop API.
-    future<compaction_stats_opt> perform_split_compaction(compaction::table_state& t, sstables::compaction_type_options::split opt, std::optional<tasks::task_info> info = std::nullopt);
+    future<compaction_stats_opt> perform_split_compaction(compaction::table_state& t, sstables::compaction_type_options::split opt, tasks::task_info info);
 
     // Run a custom job for a given table, defined by a function
     // it completes when future returned by job is ready or returns immediately
@@ -354,7 +352,7 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&, sstables::compaction_progress_monitor&)> job, std::optional<tasks::task_info> info, throw_if_stopping do_throw_if_stopping);
+    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&, sstables::compaction_progress_monitor&)> job, tasks::task_info info, throw_if_stopping do_throw_if_stopping);
 
     class compaction_reenabler {
         compaction_manager& _cm;
@@ -603,7 +601,7 @@ public:
     requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&... args) {
         {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
     }
-    friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, std::optional<tasks::task_info> parent_info, Args&&... args);
+    friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
     friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason);

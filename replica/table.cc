@@ -1833,7 +1833,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
 }
 
 future<>
-table::compact_all_sstables(std::optional<tasks::task_info> info, do_flush do_flush) {
+table::compact_all_sstables(tasks::task_info info, do_flush do_flush) {
     if (do_flush) {
         co_await flush();
     }
@@ -1882,7 +1882,7 @@ void table::trigger_offstrategy_compaction() {
     });
 }
 
-future<bool> table::perform_offstrategy_compaction(std::optional<tasks::task_info> info) {
+future<bool> table::perform_offstrategy_compaction(tasks::task_info info) {
     // If the user calls trigger_offstrategy_compaction() to trigger
     // off-strategy explicitly, cancel the timeout based automatic trigger.
     _off_strategy_trigger.cancel();
@@ -1894,7 +1894,7 @@ future<bool> table::perform_offstrategy_compaction(std::optional<tasks::task_inf
 }
 
 future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
-                                           std::optional<tasks::task_info> info,
+                                           tasks::task_info info,
                                            do_flush do_flush) {
     auto* cg = try_get_compaction_group_with_static_sharding();
     if (!cg) {
