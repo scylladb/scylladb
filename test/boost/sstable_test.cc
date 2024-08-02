@@ -211,17 +211,17 @@ write_and_validate_sst(schema_ptr s, sstring dir, noncopyable_function<future<> 
 SEASTAR_TEST_CASE(check_summary_func) {
     auto s = make_schema_for_compressed_sstable();
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
-        return sstables::test(sst2).read_summary().then([sst1, sst2] {
-            summary& sst1_s = sstables::test(sst1).get_summary();
-            summary& sst2_s = sstables::test(sst2).get_summary();
+        sstables::test(sst2).read_summary().get();
 
-            BOOST_REQUIRE(::memcmp(&sst1_s.header, &sst2_s.header, sizeof(summary::header)) == 0);
-            BOOST_REQUIRE(sst1_s.positions == sst2_s.positions);
-            BOOST_REQUIRE(sst1_s.entries == sst2_s.entries);
-            BOOST_REQUIRE(sst1_s.first_key.value == sst2_s.first_key.value);
-            BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
-            return make_ready_future<>();
-        });
+        summary& sst1_s = sstables::test(sst1).get_summary();
+        summary& sst2_s = sstables::test(sst2).get_summary();
+
+        BOOST_REQUIRE(::memcmp(&sst1_s.header, &sst2_s.header, sizeof(summary::header)) == 0);
+        BOOST_REQUIRE(sst1_s.positions == sst2_s.positions);
+        BOOST_REQUIRE(sst1_s.entries == sst2_s.entries);
+        BOOST_REQUIRE(sst1_s.first_key.value == sst2_s.first_key.value);
+        BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
+        return make_ready_future<>();
     });
 }
 
