@@ -3605,13 +3605,16 @@ future<> storage_service::raft_decommission() {
         break;
     }
 
+    rtlogger.info("decommission: waiting for completion (request ID: {})", request_id);
     auto error = co_await wait_for_topology_request_completion(request_id);
 
     if (error.empty()) {
         // Need to set it otherwise gossiper will try to send shutdown on exit
+        rtlogger.info("decommission: successfully removed from topology (request ID: {}), updating gossip status", request_id);
         co_await _gossiper.add_local_application_state(std::pair(gms::application_state::STATUS, gms::versioned_value::left({}, _gossiper.now().time_since_epoch().count())));
+        rtlogger.info("Decommission succeeded. Request ID: {}", request_id);
     } else  {
-        auto err = fmt::format("Decommission failed. See earlier errors ({})", error);
+        auto err = fmt::format("Decommission failed. See earlier errors ({}). Request ID: {}", error, request_id);
         rtlogger.error("{}", err);
         throw std::runtime_error(err);
     }
@@ -3968,19 +3971,21 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         break;
     }
 
-    rtlogger.info("removenode: wait for completion");
+    rtlogger.info("removenode: waiting for completion (request ID: {})", request_id);
 
     // Wait until request completes
     auto error = co_await wait_for_topology_request_completion(request_id);
 
     if (error.empty()) {
+        rtlogger.info("removenode: successfully removed from topology (request ID: {}), removing from group 0 configuration", request_id);
         try {
             co_await _group0->remove_from_raft_config(id);
         } catch (raft::not_a_member&) {
             rtlogger.info("removenode: already removed from the raft config by the topology coordinator");
         }
+        rtlogger.info("Removenode succeeded. Request ID: {}", request_id);
     } else {
-        auto err = fmt::format("Removenode failed. See earlier errors ({})", error);
+        auto err = fmt::format("Removenode failed. See earlier errors ({}). Request ID: {}", error, request_id);
         rtlogger.error("{}", err);
         throw std::runtime_error(err);
     }
