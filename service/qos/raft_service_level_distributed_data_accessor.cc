@@ -53,7 +53,7 @@ future<> raft_service_level_distributed_data_accessor::do_raft_command(service::
     };
 
     auto group0_cmd = _group0_client.prepare_command(change, guard, description);
-    co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &as);
+    co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), as);
 }
 
 static void validate_state(const service::raft_group0_client& group0_client, const std::optional<service::group0_guard>& guard) {
@@ -87,7 +87,7 @@ future<> raft_service_level_distributed_data_accessor::set_service_level(sstring
 future<> raft_service_level_distributed_data_accessor::drop_service_level(sstring service_level_name, std::optional<service::group0_guard> guard, abort_source& as) const {
     //FIXME: remove this when `role_manager::remove_attribute()` will be done in one raft command
     if (!guard) {
-        guard = co_await _group0_client.start_operation(&as);
+        guard = co_await _group0_client.start_operation(as);
     }
 
     validate_state(_group0_client, guard);
