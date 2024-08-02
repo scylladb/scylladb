@@ -15,6 +15,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/util/closeable.hh>
+#include "gms/feature_service.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
@@ -192,8 +193,11 @@ int main(int ac, char ** av) {
             sharded<locator::shared_token_metadata> token_metadata;
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_tm = deferred_stop(token_metadata);
+            seastar::sharded<gms::feature_service> feature_service;
+            auto cfg = gms::feature_config_from_db_config(db::config(), {});
+            feature_service.start(cfg).get();
             seastar::sharded<netw::messaging_service> messaging;
-            messaging.start(locator::host_id{}, listen, 7000).get();
+            messaging.start(locator::host_id{}, listen, 7000, std::ref(feature_service)).get();
             auto stop_messaging = deferred_stop(messaging);
             seastar::sharded<tester> testers;
             testers.start(std::ref(messaging)).get();

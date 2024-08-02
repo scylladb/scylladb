@@ -45,6 +45,7 @@ namespace gms {
     class gossip_digest_ack2;
     class gossip_get_endpoint_states_request;
     class gossip_get_endpoint_states_response;
+    class feature_service;
 }
 
 namespace db {
@@ -339,6 +340,7 @@ private:
     scheduling_config _scheduling_config;
     std::vector<scheduling_info_for_connection_index> _scheduling_info_for_connection_index;
     std::vector<tenant_connection_index> _connection_index_for_tenant;
+    gms::feature_service& _feature_service;
 
     struct connection_ref;
     std::unordered_multimap<locator::host_id, connection_ref> _host_connections;
@@ -353,8 +355,8 @@ private:
 public:
     using clock_type = lowres_clock;
 
-    messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port);
-    messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>);
+    messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service);
+    messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>, gms::feature_service& feature_service);
     ~messaging_service();
 
     future<> start();

@@ -683,7 +683,7 @@ private:
                port = distrib(gen);
             }
             // Don't start listening so tests can be run in parallel if cfg_in.ms_listen is not set to true explicitly.
-            _ms.start(host_id, listen, std::move(port)).get();
+            _ms.start(host_id, listen, std::move(port), std::ref(_feature_service)).get();
             auto stop_ms = defer([this] { _ms.stop().get(); });
 
             if (cfg_in.ms_listen) {
