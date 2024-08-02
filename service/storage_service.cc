@@ -5250,7 +5250,7 @@ future<> storage_service::load_tablet_metadata() {
     }, acquire_merge_lock::no);
 }
 
-future<> storage_service::process_tablet_split_candidate(table_id table) {
+future<> storage_service::process_tablet_split_candidate(table_id table) noexcept {
     auto all_compaction_groups_split = [&] () mutable {
         return _db.map_reduce0([table_ = table] (replica::database& db) {
             auto all_split = db.find_column_family(table_).all_storage_groups_split();
@@ -5278,7 +5278,7 @@ future<> storage_service::process_tablet_split_candidate(table_id table) {
             }
 
             if (co_await all_compaction_groups_split()) {
-                slogger.info0("All compaction groups of table {} are split ready.", table);
+                slogger.debug("All compaction groups of table {} are split ready.", table);
                 release_guard(std::move(guard));
                 break;
             } else {
@@ -5312,13 +5312,17 @@ void storage_service::register_tablet_split_candidate(table_id table) noexcept {
 }
 
 future<> storage_service::run_tablet_split_monitor() {
-    while (!_async_gate.is_closed() && !_group0_as.abort_requested()) {
-        while (!_tablet_split_candidates.empty()) {
-            auto candidate = _tablet_split_candidates.front();
-            _tablet_split_candidates.pop_front();
+    auto can_proceed = [this] { return !_async_gate.is_closed() && !_group0_as.abort_requested(); };
+    while (can_proceed()) {
+        auto tablet_split_candidates = std::exchange(_tablet_split_candidates, {});
+        for (auto candidate : tablet_split_candidates) {
             co_await process_tablet_split_candidate(candidate);
         }
-        co_await _tablet_split_monitor_event.when();
+        co_await utils::clear_gently(tablet_split_candidates);
+        // Returns if there is more work to do, or shutdown was requested.
+        co_await _tablet_split_monitor_event.when([&] {
+            return _tablet_split_candidates.size() > 0 || !can_proceed();
+        });
     }
 }
 
