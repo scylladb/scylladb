@@ -828,7 +828,7 @@ future<> storage_service::topology_transition(state_change_hint hint) {
 
 future<> storage_service::reload_raft_topology_state(service::raft_group0_client& group0_client) {
     slogger.info("Waiting for group 0 read/apply mutex before reloading Raft topology state...");
-    auto holder = co_await group0_client.hold_read_apply_mutex();
+    auto holder = co_await group0_client.hold_read_apply_mutex(_abort_source);
     slogger.info("Reloading Raft topology state");
     // Using topology_transition() instead of topology_state_load(), because the former notifies listeners
     co_await topology_transition();
@@ -951,7 +951,7 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
             // the _group0.read_apply_mutex could be taken in cross-order leading to a deadlock.
             // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
             (void)futurize_invoke(ensure_alive([this, id, endpoint, h = _ss._async_gate.hold()]() -> future<> {
-                auto guard = co_await _ss._group0->client().hold_read_apply_mutex();
+                auto guard = co_await _ss._group0->client().hold_read_apply_mutex(_ss._abort_source);
                 const auto hid = locator::host_id{id.uuid()};
                 if (_address_map.find(id) != endpoint ||
                     _ss.get_token_metadata().get_endpoint_for_host_id_if_known(hid) == endpoint)
@@ -6798,7 +6798,7 @@ void storage_service::init_messaging_service() {
             utils::chunked_vector<canonical_mutation> mutations;
             // FIXME: make it an rwlock, here we only need to lock for reads,
             // might be useful if multiple nodes are trying to pull concurrently.
-            auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
+            auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex(ss._abort_source);
             for (const auto& table : params.tables) {
                 auto schema = ss._db.local().find_schema(table);
                 auto muts = co_await ss.get_system_mutations(schema);
