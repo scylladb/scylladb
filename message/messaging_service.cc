@@ -118,6 +118,7 @@
 #include "idl/mapreduce_request.dist.impl.hh"
 #include "idl/storage_service.dist.impl.hh"
 #include "idl/join_node.dist.impl.hh"
+#include "gms/feature_service.hh"
 
 namespace netw {
 
@@ -231,9 +232,9 @@ future<> messaging_service::unregister_handler(messaging_verb verb) {
     return _rpc->unregister_handler(verb);
 }
 
-messaging_service::messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port)
+messaging_service::messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service)
     : messaging_service(config{std::move(id), ip, ip, port},
-                        scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr)
+                        scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr, feature_service)
 {}
 
 static
@@ -418,13 +419,14 @@ void messaging_service::do_start_listen() {
     }
 }
 
-messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials)
+messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials, gms::feature_service& feature_service)
     : _cfg(std::move(cfg))
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
     , _clients(PER_SHARD_CONNECTION_COUNT + scfg.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT)
     , _scheduling_config(scfg)
     , _scheduling_info_for_connection_index(initial_scheduling_info())
+    , _feature_service(feature_service)
 {
     _rpc->set_logger(&rpc_logger);
 
