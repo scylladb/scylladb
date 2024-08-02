@@ -250,13 +250,12 @@ SEASTAR_TEST_CASE(check_statistics_func) {
 SEASTAR_TEST_CASE(check_toc_func) {
     auto s = make_schema_for_compressed_sstable();
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
-        return sstables::test(sst2).read_toc().then([sst1, sst2] {
-            auto& sst1_c = sstables::test(sst1).get_components();
-            auto& sst2_c = sstables::test(sst2).get_components();
+        sstables::test(sst2).read_toc().get();
+        auto& sst1_c = sstables::test(sst1).get_components();
+        auto& sst2_c = sstables::test(sst2).get_components();
 
-            BOOST_REQUIRE(sst1_c == sst2_c);
-            return make_ready_future<>();
-        });
+        BOOST_REQUIRE(sst1_c == sst2_c);
+        return make_ready_future<>();
     });
 }
 
