@@ -2579,10 +2579,9 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
     consumer->consume_stream_end().get();
 }
 
-void shard_of_operation(schema_ptr, reader_permit,
-                        const std::vector<sstables::shared_sstable>& sstables,
-                        sstables::sstables_manager& sstable_manager,
-                        const bpo::variables_map& vm) {
+void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
+                          sstables::sstables_manager& sstable_manager,
+                          const bpo::variables_map& vm) {
     if (!vm.count("shards")) {
         throw std::invalid_argument("missing required option '--shards'");
     }
@@ -2614,6 +2613,30 @@ void shard_of_operation(schema_ptr, reader_permit,
         writer.EndArray();
     }
     writer.EndStream();
+}
+
+void shard_of_with_tablets() {
+    // TODO: support tablets
+    fmt::print(std::cerr, "tablets not supported");
+}
+
+void shard_of_operation(schema_ptr, reader_permit,
+                        const std::vector<sstables::shared_sstable>& sstables,
+                        sstables::sstables_manager& sstable_manager,
+                        const bpo::variables_map& vm) {
+    // uses "tablets" by default. as new scylla installations enable "tablet" by
+    // default
+    if (vm.count("tablets") && vm.count("vnodes")) {
+        throw std::invalid_argument("'--tablets' and '--vnodes' are mutual exclusive");
+    }
+    if (!vm.count("tablets") && !vm.count("vnodes")) {
+        throw std::invalid_argument("Please specify '--tablets' or '--vnodes'");
+    }
+    if (vm.count("vnodes")) {
+        shard_of_with_vnodes(sstables, sstable_manager, vm);
+    } else {
+        shard_of_with_tablets();
+    }
 }
 
 const std::vector<operation_option> global_options {
@@ -2886,6 +2909,8 @@ for more information on this operation, including the API documentation.
             {
                 typed_option<unsigned>("shards", "the number of shards the source scylla instance has"),
                 typed_option<unsigned>("ignore-msb-bits", 12u, "'murmur3_partitioner_ignore_msb_bits' set by scylla.yaml"),
+                typed_option<>("tablets", "assume that tokens are distributed with tablets"),
+                typed_option<>("vnodes", "assume that tokens are distributed with vnodes"),
             }},
             shard_of_operation},
 };
