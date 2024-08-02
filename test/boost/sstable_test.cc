@@ -367,13 +367,12 @@ SEASTAR_TEST_CASE(all_in_place) {
 
 SEASTAR_TEST_CASE(full_index_search) {
     return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto& env, auto sstp) {
-        return sstables::test(sstp).read_indexes(env.make_reader_permit()).then([sstp] (auto&& index_list) {
-            int idx = 0;
-            for (auto& e : index_list) {
-                auto key = key::from_partition_key(*sstp->get_schema(), e.key);
-                BOOST_REQUIRE(sstables::test(sstp).binary_search(sstp->get_schema()->get_partitioner(), index_list, key) == idx++);
-            }
-        });
+        auto index_list = sstables::test(sstp).read_indexes(env.make_reader_permit()).get();
+        int idx = 0;
+        for (auto& e : index_list) {
+            auto key = key::from_partition_key(*sstp->get_schema(), e.key);
+            BOOST_REQUIRE(sstables::test(sstp).binary_search(sstp->get_schema()->get_partitioner(), index_list, key) == idx++);
+        }
     });
 }
 
