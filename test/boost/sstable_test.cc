@@ -397,14 +397,11 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
 // See CASSANDRA-7593. This sstable writes 0 in the range_start. We need to handle that case as well
 SEASTAR_TEST_CASE(wrong_range) {
     return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/wrongrange", 114, [] (auto& env, auto sstp) {
-        return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "todata")), [&env, sstp] (auto& range) {
-            auto s = columns_schema();
-            return with_closeable(sstp->make_reader(s, env.make_reader_permit(), range, s->full_slice()), [sstp, s] (auto& rd) {
-              return read_mutation_from_mutation_reader(rd).then([sstp, s] (auto mutation) {
-                return make_ready_future<>();
-              });
-            });
-        });
+        auto range = dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "todata"));
+        auto s = columns_schema();
+        auto rd = sstp->make_reader(s, env.make_reader_permit(), range, s->full_slice());
+        auto close_rd = deferred_close(rd);
+        (void)read_mutation_from_mutation_reader(rd).get();
     });
 }
 
