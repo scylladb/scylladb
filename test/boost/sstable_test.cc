@@ -200,11 +200,11 @@ SEASTAR_TEST_CASE(check_compressed_info_func) {
 }
 
 future<>
-write_and_validate_sst(schema_ptr s, sstring dir, noncopyable_function<future<> (shared_sstable sst1, shared_sstable sst2)> func) {
+write_and_validate_sst(schema_ptr s, sstring dir, noncopyable_function<void (shared_sstable sst1, shared_sstable sst2)> func) {
     return test_env::do_with_async([s = std::move(s), dir = std::move(dir), func = std::move(func)] (test_env& env) mutable {
         auto sst1 = do_write_sst(env, s, dir, env.tempdir().path().native(), env.new_generation()).get();
         auto sst2 = env.make_sstable(s, sst1->get_version());
-        func(std::move(sst1), std::move(sst2)).get();
+        func(std::move(sst1), std::move(sst2));
     }, test_env_config{ .use_uuid = false });
 }
 
@@ -221,7 +221,6 @@ SEASTAR_TEST_CASE(check_summary_func) {
         BOOST_REQUIRE(sst1_s.entries == sst2_s.entries);
         BOOST_REQUIRE(sst1_s.first_key.value == sst2_s.first_key.value);
         BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
-        return make_ready_future<>();
     });
 }
 
@@ -243,7 +242,6 @@ SEASTAR_TEST_CASE(check_statistics_func) {
             BOOST_REQUIRE(boost::get<0>(e).second ==  boost::get<1>(e).second);
         }
         // TODO: compare the field contents from both sstables.
-        return make_ready_future<>();
     });
 }
 
@@ -255,7 +253,6 @@ SEASTAR_TEST_CASE(check_toc_func) {
         auto& sst2_c = sstables::test(sst2).get_components();
 
         BOOST_REQUIRE(sst1_c == sst2_c);
-        return make_ready_future<>();
     });
 }
 
