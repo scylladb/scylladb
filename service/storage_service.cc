@@ -826,6 +826,15 @@ future<> storage_service::topology_transition(state_change_hint hint) {
     _topology_state_machine.event.broadcast();
 }
 
+future<> storage_service::reload_raft_topology_state(service::raft_group0_client& group0_client) {
+    slogger.info("Waiting for group 0 read/apply mutex before reloading Raft topology state...");
+    auto holder = co_await group0_client.hold_read_apply_mutex();
+    slogger.info("Reloading Raft topology state");
+    // Using topology_transition() instead of topology_state_load(), because the former notifies listeners
+    co_await topology_transition();
+    slogger.info("Reloaded Raft topology state");
+}
+
 future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
     auto it = std::partition(snp.mutations.begin(), snp.mutations.end(), [] (const canonical_mutation& m) {
         return m.column_family_id() != db::system_keyspace::cdc_generations_v3()->id();
