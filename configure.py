@@ -1337,6 +1337,7 @@ scylla_tools = ['tools/read_mutation.cc',
                 'tools/scylla-sstable.cc',
                 'tools/scylla-nodetool.cc',
                 'tools/schema_loader.cc',
+                'tools/load_system_tablets.cc',
                 'tools/utils.cc',
                 'tools/lua_sstable_consumer.cc']
 scylla_perfs = ['test/perf/perf_alternator.cc',

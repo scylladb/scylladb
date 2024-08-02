@@ -33,6 +33,7 @@
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
 #include "tools/json_writer.hh"
+#include "tools/load_system_tablets.hh"
 #include "tools/lua_sstable_consumer.hh"
 #include "tools/schema_loader.hh"
 #include "tools/sstable_consumer.hh"
@@ -2615,19 +2616,59 @@ void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
     writer.EndStream();
 }
 
-void shard_of_with_tablets() {
-    // TODO: support tablets
-    fmt::print(std::cerr, "tablets not supported");
+void shard_of_with_tablets(schema_ptr schema,
+                           const std::vector<sstables::shared_sstable>& sstables,
+                           std::filesystem::path data_dir_path,
+                           sstables::sstables_manager& sstable_manager,
+                           reader_permit permit) {
+    auto& dbcfg = sstable_manager.config();
+    auto tablets = tools::load_system_tablets(dbcfg, data_dir_path,
+                                              schema->ks_name(), schema->cf_name(),
+                                              permit).get();
+    json_writer writer;
+    writer.StartStream();
+    for (auto& sst : sstables) {
+        writer.Key(sst->get_filename());
+        writer.StartArray();
+
+        // token ranges are distributed across tablets, so we just check for
+        // the token range of each sstable
+        auto first_token = sst->get_first_decorated_key().token();
+        auto last_token = sst->get_last_decorated_key().token();
+        // each tablet holds a range of (last_token(i-1), last_token(i)], where
+        // "last_token" is the value of the column with the same name in
+        // the "system.tablets" table, and "i" is the index of current tablet.
+        auto tablet = tablets.upper_bound(first_token);
+        if (auto last_tablet = tablets.lower_bound(last_token); tablet != last_tablet) {
+            fmt::print(std::cerr, "sstable spans across multiple tablets\n");
+        }
+        if (tablet == tablets.end()) {
+            fmt::print(std::cerr, "unable to find replica set for sstable: {}\n", sst->get_filename());
+            continue;
+        }
+        auto& [token, replica_set] = *tablet;
+        for (auto& replica : replica_set) {
+            writer.StartObject();
+            writer.Key("host");
+            writer.String(fmt::to_string(replica.host));
+            writer.Key("shard");
+            writer.Uint(replica.shard);
+            writer.EndObject();
+        }
+
+        writer.EndArray();
+    }
+    writer.EndStream();
 }
 
-void shard_of_operation(schema_ptr, reader_permit,
+void shard_of_operation(schema_ptr schema, reader_permit permit,
                         const std::vector<sstables::shared_sstable>& sstables,
                         sstables::sstables_manager& sstable_manager,
                         const bpo::variables_map& vm) {
     // uses "tablets" by default. as new scylla installations enable "tablet" by
     // default
     if (vm.count("tablets") && vm.count("vnodes")) {
-        throw std::invalid_argument("'--tablets' and '--vnodes' are mutual exclusive");
+        throw std::invalid_argument("--tablets and --vnodes are mutually exclusive");
     }
     if (!vm.count("tablets") && !vm.count("vnodes")) {
         throw std::invalid_argument("Please specify '--tablets' or '--vnodes'");
@@ -2635,7 +2676,8 @@ void shard_of_operation(schema_ptr, reader_permit,
     if (vm.count("vnodes")) {
         shard_of_with_vnodes(sstables, sstable_manager, vm);
     } else {
-        shard_of_with_tablets();
+        auto info = extract_from_sstable_path(vm);
+        shard_of_with_tablets(schema, sstables, info.data_dir_path, sstable_manager, permit);
     }
 }
 
