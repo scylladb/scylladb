@@ -46,6 +46,7 @@
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"
 #include "utils/user_provided_param.hh"
+#include "utils/sequenced_set.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
@@ -173,7 +174,7 @@ private:
     gate _async_gate;
 
     condition_variable _tablet_split_monitor_event;
-    std::deque<table_id> _tablet_split_candidates;
+    utils::sequenced_set<table_id> _tablet_split_candidates;
     future<> _tablet_split_monitor = make_ready_future<>();
 
     std::unordered_map<node_ops_id, node_ops_meta_data> _node_ops;
@@ -200,7 +201,7 @@ private:
     inet_address host2ip(locator::host_id) const;
     // Handler for table load stats RPC.
     future<locator::load_stats> load_stats_for_tablet_based_tables();
-    future<> process_tablet_split_candidate(table_id);
+    future<> process_tablet_split_candidate(table_id) noexcept;
     void register_tablet_split_candidate(table_id) noexcept;
     future<> run_tablet_split_monitor();
 public:
