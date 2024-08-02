@@ -469,14 +469,12 @@ static future<shared_sstable> load_large_partition_sst(test_env& env, const ssta
 // search for anything.
 SEASTAR_TEST_CASE(promoted_index_read) {
   return for_each_sstable_version([] (const sstables::sstable::version_types version) {
-    return test_env::do_with([version] (test_env& env) {
-      return load_large_partition_sst(env, version).then([&env] (auto sstp) {
+    return test_env::do_with_async([version] (test_env& env) {
+        auto sstp = load_large_partition_sst(env, version).get();
         schema_ptr s = large_partition_schema();
-        return sstables::test(sstp).read_indexes(env.make_reader_permit()).then([sstp] (std::vector<sstables::test::index_entry> vec) {
-            BOOST_REQUIRE(vec.size() == 1);
-            BOOST_REQUIRE(vec[0].promoted_index_size > 0);
-        });
-      });
+        std::vector<sstables::test::index_entry> vec = sstables::test(sstp).read_indexes(env.make_reader_permit()).get();
+        BOOST_REQUIRE(vec.size() == 1);
+        BOOST_REQUIRE(vec[0].promoted_index_size > 0);
     });
   });
 }
