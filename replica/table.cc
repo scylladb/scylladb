@@ -851,7 +851,7 @@ future<> storage_group::split(sstables::compaction_type_options::split opt) {
     }
 
     co_await _main_cg->flush();
-    co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt));
+    co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt), tasks::task_info{});
 }
 
 lw_shared_ptr<const sstables::sstable_set> storage_group::make_sstable_set() const {
