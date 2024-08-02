@@ -252,7 +252,7 @@ SEASTAR_TEST_CASE(test_group0_batch) {
         };
 
         auto do_transaction = [&] (std::function<future<>(service::group0_batch&)> f) -> future<> {
-            auto guard = co_await rclient.start_operation(&as);
+            auto guard = co_await rclient.start_operation(as);
             service::group0_batch mc(std::move(guard));
             co_await f(mc);
             co_await std::move(mc).commit(rclient, as, ::service::raft_timeout{});
@@ -273,7 +273,7 @@ SEASTAR_TEST_CASE(test_group0_batch) {
 
         // test extract
         {
-            auto guard = co_await rclient.start_operation(&as);
+            auto guard = co_await rclient.start_operation(as);
             service::group0_batch mc(std::move(guard));
             mc.add_mutation(co_await insert_mut(1, 2));
             mc.add_generator([&] (api::timestamp_type t) -> ::service::mutations_generator {
