@@ -1205,6 +1205,26 @@ def test_scylla_sstable_shard_of_vnodes(cql, test_keyspace_vnodes, scylla_path, 
                 assert actual_json == expected_json
 
 
+def test_scylla_sstable_shard_of_tablets(cql, test_keyspace_tablets, scylla_path, scylla_data_dir) -> None:
+    # the token for 0 is mapped to shard 0, 142 is mapped to shard 1
+    shard_to_key = {0: 0, 1: 142}
+    for shard_id, key in shard_to_key.items():
+        table_factory = functools.partial(_simple_table_with_keys, keys=[key])
+        with scylla_sstable(table_factory, cql, test_keyspace_tablets, scylla_data_dir) as (schema_file, sstables):
+            with nodetool.no_autocompaction_context(cql, "system.tablets"):
+                nodetool.flush_keyspace(cql, "system")
+                out = subprocess.check_output([scylla_path,
+                                               "sstable", "shard-of",
+                                               "--tablets",
+                                               "--schema-file", schema_file] +
+                                              sstables)
+                sstables_json = json.loads(out)['sstables']
+                for replica_sets in sstables_json.values():
+                    for replica_set in replica_sets:
+                        actual_shard = replica_set['shard']
+                        assert actual_shard == shard_id
+
+
 def test_scylla_sstable_no_args(scylla_path):
     res = subprocess.run([scylla_path, "sstable"], capture_output=True, text=True)
 
