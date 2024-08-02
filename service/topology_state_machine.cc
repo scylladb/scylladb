@@ -123,6 +123,16 @@ std::set<sstring> topology::calculate_not_yet_enabled_features() const {
             }));
 }
 
+std::unordered_set<raft::server_id> topology::get_normal_zero_token_nodes() const {
+    std::unordered_set<raft::server_id> normal_zero_token_nodes;
+    for (const auto& node: normal_nodes) {
+        if (node.second.ring.value().tokens.empty()) {
+            normal_zero_token_nodes.insert(node.first);
+        }
+    }
+    return normal_zero_token_nodes;
+}
+
 size_t topology::size() const {
     return normal_nodes.size() + transition_nodes.size() + new_nodes.size();
 }

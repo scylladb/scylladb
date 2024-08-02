@@ -2098,10 +2098,6 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
 }
 
 future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& tokens) {
-    if (tokens.empty()) {
-        throw std::invalid_argument("remove_endpoint should be used instead");
-    }
-
     sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
     co_await execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens)));
@@ -2942,9 +2938,30 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ring_slice = service::ring_slice {
                 .tokens = std::move(tokens),
             };
-        } else if (must_have_tokens(nstate)) {
-            on_fatal_internal_error(slogger, format(
+        } else {
+            auto zero_token = num_tokens == 0 && tokens_string.empty();
+            if (zero_token) {
+                // We distinguish normal zero-token nodes from token-owning nodes without tokens at the moment
+                // in the following way:
+                // - for normal zero-token nodes, ring_slice is engaged with an empty set of tokens,
+                // - for token-owning nodes without tokens at the moment, ring_slice equals std::nullopt.
+                // ring_slice also equals std::nullopt for joining zero-token nodes. The reason is that the
+                // topology coordinator assigns tokens in the join_group0 state handler, and we want to simulate
+                // assigning zero tokens for zero-token nodes. It allows us to have the same assertions for all nodes.
+                // The code below is correct because the join_group0 state is the last transition state if a joining
+                // node is zero-token.
+                // Note that we need this workaround because we store tokens in a non-frozen set, which doesn't
+                // distinguish an empty set from no value.
+                if (nstate != service::node_state::none && nstate != service::node_state::bootstrapping
+                        && nstate != service::node_state::replacing) {
+                    ring_slice = service::ring_slice {
+                        .tokens = std::unordered_set<dht::token>(),
+                    };
+                }
+            } else if (must_have_tokens(nstate)) {
+                on_fatal_internal_error(slogger, format(
                         "load_topology_state: node {} in {} state but missing ring slice", host_id, nstate));
+            }
         }
 
         std::optional<raft::server_id> replaced_id;

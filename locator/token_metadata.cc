@@ -246,10 +246,11 @@ public:
 
     token get_predecessor(token t) const;
 
-    // Returns nodes that are officially part of the ring. It does not include
-    // node that is still joining the cluster, e.g., a node that is still
+    // Returns nodes that are officially part of the ring. It does not include:
+    // - nodes that are still joining the cluster, e.g., a node that is still
     // streaming data before it finishes the bootstrap process and turns into
-    // NORMAL status.
+    // NORMAL status,
+    // - zero-token nodes (the ones with join_ring=false).
     const std::unordered_set<host_id>& get_normal_token_owners() const noexcept {
         return _normal_token_owners;
     }

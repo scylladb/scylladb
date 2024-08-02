@@ -210,6 +210,9 @@ struct topology {
 
     // Calculates a set of features that are supported by all normal nodes but not yet enabled.
     std::set<sstring> calculate_not_yet_enabled_features() const;
+
+    // Returns the set of zero-token normal nodes.
+    std::unordered_set<raft::server_id> get_normal_zero_token_nodes() const;
 };
 
 struct raft_snapshot {

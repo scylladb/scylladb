@@ -1592,8 +1592,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         SCYLLA_ASSERT(!node.rs->ring);
                         auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
                         auto tokens_string = std::get<join_param>(node.req_param.value()).tokens_string;
-                        // A node have just been accepted and does not have tokens assigned yet
-                        // Need to assign random tokens to the node
+
+                        auto guard = take_guard(std::move(node));
+                        topology_mutation_builder builder(guard.write_timestamp());
+
+                        // A node has just been accepted. If it is a zero-token node, we can
+                        // instantly move its state to normal. Otherwise, we need to assign
+                        // random tokens and prepare a new CDC generation.
+                        if (num_tokens == 0 && tokens_string.empty()) {
+                            topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
+                            builder.del_transition_state()
+                                   .with_node(node.id)
+                                   .set("node_state", node_state::normal);
+                            rtbuilder.done();
+                            auto reason = ::format("bootstrap: joined a zero-token node {}", node.id);
+                            co_await update_topology_state(std::move(guard), {builder.build(), rtbuilder.build()}, reason);
+                            break;
+                        }
+
                         auto tmptr = get_token_metadata_ptr();
                         std::unordered_set<token> bootstrap_tokens;
                         try {
@@ -1602,10 +1618,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             _rollback = fmt::format("Failed to assign tokens: {}", std::current_exception());
                         }
 
-                        auto [gen_uuid, guard, mutation] = co_await prepare_and_broadcast_cdc_generation_data(
-                                tmptr, take_guard(std::move(node)), bootstrapping_info{bootstrap_tokens, *node.rs});
-
-                        topology_mutation_builder builder(guard.write_timestamp());
+                        auto [gen_uuid, guard_, mutation] = co_await prepare_and_broadcast_cdc_generation_data(
+                                tmptr, std::move(guard), bootstrapping_info{bootstrap_tokens, *node.rs});
 
                         // Write the new CDC generation data through raft.
                         builder.set_transition_state(topology::transition_state::commit_cdc_generation)
@@ -1614,7 +1628,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                .set("tokens", bootstrap_tokens);
                         auto reason = ::format(
                             "bootstrap: insert tokens and CDC generation data (UUID: {})", gen_uuid);
-                        co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
+                        co_await update_topology_state(std::move(guard_), {std::move(mutation), builder.build()}, reason);
                     }
                         break;
                     case node_state::replacing: {
@@ -1641,6 +1655,27 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         SCYLLA_ASSERT(it->second.ring && it->second.state == node_state::normal);
 
                         topology_mutation_builder builder(node.guard.write_timestamp());
+
+                        // If a zero-token node is replacing another zero-token node,
+                        // we can instantly move the new node's state to normal.
+                        if (it->second.ring->tokens.empty()) {
+                            node = retake_node(co_await remove_from_group0(std::move(node.guard), replaced_id), node.id);
+
+                            topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
+                            builder.del_transition_state()
+                                   .with_node(node.id)
+                                   .set("node_state", node_state::normal);
+
+                            // Move the old node to the left state.
+                            topology_mutation_builder builder2(node.guard.write_timestamp());
+                            cleanup_ignored_nodes_on_left(builder2, replaced_id);
+                            builder2.with_node(replaced_id)
+                                    .set("node_state", node_state::left);
+                            rtbuilder.done();
+                            co_await update_topology_state(take_guard(std::move(node)), {builder.build(), builder2.build(), rtbuilder.build()},
+                                    fmt::format("replace: replaced node {} with the new zero-token node {}", replaced_id, node.id));
+                            break;
+                        }
 
                         builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
@@ -1810,12 +1845,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
                 auto state = node.rs->state;
                 try {
+                    // No need to stream data when the node is zero-token.
+                    if (!node.rs->ring->tokens.empty()) {
                     if (node.rs->state == node_state::removing) {
-                        // tell all nodes to stream data of the removed node to new range owners
-                        node = co_await exec_global_command(std::move(node), cmd);
+                        // tell all token owners to stream data of the removed node to new range owners
+                        auto exclude_nodes = get_excluded_nodes(node);
+                        auto normal_zero_token_nodes = _topo_sm._topology.get_normal_zero_token_nodes();
+                        std::move(normal_zero_token_nodes.begin(), normal_zero_token_nodes.end(),
+                                std::inserter(exclude_nodes, exclude_nodes.begin()));
+                        node = retake_node(
+                                co_await exec_global_command(take_guard(std::move(node)), cmd, exclude_nodes), node.id);
                     } else {
                         // Tell joining/leaving/replacing node to stream its ranges
                         node = co_await exec_direct_command(std::move(node), cmd);
+                    }
                     }
                 } catch (term_changed_error&) {
                     throw;
