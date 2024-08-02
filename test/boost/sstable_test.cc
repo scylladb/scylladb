@@ -232,19 +232,18 @@ SEASTAR_TEST_CASE(check_filter_func) {
 SEASTAR_TEST_CASE(check_statistics_func) {
     auto s = make_schema_for_compressed_sstable();
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
-        return sstables::test(sst2).read_statistics().then([sst1, sst2] {
-            statistics& sst1_s = sstables::test(sst1).get_statistics();
-            statistics& sst2_s = sstables::test(sst2).get_statistics();
+        sstables::test(sst2).read_statistics().get();
+        statistics& sst1_s = sstables::test(sst1).get_statistics();
+        statistics& sst2_s = sstables::test(sst2).get_statistics();
 
-            BOOST_REQUIRE(sst1_s.offsets.elements.size() == sst2_s.offsets.elements.size());
-            BOOST_REQUIRE(sst1_s.contents.size() == sst2_s.contents.size());
+        BOOST_REQUIRE(sst1_s.offsets.elements.size() == sst2_s.offsets.elements.size());
+        BOOST_REQUIRE(sst1_s.contents.size() == sst2_s.contents.size());
 
-            for (auto&& e : boost::combine(sst1_s.offsets.elements, sst2_s.offsets.elements)) {
-                BOOST_REQUIRE(boost::get<0>(e).second ==  boost::get<1>(e).second);
-            }
-            // TODO: compare the field contents from both sstables.
-            return make_ready_future<>();
-        });
+        for (auto&& e : boost::combine(sst1_s.offsets.elements, sst2_s.offsets.elements)) {
+            BOOST_REQUIRE(boost::get<0>(e).second ==  boost::get<1>(e).second);
+        }
+        // TODO: compare the field contents from both sstables.
+        return make_ready_future<>();
     });
 }
 
