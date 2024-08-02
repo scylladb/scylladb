@@ -42,8 +42,8 @@ async def test_coordinator_queue_management(manager: ManagerClient):
     done, pending = await asyncio.wait(search, return_when = asyncio.FIRST_COMPLETED)
     for t in pending: t.cancel()
 
-    marks[0] = await logs[0].wait_for("raft_topology - removenode: wait for completion", marks[0])
-    marks[0] = await logs[0].wait_for("raft_topology - removenode: wait for completion", marks[0])
+    marks[0] = await logs[0].wait_for("raft_topology - removenode: waiting for completion", marks[0])
+    marks[0] = await logs[0].wait_for("raft_topology - removenode: waiting for completion", marks[0])
 
     [await manager.api.message_injection(s.ip_addr, inj) for s in servers[:3]]
 
@@ -64,7 +64,7 @@ async def test_coordinator_queue_management(manager: ManagerClient):
     done, pending = await asyncio.wait(search, return_when = asyncio.FIRST_COMPLETED)
     for t in pending: t.cancel()
 
-    logs[1].wait_for("raft_topology - decommission: wait for completion", marks[1])
+    await logs[1].wait_for("raft_topology - decommission: waiting for completion", marks[1])
 
     [await manager.api.message_injection(s.ip_addr, inj) for s in servers[:3]]
 
