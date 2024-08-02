@@ -43,6 +43,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/local_strategy.hh"
 #include "tools/schema_loader.hh"
+#include "tools/sstable_manager_service.hh"
 #include "view_info.hh"
 
 namespace {
@@ -378,25 +379,6 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             boost::adaptors::filtered([] (const table& t) { return t.user; }) |
             boost::adaptors::transformed([] (const table& t) { return t.schema; }));
 }
-
-struct sstable_manager_service {
-    db::nop_large_data_handler large_data_handler;
-    gms::feature_service feature_service;
-    cache_tracker tracker;
-    sstables::directory_semaphore dir_sem;
-    sstables::sstables_manager sst_man;
-    abort_source abort;
-
-    explicit sstable_manager_service(const db::config& dbcfg)
-        : feature_service(gms::feature_config_from_db_config(dbcfg))
-        , dir_sem(1)
-        , sst_man("schema_loader", large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, abort) {
-    }
-
-    future<> stop() {
-        return sst_man.close();
-    }
-};
 
 mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_man, std::filesystem::path schema_table_data_path,
         std::function<schema_ptr()> schema_factory, reader_permit permit, std::string_view keyspace, std::vector<std::string_view> ck_strings) {
