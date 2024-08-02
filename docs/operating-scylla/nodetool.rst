@@ -60,6 +60,8 @@ Nodetool
 
 The ``nodetool`` utility provides a simple command-line interface to the following exposed operations and attributes. ScyllaDB’s nodetool is a fork of `the Apache Cassandra nodetool <https://cassandra.apache.org/doc/latest/tools/nodetool/nodetool.html>`_ with the same syntax and a subset of the operations.
 
+.. note:: Starting with ScyllaDB 6.0 `JMX server`<https://github.com/scylladb/scylla-jmx> is not needed anymore - see https://forum.scylladb.com/t/release-scylladb-6-0/2143
+
 .. _nodetool-generic-options:
 
 Nodetool generic options
