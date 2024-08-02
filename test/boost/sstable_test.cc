@@ -471,7 +471,6 @@ SEASTAR_TEST_CASE(promoted_index_read) {
   return for_each_sstable_version([] (const sstables::sstable::version_types version) {
     return test_env::do_with_async([version] (test_env& env) {
         auto sstp = load_large_partition_sst(env, version).get();
-        schema_ptr s = large_partition_schema();
         std::vector<sstables::test::index_entry> vec = sstables::test(sstp).read_indexes(env.make_reader_permit()).get();
         BOOST_REQUIRE(vec.size() == 1);
         BOOST_REQUIRE(vec[0].promoted_index_size > 0);
