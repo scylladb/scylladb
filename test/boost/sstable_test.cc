@@ -391,7 +391,6 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
         auto key = sstables::key::from_deeply_exploded(*s, kk);
         // (result + 1) * -1 -1 = 0
         BOOST_REQUIRE(sstables::test(sstp).binary_search(s->get_partitioner(), summary.entries, key) == -2);
-        return make_ready_future<>();
     });
 }
 
