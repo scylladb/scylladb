@@ -295,7 +295,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
      };
 
     future<group0_guard> start_operation() {
+        rtlogger.debug("obtaining group 0 guard...");
         auto guard = co_await _group0.client().start_operation(_as);
+        rtlogger.debug("guard taken, prev_state_id: {}, new_state_id: {}, coordinator term: {}, current Raft term: {}",
+                       guard.observed_group0_state_id(), guard.new_group0_state_id(), _term, _raft.get_current_term());
 
         if (_term != _raft.get_current_term()) {
             throw term_changed_error{};
@@ -2339,7 +2342,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 topology_mutation_builder builder(node.guard.write_timestamp());
                 builder.with_node(id).set("cleanup_status", cleanup_status::needed);
                 muts.emplace_back(builder.build());
-                rtlogger.trace("mark node {} as needed cleanup", id);
+                rtlogger.debug("mark node {} as needed for cleanup", id);
             }
         }
         return muts;
@@ -2360,7 +2363,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 topology_mutation_builder builder(guard.write_timestamp());
                 builder.with_node(id).set("cleanup_status", cleanup_status::running);
                 muts.emplace_back(builder.build());
-                rtlogger.trace("mark node {} as cleanup running", id);
+                rtlogger.debug("mark node {} as cleanup running", id);
             }
         }
         if (!muts.empty()) {
