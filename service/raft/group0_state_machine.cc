@@ -212,7 +212,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
 
     co_await utils::get_local_injector().inject("group0_state_machine::delay_apply", 1s);
 
-    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex();
+    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
 
     // max_mutation_size = 1/2 of commitlog segment size, thus max_command_size is set 1/3 of commitlog segment size to leave space for metadata.
     size_t max_command_size = _sp.data_dictionary().get_config().commitlog_segment_size_in_mb() * 1024 * 1024 / 3;
@@ -268,7 +268,7 @@ void group0_state_machine::drop_snapshot(raft::snapshot_id id) {
 future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     // topology_state_load applies persisted state machine state into
     // memory and thus needs to be protected with apply mutex
-    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex();
+    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
     co_await _ss.topology_state_load();
     _ss._topology_state_machine.event.broadcast();
 }
