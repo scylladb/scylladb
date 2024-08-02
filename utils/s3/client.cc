@@ -7,7 +7,6 @@
  */
 
 #include <fmt/format.h>
-#include <cstdlib>
 #include <exception>
 #include <initializer_list>
 #include <memory>
@@ -37,6 +36,7 @@
 #include <seastar/http/exception.hh>
 #include "utils/assert.hh"
 #include "utils/s3/client.hh"
+#include "utils/div_ceil.hh"
 #include "utils/http.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
@@ -979,13 +979,6 @@ class client::do_upload_file {
         }).handle_exception([this, part_number] (auto ex) {
             s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
         }).finally([gh = std::move(gh)] {});
-    }
-
-    static size_t div_ceil(size_t x, size_t y) {
-        SCYLLA_ASSERT(std::in_range<long long>(x));
-        SCYLLA_ASSERT(std::in_range<long long>(y));
-        auto [quot, rem] = std::lldiv(x, y);
-        return rem ? quot + 1 : quot;
     }
 
     // returns pair<num_of_parts, part_size>
