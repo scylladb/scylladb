@@ -551,10 +551,10 @@ public:
             return map_reduce_tables<stats>([] (replica::table& t) {
                 logalloc::occupancy_stats s;
                 uint64_t partition_count = 0;
-                for (replica::memtable* active_memtable : t.active_memtables()) {
-                    s += active_memtable->region().occupancy();
-                    partition_count += active_memtable->partition_count();
-                }
+                t.for_each_active_memtable([&] (replica::memtable& active_memtable) {
+                    s += active_memtable.region().occupancy();
+                    partition_count += active_memtable.partition_count();
+                });
                 return stats{s.total_space(), s.free_space(), partition_count};
             }, stats::reduce).then([] (stats s) {
                 return std::vector<std::pair<sstring, sstring>>{
