@@ -177,7 +177,6 @@ public:
     // Wait until group 0 upgrade enters the `use_post_raft_procedures` state.
     future<> wait_until_group0_upgraded(abort_source&);
 
-    future<semaphore_units<>> hold_read_apply_mutex();
     future<semaphore_units<>> hold_read_apply_mutex(abort_source&);
 
     db::system_keyspace& sys_ks();
