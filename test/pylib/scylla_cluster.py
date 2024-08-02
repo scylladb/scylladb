@@ -149,6 +149,7 @@ SCYLLA_CMDLINE_OPTIONS = [
     '--abort-on-ebadf', '1',
     '--logger-log-level', 'raft_topology=debug',
     '--logger-log-level', 'query_processor=debug',
+    '--logger-log-level', 'group0_raft_sm=trace',
 ]
 
 # [--smp, 1], [--smp, 2] -> [--smp, 2]
