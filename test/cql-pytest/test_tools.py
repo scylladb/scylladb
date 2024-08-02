@@ -1180,7 +1180,7 @@ def _simple_table_with_keys(cql, keyspace: str, keys: Iterable[int]) -> tuple[st
     return table, schema
 
 
-def test_scylla_sstable_shard_of(cql, test_keyspace, scylla_path, scylla_data_dir) -> None:
+def test_scylla_sstable_shard_of_vnodes(cql, test_keyspace_vnodes, scylla_path, scylla_data_dir) -> None:
     # cql-pytest/run.py::run_scylla_cmd() passes "--smp 2" to scylla, so we
     # need to be consistent with it to get the correct sstable-shard mapping
     scylla_option_smp = 2
@@ -1190,9 +1190,10 @@ def test_scylla_sstable_shard_of(cql, test_keyspace, scylla_path, scylla_data_di
         all_keys_for_shard = _generate_key_for_shard(scylla_path, shards, shard_id)
         keys = itertools.islice(all_keys_for_shard, num_keys)
         table_factory = functools.partial(_simple_table_with_keys, keys=keys)
-        with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        with scylla_sstable(table_factory, cql, test_keyspace_vnodes, scylla_data_dir) as (schema_file, sstables):
             out = subprocess.check_output([scylla_path,
                                            "sstable", "shard-of",
+                                           "--vnodes",
                                            "--schema-file", schema_file,
                                            "--shards", str(shards)] +
                                           sstables)
