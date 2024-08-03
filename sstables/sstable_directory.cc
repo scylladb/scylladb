@@ -315,9 +315,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     co_await lister.close();
     if (ex) {
         dirlog.debug("Could not process sstable directory {}: {}", _directory, ex);
-        // FIXME: waiting for https://github.com/scylladb/seastar/pull/1090
-        // co_await coroutine::return_exception(std::move(ex));
-        std::rethrow_exception(std::move(ex));
+        co_await coroutine::return_exception_ptr(std::move(ex));
     }
 
     // Always okay to delete files with a temporary TOC. We want to do it before we process
