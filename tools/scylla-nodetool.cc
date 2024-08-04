@@ -1254,8 +1254,11 @@ void rebuild_operation(scylla_rest_client& client, const bpo::variables_map& vm)
 }
 
 void refresh_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.count("keyspace") || !vm.count("table")) {
-        throw std::invalid_argument("required parameters are missing: keyspace and/or table");
+    if (!vm.count("keyspace")) {
+        throw std::invalid_argument("required parameters are missing: keyspace and table");
+    }
+    if (!vm.count("table")) {
+        throw std::invalid_argument("required parameter is missing: table");
     }
     std::unordered_map<sstring, sstring> params{{"cf", vm["table"].as<sstring>()}};
     if (vm.count("load-and-stream")) {
