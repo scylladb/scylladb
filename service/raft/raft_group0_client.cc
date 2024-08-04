@@ -236,7 +236,7 @@ static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
             ts = lower_bound + 1;
         }
     }
-    return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
+    return utils::UUID_gen::get_random_time_UUID_v1_from_micros(std::chrono::microseconds{ts});
 }
 
 future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& as, std::optional<raft_timeout> timeout) {

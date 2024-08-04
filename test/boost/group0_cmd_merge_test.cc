@@ -22,7 +22,7 @@
 #include "utils/error_injection.hh"
 #include "test/lib/expr_test_utils.hh"
 
-const auto OLD_TIMEUUID = utils::UUID_gen::get_time_UUID(std::chrono::system_clock::time_point::min());
+const auto OLD_TIMEUUID = utils::UUID_gen::get_time_UUID_v1(std::chrono::system_clock::time_point::min());
 
 static service::group0_command create_command(utils::UUID id) {
     auto mut = canonical_mutation{mutation{db::system_keyspace::group0_history(), partition_key::make_empty()}};

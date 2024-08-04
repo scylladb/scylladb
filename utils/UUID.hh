@@ -49,20 +49,47 @@ public:
         return (most_sig_bits >> 12) & 0xf;
     }
 
-    bool is_timestamp() const noexcept {
+    bool is_timestamp_v1() const noexcept {
         return version() == 1;
     }
 
+    bool is_timestamp_v7() const noexcept {
+        return version() == 7;
+    }
+
+    bool is_timestamp() const noexcept {
+        return is_timestamp_v1() || is_timestamp_v7();
+    }
+
+    // Return the uuid timestamp in decimicroseconds.
     int64_t timestamp() const noexcept {
-        //if (version() != 1) {
-        //     throw new UnsupportedOperationException("Not a time-based UUID");
-        //}
-        assert(is_timestamp());
+        switch (version()) {
+        case 1:
+            return ((most_sig_bits & 0xFFF) << 48) |
+                (((most_sig_bits >> 16) & 0xFFFF) << 32) |
+                (((uint64_t)most_sig_bits) >> 32);
+        case 7:
+            // The UUIDv7 msb format as defined in https://datatracker.ietf.org/doc/html/rfc9562#name-uuid-version-7
+            // 48 bits - milliseconds since unix epoch of 1970-01-01 GMT (unsigned)
+            //  4 bits - version (7)
+            // 12 bits - sub-milliseconds (in ms/4096 units, unsigned)
+            return 10000 * ((uint64_t)most_sig_bits >> 16) +
+                  (10000 * (most_sig_bits & 0xfff)) / 0x1000;
+        default:
+            not_a_time_uuid();
+        }
+    }
 
-        return ((most_sig_bits & 0xFFF) << 48) |
-               (((most_sig_bits >> 16) & 0xFFFF) << 32) |
-               (((uint64_t)most_sig_bits) >> 32);
-
+    // Return the uuid timestamp in milliseconds.
+    int64_t millis_timestamp() const noexcept {
+        switch (version()) {
+        case 1:
+            return timestamp() / 10000;
+        case 7:
+            return (uint64_t)most_sig_bits >> 16;
+        default:
+            not_a_time_uuid();
+        }
     }
 
     friend ::fmt::formatter<UUID>;
@@ -111,6 +138,9 @@ public:
         serialize_int64(out, most_sig_bits);
         serialize_int64(out, least_sig_bits);
     }
+
+private:
+    [[noreturn]] void not_a_time_uuid() const;
 };
 
 // Convert the uuid to a uint32_t using xor.
@@ -123,82 +153,8 @@ inline constexpr UUID null_uuid() noexcept {
 
 UUID make_random_uuid() noexcept;
 
-// Read 8 most significant bytes of timeuuid from serialized bytes
-inline uint64_t timeuuid_read_msb(const int8_t *b) noexcept {
-    // cast to unsigned to avoid sign-compliment during shift.
-    auto u64 = [](uint8_t i) -> uint64_t { return i; };
-    // Scylla and Cassandra use a standard UUID memory layout for MSB:
-    // 4 bytes    2 bytes    2 bytes
-    // time_low - time_mid - time_hi_and_version
-    //
-    // The storage format uses network byte order.
-    // Reorder bytes to allow for an integer compare.
-    return u64(b[6] & 0xf) << 56 | u64(b[7]) << 48 |
-           u64(b[4]) << 40 | u64(b[5]) << 32 |
-           u64(b[0]) << 24 | u64(b[1]) << 16 |
-           u64(b[2]) << 8  | u64(b[3]);
-}
-
-inline uint64_t uuid_read_lsb(const int8_t *b) noexcept {
-    auto u64 = [](uint8_t i) -> uint64_t { return i; };
-    return u64(b[8]) << 56 | u64(b[9]) << 48 |
-           u64(b[10]) << 40 | u64(b[11]) << 32 |
-           u64(b[12]) << 24 | u64(b[13]) << 16 |
-           u64(b[14]) << 8  | u64(b[15]);
-}
-
-// Compare two values of timeuuid type.
-// Cassandra legacy requires:
-// - using signed compare for least significant bits.
-// - masking off UUID version during compare, to
-// treat possible non-version-1 UUID the same way as UUID.
-//
-// To avoid breaking ordering in existing sstables, Scylla preserves
-// Cassandra compare order.
-//
-inline std::strong_ordering timeuuid_tri_compare(const int8_t* o1, const int8_t* o2) noexcept {
-    auto timeuuid_read_lsb = [](const int8_t* o) -> uint64_t {
-        return uuid_read_lsb(o) ^ 0x8080808080808080;
-    };
-    auto res = timeuuid_read_msb(o1) <=> timeuuid_read_msb(o2);
-    if (res == 0) {
-        res = timeuuid_read_lsb(o1) <=> timeuuid_read_lsb(o2);
-    }
-    return res;
-}
-
-inline std::strong_ordering timeuuid_tri_compare(bytes_view o1, bytes_view o2) noexcept {
-    return timeuuid_tri_compare(o1.begin(), o2.begin());
-}
-
-inline std::strong_ordering timeuuid_tri_compare(const UUID& u1, const UUID& u2) noexcept {
-    std::array<int8_t, UUID::serialized_size()> buf1;
-    {
-        auto i = buf1.begin();
-        u1.serialize(i);
-    }
-    std::array<int8_t, UUID::serialized_size()> buf2;
-    {
-        auto i = buf2.begin();
-        u2.serialize(i);
-    }
-    return timeuuid_tri_compare(buf1.begin(), buf2.begin());
-}
-
-// Compare two values of UUID type, if they happen to be
-// both of Version 1 (timeuuids).
-//
-// This function uses memory order for least significant bits,
-// which is both faster and monotonic, so should be preferred
-// to @timeuuid_tri_compare() used for all new features.
-//
-inline std::strong_ordering uuid_tri_compare_timeuuid(bytes_view o1, bytes_view o2) noexcept {
-    auto res = timeuuid_read_msb(o1.begin()) <=> timeuuid_read_msb(o2.begin());
-    if (res == 0) {
-        res = uuid_read_lsb(o1.begin()) <=> uuid_read_lsb(o2.begin());
-    }
-    return res;
-}
+[[noreturn]] void not_a_time_uuid(UUID uuid);
+[[noreturn]] void not_a_time_uuid(bytes_view);
 
 template<typename Tag>
 struct tagged_uuid {

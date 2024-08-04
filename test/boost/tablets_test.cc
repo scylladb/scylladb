@@ -45,7 +45,7 @@ static api::timestamp_type current_timestamp(cql_test_env& e) {
 
 static utils::UUID next_uuid() {
     static uint64_t counter = 1;
-    return utils::UUID_gen::get_time_UUID(std::chrono::system_clock::time_point(
+    return utils::UUID_gen::get_time_UUID_v7(std::chrono::system_clock::time_point(
             std::chrono::duration_cast<std::chrono::system_clock::duration>(
                     std::chrono::seconds(counter++))));
 }

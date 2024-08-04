@@ -47,6 +47,7 @@
 #include "utils/ascii.hh"
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/UUID_cmp.hh"
 
 #include "types/user.hh"
 #include "types/tuple.hh"
@@ -2365,7 +2366,7 @@ struct compare_visitor {
       return with_empty_checks([&] {
         return with_linearized(v1, [&] (bytes_view v1) {
             return with_linearized(v2, [&] (bytes_view v2) {
-                return utils::timeuuid_tri_compare(v1, v2);
+                return utils::timeuuid_cmp(v1, v2).tri_compare();
             });
         });
       });
@@ -2398,16 +2399,15 @@ struct compare_visitor {
         auto c1 = (v1[6] >> 4) & 0x0f;
         auto c2 = (v2[6] >> 4) & 0x0f;
 
-        if (c1 != c2) {
-            return c1 <=> c2;
-        }
-
-        if (c1 == 1) {
+        if ((c1 == 1 || c1 == 7) && (c2 == 1 || c2 == 7)) {
             return with_linearized(v1, [&] (bytes_view v1) {
                 return with_linearized(v2, [&] (bytes_view v2) {
-                    return utils::uuid_tri_compare_timeuuid(v1, v2);
+                    return utils::timeuuid_cmp(v1, v2).uuid_tri_compare();
                 });
             });
+        }
+        if (c1 != c2) {
+            return c1 <=> c2;
         }
         return compare_unsigned(v1, v2);
     }

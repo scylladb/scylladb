@@ -72,7 +72,7 @@ private:
 
     static future<guard> get_replica_lock(const dht::token& key, clock_type::time_point timeout);
 
-    utils::UUID _promised_ballot = utils::UUID_gen::min_time_UUID();
+    utils::UUID _promised_ballot = utils::UUID_gen::min_time_UUID_v1();
     std::optional<proposal> _accepted_proposal;
     std::optional<proposal> _most_recent_commit;
 

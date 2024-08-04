@@ -164,4 +164,8 @@ const thread_local int64_t UUID_gen::spoof_node = make_thread_local_node(make_ra
 const thread_local int64_t UUID_gen::clock_seq_and_node = make_clock_seq_and_node();
 thread_local UUID_gen UUID_gen::_instance;
 
+void not_a_time_uuid(bytes_view v) {
+    not_a_time_uuid(UUID_gen::get_UUID(v.begin()));
+}
+
 } // namespace utils

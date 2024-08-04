@@ -2587,7 +2587,7 @@ future<service::paxos::paxos_state> system_keyspace::load_paxos_state(partition_
         }
         auto& row = results->one();
         auto promised = row.has("promise")
-                        ? row.get_as<utils::UUID>("promise") : utils::UUID_gen::min_time_UUID();
+                        ? row.get_as<utils::UUID>("promise") : utils::UUID_gen::min_time_UUID_v1();
 
         std::optional<service::paxos::proposal> accepted;
         if (row.has("proposal")) {
@@ -2746,7 +2746,7 @@ mutation system_keyspace::make_group0_history_state_id_mutation(
         auto gc_older_than_micros = duration_cast<microseconds>(*gc_older_than);
         assert(gc_older_than_micros < ts_micros);
 
-        auto tomb_upper_bound = utils::UUID_gen::min_time_UUID(ts_micros - gc_older_than_micros);
+        auto tomb_upper_bound = utils::UUID_gen::min_time_UUID_v1(ts_micros - gc_older_than_micros);
         // We want to delete all entries with IDs smaller than `tomb_upper_bound`
         // but the deleted range is of the form (x, +inf) since the schema is reversed.
         auto range = query::clustering_range::make_starting_with({

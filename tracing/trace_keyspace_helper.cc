@@ -375,7 +375,7 @@ std::vector<cql3::raw_value> trace_keyspace_helper::make_event_mutation_data(gms
 
     std::vector<cql3::raw_value> values({
         cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
-        cql3::raw_value::make_value(timeuuid_type->decompose(utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(backend_state_ptr->last_nanos, record.event_time_point)))),
+        cql3::raw_value::make_value(timeuuid_type->decompose(utils::UUID_gen::get_time_UUID_v1(table_helper::make_monotonic_UUID_tp(backend_state_ptr->last_nanos, record.event_time_point)))),
         cql3::raw_value::make_value(utf8_type->decompose(record.message)),
         cql3::raw_value::make_value(inet_addr_type->decompose(my_address.addr())),
         cql3::raw_value::make_value(int32_type->decompose(elapsed_to_micros(record.elapsed))),
@@ -453,7 +453,7 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
                         }
 
                         // if slow query log is requested - store a slow query log and a slow query log time index entries
-                        auto start_time_id = utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(_slow_query_last_nanos, records->session_rec.started_at));
+                        auto start_time_id = utils::UUID_gen::get_time_UUID_v1(table_helper::make_monotonic_UUID_tp(_slow_query_last_nanos, records->session_rec.started_at));
                         tlogger.trace("{}: going to store a slow query event", records->session_id);
                         return _slow_query_log.insert(qp, mm, _dummy_query_state, make_slow_query_mutation_data, my_address(), std::ref(*records), start_time_id).then([this, &qp, &mm, records, start_time_id] {
                             tlogger.trace("{}: going to store a {} entry", records->session_id, _slow_query_log_time_idx.name());

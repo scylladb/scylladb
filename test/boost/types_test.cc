@@ -161,7 +161,7 @@ BOOST_AUTO_TEST_CASE(test_long_type_string_conversions) {
 }
 
 BOOST_AUTO_TEST_CASE(test_timeuuid_type_string_conversions) {
-    auto now = utils::UUID_gen::get_time_UUID();
+    auto now = utils::UUID_gen::get_time_UUID_v1();
     BOOST_REQUIRE(timeuuid_type->equal(timeuuid_type->from_string(fmt::to_string(now)), timeuuid_type->decompose(now)));
     auto uuid = utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"));
     BOOST_REQUIRE(timeuuid_type->equal(timeuuid_type->from_string("D2177dD0-EAa2-11de-a572-001B779C76e3"), timeuuid_type->decompose(uuid)));
@@ -232,7 +232,7 @@ BOOST_AUTO_TEST_CASE(test_uuid_type_comparison) {
 }
 
 BOOST_AUTO_TEST_CASE(test_uuid_type_string_conversions) {
-    auto now = utils::UUID_gen::get_time_UUID();
+    auto now = utils::UUID_gen::get_time_UUID_v1();
     BOOST_REQUIRE(uuid_type->equal(uuid_type->from_string(fmt::to_string(now)), uuid_type->decompose(now)));
     auto random = utils::make_random_uuid();
     BOOST_REQUIRE(uuid_type->equal(uuid_type->from_string(fmt::to_string(random)), uuid_type->decompose(random)));
@@ -614,7 +614,7 @@ BOOST_AUTO_TEST_CASE(test_long_type_validation) {
 }
 
 BOOST_AUTO_TEST_CASE(test_timeuuid_type_validation) {
-    auto now = utils::UUID_gen::get_time_UUID();
+    auto now = utils::UUID_gen::get_time_UUID_v1();
     timeuuid_type->validate(now.serialize());
     auto random = utils::make_random_uuid();
     test_validation_fails(timeuuid_type, random.serialize());
@@ -622,7 +622,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_type_validation) {
 }
 
 BOOST_AUTO_TEST_CASE(test_uuid_type_validation) {
-    auto now = utils::UUID_gen::get_time_UUID();
+    auto now = utils::UUID_gen::get_time_UUID_v1();
     uuid_type->validate(now.serialize());
     auto random = utils::make_random_uuid();
     uuid_type->validate(random.serialize());

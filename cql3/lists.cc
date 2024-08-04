@@ -157,7 +157,7 @@ lists::do_append(const cql3::raw_value& list_value,
         appended.cells.reserve(to_add.size());
         for (auto&& e : to_add) {
             try {
-                auto uuid1 = utils::UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(
+                auto uuid1 = utils::UUID_gen::get_time_UUID_v1_bytes_from_micros_and_submicros(
                     std::chrono::microseconds{params.timestamp()},
                     params._options.next_list_append_seq());
                 auto uuid = bytes(reinterpret_cast<const int8_t*>(uuid1.data()), uuid1.size());
@@ -225,7 +225,7 @@ lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, cons
     int clockseq = params._options.next_list_prepend_seq(list_elements.size(), utils::UUID_gen::SUBMICRO_LIMIT);
     for (auto&& v : list_elements) {
         try {
-            auto uuid = utils::UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(std::chrono::microseconds{micros}, clockseq++);
+            auto uuid = utils::UUID_gen::get_time_UUID_v1_bytes_from_micros_and_submicros(std::chrono::microseconds{micros}, clockseq++);
             if (!v) {
                 throw exceptions::invalid_request_exception("Invalid NULL element in list");
             }
