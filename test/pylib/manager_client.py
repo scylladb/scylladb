@@ -153,9 +153,11 @@ class ManagerClient():
         logging.getLogger().removeHandler(self.test_log_fh)
         pathlib.Path(self.test_log_fh.baseFilename).unlink()
         logger.debug("after_test for %s (success: %s)", test_case_name, success)
-        cluster_str = await _client.put_json(f"/cluster/after-test/{success}",
+        cluster_status = await _client.put_json(f"/cluster/after-test/{success}",
                                                  response_type = "json")
-        logger.info("Cluster after test %s: %s", test_case_name, cluster_str)
+        logger.info("Cluster after test %s: %s", test_case_name, cluster_status)
+
+        return cluster_status
 
     async def gather_related_logs(self, failed_test_path_dir: Path, logs: Dict[str, Path]) -> None:
         for server in await self.all_servers():

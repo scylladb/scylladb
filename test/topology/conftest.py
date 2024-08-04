@@ -219,8 +219,10 @@ async def manager(request, manager_internal, record_property, mode):
             full_url = f"<a href={request.config.getoption('artifacts_dir_url')}/{dir_path_relative}>failed_test_logs</a>"
             record_property("TEST_LOGS", full_url)
 
-    await manager_internal.after_test(test_case_name, not failed)
+    cluster_status = await manager_internal.after_test(test_case_name, not failed)
     await manager_internal.stop()  # Stop client session and close driver after each test
+    if cluster_status["server_broken"]:
+        pytest.fail(f"test case {test_case_name} leave unfinished tasks on Scylla server. Server marked as broken")
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object
