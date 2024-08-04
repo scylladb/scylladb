@@ -10,6 +10,7 @@
 #include <map>
 #include "db/view/view.hh"
 #include "timestamp.hh"
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
@@ -89,7 +90,7 @@ bool operator==(const column_mapping& lhs, const column_mapping& rhs) {
 }
 
 const column_mapping_entry& column_mapping::column_at(column_kind kind, column_id id) const {
-    assert(kind == column_kind::regular_column || kind == column_kind::static_column);
+    SCYLLA_ASSERT(kind == column_kind::regular_column || kind == column_kind::static_column);
     return kind == column_kind::regular_column ? regular_column_at(id) : static_column_at(id);
 }
 
@@ -404,7 +405,7 @@ schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> 
     column_id id = 0;
     for (auto& def : _raw._columns) {
         def.column_specification = make_column_specification(def);
-        assert(!def.id || def.id == id - column_offset(def.kind));
+        SCYLLA_ASSERT(!def.id || def.id == id - column_offset(def.kind));
         def.ordinal_id = static_cast<ordinal_column_id>(id);
         def.id = id - column_offset(def.kind);
 
@@ -1236,7 +1237,7 @@ schema_builder& schema_builder::rename_column(bytes from, bytes to)
     auto it = std::find_if(_raw._columns.begin(), _raw._columns.end(), [&] (auto& col) {
         return col.name() == from;
     });
-    assert(it != _raw._columns.end());
+    SCYLLA_ASSERT(it != _raw._columns.end());
     auto& def = *it;
     column_definition new_def(to, def.type, def.kind, def.component_index());
     _raw._columns.erase(it);
@@ -1246,12 +1247,12 @@ schema_builder& schema_builder::rename_column(bytes from, bytes to)
 schema_builder& schema_builder::alter_column_type(bytes name, data_type new_type)
 {
     auto it = boost::find_if(_raw._columns, [&name] (auto& c) { return c.name() == name; });
-    assert(it != _raw._columns.end());
+    SCYLLA_ASSERT(it != _raw._columns.end());
     it->type = new_type;
 
     if (new_type->is_multi_cell()) {
         auto c_it = _raw._collections.find(name);
-        assert(c_it != _raw._collections.end());
+        SCYLLA_ASSERT(c_it != _raw._collections.end());
         c_it->second = new_type;
     }
     return *this;
@@ -1259,7 +1260,7 @@ schema_builder& schema_builder::alter_column_type(bytes name, data_type new_type
 
 schema_builder& schema_builder::mark_column_computed(bytes name, column_computation_ptr computation) {
     auto it = boost::find_if(_raw._columns, [&name] (const column_definition& c) { return c.name() == name; });
-    assert(it != _raw._columns.end());
+    SCYLLA_ASSERT(it != _raw._columns.end());
     it->set_computed(std::move(computation));
 
     return *this;
@@ -1556,7 +1557,7 @@ sstring to_sstring(const schema& s) {
     if (s.is_compound()) {
         return compound_name(s);
     } else if (s.clustering_key_size() == 1) {
-        assert(s.is_dense() || s.is_static_compact_table());
+        SCYLLA_ASSERT(s.is_dense() || s.is_static_compact_table());
         return s.clustering_key_columns().front().type->name();
     } else {
         return s.regular_column_name_type()->name();

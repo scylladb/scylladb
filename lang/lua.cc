@@ -12,6 +12,7 @@
 #include "lang/lua_scylla_types.hh"
 #include "exceptions/exceptions.hh"
 #include "concrete_types.hh"
+#include "utils/assert.hh"
 #include "utils/utf8.hh"
 #include "utils/ascii.hh"
 #include "utils/date.h"
@@ -41,7 +42,7 @@ struct alloc_state {
         : max(max)
         , max_contiguous(max_contiguous) {
         // The max and max_contiguous limits are responsible for avoiding overflows.
-        assert(max + max_contiguous >= max);
+        SCYLLA_ASSERT(max + max_contiguous >= max);
     }
 };
 
@@ -79,7 +80,7 @@ static void* lua_alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     size_t next = s->allocated + nsize;
 
     // The max and max_contiguous limits should be small enough to avoid overflows.
-    assert(next >= s->allocated);
+    SCYLLA_ASSERT(next >= s->allocated);
 
     if (ptr) {
         next -= osize;
@@ -119,7 +120,7 @@ static void debug_hook(lua_State* l, lua_Debug* ar) {
         return;
     }
     if (lua_yield(l, 0)) {
-        assert(0 && "lua_yield failed");
+        SCYLLA_ASSERT(0 && "lua_yield failed");
     }
 }
 
@@ -223,7 +224,7 @@ requires CanHandleRawLuaTypes<Func>
 static auto visit_lua_raw_value(lua_State* l, int index, Func&& f) {
     switch (lua_type(l, index)) {
     case LUA_TNONE:
-        assert(0 && "Invalid index");
+        SCYLLA_ASSERT(0 && "Invalid index");
     case LUA_TNUMBER:
         if (lua_isinteger(l, index)) {
             return f(lua_tointeger(l, index));
@@ -244,9 +245,9 @@ static auto visit_lua_raw_value(lua_State* l, int index, Func&& f) {
         return f(*get_decimal(l, index));
     case LUA_TTHREAD:
     case LUA_TLIGHTUSERDATA:
-        assert(0 && "We never make thread or light user data visible to scripts");
+        SCYLLA_ASSERT(0 && "We never make thread or light user data visible to scripts");
     }
-    assert(0 && "invalid lua type");
+    SCYLLA_ASSERT(0 && "invalid lua type");
 }
 
 template <typename Func>
@@ -362,7 +363,7 @@ static const big_decimal& get_decimal_in_binary_op(lua_State* l) {
     if (a == nullptr) {
         lua_insert(l, 1);
         a = get_decimal(l, 1);
-        assert(a);
+        SCYLLA_ASSERT(a);
     }
     return *a;
 }

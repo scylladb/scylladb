@@ -28,6 +28,7 @@
 #include "clustering_key_filter.hh"
 #include "mutation_partition_view.hh"
 #include "tombstone_gc.hh"
+#include "utils/assert.hh"
 #include "utils/unconst.hh"
 #include "mutation/async_utils.hh"
 
@@ -144,7 +145,7 @@ mutation_partition::mutation_partition(const schema& s, const mutation_partition
 #endif
 {
 #ifdef SEASTAR_DEBUG
-    assert(x._schema_version == _schema_version);
+    SCYLLA_ASSERT(x._schema_version == _schema_version);
 #endif
     auto cloner = [&s] (const rows_entry* x) -> rows_entry* {
         return current_allocator().construct<rows_entry>(s, *x);
@@ -164,7 +165,7 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
 #endif
 {
 #ifdef SEASTAR_DEBUG
-    assert(x._schema_version == _schema_version);
+    SCYLLA_ASSERT(x._schema_version == _schema_version);
 #endif
     try {
         for(auto&& r : ck_ranges) {
@@ -194,7 +195,7 @@ mutation_partition::mutation_partition(mutation_partition&& x, const schema& sch
 #endif
 {
 #ifdef SEASTAR_DEBUG
-    assert(x._schema_version == _schema_version);
+    SCYLLA_ASSERT(x._schema_version == _schema_version);
 #endif
     {
         auto deleter = current_deleter<rows_entry>();
@@ -280,8 +281,8 @@ mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
 stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker,
         mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res) {
 #ifdef SEASTAR_DEBUG
-    assert(s.version() == _schema_version);
-    assert(p._schema_version == _schema_version);
+    SCYLLA_ASSERT(s.version() == _schema_version);
+    SCYLLA_ASSERT(p._schema_version == _schema_version);
 #endif
     _tombstone.apply(p._tombstone);
     _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
@@ -531,7 +532,7 @@ mutation_partition::tombstone_for_row(const schema& schema, const rows_entry& e)
 void
 mutation_partition::apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t) {
     check_schema(schema);
-    assert(!prefix.is_full(schema));
+    SCYLLA_ASSERT(!prefix.is_full(schema));
     auto start = prefix;
     _row_tombstones.apply(schema, {std::move(start), std::move(prefix), std::move(t)});
 }
@@ -748,7 +749,7 @@ void mutation_partition::for_each_row(const schema& schema, const query::cluster
 
 template<typename RowWriter>
 void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
-    assert(c.is_live());
+    SCYLLA_ASSERT(c.is_live());
     auto wr = w.add().write();
     auto after_timestamp = [&, wr = std::move(wr)] () mutable {
         if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
@@ -789,7 +790,7 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, data_type typ
 
 template<typename RowWriter>
 void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
-    assert(c.is_live());
+    SCYLLA_ASSERT(c.is_live());
     auto ccv = counter_cell_view(c);
     auto wr = w.add().write();
     [&, wr = std::move(wr)] () mutable {
@@ -1179,8 +1180,8 @@ bool mutation_partition::equal(const schema& s, const mutation_partition& p) con
 
 bool mutation_partition::equal(const schema& this_schema, const mutation_partition& p, const schema& p_schema) const {
 #ifdef SEASTAR_DEBUG
-    assert(_schema_version == this_schema.version());
-    assert(p._schema_version == p_schema.version());
+    SCYLLA_ASSERT(_schema_version == this_schema.version());
+    SCYLLA_ASSERT(p._schema_version == p_schema.version());
 #endif
     if (_tombstone != p._tombstone) {
         return false;
@@ -1375,7 +1376,7 @@ uint32_t mutation_partition::do_compact(const schema& s,
     const tombstone_gc_state& gc_state)
 {
     check_schema(s);
-    assert(row_limit > 0);
+    SCYLLA_ASSERT(row_limit > 0);
 
     auto gc_before = drop_tombstones_unconditionally ? gc_clock::time_point::max() :
         gc_state.get_gc_before_for_key(s.shared_from_this(), dk, query_time);
@@ -2383,7 +2384,7 @@ void mutation_partition::set_continuity(const schema& s, const position_range& p
         i = _rows.insert_before(i, std::move(e));
     }
 
-    assert(i != end);
+    SCYLLA_ASSERT(i != end);
     ++i;
 
     while (1) {

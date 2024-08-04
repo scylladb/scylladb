@@ -14,6 +14,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/execution_stage.hh>
+#include "utils/assert.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
@@ -1767,12 +1768,12 @@ public:
     const db::extensions& extensions() const;
 
     sstables::sstables_manager& get_user_sstables_manager() const noexcept {
-        assert(_user_sstables_manager);
+        SCYLLA_ASSERT(_user_sstables_manager);
         return *_user_sstables_manager;
     }
 
     sstables::sstables_manager& get_system_sstables_manager() const noexcept {
-        assert(_system_sstables_manager);
+        SCYLLA_ASSERT(_system_sstables_manager);
         return *_system_sstables_manager;
     }
 

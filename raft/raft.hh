@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include "utils/assert.hh"
 #include <concepts>
 #include <vector>
 #include <unordered_set>
@@ -228,7 +229,7 @@ struct configuration {
 
     // Transition from C_old + C_new to C_new.
     void leave_joint() {
-        assert(is_joint());
+        SCYLLA_ASSERT(is_joint());
         previous.clear();
     }
 };

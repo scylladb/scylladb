@@ -27,6 +27,7 @@
 #include "test/lib/key_utils.hh"
 
 #include "replica/database.hh"
+#include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "partition_slice_builder.hh"
 #include "mutation/frozen_mutation.hh"
@@ -788,7 +789,7 @@ SEASTAR_TEST_CASE(clear_multiple_snapshots) {
         testlog.debug("Clearing all snapshots in {}.{} after it had been dropped", ks_name, table_name);
         e.local_db().clear_snapshot("", {ks_name}, table_name).get();
 
-        assert(!fs::exists(table_dir));
+        SCYLLA_ASSERT(!fs::exists(table_dir));
 
         // after all snapshots had been cleared,
         // the dropped table directory is expected to be removed.

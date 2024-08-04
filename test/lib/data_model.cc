@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "test/lib/data_model.hh"
 
 #include <boost/algorithm/string/join.hpp>
@@ -94,10 +95,10 @@ mutation mutation_description::build(schema_ptr s) const {
     m.partition().apply(_partition_tombstone);
     for (auto& [ column, value_or_collection ] : _static_row) {
         auto cdef = s->get_column_definition(utf8_type->decompose(column));
-        assert(cdef);
+        SCYLLA_ASSERT(cdef);
         std::visit(make_visitor(
             [&] (const atomic_value& v) {
-                assert(cdef->is_atomic());
+                SCYLLA_ASSERT(cdef->is_atomic());
                 if (!v.expiring) {
                     m.set_static_cell(*cdef, atomic_cell::make_live(*cdef->type, v.timestamp, v.value));
                 } else {
@@ -106,7 +107,7 @@ mutation mutation_description::build(schema_ptr s) const {
                 }
             },
             [&] (const collection& c) {
-                assert(!cdef->is_atomic());
+                SCYLLA_ASSERT(!cdef->is_atomic());
 
                 auto get_value_type = visit(*cdef->type, make_visitor(
                     [] (const collection_type_impl& ctype) -> std::function<const abstract_type&(bytes_view)> {
@@ -116,7 +117,7 @@ mutation mutation_description::build(schema_ptr s) const {
                         return [&] (bytes_view key) -> const abstract_type& { return *utype.type(deserialize_field_index(key)); };
                     },
                     [] (const abstract_type& o) -> std::function<const abstract_type&(bytes_view)> {
-                        assert(false);
+                        SCYLLA_ASSERT(false);
                     }
                 ));
 
@@ -144,10 +145,10 @@ mutation mutation_description::build(schema_ptr s) const {
         auto ck = clustering_key::from_exploded(*s, ckey);
         for (auto& [ column, value_or_collection ] : cells) {
             auto cdef = s->get_column_definition(utf8_type->decompose(column));
-            assert(cdef);
+            SCYLLA_ASSERT(cdef);
             std::visit(make_visitor(
             [&] (const atomic_value& v) {
-                    assert(cdef->is_atomic());
+                    SCYLLA_ASSERT(cdef->is_atomic());
                     if (!v.expiring) {
                         m.set_clustered_cell(ck, *cdef, atomic_cell::make_live(*cdef->type, v.timestamp, v.value));
                     } else {
@@ -156,7 +157,7 @@ mutation mutation_description::build(schema_ptr s) const {
                     }
                 },
             [&] (const collection& c) {
-                    assert(!cdef->is_atomic());
+                    SCYLLA_ASSERT(!cdef->is_atomic());
 
                     auto get_value_type = visit(*cdef->type, make_visitor(
                         [] (const collection_type_impl& ctype) -> std::function<const abstract_type&(bytes_view)> {
@@ -166,7 +167,7 @@ mutation mutation_description::build(schema_ptr s) const {
                             return [&] (bytes_view key) -> const abstract_type& { return *utype.type(deserialize_field_index(key)); };
                         },
                         [] (const abstract_type& o) -> std::function<const abstract_type&(bytes_view)> {
-                            assert(false);
+                            SCYLLA_ASSERT(false);
                         }
                     ));
 
@@ -229,7 +230,7 @@ std::vector<table_description::column>::iterator table_description::find_column(
 }
 
 void table_description::add_column(std::vector<column>& columns, const sstring& name, data_type type) {
-    assert(find_column(columns, name) == columns.end());
+    SCYLLA_ASSERT(find_column(columns, name) == columns.end());
     columns.emplace_back(name, type);
 }
 
@@ -239,14 +240,14 @@ void table_description::add_old_column(const sstring& name, data_type type) {
 
 void table_description::remove_column(std::vector<column>& columns, const sstring& name) {
     auto it = find_column(columns, name);
-    assert(it != columns.end());
+    SCYLLA_ASSERT(it != columns.end());
     _removed_columns.emplace_back(removed_column { name, std::get<data_type>(*it), column_removal_timestamp });
     columns.erase(it);
 }
 
 void table_description::alter_column_type(std::vector<column>& columns, const sstring& name, data_type new_type) {
     auto it = find_column(columns, name);
-    assert(it != columns.end());
+    SCYLLA_ASSERT(it != columns.end());
     std::get<data_type>(*it) = new_type;
 }
 
@@ -344,13 +345,13 @@ void table_description::alter_regular_column_type(const sstring& name, data_type
 void table_description::rename_partition_column(const sstring& from, const sstring& to) {
     _change_log.emplace_back(format("renamed partition column \'{}\' to \'{}\'", from, to));
     auto it = find_column(_partition_key, from);
-    assert(it != _partition_key.end());
+    SCYLLA_ASSERT(it != _partition_key.end());
     std::get<sstring>(*it) = to;
 }
 void table_description::rename_clustering_column(const sstring& from, const sstring& to) {
     _change_log.emplace_back(format("renamed clustering column \'{}\' to \'{}\'", from, to));
     auto it = find_column(_clustering_key, from);
-    assert(it != _clustering_key.end());
+    SCYLLA_ASSERT(it != _clustering_key.end());
     std::get<sstring>(*it) = to;
 }
 

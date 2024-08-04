@@ -15,6 +15,7 @@
 #include <seastar/http/exception.hh>
 #include "sstables/sstables.hh"
 #include "sstables/metadata_collector.hh"
+#include "utils/assert.hh"
 #include "utils/estimated_histogram.hh"
 #include <algorithm>
 #include "db/system_keyspace.hh"
@@ -103,7 +104,7 @@ class autocompaction_toggle_guard {
     replica::database& _db;
 public:
     autocompaction_toggle_guard(replica::database& db) : _db(db) {
-        assert(this_shard_id() == 0);
+        SCYLLA_ASSERT(this_shard_id() == 0);
         if (!_db._enable_autocompaction_toggle) {
             throw std::runtime_error("Autocompaction toggle is busy");
         }
@@ -112,7 +113,7 @@ public:
     autocompaction_toggle_guard(const autocompaction_toggle_guard&) = delete;
     autocompaction_toggle_guard(autocompaction_toggle_guard&&) = default;
     ~autocompaction_toggle_guard() {
-        assert(this_shard_id() == 0);
+        SCYLLA_ASSERT(this_shard_id() == 0);
         _db._enable_autocompaction_toggle = true;
     }
 };

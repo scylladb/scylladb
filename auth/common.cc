@@ -16,6 +16,7 @@
 #include "mutation/canonical_mutation.hh"
 #include "schema/schema_fwd.hh"
 #include "timestamp.hh"
+#include "utils/assert.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_table_statement.hh"
@@ -68,7 +69,7 @@ static future<> create_legacy_metadata_table_if_missing_impl(
         cql3::query_processor& qp,
         std::string_view cql,
         ::service::migration_manager& mm) {
-    assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
+    SCYLLA_ASSERT(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
 
     auto db = qp.db();
     auto parsed_statement = cql3::query_processor::parse_statement(cql);

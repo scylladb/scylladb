@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <iterator>
 #include <boost/regex.hpp>
 
@@ -47,8 +48,8 @@ static cql3_type::kind get_cql3_kind(const abstract_type& t) {
         cql3_type::kind operator()(const uuid_type_impl&) { return cql3_type::kind::UUID; }
         cql3_type::kind operator()(const varint_type_impl&) { return cql3_type::kind::VARINT; }
         cql3_type::kind operator()(const reversed_type_impl& r) { return get_cql3_kind(*r.underlying_type()); }
-        cql3_type::kind operator()(const tuple_type_impl&) { assert(0 && "no kind for this type"); }
-        cql3_type::kind operator()(const collection_type_impl&) { assert(0 && "no kind for this type"); }
+        cql3_type::kind operator()(const tuple_type_impl&) { SCYLLA_ASSERT(0 && "no kind for this type"); }
+        cql3_type::kind operator()(const collection_type_impl&) { SCYLLA_ASSERT(0 && "no kind for this type"); }
     };
     return visit(t, visitor{});
 }
@@ -147,7 +148,7 @@ public:
     }
 
     virtual cql3_type prepare_internal(const sstring& keyspace, const data_dictionary::user_types_metadata& user_types) override {
-        assert(_values); // "Got null values type for a collection";
+        SCYLLA_ASSERT(_values); // "Got null values type for a collection";
 
         if (_values->is_counter()) {
             throw exceptions::invalid_request_exception(format("Counters are not allowed inside collections: {}", *this));
@@ -187,7 +188,7 @@ private:
             }
             return cql3_type(set_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !is_frozen()));
         } else if (_kind == abstract_type::kind::map) {
-            assert(_keys); // "Got null keys type for a collection";
+            SCYLLA_ASSERT(_keys); // "Got null keys type for a collection";
             if (_keys->is_duration()) {
                 throw exceptions::invalid_request_exception(format("Durations are not allowed as map keys: {}", *this));
             }

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <boost/algorithm/string/join.hpp>
 #include <chrono>
 
@@ -222,7 +223,7 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
 }
 
 void service_level_controller::stop_legacy_update_from_distributed_data() {
-    assert(this_shard_id() == global_controller);
+    SCYLLA_ASSERT(this_shard_id() == global_controller);
 
     if (_global_controller_db->dist_data_update_aborter.abort_requested()) {
         return;

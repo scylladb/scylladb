@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <grp.h>
 #include "transport/controller.hh"
 #include <seastar/core/sharded.hh>
@@ -272,7 +273,7 @@ future<> controller::do_start_server() {
 }
 
 future<> controller::stop_server() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     if (!_stopped) {
         co_await _ops_sem.wait();

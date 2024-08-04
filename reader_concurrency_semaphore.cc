@@ -19,6 +19,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "query-result.hh"
 #include "readers/mutation_reader.hh"
+#include "utils/assert.hh"
 #include "utils/exceptions.hh"
 #include "schema/schema.hh"
 #include "utils/human_readable.hh"
@@ -107,7 +108,7 @@ reader_permit::resource_units& reader_permit::resource_units::operator=(resource
 }
 
 void reader_permit::resource_units::add(resource_units&& o) {
-    assert(_permit == o._permit);
+    SCYLLA_ASSERT(_permit == o._permit);
     _resources += std::exchange(o._resources, {});
 }
 
@@ -335,7 +336,7 @@ public:
     }
 
     void on_admission() {
-        assert(_state != reader_permit::state::active_await);
+        SCYLLA_ASSERT(_state != reader_permit::state::active_await);
         on_permit_active();
         consume(_base_resources);
         _base_resources_consumed = true;
@@ -353,17 +354,17 @@ public:
     }
 
     void on_register_as_inactive() {
-        assert(_state == reader_permit::state::active || _state == reader_permit::state::active_need_cpu || _state == reader_permit::state::waiting_for_memory);
+        SCYLLA_ASSERT(_state == reader_permit::state::active || _state == reader_permit::state::active_need_cpu || _state == reader_permit::state::waiting_for_memory);
         on_permit_inactive(reader_permit::state::inactive);
     }
 
     void on_unregister_as_inactive() {
-        assert(_state == reader_permit::state::inactive);
+        SCYLLA_ASSERT(_state == reader_permit::state::inactive);
         on_permit_active();
     }
 
     void on_evicted() {
-        assert(_state == reader_permit::state::inactive);
+        SCYLLA_ASSERT(_state == reader_permit::state::inactive);
         _state = reader_permit::state::evicted;
         if (_base_resources_consumed) {
             signal(_base_resources);
@@ -424,7 +425,7 @@ public:
     }
 
     void mark_not_need_cpu() noexcept {
-        assert(_need_cpu_branches);
+        SCYLLA_ASSERT(_need_cpu_branches);
         --_need_cpu_branches;
         if (_marked_as_need_cpu && !_need_cpu_branches) {
             // When an exception is thrown, need_cpu and awaits guards might be
@@ -447,7 +448,7 @@ public:
     }
 
     void mark_not_awaits() noexcept {
-        assert(_awaits_branches);
+        SCYLLA_ASSERT(_awaits_branches);
         --_awaits_branches;
         if (_marked_as_awaits && !_awaits_branches) {
             _state = reader_permit::state::active_need_cpu;
@@ -1071,7 +1072,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             metrics) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
-    assert(!_stats.waiters);
+    SCYLLA_ASSERT(!_stats.waiters);
     if (!_stats.total_permits) {
         // We allow destroy without stop() when the semaphore wasn't used at all yet.
         return;
@@ -1080,7 +1081,7 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
         on_internal_error_noexcept(rcslog, format("~reader_concurrency_semaphore(): semaphore {} not stopped before destruction", _name));
         // With the below conditions, we can get away with the semaphore being
         // unstopped. In this case don't force an abort.
-        assert(_inactive_reads.empty() && !_close_readers_gate.get_count() && !_permit_gate.get_count() && !_execution_loop_future);
+        SCYLLA_ASSERT(_inactive_reads.empty() && !_close_readers_gate.get_count() && !_permit_gate.get_count() && !_execution_loop_future);
         broken();
     }
 }
@@ -1210,7 +1211,7 @@ std::runtime_error reader_concurrency_semaphore::stopped_exception() {
 }
 
 future<> reader_concurrency_semaphore::stop() noexcept {
-    assert(!_stopped);
+    SCYLLA_ASSERT(!_stopped);
     _stopped = true;
     co_await stop_ext_pre();
     clear_inactive_reads();
@@ -1534,20 +1535,20 @@ void reader_concurrency_semaphore::on_permit_need_cpu() noexcept {
 }
 
 void reader_concurrency_semaphore::on_permit_not_need_cpu() noexcept {
-    assert(_stats.need_cpu_permits);
+    SCYLLA_ASSERT(_stats.need_cpu_permits);
     --_stats.need_cpu_permits;
-    assert(_stats.need_cpu_permits >= _stats.awaits_permits);
+    SCYLLA_ASSERT(_stats.need_cpu_permits >= _stats.awaits_permits);
     maybe_admit_waiters();
 }
 
 void reader_concurrency_semaphore::on_permit_awaits() noexcept {
     ++_stats.awaits_permits;
-    assert(_stats.need_cpu_permits >= _stats.awaits_permits);
+    SCYLLA_ASSERT(_stats.need_cpu_permits >= _stats.awaits_permits);
     maybe_admit_waiters();
 }
 
 void reader_concurrency_semaphore::on_permit_not_awaits() noexcept {
-    assert(_stats.awaits_permits);
+    SCYLLA_ASSERT(_stats.awaits_permits);
     --_stats.awaits_permits;
 }
 

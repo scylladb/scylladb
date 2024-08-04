@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "db/system_distributed_keyspace.hh"
 
 #include "cql3/untyped_result_set.hh"
@@ -220,7 +221,7 @@ static schema_ptr get_current_service_levels(data_dictionary::database db) {
 }
 
 static schema_ptr get_updated_service_levels(data_dictionary::database db) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     auto schema = get_current_service_levels(db);
     schema_builder b(schema);
     for (const auto& col : new_columns) {

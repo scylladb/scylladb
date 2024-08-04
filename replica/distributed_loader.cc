@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <fmt/std.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/smp.hh>
@@ -43,7 +44,7 @@ static std::unordered_set<sstring> load_prio_keyspaces;
 static bool population_started = false;
 
 void replica::distributed_loader::mark_keyspace_as_load_prio(const sstring& ks) {
-    assert(!population_started);
+    SCYLLA_ASSERT(!population_started);
     load_prio_keyspaces.insert(ks);
 }
 
@@ -288,11 +289,11 @@ public:
     ~table_populator() {
         // All directories must have been stopped
         // using table_populator::stop()
-        assert(_sstable_directories.empty());
+        SCYLLA_ASSERT(_sstable_directories.empty());
     }
 
     future<> start() {
-        assert(this_shard_id() == 0);
+        SCYLLA_ASSERT(this_shard_id() == 0);
 
         for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
             co_await start_subdir(state);

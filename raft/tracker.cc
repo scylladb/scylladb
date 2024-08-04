@@ -5,6 +5,7 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+#include "utils/assert.hh"
 #include "tracker.hh"
 #include <seastar/core/coroutine.hh>
 
@@ -45,7 +46,7 @@ bool follower_progress::is_stray_reject(const append_reply::rejected& rejected) 
         // any reject during snapshot transfer is stray one
         return true;
     default:
-        assert(false);
+        SCYLLA_ASSERT(false);
     }
     return false;
 }
@@ -86,7 +87,7 @@ bool follower_progress::can_send_to() {
         // before starting to sync the log.
         return false;
     }
-    assert(false);
+    SCYLLA_ASSERT(false);
     return false;
 }
 

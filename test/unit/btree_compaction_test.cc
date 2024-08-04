@@ -14,6 +14,7 @@ constexpr int TEST_NODE_SIZE = 7;
 constexpr int TEST_LINEAR_THRESHOLD = 19;
 
 #include "tree_test_key.hh"
+#include "utils/assert.hh"
 #include "utils/intrusive_btree.hh"
 #include "btree_validation.hh"
 #include "collection_stress.hh"
@@ -58,7 +59,7 @@ int main(int argc, char **argv) {
                 /* insert */ [&] (int key) {
                     auto k = alloc_strategy_unique_ptr<test_key>(current_allocator().construct<test_key>(key));
                     auto ti = t->insert(std::move(k), test_key_tri_compare{});
-                    assert(ti.second);
+                    SCYLLA_ASSERT(ti.second);
                 },
                 /* erase */ [&] (int key) {
                     auto deleter = current_deleter<test_key>();

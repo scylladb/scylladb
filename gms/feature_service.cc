@@ -17,6 +17,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include "gms/gossiper.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "service/storage_service.hh"
 
@@ -59,7 +60,7 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     case sstables::sstable_version_types::me:
         break;
     default:
-        assert(false && "Invalid sstable_format");
+        SCYLLA_ASSERT(false && "Invalid sstable_format");
     }
 
     if (!cfg.enable_user_defined_functions()) {
@@ -101,7 +102,7 @@ future<> feature_service::stop() {
 
 void feature_service::register_feature(feature& f) {
     auto i = _registered_features.emplace(f.name(), f);
-    assert(i.second);
+    SCYLLA_ASSERT(i.second);
 }
 
 void feature_service::unregister_feature(feature& f) {

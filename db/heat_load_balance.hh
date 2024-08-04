@@ -27,6 +27,7 @@
  *    uniformly, and we need to choose K nodes and forward the request
  *    to them).
  */
+#include "utils/assert.hh"
 #include <vector>
 #include <cassert>
 #include <fmt/ranges.h>
@@ -70,7 +71,7 @@ public:
     std::vector<Node> get() {
         auto n = _pp.size();
         auto ke = _k + (_extra ? 1 : 0);
-        assert(ke <= n);
+        SCYLLA_ASSERT(ke <= n);
         std::vector<Node> ret;
         ret.reserve(ke);
         std::vector<int> r = ssample(_k, _pp);
@@ -97,7 +98,7 @@ public:
                 }
             }
         }
-        assert(ret.size() == ke);
+        SCYLLA_ASSERT(ret.size() == ke);
         return ret;
     }
 };

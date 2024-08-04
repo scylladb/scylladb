@@ -24,6 +24,7 @@
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
+#include "utils/assert.hh"
 #include "utils/hashers.hh"
 #include "log.hh"
 #include <seastar/core/enum.hh>
@@ -1580,7 +1581,7 @@ struct local_cache {
 };
 
 future<> system_keyspace::peers_table_read_fixup() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     if (_peers_table_read_fixup_done) {
         co_return;
     }
@@ -1839,7 +1840,7 @@ std::unordered_set<dht::token> decode_tokens(const set_type_impl::native_type& t
     std::unordered_set<dht::token> tset;
     for (auto& t: tokens) {
         auto str = value_cast<sstring>(t);
-        assert(str == dht::token::from_sstring(str).to_sstring());
+        SCYLLA_ASSERT(str == dht::token::from_sstring(str).to_sstring());
         tset.insert(dht::token::from_sstring(str));
     }
     return tset;
@@ -1945,7 +1946,7 @@ future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
     co_await peers_table_read_fixup();
 
     const auto res = co_await execute_cql(format("SELECT peer, tokens FROM system.{}", PEERS));
-    assert(res);
+    SCYLLA_ASSERT(res);
 
     std::vector<gms::inet_address> ret;
     for (const auto& row: *res) {
@@ -2709,7 +2710,7 @@ future<utils::UUID> system_keyspace::get_last_group0_state_id() {
         format(
             "SELECT state_id FROM system.{} WHERE key = '{}' LIMIT 1",
             GROUP0_HISTORY, GROUP0_HISTORY_KEY));
-    assert(rs);
+    SCYLLA_ASSERT(rs);
     if (rs->empty()) {
         co_return utils::UUID{};
     }
@@ -2722,7 +2723,7 @@ future<bool> system_keyspace::group0_history_contains(utils::UUID state_id) {
             "SELECT state_id FROM system.{} WHERE key = '{}' AND state_id = ?",
             GROUP0_HISTORY, GROUP0_HISTORY_KEY),
         state_id);
-    assert(rs);
+    SCYLLA_ASSERT(rs);
     co_return !rs->empty();
 }
 
@@ -2735,16 +2736,16 @@ mutation system_keyspace::make_group0_history_state_id_mutation(
     row.apply(row_marker(ts));
     if (!description.empty()) {
         auto cdef = s->get_column_definition("description");
-        assert(cdef);
+        SCYLLA_ASSERT(cdef);
         row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, cdef->type->decompose(description)));
     }
     if (gc_older_than) {
         using namespace std::chrono;
-        assert(*gc_older_than >= gc_clock::duration{0});
+        SCYLLA_ASSERT(*gc_older_than >= gc_clock::duration{0});
 
         auto ts_micros = microseconds{ts};
         auto gc_older_than_micros = duration_cast<microseconds>(*gc_older_than);
-        assert(gc_older_than_micros < ts_micros);
+        SCYLLA_ASSERT(gc_older_than_micros < ts_micros);
 
         auto tomb_upper_bound = utils::UUID_gen::min_time_UUID(ts_micros - gc_older_than_micros);
         // We want to delete all entries with IDs smaller than `tomb_upper_bound`
@@ -2761,7 +2762,7 @@ mutation system_keyspace::make_group0_history_state_id_mutation(
 future<mutation> system_keyspace::get_group0_history(distributed<replica::database>& db) {
     auto s = group0_history();
     auto rs = co_await db::system_keyspace::query_mutations(db, db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY);
-    assert(rs);
+    SCYLLA_ASSERT(rs);
     auto& ps = rs->partitions();
     for (auto& p: ps) {
         auto mut = p.mut().unfreeze(s);
@@ -2783,7 +2784,7 @@ static future<std::optional<mutation>> get_scylla_local_mutation(replica::databa
     dht::partition_range pr = dht::partition_range::make_singular(dht::decorate_key(*s, pk));
 
     auto rs = co_await replica::query_mutations(db.container(), s, pr, s->full_slice(), db::no_timeout);
-    assert(rs);
+    SCYLLA_ASSERT(rs);
     auto& ps = rs->partitions();
     for (auto& p: ps) {
         auto mut = p.mut().unfreeze(s);
@@ -2906,7 +2907,7 @@ static bool must_have_tokens(service::node_state nst) {
 future<service::topology> system_keyspace::load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts) {
     auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
-    assert(rs);
+    SCYLLA_ASSERT(rs);
 
     service::topology_state_machine::topology_type ret;
 
@@ -3087,7 +3088,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
                 format("SELECT count(range_end) as cnt FROM {}.{} WHERE key = '{}' AND id = ?",
                         NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
                 gen_id.id);
-            assert(gen_rows);
+            SCYLLA_ASSERT(gen_rows);
             if (gen_rows->empty()) {
                 on_internal_error(slogger, format(
                     "load_topology_state: last committed CDC generation time UUID ({}) present, but data missing", gen_id.id));
@@ -3146,7 +3147,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
 future<std::optional<service::topology_features>> system_keyspace::load_topology_features_state() {
     auto rs = co_await execute_cql(
         format("SELECT host_id, node_state, supported_features, enabled_features FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
-    assert(rs);
+    SCYLLA_ASSERT(rs);
 
     co_return decode_topology_features_state(std::move(rs));
 }

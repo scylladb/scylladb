@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 
+#include "utils/assert.hh"
 #include "dirty_memory_manager.hh"
 #include "database.hh" // for memtable_list
 #include <seastar/core/metrics_api.hh>
@@ -43,7 +44,7 @@ region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
         auto t = r->evictable_occupancy().total_space();
         fmt::print(" r = {} (id={}), occupancy = {}\n", fmt::ptr(r), r->id(), t);
     }
-    assert(0);
+    SCYLLA_ASSERT(0);
 #endif
 }
 
@@ -63,7 +64,7 @@ dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_re
 void
 region_group::add(logalloc::region* child_r) {
     auto child = static_cast<size_tracked_region*>(child_r);
-    assert(!child->_heap_handle);
+    SCYLLA_ASSERT(!child->_heap_handle);
     child->_heap_handle = std::make_optional(_regions.push(child));
     region_group_binomial_group_sanity_check(_regions);
     update_unspooled(child_r->occupancy().total_space());

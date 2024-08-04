@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "schema/schema_fwd.hh"
 #include "mutation/position_in_partition.hh"
 #include <boost/icl/interval_set.hpp>
@@ -87,8 +88,8 @@ public:
         }
     };
     static interval::type make_interval(const schema& s, const position_range& r) {
-        assert(r.start().has_clustering_key());
-        assert(r.end().has_clustering_key());
+        SCYLLA_ASSERT(r.start().has_clustering_key());
+        SCYLLA_ASSERT(r.end().has_clustering_key());
         return interval::right_open(
             position_in_partition_with_schema(s.shared_from_this(), r.start()),
             position_in_partition_with_schema(s.shared_from_this(), r.end()));

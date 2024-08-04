@@ -30,6 +30,7 @@
 #include "conditions.hh"
 #include "cql3/util.hh"
 #include <optional>
+#include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include <seastar/json/json_elements.hh>
 #include <boost/algorithm/cxx11/any_of.hpp>
@@ -85,7 +86,7 @@ static map_type attrs_type() {
 
 static const column_definition& attrs_column(const schema& schema) {
     const column_definition* cdef = schema.get_column_definition(bytes(executor::ATTRS_COLUMN_NAME));
-    assert(cdef);
+    SCYLLA_ASSERT(cdef);
     return *cdef;
 }
 
@@ -931,7 +932,7 @@ static void validate_attribute_definitions(const rjson::value& attribute_definit
 }
 
 static future<executor::request_return_type> create_table_on_shard0(tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     // We begin by parsing and validating the content of the CreateTable
     // command. We can't inspect the current database schema at this point
@@ -1677,7 +1678,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
-        assert(m); // !needs_read_before_write, so apply() did not check a condition
+        SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
         return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
             return rmw_operation_return(std::move(_return_attributes));
         });
@@ -3844,7 +3845,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
 }
 
 static dht::token token_for_segment(int segment, int total_segments) {
-    assert(total_segments > 1 && segment >= 0 && segment < total_segments);
+    SCYLLA_ASSERT(total_segments > 1 && segment >= 0 && segment < total_segments);
     uint64_t delta = std::numeric_limits<uint64_t>::max() / total_segments;
     return dht::token::from_int64(std::numeric_limits<int64_t>::min() + delta * segment);
 }

@@ -17,6 +17,7 @@
 #include "gms/feature_service.hh"
 #include "repair/row_level.hh"
 #include "replica/compaction_group.hh"
+#include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include <boost/program_options.hpp>
 #include <iostream>
@@ -224,7 +225,7 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     }
     if (!storage.is_local_type()) {
         // remote storage requires uuid-based identifier for naming sstables
-        assert(use_uuid == uuid_identifiers::yes);
+        SCYLLA_ASSERT(use_uuid == uuid_identifiers::yes);
     }
 }
 

@@ -53,6 +53,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "compaction/compaction_manager.hh"
+#include "utils/assert.hh"
 #include "utils/small_vector.hh"
 #include "view_info.hh"
 #include "view_update_checks.hh"
@@ -1490,7 +1491,7 @@ future<stop_iteration> view_update_builder::on_results() {
                 existing.apply(std::max(_existing_partition_tombstone, _existing_current_tombstone));
                 auto tombstone = std::max(_update_partition_tombstone, _update_current_tombstone);
                 // The way we build the read command used for existing rows, we should always have a non-empty
-                // tombstone, since we wouldn't have read the existing row otherwise. We don't assert that in case the
+                // tombstone, since we wouldn't have read the existing row otherwise. We don't SCYLLA_ASSERT that in case the
                 // read method ever changes.
                 if (tombstone) {
                     auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
@@ -1516,11 +1517,11 @@ future<stop_iteration> view_update_builder::on_results() {
         }
         // We're updating a row that had pre-existing data
         if (_update->is_range_tombstone_change()) {
-            assert(_existing->is_range_tombstone_change());
+            SCYLLA_ASSERT(_existing->is_range_tombstone_change());
             _existing_current_tombstone = std::move(*_existing).as_range_tombstone_change().tombstone();
             _update_current_tombstone = std::move(*_update).as_range_tombstone_change().tombstone();
         } else if (_update->is_clustering_row()) {
-            assert(_existing->is_clustering_row());
+            SCYLLA_ASSERT(_existing->is_clustering_row());
             _update->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
                 cr.apply(std::max(_update_partition_tombstone, _update_current_tombstone));
             });
@@ -1752,7 +1753,7 @@ get_view_natural_endpoint(
         }
     }
 
-    assert(base_endpoints.size() == view_endpoints.size());
+    SCYLLA_ASSERT(base_endpoints.size() == view_endpoints.size());
     auto base_it = std::find(base_endpoints.begin(), base_endpoints.end(), me);
     if (base_it == base_endpoints.end()) {
         // This node is not a base replica of this key, so we return empty
@@ -2700,7 +2701,7 @@ future<> view_builder::mark_as_built(view_ptr view) {
 }
 
 future<> view_builder::mark_existing_views_as_built() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     auto views = _db.get_views();
     co_await coroutine::parallel_for_each(views, [this] (view_ptr& view) {
         return mark_as_built(view);
@@ -2890,7 +2891,7 @@ delete_ghost_rows_visitor::delete_ghost_rows_visitor(service::storage_proxy& pro
 {}
 
 void delete_ghost_rows_visitor::accept_new_partition(const partition_key& key, uint32_t row_count) {
-    assert(thread::running_in_thread());
+    SCYLLA_ASSERT(thread::running_in_thread());
     _view_pk = key;
 }
 

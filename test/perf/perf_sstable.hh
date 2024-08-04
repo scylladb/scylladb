@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <seastar/util/closeable.hh>
 
 #include "sstables/sstables.hh"
@@ -245,12 +246,12 @@ public:
 
                 auto partitions_per_sstable = _cfg.partitions / _cfg.sstables;
                 if (_cfg.compaction_strategy != sstables::compaction_strategy_type::time_window) {
-                    assert(ret.new_sstables.size() == 1);
+                    SCYLLA_ASSERT(ret.new_sstables.size() == 1);
                 }
                 auto total_keys_written = std::accumulate(ret.new_sstables.begin(), ret.new_sstables.end(), uint64_t(0), [] (uint64_t n, const sstables::shared_sstable& sst) {
                     return n + sst->get_estimated_key_count();
                 });
-                assert(total_keys_written >= partitions_per_sstable);
+                SCYLLA_ASSERT(total_keys_written >= partitions_per_sstable);
 
                 auto duration = std::chrono::duration<double>(end - start).count();
                 return total_keys_written / duration;

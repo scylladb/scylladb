@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "cql3/result_set.hh"
 
 namespace cql3 {
@@ -49,7 +50,7 @@ void metadata::set_paging_state(lw_shared_ptr<const service::pager::paging_state
 }
 
 void metadata::maybe_set_paging_state(lw_shared_ptr<const service::pager::paging_state> paging_state) {
-    assert(paging_state);
+    SCYLLA_ASSERT(paging_state);
     if (paging_state->get_remaining() > 0) {
         set_paging_state(std::move(paging_state));
     } else {
@@ -114,7 +115,7 @@ bool result_set::empty() const {
 }
 
 void result_set::add_row(std::vector<managed_bytes_opt> row) {
-    assert(row.size() == _metadata->value_count());
+    SCYLLA_ASSERT(row.size() == _metadata->value_count());
     _rows.emplace_back(std::move(row));
 }
 

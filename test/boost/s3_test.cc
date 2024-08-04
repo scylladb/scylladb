@@ -23,6 +23,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/tmpdir.hh"
+#include "utils/assert.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
 #include "utils/exceptions.hh"
@@ -209,7 +210,7 @@ future<> test_client_upload_file(std::string_view test_name, size_t total_size, 
         auto output = co_await make_file_output_stream(std::move(f));
         std::string_view data = "1234567890ABCDEF";
         // so we can test !with_remainder case properly with multiple writes
-        assert(total_size % data.size() == 0);
+        SCYLLA_ASSERT(total_size % data.size() == 0);
 
         for (size_t bytes_written = 0;
              bytes_written < total_size;

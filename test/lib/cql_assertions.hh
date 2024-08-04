@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "test/lib/cql_test_env.hh"
 #include "transport/messages/result_message_base.hh"
 #include "bytes.hh"
@@ -50,7 +51,7 @@ void assert_that_failed(future<T>& f)
 {
     try {
         f.get();
-        assert(f.failed());
+        SCYLLA_ASSERT(f.failed());
     }
     catch (...) {
     }
@@ -61,7 +62,7 @@ void assert_that_failed(future<T>&& f)
 {
     try {
         f.get();
-        assert(f.failed());
+        SCYLLA_ASSERT(f.failed());
     }
     catch (...) {
     }

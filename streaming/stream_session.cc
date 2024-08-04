@@ -30,6 +30,7 @@
 #include "consumer.hh"
 #include "readers/generating_v2.hh"
 #include "service/topology_guard.hh"
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 
 namespace streaming {
@@ -543,7 +544,7 @@ void stream_session::add_transfer_ranges(sstring keyspace, dht::token_range_vect
         if (it == _transfers.end()) {
             stream_transfer_task task(shared_from_this(), cf_id, ranges);
             auto inserted = _transfers.emplace(cf_id, std::move(task)).second;
-            assert(inserted);
+            SCYLLA_ASSERT(inserted);
         } else {
             it->second.append_ranges(ranges);
         }

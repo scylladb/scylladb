@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "lang.hh"
 
 #include <seastar/core/future.hh>
@@ -73,7 +74,7 @@ future<query_result> execute_broadcast_table_query(
                 co_return query_result_select{};
             }
 
-            assert(rs->partitions().size() == 1); // In this version only one value per partition key is allowed.
+            SCYLLA_ASSERT(rs->partitions().size() == 1); // In this version only one value per partition key is allowed.
 
             const auto& p = rs->partitions()[0];
             auto mutation = p.mut().unfreeze(schema);
@@ -92,7 +93,7 @@ future<query_result> execute_broadcast_table_query(
 
             bool found = !rs->partitions().empty();
 
-            assert(!found || rs->partitions().size() == 1); // In this version at most one value per partition key is allowed.
+            SCYLLA_ASSERT(!found || rs->partitions().size() == 1); // In this version at most one value per partition key is allowed.
 
             auto new_mutation = found
                 ? rs->partitions()[0].mut().unfreeze(schema)

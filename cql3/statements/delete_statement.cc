@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/adaptors.hpp>
 
@@ -102,7 +103,7 @@ delete_statement::delete_statement(cf_name name,
     , _deletions(std::move(deletions))
     , _where_clause(std::move(where_clause))
 {
-    assert(!_attrs->time_to_live.has_value());
+    SCYLLA_ASSERT(!_attrs->time_to_live.has_value());
 }
 
 }

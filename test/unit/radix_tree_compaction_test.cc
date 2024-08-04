@@ -11,6 +11,7 @@
 #include <string>
 #include <fmt/core.h>
 
+#include "utils/assert.hh"
 #include "utils/compact-radix-tree.hh"
 #include "radix_tree_printer.hh"
 #include "collection_stress.hh"
@@ -86,11 +87,11 @@ int main(int argc, char **argv) {
                         unsigned nr = 0;
                         auto ti = t->begin();
                         while (ti != t->end()) {
-                            assert(ti->value() == ti.key());
+                            SCYLLA_ASSERT(ti->value() == ti.key());
                             nr++;
                             ti++;
                         }
-                        assert(nr == col_size);
+                        SCYLLA_ASSERT(nr == col_size);
                     },
                     /* clear */ [&] {
                         t->clear();

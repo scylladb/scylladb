@@ -35,6 +35,7 @@
 #include "mutation/mutation.hh"
 #include "types/types.hh"
 #include "types/map.hh"
+#include "utils/assert.hh"
 #include "utils/rjson.hh"
 #include "utils/big_decimal.hh"
 #include "cql3/selection/selection.hh"
@@ -551,7 +552,7 @@ static future<> scan_table_ranges(
         expiration_service::stats& expiration_stats)
 {
     const schema_ptr& s = scan_ctx.s;
-    assert (partition_ranges.size() == 1); // otherwise issue #9167 will cause incorrect results.
+    SCYLLA_ASSERT (partition_ranges.size() == 1); // otherwise issue #9167 will cause incorrect results.
     auto p = service::pager::query_pagers::pager(proxy, s, scan_ctx.selection, *scan_ctx.query_state_ptr,
             *scan_ctx.query_options, scan_ctx.command, std::move(partition_ranges), nullptr);
     while (!p->is_exhausted()) {

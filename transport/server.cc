@@ -36,6 +36,7 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/execution_stage.hh>
+#include "utils/assert.hh"
 #include "utils/result_try.hh"
 #include "utils/result_combinators.hh"
 #include "db/operation_type.hh"
@@ -160,7 +161,7 @@ sstring to_string(const event::schema_change::change_type t) {
     case event::schema_change::change_type::UPDATED: return "UPDATED";
     case event::schema_change::change_type::DROPPED: return "DROPPED";
     }
-    assert(false && "unreachable");
+    SCYLLA_ASSERT(false && "unreachable");
 }
 
 sstring to_string(const event::schema_change::target_type t) {
@@ -171,7 +172,7 @@ sstring to_string(const event::schema_change::target_type t) {
     case event::schema_change::target_type::FUNCTION: return "FUNCTION";
     case event::schema_change::target_type::AGGREGATE:return "AGGREGATE";
     }
-    assert(false && "unreachable");
+    SCYLLA_ASSERT(false && "unreachable");
 }
 
 event::event_type parse_event_type(const sstring& value)
@@ -1499,7 +1500,7 @@ public:
             break;
         }
         default:
-            assert(0);
+            SCYLLA_ASSERT(0);
         }
     }
 

@@ -69,6 +69,7 @@
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/combined.hh"
+#include "utils/assert.hh"
 #include "utils/pretty_printers.hh"
 
 namespace fs = std::filesystem;
@@ -395,7 +396,7 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
 static future<compact_sstables_result> create_and_compact_sstables(test_env& env, size_t create_sstables) {
     uint64_t min_sstable_size = 50;
     auto res = co_await compact_sstables(env, {}, create_sstables, min_sstable_size, compaction_strategy_type::size_tiered);
-    // size tiered compaction will output at most one sstable, let's assert that.
+    // size tiered compaction will output at most one sstable, let's SCYLLA_ASSERT that.
     BOOST_REQUIRE(res.output_sstables.size() == 1);
     co_return res;
 }
@@ -403,7 +404,7 @@ static future<compact_sstables_result> create_and_compact_sstables(test_env& env
 static future<compact_sstables_result> compact_sstables(test_env& env, std::vector<sstables::shared_sstable> sstables_to_compact) {
     uint64_t min_sstable_size = 50;
     auto res = co_await compact_sstables(env, std::move(sstables_to_compact), 0, min_sstable_size, compaction_strategy_type::size_tiered);
-    // size tiered compaction will output at most one sstable, let's assert that.
+    // size tiered compaction will output at most one sstable, let's SCYLLA_ASSERT that.
     BOOST_REQUIRE(res.output_sstables.size() == 1);
     co_return res;
 }
@@ -492,9 +493,9 @@ static sstables::shared_sstable add_sstable_for_leveled_test(test_env& env, lw_s
                                          uint32_t sstable_level, const partition_key& first_key, const partition_key& last_key, int64_t max_timestamp = 0) {
     auto sst = env.make_sstable(cf->schema());
     sstables::test(sst).set_values_for_leveled_strategy(fake_data_size, sstable_level, max_timestamp, first_key, last_key);
-    assert(sst->data_size() == fake_data_size);
-    assert(sst->get_sstable_level() == sstable_level);
-    assert(sst->get_stats_metadata().max_timestamp == max_timestamp);
+    SCYLLA_ASSERT(sst->data_size() == fake_data_size);
+    SCYLLA_ASSERT(sst->get_sstable_level() == sstable_level);
+    SCYLLA_ASSERT(sst->get_stats_metadata().max_timestamp == max_timestamp);
     column_family_test(cf).add_sstable(sst).get();
     return sst;
 }
@@ -2873,7 +2874,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
             }
 
             // Start compaction, then stop tracking compaction, switch to TWCS, wait for compaction to finish and check for backlog.
-            // That's done to assert backlog will work for compaction that is finished and was stopped tracking.
+            // That's done to SCYLLA_ASSERT backlog will work for compaction that is finished and was stopped tracking.
 
             auto fut = compact_sstables(env, sstables::compaction_descriptor(ssts), cf, sst_gen);
 
@@ -3492,7 +3493,7 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
         };
 
         auto ret = compact_sstables(env, sstables::compaction_descriptor(sstables_spanning_many_windows), cf, sst_gen, replacer_fn_no_op()).get();
-        // The real test here is that we don't assert() in
+        // The real test here is that we don't SCYLLA_ASSERT() in
         // sstables::prepare_summary() with the compact_sstables() call above,
         // this is only here as a sanity check.
         BOOST_REQUIRE_EQUAL(ret.new_sstables.size(), std::min(sstables_spanning_many_windows.size() * rows_per_partition,
@@ -3755,7 +3756,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
         constexpr auto window_size_in_minutes = 8 * 60;
         forward_jump_clocks(minutes(window_size_in_minutes - now_in_minutes.count() % window_size_in_minutes));
         now = gc_clock::now().time_since_epoch() + offset_duration;
-        assert(std::chrono::duration_cast<minutes>(now).count() % window_size_in_minutes == 0);
+        SCYLLA_ASSERT(std::chrono::duration_cast<minutes>(now).count() % window_size_in_minutes == 0);
 
         auto next_timestamp = [now](auto step) {
             return (now + duration_cast<seconds>(step)).count();
@@ -4427,7 +4428,7 @@ future<> run_controller_test(sstables::compaction_strategy_type compaction_strat
             auto sst = env.make_sstable(t.schema());
             auto key = tests::generate_partition_key(t.schema()).key();
             sstables::test(sst).set_values_for_leveled_strategy(data_size, level, 0 /*max ts*/, key, key);
-            assert(sst->data_size() == data_size);
+            SCYLLA_ASSERT(sst->data_size() == data_size);
             auto backlog_before = t.as_table_state().get_backlog_tracker().backlog();
             t->add_sstable_and_update_cache(sst).get();
             testlog.debug("\tNew sstable of size={} level={}; Backlog diff={};",

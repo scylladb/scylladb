@@ -22,6 +22,7 @@
 
 #include <seastar/core/future-util.hh>
 #include "transport/messages/result_message.hh"
+#include "utils/assert.hh"
 #include "utils/big_decimal.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -316,7 +317,7 @@ SEASTAR_TEST_CASE(test_aggregate_functions_timeuuid_type) {
             timeuuid_native_type{utils::UUID("00000000-0000-1000-0000-000000000000")},
             timeuuid_native_type{utils::UUID("00000000-0000-1000-0000-000000000001")},
             timeuuid_native_type{utils::UUID("00000000-0000-1000-0000-000000000002")}
-        ).test_count(); // min and max will fail, because we assert using UUID order, not timestamp order.
+        ).test_count(); // min and max will fail, because we SCYLLA_ASSERT using UUID order, not timestamp order.
     });
 }
 

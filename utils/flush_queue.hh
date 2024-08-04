@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <map>
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
@@ -77,7 +78,7 @@ private:
 
     template<typename... Types>
     static future<Types...> handle_failed_future(future<Types...> f, promise_type& pr) {
-        assert(f.failed());
+        SCYLLA_ASSERT(f.failed());
         auto ep = std::move(f).get_exception();
         pr.set_exception(ep);
         return make_exception_future<Types...>(ep);
@@ -120,16 +121,16 @@ public:
 
         return futurator::invoke(std::forward<Func>(func)).then_wrapped([this, rp, post = std::forward<Post>(post)](typename futurator::type f) mutable {
             auto i = _map.find(rp);
-            assert(i != _map.end());
+            SCYLLA_ASSERT(i != _map.end());
 
             using post_result = decltype(call_helper(std::forward<Post>(post), std::move(f)));
 
             auto run_post = [this, post = std::forward<Post>(post), f = std::move(f), i]() mutable {
-                assert(i == _map.begin());
+                SCYLLA_ASSERT(i == _map.begin());
                 return call_helper(std::forward<Post>(post), std::move(f)).then_wrapped([this, i](post_result f) {
                     if (--i->second.count == 0) {
                         auto pr = std::move(i->second.pr);
-                        assert(i == _map.begin());
+                        SCYLLA_ASSERT(i == _map.begin());
                         _map.erase(i);
                         if (f.failed() && _chain_exceptions) {
                             return handle_failed_future(std::move(f), pr);

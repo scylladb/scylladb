@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
@@ -89,7 +90,7 @@ public:
     }
 
     bool leadership_transfer_active() const {
-        assert(is_leader());
+        SCYLLA_ASSERT(is_leader());
         return bool(leader_state().stepdown);
     }
 };

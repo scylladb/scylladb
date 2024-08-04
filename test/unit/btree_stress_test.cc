@@ -16,6 +16,7 @@
 constexpr int TEST_NODE_SIZE = 8;
 constexpr int TEST_LINEAR_THRESH = 21;
 
+#include "utils/assert.hh"
 #include "utils/intrusive_btree.hh"
 #include "btree_validation.hh"
 #include "test/unit/tree_test_key.hh"
@@ -68,7 +69,7 @@ int main(int argc, char **argv) {
             stress_collection(cfg,
                 /* insert */ [&] (int key) {
                     auto ir = t->insert(std::make_unique<test_key>(key), cmp);
-                    assert(ir.second);
+                    SCYLLA_ASSERT(ir.second);
                     oracle[key] = key;
 
                     if (itv++ % 7 == 0) {

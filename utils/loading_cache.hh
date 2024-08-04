@@ -26,6 +26,7 @@
 #include <seastar/core/gate.hh>
 
 #include "exceptions/exceptions.hh"
+#include "utils/assert.hh"
 #include "utils/loading_shared_values.hh"
 #include "utils/chunked_vector.hh"
 #include "log.hh"
@@ -144,7 +145,7 @@ class loading_cache {
         timestamped_val(timestamped_val&&) = default;
 
         timestamped_val& operator=(value_type new_val) {
-            assert(_lru_entry_ptr);
+            SCYLLA_ASSERT(_lru_entry_ptr);
 
             _value = std::move(new_val);
             _loaded = loading_cache_clock_type::now();
@@ -305,7 +306,7 @@ public:
     requires std::is_invocable_r_v<future<value_type>, LoadFunc, const key_type&>
     future<value_ptr> get_ptr(const Key& k, LoadFunc&& load) {
         // We shouldn't be here if caching is disabled
-        assert(caching_enabled());
+        SCYLLA_ASSERT(caching_enabled());
 
         return _loading_values.get_or_load(k, [load = std::forward<LoadFunc>(load)] (const Key& k) mutable {
             return load(k).then([] (value_type val) {

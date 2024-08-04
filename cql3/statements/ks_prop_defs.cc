@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
@@ -158,7 +159,7 @@ ks_prop_defs::init_tablets_options ks_prop_defs::get_initial_tablets(const sstri
         if (enabled == "true") {
             ret = init_tablets_options{ .enabled = true, .specified_count = 0 }; // even if 'initial' is not set, it'll start with auto-detection
         } else if (enabled == "false") {
-            assert(!ret.enabled);
+            SCYLLA_ASSERT(!ret.enabled);
             return ret;
         } else {
             throw exceptions::configuration_exception(sstring("Tablets enabled value must be true or false; found: ") + enabled);

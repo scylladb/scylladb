@@ -8,6 +8,7 @@
 
 #define BOOST_TEST_MODULE core
 
+#include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 
 #include <seastar/util/variant_utils.hh>
@@ -241,7 +242,7 @@ BOOST_AUTO_TEST_CASE(test_vector)
     BOOST_REQUIRE_EQUAL(vec1.size(), first_view.size());
     for (size_t i = 0; i < first_view.size(); i++) {
         auto fv = first_view[i];
-        assert(vec1[i].foo == fv.foo());
+        SCYLLA_ASSERT(vec1[i].foo == fv.foo());
         BOOST_REQUIRE_EQUAL(vec1[i].foo, first_view[i].foo());
         BOOST_REQUIRE_EQUAL(vec1[i].bar, first_view[i].bar());
     }

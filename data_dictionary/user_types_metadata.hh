@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <unordered_map>
 
 #include "bytes.hh"
@@ -26,7 +27,7 @@ public:
     }
     void add_type(user_type type) {
         auto i = _user_types.find(type->_name);
-        assert(i == _user_types.end() || type->is_compatible_with(*i->second));
+        SCYLLA_ASSERT(i == _user_types.end() || type->is_compatible_with(*i->second));
         _user_types.insert_or_assign(i, type->_name, type);
     }
     void remove_type(user_type type) {

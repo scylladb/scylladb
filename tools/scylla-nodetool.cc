@@ -43,6 +43,7 @@
 #include "release.hh"
 #include "tools/format_printers.hh"
 #include "tools/utils.hh"
+#include "utils/assert.hh"
 #include "utils/estimated_histogram.hh"
 #include "utils/http.hh"
 #include "utils/pretty_printers.hh"
@@ -1533,7 +1534,7 @@ std::string last_token_in_hosts(const std::vector<std::pair<sstring, std::string
                                    [&last_host] (auto& token_endpoint) {
                                        return token_endpoint.second == last_host.endpoint;
                                    });
-    assert(last_token != tokens_endpoint.rend());
+    SCYLLA_ASSERT(last_token != tokens_endpoint.rend());
     return last_token->first;
 }
 

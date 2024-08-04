@@ -8,6 +8,7 @@
 
 #include <boost/range/adaptor/reversed.hpp>
 #include "range_tombstone_list.hh"
+#include "utils/assert.hh"
 #include "utils/allocation_strategy.hh"
 #include <seastar/util/variant_utils.hh>
 
@@ -409,7 +410,7 @@ void range_tombstone_list::nop_reverter::update(range_tombstones_type::iterator 
 
 void range_tombstone_list::insert_undo_op::undo(const schema& s, range_tombstone_list& rt_list) noexcept {
     auto it = rt_list.find(s, _new_rt);
-    assert (it != rt_list.end());
+    SCYLLA_ASSERT (it != rt_list.end());
     rt_list._tombstones.erase_and_dispose(it, current_deleter<range_tombstone_entry>());
 }
 
@@ -419,7 +420,7 @@ void range_tombstone_list::erase_undo_op::undo(const schema& s, range_tombstone_
 
 void range_tombstone_list::update_undo_op::undo(const schema& s, range_tombstone_list& rt_list) noexcept {
     auto it = rt_list.find(s, _new_rt);
-    assert (it != rt_list.end());
+    SCYLLA_ASSERT (it != rt_list.end());
     *it = std::move(_old_rt);
 }
 

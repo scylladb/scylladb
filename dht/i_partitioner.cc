@@ -12,6 +12,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include "dht/ring_position.hh"
 #include "dht/token-sharding.hh"
+#include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/irange.hpp>
@@ -423,7 +424,7 @@ future<dht::partition_range_vector> subtract_ranges(const schema& schema, const 
             ++range_to_subtract;
             break;
         default:
-            assert(size <= 2);
+            SCYLLA_ASSERT(size <= 2);
         }
         co_await coroutine::maybe_yield();
     }
@@ -442,7 +443,7 @@ dht::token_range_vector split_token_range_msb(unsigned most_significant_bits) {
     }
     uint64_t number_of_ranges = 1 << most_significant_bits;
     ret.reserve(number_of_ranges);
-    assert(most_significant_bits < 64);
+    SCYLLA_ASSERT(most_significant_bits < 64);
     dht::token prev_last_token;
     for (uint64_t i = 0; i < number_of_ranges; i++) {
         std::optional<dht::token_range::bound> start_bound;

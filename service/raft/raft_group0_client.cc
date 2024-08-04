@@ -22,6 +22,7 @@
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "replica/database.hh"
+#include "utils/assert.hh"
 #include "utils/to_string.hh"
 
 
@@ -116,7 +117,7 @@ struct group0_guard::impl {
     {}
 
     void release_read_apply_mutex() {
-        assert(_read_apply_mutex_holder.count() == 1);
+        SCYLLA_ASSERT(_read_apply_mutex_holder.count() == 1);
         _read_apply_mutex_holder.return_units(1);
     }
 };

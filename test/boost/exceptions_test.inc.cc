@@ -23,6 +23,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/log.hh>
 
+#include "utils/assert.hh"
 #include "utils/exceptions.hh"
 
 class base_exception : public std::exception {};
@@ -67,7 +68,7 @@ static void check_catch(Throw&& ex) {
         BOOST_CHECK_EQUAL(typed_eptr, &t);
     } catch (...) {
         // Can happen if the first check fails, just skip
-        assert(typed_eptr == nullptr);
+        SCYLLA_ASSERT(typed_eptr == nullptr);
     }
 }
 

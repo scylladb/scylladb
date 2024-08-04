@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "query-request.hh"
 #include "tracing/trace_state.hh"
 #include "readers/mutation_reader_fwd.hh"
@@ -81,7 +82,7 @@ public:
                     tracing::trace_state_ptr,
                     streamed_mutation::forwarding fwd,
                     mutation_reader::forwarding) {
-        assert(!fwd);
+        SCYLLA_ASSERT(!fwd);
         return fn(std::move(s), std::move(permit), range, slice);
     }) {}
     mutation_source(std::function<mutation_reader(schema_ptr, reader_permit, partition_range range)> fn)
@@ -92,7 +93,7 @@ public:
                     tracing::trace_state_ptr,
                     streamed_mutation::forwarding fwd,
                     mutation_reader::forwarding) {
-        assert(!fwd);
+        SCYLLA_ASSERT(!fwd);
         return fn(std::move(s), std::move(permit), range);
     }) {}
 

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "clustering_key_filter.hh"
 #include "clustering_ranges_walker.hh"
 #include "mutation/mutation.hh"
@@ -58,7 +59,7 @@ public:
         switch (mf.mutation_fragment_kind()) {
             case mutation_fragment_v2::kind::partition_start:
                 // can't happen
-                assert(false);
+                SCYLLA_ASSERT(false);
                 break;
             case mutation_fragment_v2::kind::static_row:
                 break;
@@ -1130,7 +1131,7 @@ make_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit, std
     for (auto it = fragments.begin(); it != fragments.end(); ) {
         auto&& mf = *it++;
         auto kind = mf.mutation_fragment_kind();
-        assert(kind == mutation_fragment_v2::kind::partition_start);
+        SCYLLA_ASSERT(kind == mutation_fragment_v2::kind::partition_start);
         partition_slicer slicer(schema, permit, slice.row_ranges(*schema, mf.as_partition_start().key().key()),
                                 [&filtered] (mutation_fragment_v2 mf) {
                                     filtered.push_back(std::move(mf));

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <seastar/util/closeable.hh>
 #include <seastar/core/file.hh>
 #include "reader_concurrency_semaphore.hh"
@@ -121,7 +122,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abandoned_handle_clos
     {
         auto handle = semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permit));
         // The handle is destroyed here, triggering the destrution of the inactive read.
-        // If the test fails an assert() is triggered due to the reader being
+        // If the test fails an SCYLLA_ASSERT() is triggered due to the reader being
         // destroyed without having been closed before.
     }
 }

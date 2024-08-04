@@ -46,6 +46,7 @@
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/topology_state_machine.hh"
+#include "utils/assert.hh"
 #include "utils/UUID.hh"
 #include "utils/to_string.hh"
 #include "gms/inet_address.hh"
@@ -301,7 +302,7 @@ bool storage_service::should_bootstrap() {
  */
 static future<> set_gossip_tokens(gms::gossiper& g,
         const std::unordered_set<dht::token>& tokens, std::optional<cdc::generation_id> cdc_gen_id) {
-    assert(!tokens.empty());
+    SCYLLA_ASSERT(!tokens.empty());
 
     // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
     return g.add_local_application_state(
@@ -563,14 +564,14 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
             co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
             break;
         case node_state::replacing: {
-            assert(_topology_state_machine._topology.req_param.contains(id));
+            SCYLLA_ASSERT(_topology_state_machine._topology.req_param.contains(id));
             auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
             auto existing_ip = am.find(replaced_id);
             if (!existing_ip) {
                 // FIXME: What if not known?
                 on_fatal_internal_error(rtlogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
             }
-            assert(existing_ip);
+            SCYLLA_ASSERT(existing_ip);
             const auto replaced_host_id = locator::host_id(replaced_id.uuid());
             tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
             update_topology(host_id, ip, rs);
@@ -649,7 +650,7 @@ future<> storage_service::notify_nodes_after_sync(nodes_to_notify_after_sync&& n
 future<> storage_service::topology_state_load() {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
-    assert(!running); // The function is not re-entrant
+    SCYLLA_ASSERT(!running); // The function is not re-entrant
     auto d = defer([] {
         running = false;
     });
@@ -817,7 +818,7 @@ future<> storage_service::topology_state_load() {
 }
 
 future<> storage_service::topology_transition() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     co_await topology_state_load(); // reload new state
 
     _topology_state_machine.event.broadcast();
@@ -873,7 +874,7 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
 }
 
 future<> storage_service::update_service_levels_cache() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     co_await _sl_controller.local().update_service_levels_from_distributed_data();
 }
 
@@ -1414,7 +1415,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
 }
 
 future<> storage_service::start_upgrade_to_raft_topology() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::not_upgraded) {
         co_return;
@@ -1466,7 +1467,7 @@ future<> storage_service::start_upgrade_to_raft_topology() {
 }
 
 topology::upgrade_state_type storage_service::get_topology_upgrade_state() const {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     return _topology_state_machine._topology.upgrade_state;
 }
 
@@ -1730,7 +1731,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         slogger.info("Nodes {} are alive", get_sync_nodes());
     }
 
-    assert(_group0);
+    SCYLLA_ASSERT(_group0);
 
     join_node_request_params join_params {
         .host_id = _group0->load_my_id(),
@@ -1974,7 +1975,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 
     if (!_sys_ks.local().bootstrap_complete()) {
         // If we're not bootstrapping then we shouldn't have chosen a CDC streams timestamp yet.
-        assert(should_bootstrap() || !cdc_gen_id);
+        SCYLLA_ASSERT(should_bootstrap() || !cdc_gen_id);
 
         // Don't try rewriting CDC stream description tables.
         // See cdc.md design notes, `Streams description table V1 and rewriting` section, for explanation.
@@ -2029,7 +2030,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         throw std::runtime_error(err);
     }
 
-    assert(_group0);
+    SCYLLA_ASSERT(_group0);
     co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), false);
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 
@@ -2054,7 +2055,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 }
 
 future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
-    assert(_group0);
+    SCYLLA_ASSERT(_group0);
 
     while (true) {
         _group0_as.check();
@@ -2190,7 +2191,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
 
             // After we pick a generation timestamp, we start gossiping it, and we stick with it.
             // We don't do any other generation switches (unless we crash before complecting bootstrap).
-            assert(!cdc_gen_id);
+            SCYLLA_ASSERT(!cdc_gen_id);
 
             cdc_gen_id = _cdc_gens.local().legacy_make_new_generation(bootstrap_tokens, !is_first_node()).get();
 
@@ -2223,9 +2224,9 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
             slogger.debug("Removing replaced endpoint {} from system.peers", replace_addr);
             _sys_ks.local().remove_endpoint(replace_addr).get();
 
-            assert(replaced_host_id);
+            SCYLLA_ASSERT(replaced_host_id);
             auto raft_id = raft::server_id{replaced_host_id.uuid()};
-            assert(_group0);
+            SCYLLA_ASSERT(_group0);
             bool raft_available = _group0->wait_for_raft().get();
             if (raft_available) {
                 slogger.info("Replace: removing {}/{} from group 0...", replace_addr, raft_id);
@@ -2842,7 +2843,7 @@ future<> storage_service::stop_transport() {
 }
 
 future<> storage_service::drain_on_shutdown() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     return (_operation_mode == mode::DRAINING || _operation_mode == mode::DRAINED) ?
         _drain_finished.get_future() : do_drain();
 }
@@ -2874,7 +2875,7 @@ bool storage_service::is_topology_coordinator_enabled() const {
 
 future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
         start_hint_manager start_hm, gms::generation_type new_generation) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     if (_sys_ks.local().was_decommissioned()) {
         auto msg = sstring("This node was decommissioned and will not rejoin the ring unless "
@@ -2993,7 +2994,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
 }
 
 future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     slogger.debug("Replicating token_metadata to all cores");
     std::exception_ptr ex;
@@ -3118,8 +3119,8 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                     auto& ss_ = ss;
                     const auto ks_name = handler.get("ks_name");
                     const auto cf_name = handler.get("cf_name");
-                    assert(ks_name);
-                    assert(cf_name);
+                    SCYLLA_ASSERT(ks_name);
+                    SCYLLA_ASSERT(cf_name);
                     if (cf.schema()->ks_name() != *ks_name || cf.schema()->cf_name() != *cf_name) {
                         co_return;
                     }
@@ -3464,7 +3465,7 @@ void storage_service::set_mode(mode m) {
         slogger.info("entering {} mode", m);
         _operation_mode = m;
     } else {
-        // This shouldn't happen, but it's too much for an assert,
+        // This shouldn't happen, but it's too much for an SCYLLA_ASSERT,
         // so -- just emit a warning in the hope that it will be
         // noticed, reported and fixed
         slogger.warn("re-entering {} mode", m);
@@ -3686,7 +3687,7 @@ future<> storage_service::decommission() {
                 slogger.info("DECOMMISSIONING: starts");
                 ctl.req.leaving_nodes = std::list<gms::inet_address>{endpoint};
 
-                assert(ss._group0);
+                SCYLLA_ASSERT(ss._group0);
                 bool raft_available = ss._group0->wait_for_raft().get();
 
                 try {
@@ -3738,7 +3739,7 @@ future<> storage_service::decommission() {
 
                     if (raft_available && left_token_ring) {
                         slogger.info("decommission[{}]: leaving Raft group 0", uuid);
-                        assert(ss._group0);
+                        SCYLLA_ASSERT(ss._group0);
                         ss._group0->leave_group0().get();
                         slogger.info("decommission[{}]: left Raft group 0", uuid);
                     }
@@ -4013,7 +4014,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
             auto uuid = ctl.uuid();
             const auto& tmptr = ctl.tmptr;
             auto endpoint_opt = tmptr->get_endpoint_for_host_id_if_known(host_id);
-            assert(ss._group0);
+            SCYLLA_ASSERT(ss._group0);
             auto raft_id = raft::server_id{host_id.uuid()};
             bool raft_available = ss._group0->wait_for_raft().get();
             bool is_group0_member = raft_available && ss._group0->is_member(raft_id, false);
@@ -4130,7 +4131,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
 }
 
 future<> storage_service::check_and_repair_cdc_streams() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     if (!_cdc_gens.local_is_initialized()) {
         return make_exception_future<>(std::runtime_error("CDC generation service not initialized yet"));
@@ -5157,7 +5158,7 @@ std::chrono::milliseconds storage_service::get_ring_delay() {
 }
 
 future<locator::token_metadata_lock> storage_service::get_token_metadata_lock() noexcept {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     return _shared_token_metadata.get_lock();
 }
 
@@ -5172,7 +5173,7 @@ future<locator::token_metadata_lock> storage_service::get_token_metadata_lock() 
 //
 // Note: must be called on shard 0.
 future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock acquire_merge_lock) noexcept {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     std::optional<token_metadata_lock> tmlock;
 
     if (acquire_merge_lock) {
@@ -5184,7 +5185,7 @@ future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_
 }
 
 future<> storage_service::update_topology_change_info(mutable_token_metadata_ptr tmptr, sstring reason) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     try {
         locator::dc_rack_fn get_dc_rack_by_host_id([this, &tm = *tmptr] (locator::host_id host_id) -> std::optional<locator::endpoint_dc_rack> {
@@ -5334,7 +5335,7 @@ void storage_service::start_tablet_split_monitor() {
 }
 
 future<> storage_service::snitch_reconfigured() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     auto& snitch = _snitch.local();
     co_await mutate_token_metadata([&snitch] (mutable_token_metadata_ptr tmptr) -> future<> {
         // re-read local rack and DC info
@@ -5532,7 +5533,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                                           locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
                                     auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
                                     auto existing_ip = _group0->address_map().find(replaced_id);
-                                    assert(existing_ip);
+                                    SCYLLA_ASSERT(existing_ip);
                                     co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, *existing_ip);
                                 }
                             }));
@@ -5571,7 +5572,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         rtlogger.debug("streaming to remove node {}", id);
                         const auto& am = _group0->address_map();
                         auto ip = am.find(id); // map node id to ip
-                        assert (ip); // what to do if address is unknown?
+                        SCYLLA_ASSERT (ip); // what to do if address is unknown?
                         tasks::task_info parent_info{tasks::task_id{it->second.request_id}, 0};
                         auto task = co_await get_task_manager_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
                                 parent_info.id, streaming::stream_reason::removenode, _remove_result[id], coroutine::lambda([this, ip] () {
@@ -6494,7 +6495,7 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
 }
 
 future<join_node_response_result> storage_service::join_node_response_handler(join_node_response_params params) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     // Usually this handler will only run once, but there are some cases where we might get more than one RPC,
     // possibly happening at the same time, e.g.:
@@ -6855,7 +6856,7 @@ future<> storage_service::force_remove_completion() {
                     co_await ss.excise(tokens_set, *endpoint, host_id, pid);
 
                     slogger.info("force_remove_completion: removing endpoint {} from group 0", *endpoint);
-                    assert(ss._group0);
+                    SCYLLA_ASSERT(ss._group0);
                     bool raft_available = co_await ss._group0->wait_for_raft();
                     if (raft_available) {
                         co_await ss._group0->remove_from_group0(raft::server_id{host_id.uuid()});

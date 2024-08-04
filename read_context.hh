@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "schema/schema_fwd.hh"
 #include "query-request.hh"
 #include "mutation/mutation_fragment.hh"
@@ -73,7 +74,7 @@ public:
         }
         auto mfopt = co_await (*_reader)();
         if (mfopt) {
-            assert(mfopt->is_partition_start());
+            SCYLLA_ASSERT(mfopt->is_partition_start());
             _new_last_key = mfopt->as_partition_start().key();
         }
         co_return std::move(mfopt);

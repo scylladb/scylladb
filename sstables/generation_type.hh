@@ -21,6 +21,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
 #include "types/types.hh"
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "log.hh"
 
@@ -180,7 +181,7 @@ public:
     /// way to determine that is overlapping its partition-ranges with the shard's
     /// owned ranges.
     static bool maybe_owned_by_this_shard(const sstables::generation_type& gen) {
-        assert(bool(gen));
+        SCYLLA_ASSERT(bool(gen));
         int64_t hint = 0;
         if (gen.is_uuid_based()) {
             hint = std::hash<utils::UUID>{}(gen.as_uuid());

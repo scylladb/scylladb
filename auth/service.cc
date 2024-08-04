@@ -36,6 +36,7 @@
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "timestamp.hh"
+#include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/keyspace_metadata.hh"
@@ -194,7 +195,7 @@ service::service(
 }
 
 future<> service::create_legacy_keyspace_if_missing(::service::migration_manager& mm) const {
-    assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
+    SCYLLA_ASSERT(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
     auto db = _qp.db();
 
     while (!db.has_keyspace(meta::legacy::AUTH_KS)) {

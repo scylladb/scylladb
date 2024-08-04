@@ -13,6 +13,7 @@
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/combine.hpp>
 #include "mutation_query.hh"
+#include "utils/assert.hh"
 #include "utils/hashers.hh"
 #include "utils/preempt.hh"
 #include "utils/xx_hasher.hh"
@@ -2927,13 +2928,13 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
             if (destination == tests::timestamp_destination::partition_tombstone ||
                     destination == tests::timestamp_destination::row_tombstone ||
                     destination == tests::timestamp_destination::range_tombstone) {
-                assert(min_timestamp < tomb_ts_max);
+                SCYLLA_ASSERT(min_timestamp < tomb_ts_max);
                 return tests::random::get_int<api::timestamp_type>(tomb_ts_min, tomb_ts_max, engine);
             } else if (destination == tests::timestamp_destination::collection_tombstone) {
-                assert(min_timestamp < collection_tomb_ts_max);
+                SCYLLA_ASSERT(min_timestamp < collection_tomb_ts_max);
                 return tests::random::get_int<api::timestamp_type>(collection_tomb_ts_min, collection_tomb_ts_max, engine);
             } else {
-                assert(min_timestamp < other_ts_max);
+                SCYLLA_ASSERT(min_timestamp < other_ts_max);
                 return tests::random::get_int<api::timestamp_type>(other_ts_min, other_ts_max, engine);
             }
         };
@@ -2962,13 +2963,13 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
             if (destination == tests::timestamp_destination::partition_tombstone ||
                     destination == tests::timestamp_destination::row_tombstone ||
                     destination == tests::timestamp_destination::range_tombstone) {
-                assert(min_timestamp < tomb_ts_max);
+                SCYLLA_ASSERT(min_timestamp < tomb_ts_max);
                 return tests::random::get_int<api::timestamp_type>(tomb_ts_min, tomb_ts_max, engine);
             } else if (destination == tests::timestamp_destination::collection_tombstone) {
-                assert(min_timestamp < tomb_ts_max);
+                SCYLLA_ASSERT(min_timestamp < tomb_ts_max);
                 return tests::random::get_int<api::timestamp_type>(collection_tomb_ts_min, collection_tomb_ts_max, engine);
             } else {
-                assert(min_timestamp < other_ts_max);
+                SCYLLA_ASSERT(min_timestamp < other_ts_max);
                 return tests::random::get_int<api::timestamp_type>(other_ts_min, other_ts_max, engine);
             }
         };

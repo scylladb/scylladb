@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <boost/iterator/transform_iterator.hpp>
 #include <seastar/core/bitset-iter.hh>
 
@@ -31,9 +32,9 @@
  *
  *   static_assert(my_enumset::frozen<x::A, x::B>::contains<x::A>(), "it should...");
  *
- *   assert(my_enumset::frozen<x::A, x::B>::contains(my_enumset::prepare<x::A>()));
+ *   SCYLLA_ASSERT(my_enumset::frozen<x::A, x::B>::contains(my_enumset::prepare<x::A>()));
  *
- *   assert(my_enumset::frozen<x::A, x::B>::contains(x::A));
+ *   SCYLLA_ASSERT(my_enumset::frozen<x::A, x::B>::contains(x::A));
  *
  */
 

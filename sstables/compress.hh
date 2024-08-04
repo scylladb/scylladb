@@ -33,6 +33,7 @@
 // are read using O_DIRECT), nor uncompressed data. We intend to cache high-
 // level Cassandra rows, not disk blocks.
 
+#include "utils/assert.hh"
 #include <vector>
 #include <cstdint>
 #include <iterator>
@@ -171,7 +172,7 @@ struct compression {
             const_iterator(const const_iterator& other) = default;
 
             const_iterator& operator=(const const_iterator& other) {
-                assert(&_offsets == &other._offsets);
+                SCYLLA_ASSERT(&_offsets == &other._offsets);
                 _index = other._index;
                 return *this;
             }

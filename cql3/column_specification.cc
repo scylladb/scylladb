@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "cql3/column_specification.hh"
 
 namespace cql3 {
@@ -22,7 +23,7 @@ column_specification::column_specification(std::string_view ks_name_, std::strin
 
 bool column_specification::all_in_same_table(const std::vector<lw_shared_ptr<column_specification>>& names)
 {
-    assert(!names.empty());
+    SCYLLA_ASSERT(!names.empty());
 
     auto first = names.front();
     return std::all_of(std::next(names.begin()), names.end(), [first] (auto&& spec) {

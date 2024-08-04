@@ -24,6 +24,7 @@
 #include "db/hints/manager.hh"
 #include "db/timeout_clock.hh"
 #include "replica/database.hh"
+#include "utils/assert.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/error_injection.hh"
 #include "utils/runtime.hh"
@@ -173,7 +174,7 @@ hint_endpoint_manager::hint_endpoint_manager(hint_endpoint_manager&& other)
 {}
 
 hint_endpoint_manager::~hint_endpoint_manager() {
-    assert(stopped());
+    SCYLLA_ASSERT(stopped());
 }
 
 future<hints_store_ptr> hint_endpoint_manager::get_or_load() {

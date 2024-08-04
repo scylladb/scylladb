@@ -18,6 +18,7 @@
 #include "seastarx.hh"
 #include "error.hh"
 #include "service/qos/service_level_controller.hh"
+#include "utils/assert.hh"
 #include "utils/rjson.hh"
 #include "auth.hh"
 #include <cctype>
@@ -405,7 +406,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         ++_executor._stats.requests_blocked_memory;
     }
     auto units = co_await std::move(units_fut);
-    assert(req->content_stream);
+    SCYLLA_ASSERT(req->content_stream);
     chunked_content content = co_await util::read_entire_stream(*req->content_stream);
     auto username = co_await verify_signature(*req, content);
 

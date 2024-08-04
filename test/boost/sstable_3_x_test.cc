@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <set>
 #include <iterator>
 
@@ -5609,7 +5610,7 @@ SEASTAR_TEST_CASE(test_compression_premature_eof) {
 // Creates an sstable with a newer schema, and populates
 // it with a reader created with an older schema.
 // 
-// Before the fixes, it would have resulted in an assert violation.
+// Before the fixes, it would have resulted in an SCYLLA_ASSERT violation.
 SEASTAR_TEST_CASE(test_alter_bloom_fp_chance_during_write) {
     return test_env::do_with_async([] (test_env& env) {
         auto s1 = schema_builder("ks", "t")

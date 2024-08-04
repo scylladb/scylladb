@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "interval.hh"
 #include <seastar/core/print.hh>
 
@@ -17,8 +18,8 @@ using int_range = interval<int>;
 
 inline
 unsigned cardinality(const int_range& r) {
-    assert(r.start());
-    assert(r.end());
+    SCYLLA_ASSERT(r.start());
+    SCYLLA_ASSERT(r.end());
     return r.end()->value() - r.start()->value() + r.start()->is_inclusive() + r.end()->is_inclusive() - 1;
 }
 

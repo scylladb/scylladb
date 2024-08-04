@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "table_helper.hh"
@@ -24,7 +25,7 @@ static schema_ptr parse_new_cf_statement(cql3::query_processor& qp, const sstrin
     auto parsed = cql3::query_processor::parse_statement(create_cql);
 
     cql3::statements::raw::cf_statement* parsed_cf_stmt = static_cast<cql3::statements::raw::cf_statement*>(parsed.get());
-    (void)parsed_cf_stmt->keyspace(); // This will assert if cql statement did not contain keyspace
+    (void)parsed_cf_stmt->keyspace(); // This will SCYLLA_ASSERT if cql statement did not contain keyspace
     ::shared_ptr<cql3::statements::create_table_statement> statement =
                     static_pointer_cast<cql3::statements::create_table_statement>(
                                     parsed_cf_stmt->prepare(db, qp.get_cql_stats())->statement);

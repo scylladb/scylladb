@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <fmt/ranges.h>
 
 #include <seastar/core/distributed.hh>
@@ -82,7 +83,7 @@ static future<> test_basic_operations(app_template& app) {
                 for (int k = 0; k < rf; ++k) {
                     replicas.push_back({h1, 0});
                 }
-                assert(std::cmp_equal(replicas.size(), rf));
+                SCYLLA_ASSERT(std::cmp_equal(replicas.size(), rf));
                 tmap.set_tablet(j, tablet_info{std::move(replicas)});
                 ++total_tablets;
             }
@@ -117,7 +118,7 @@ static future<> test_basic_operations(app_template& app) {
         auto time_to_read = duration_in_seconds([&] {
             tm2 = read_tablet_metadata(e.local_qp()).get();
         });
-        assert(tm == tm2);
+        SCYLLA_ASSERT(tm == tm2);
 
         testlog.info("Read in {:.6f} [ms]", time_to_read.count() * 1000);
 

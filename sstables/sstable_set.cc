@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <seastar/util/defer.hh>
 
 #include <boost/icl/interval_map.hpp>
@@ -693,8 +694,8 @@ public:
 
         // by !empty(bound) and `_it` invariant:
         //      _it != _end, _it->first <= bound, and filter(*_it->second) == true
-        assert(_cmp(_it->first, bound) <= 0);
-        // we don't assert(filter(*_it->second)) due to the requirement that `filter` is called at most once for each sstable
+        SCYLLA_ASSERT(_cmp(_it->first, bound) <= 0);
+        // we don't SCYLLA_ASSERT(filter(*_it->second)) due to the requirement that `filter` is called at most once for each sstable
 
         // Find all sstables with the same position as `_it` (they form a contiguous range in the container).
         auto next = std::find_if(std::next(_it), _end, [this] (const value_t& v) { return _cmp(v.first, _it->first) != 0; });
@@ -1264,7 +1265,7 @@ sstable_set::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         const sstable_predicate& predicate) const {
-    assert(pr.is_singular() && pr.start()->value().has_key());
+    SCYLLA_ASSERT(pr.is_singular() && pr.start()->value().has_key());
     return _impl->create_single_key_sstable_reader(cf, std::move(schema),
             std::move(permit), sstable_histogram, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate);
 }
@@ -1368,7 +1369,7 @@ sstable_set::make_local_shard_sstable_reader(
 {
     auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator, &predicate]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
-        assert(!sst->is_shared());
+        SCYLLA_ASSERT(!sst->is_shared());
         if (!predicate(*sst)) {
             return make_empty_flat_reader_v2(s, permit);
         }

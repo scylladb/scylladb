@@ -8,6 +8,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 
+#include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 
 namespace locator {
@@ -29,13 +30,13 @@ future<> ec2_snitch::load_config(bool prefer_local) {
     if (this_shard_id() == io_cpu_id()) {
         auto token = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, TOKEN_REQ_ENDPOINT, std::nullopt);
         auto az = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, ZONE_NAME_QUERY_REQ, token);
-        assert(az.size());
+        SCYLLA_ASSERT(az.size());
 
         std::vector<std::string> splits;
 
         // Split "us-east-1a" or "asia-1a" into "us-east"/"1a" and "asia"/"1a".
         split(splits, az, is_any_of("-"));
-        assert(splits.size() > 1);
+        SCYLLA_ASSERT(splits.size() > 1);
 
         sstring my_rack = splits[splits.size() - 1];
 

@@ -18,6 +18,7 @@
 #include <fmt/ranges.h>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
+#include "utils/assert.hh"
 #include "utils/stall_free.hh"
 
 namespace dht {
@@ -118,7 +119,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, lo
 std::unordered_map<dht::token_range, std::vector<inet_address>>
 range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, locator::vnode_effective_replication_map_ptr erm, dht::token_range_vector desired_ranges, gms::gossiper& gossiper) {
     logger.debug("{} ks={}", __func__, keyspace_name);
-    assert (_tokens.empty() == false);
+    SCYLLA_ASSERT (_tokens.empty() == false);
 
     auto& strat = erm->get_replication_strategy();
 

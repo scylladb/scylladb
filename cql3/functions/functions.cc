@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "functions.hh"
 #include "token_fct.hh"
 #include "cql3/ut_name.hh"
@@ -450,7 +451,7 @@ functions::get_user_aggregates(const sstring& keyspace) const {
 
 boost::iterator_range<functions::declared_t::const_iterator>
 functions::find(const function_name& name) const {
-    assert(name.has_keyspace()); // : "function name not fully qualified";
+    SCYLLA_ASSERT(name.has_keyspace()); // : "function name not fully qualified";
     auto pair = _declared.equal_range(name);
     return boost::make_iterator_range(pair.first, pair.second);
 }

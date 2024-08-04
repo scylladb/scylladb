@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <boost/intrusive/list.hpp>
 #include <seastar/core/memory.hh>
 
@@ -37,7 +38,7 @@ protected:
     // in the destructor, we can't perform proper accounting for that without access to the
     // head of the containing list.
     ~evictable() {
-        assert(!_lru_link.is_linked());
+        SCYLLA_ASSERT(!_lru_link.is_linked());
     }
     evictable() = default;
     evictable(evictable&&) noexcept = default;

@@ -11,6 +11,7 @@
 #include <fmt/ranges.h>
 #include "gms/inet_address.hh"
 #include "locator/types.hh"
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/sequenced_set.hh"
 #include "utils/to_string.hh"
@@ -747,7 +748,7 @@ static locator::host_id_set calculate_natural_endpoints(
         racks = tp.get_datacenter_racks();
 
     // not aware of any cluster members
-    assert(!all_endpoints.empty() && !racks.empty());
+    SCYLLA_ASSERT(!all_endpoints.empty() && !racks.empty());
 
     for (auto& next : tm.ring_range(search_token)) {
 

@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include "utils/assert.hh"
 #include <seastar/core/condition-variable.hh>
 #include <fmt/core.h>
 #include "raft.hh"
@@ -89,7 +90,7 @@ class tracker: private progress {
     // Hide size() function we inherited from progress since
     // it is never right to use it directly in case of joint config
     size_t size() const {
-        assert(false);
+        SCYLLA_ASSERT(false);
     }
 public:
     using progress::begin, progress::end, progress::cbegin, progress::cend, progress::size;
@@ -177,7 +178,7 @@ public:
         if (_granted >= quorum) {
             return vote_result::WON;
         }
-        assert(_responded.size() <= _suffrage.size());
+        SCYLLA_ASSERT(_responded.size() <= _suffrage.size());
         auto unknown = _suffrage.size() - _responded.size();
         return _granted + unknown >= quorum ? vote_result::UNKNOWN : vote_result::LOST;
     }

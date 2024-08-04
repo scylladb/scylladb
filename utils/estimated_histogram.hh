@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <cmath>
 #include <algorithm>
 #include <vector>
@@ -557,7 +558,7 @@ public:
      * @return estimated value at given percentile
      */
     int64_t percentile(double perc) const {
-        assert(perc >= 0 && perc <= 1.0);
+        SCYLLA_ASSERT(perc >= 0 && perc <= 1.0);
         auto last_bucket = buckets.size() - 1;
 
         auto c = count();

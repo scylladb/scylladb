@@ -29,6 +29,7 @@ struct perf_key_tri_compare {
     }
 };
 
+#include "utils/assert.hh"
 #include "utils/bptree.hh"
 
 using namespace seastar;
@@ -98,7 +99,7 @@ public:
     virtual void insert(per_key_t k) override { _t.emplace(k, 0); }
     virtual void lower_bound(per_key_t k) override {
         auto i = _t.lower_bound(k);
-        assert(i != _t.end());
+        SCYLLA_ASSERT(i != _t.end());
     }
     virtual void scan(int batch) override {
         scan_collection(_t, batch);
@@ -118,7 +119,7 @@ public:
     virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _t.emplace(k, 0);
-        assert(i.second);
+        SCYLLA_ASSERT(i.second);
         i.first.erase(perf_key_compare{});
     }
     virtual void show_stats() override {
@@ -149,7 +150,7 @@ public:
     virtual void insert(per_key_t k) override { _t.emplace(k, 0); }
     virtual void lower_bound(per_key_t k) override {
         auto i = _t.get(k);
-        assert(i != nullptr);
+        SCYLLA_ASSERT(i != nullptr);
     }
     virtual void scan(int batch) override {
         scan_collection(_t, batch);
@@ -194,7 +195,7 @@ public:
     virtual void insert(per_key_t k) override { _t.insert(std::make_unique<perf_intrusive_key>(k), _cmp); }
     virtual void lower_bound(per_key_t k) override {
         auto i = _t.lower_bound(k, _cmp);
-        assert(i != _t.end());
+        SCYLLA_ASSERT(i != _t.end());
     }
     virtual void erase(per_key_t k) override { _t.erase_and_dispose(k, _cmp, [] (perf_intrusive_key* k) noexcept { delete k; }); }
     virtual void drain(int batch) override {
@@ -240,7 +241,7 @@ public:
     virtual void insert(per_key_t k) override { _s.insert(k); }
     virtual void lower_bound(per_key_t k) override {
         auto i = _s.lower_bound(k);
-        assert(i != _s.end());
+        SCYLLA_ASSERT(i != _s.end());
     }
     virtual void scan(int batch) override {
         scan_collection(_s, batch);
@@ -260,7 +261,7 @@ public:
     virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _s.insert(k);
-        assert(i.second);
+        SCYLLA_ASSERT(i.second);
         _s.erase(i.first);
     }
     virtual void show_stats() override { }
@@ -273,7 +274,7 @@ public:
     virtual void insert(per_key_t k) override { _m[k] = 0; }
     virtual void lower_bound(per_key_t k) override {
         auto i = _m.lower_bound(k);
-        assert(i != _m.end());
+        SCYLLA_ASSERT(i != _m.end());
     }
     virtual void scan(int batch) override {
         scan_collection(_m, batch);
@@ -293,7 +294,7 @@ public:
     virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _m.insert({k, 0});
-        assert(i.second);
+        SCYLLA_ASSERT(i.second);
         _m.erase(i.first);
     }
     virtual void show_stats() override { }

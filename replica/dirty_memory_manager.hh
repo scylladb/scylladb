@@ -15,6 +15,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/semaphore.hh>
 #include "replica/database_fwd.hh"
+#include "utils/assert.hh"
 #include "utils/logalloc.hh"
 
 class test_region_group;
@@ -257,7 +258,7 @@ public:
         // If we set a throttle threshold, we'd be postponing many operations. So shutdown must be
         // called.
         if (reclaimer_can_block()) {
-            assert(_shutdown_requested);
+            SCYLLA_ASSERT(_shutdown_requested);
         }
     }
     region_group& operator=(const region_group&) = delete;

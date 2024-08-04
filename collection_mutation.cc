@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "types/collection.hh"
 #include "types/user.hh"
 #include "concrete_types.hh"
@@ -391,7 +392,7 @@ deserialize_collection_mutation(collection_mutation_input_stream& in, F&& read_k
         ret.cells.push_back(read_kv(in));
     }
 
-    assert(in.empty());
+    SCYLLA_ASSERT(in.empty());
     return ret;
 }
 

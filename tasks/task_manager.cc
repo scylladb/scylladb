@@ -20,6 +20,7 @@
 
 #include "db/timeout_clock.hh"
 #include "message/messaging_service.hh"
+#include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include "tasks/task_handler.hh"
 #include "task_manager.hh"
@@ -50,7 +51,7 @@ future<> task_manager::task::children::add_child(foreign_task_ptr task) {
 
     auto id = task->id();
     auto inserted = _children.emplace(id, std::move(task)).second;
-    assert(inserted);
+    SCYLLA_ASSERT(inserted);
 }
 
 future<> task_manager::task::children::mark_as_finished(task_id id, task_essentials essentials) const {
@@ -70,7 +71,7 @@ future<task_manager::task::progress> task_manager::task::children::get_progress(
     co_await coroutine::parallel_for_each(_children, [&] (const auto& child_entry) -> future<> {
         const auto& child = child_entry.second;
         auto local_progress = co_await smp::submit_to(child.get_owner_shard(), [&child, &progress_units] {
-            assert(child->get_status().progress_units == progress_units);
+            SCYLLA_ASSERT(child->get_status().progress_units == progress_units);
             return child->get_progress();
         });
         progress += local_progress;
@@ -431,7 +432,7 @@ future<tasks::is_abortable> task_manager::virtual_task::impl::is_abortable() con
 task_manager::virtual_task::virtual_task(virtual_task_impl_ptr&& impl) noexcept
     : _impl(std::move(impl))
 {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 }
 
 future<std::set<task_id>> task_manager::virtual_task::get_ids() const {
@@ -562,7 +563,7 @@ void task_manager::module::register_task(task_ptr task) {
 }
 
 void task_manager::module::register_virtual_task(virtual_task_ptr task) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     auto group = task->get_group();
     get_virtual_tasks()[group] = task;
     try {

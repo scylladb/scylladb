@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/range/irange.hpp>
@@ -384,7 +385,7 @@ static std::vector<perf_result> do_alternator_test(std::string isolation_level,
         sharded<service::migration_manager>& mm,
         sharded<gms::gossiper>& gossiper,
         test_config& cfg) {
-    assert(cfg.frontend == test_config::frontend_type::alternator);
+    SCYLLA_ASSERT(cfg.frontend == test_config::frontend_type::alternator);
     std::cout << "Running test with config: " << cfg << std::endl;
 
     alternator_test_env env(gossiper, qp.local().proxy().container(), mm, qp);
@@ -417,7 +418,7 @@ static std::vector<perf_result> do_alternator_test(std::string isolation_level,
 }
 
 static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg) {
-    assert(cfg.frontend == test_config::frontend_type::cql);
+    SCYLLA_ASSERT(cfg.frontend == test_config::frontend_type::cql);
 
     std::cout << "Running test with config: " << cfg << std::endl;
     env.create_table([&cfg] (auto ks_name) {

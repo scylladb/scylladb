@@ -16,6 +16,7 @@
 constexpr int TEST_NODE_SIZE = 7;
 
 #include "tree_test_key.hh"
+#include "utils/assert.hh"
 #include "utils/bptree.hh"
 #include "bptree_validation.hh"
 #include "collection_stress.hh"
@@ -63,7 +64,7 @@ int main(int argc, char **argv) {
                 /* insert */ [&] (int key) {
                     test_key k(key);
                     auto ti = t->emplace(copy_key(k), k);
-                    assert(ti.second);
+                    SCYLLA_ASSERT(ti.second);
                 },
                 /* erase */ [&] (int key) {
                     t->erase(test_key(key));

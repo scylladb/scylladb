@@ -31,6 +31,7 @@
 
 #include "cql3/column_identifier.hh"
 
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/to_string.hh"
 
@@ -269,7 +270,7 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
 
         for (auto& t : {generations_v2, streams, timestamps}) {
             auto dot_pos = t.find_first_of('.');
-            assert(dot_pos != std::string_view::npos && dot_pos != 0 && dot_pos != t.size() - 1);
+            SCYLLA_ASSERT(dot_pos != std::string_view::npos && dot_pos != 0 && dot_pos != t.size() - 1);
             BOOST_REQUIRE(e.local_db().has_schema(t.substr(0, dot_pos), t.substr(dot_pos + 1)));
 
             // Disallow DROP

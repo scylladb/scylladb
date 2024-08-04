@@ -8,6 +8,7 @@
 
 #define BOOST_TEST_MODULE core
 
+#include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 #include <vector>
 
@@ -139,7 +140,7 @@ BOOST_AUTO_TEST_CASE(test_cdc_generation_limitting_multiple_vnodes_should_limit)
 
     cdc::topology_description result = cdc::limit_number_of_streams_if_needed(std::move(given));
 
-    assert(streams_count_per_vnode.size() <= cdc::limit_of_streams_in_topology_description());
+    SCYLLA_ASSERT(streams_count_per_vnode.size() <= cdc::limit_of_streams_in_topology_description());
     size_t per_vnode_limit = cdc::limit_of_streams_in_topology_description() / streams_count_per_vnode.size();
     for (auto& count : streams_count_per_vnode) {
         count = std::min(count, per_vnode_limit);

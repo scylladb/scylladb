@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <memory>
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
@@ -25,7 +26,7 @@ protected:
     virtual input_stream<char> open_at(uint64_t pos) = 0;
 
     void set(input_stream<char> in) {
-        assert(!_in);
+        SCYLLA_ASSERT(!_in);
         _in = std::make_unique<input_stream<char>>(std::move(in));
     }
 

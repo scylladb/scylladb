@@ -10,6 +10,7 @@
 
 #include "mutation/partition_version.hh"
 #include "row_cache.hh"
+#include "utils/assert.hh"
 #include "utils/small_vector.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/find_if.hpp>
@@ -314,7 +315,7 @@ class partition_snapshot_row_cursor final {
     bool advance(bool keep) {
         memory::on_alloc_point();
         version_heap_less_compare heap_less(*this);
-        assert(iterators_valid());
+        SCYLLA_ASSERT(iterators_valid());
         for (auto&& curr : _current_row) {
             if (!keep && curr.unique_owner) {
                 mutation_partition::rows_type::key_grabber kg(curr.it);
@@ -382,7 +383,7 @@ public:
 
     // If is_in_latest_version() then this returns an iterator to the entry under cursor in the latest version.
     mutation_partition::rows_type::iterator get_iterator_in_latest_version() const {
-        assert(_latest_it);
+        SCYLLA_ASSERT(_latest_it);
         return *_latest_it;
     }
 
@@ -688,7 +689,7 @@ public:
         position_in_partition::less_compare less(_schema);
         if (!iterators_valid() || less(position(), pos)) {
             auto has_entry = maybe_advance_to(pos);
-            assert(has_entry); // evictable snapshots must have a dummy after all rows.
+            SCYLLA_ASSERT(has_entry); // evictable snapshots must have a dummy after all rows.
         }
         auto&& rows = _snp.version()->partition().mutable_clustered_rows();
         auto latest_i = get_iterator_in_latest_version();

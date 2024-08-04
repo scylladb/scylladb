@@ -10,6 +10,7 @@
 
 #include "mutation_partition.hh"
 #include "mutation_partition_v2.hh"
+#include "utils/assert.hh"
 #include "utils/anchorless_list.hh"
 #include "utils/logalloc.hh"
 #include "utils/coroutine.hh"
@@ -208,13 +209,13 @@ public:
         : _schema(std::move(s))
         , _partition(*_schema)
     {
-        assert(_schema);
+        SCYLLA_ASSERT(_schema);
     }
     explicit partition_version(mutation_partition_v2 mp, schema_ptr s) noexcept
         : _schema(std::move(s))
         , _partition(std::move(mp))
     {
-        assert(_schema);
+        SCYLLA_ASSERT(_schema);
     }
 
     partition_version(partition_version&& pv) noexcept;
@@ -251,7 +252,7 @@ public:
         : _version(&pv)
         , _unique_owner(unique_owner)
     {
-        assert(!_version->_backref);
+        SCYLLA_ASSERT(!_version->_backref);
         _version->_backref = this;
     }
     ~partition_version_ref() {
@@ -279,19 +280,19 @@ public:
     explicit operator bool() const { return _version; }
 
     partition_version& operator*() {
-        assert(_version);
+        SCYLLA_ASSERT(_version);
         return *_version;
     }
     const partition_version& operator*() const {
-        assert(_version);
+        SCYLLA_ASSERT(_version);
         return *_version;
     }
     partition_version* operator->() {
-        assert(_version);
+        SCYLLA_ASSERT(_version);
         return _version;
     }
     const partition_version* operator->() const {
-        assert(_version);
+        SCYLLA_ASSERT(_version);
         return _version;
     }
 
@@ -669,9 +670,9 @@ public:
                 // If entry is being updated, we will get reads for non-latest phase, and
                 // they must attach to the non-current version.
                 partition_version* second = _version->next();
-                assert(second && second->is_referenced());
+                SCYLLA_ASSERT(second && second->is_referenced());
                 auto&& snp = partition_snapshot::referer_of(*second);
-                assert(phase == snp._phase);
+                SCYLLA_ASSERT(phase == snp._phase);
                 return *second;
             } else { // phase > _snapshot->_phase
                 add_version(s, t);

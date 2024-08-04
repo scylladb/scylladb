@@ -11,6 +11,7 @@
 
 #include "simple_strategy.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 #include <boost/algorithm/string.hpp>
 
@@ -50,7 +51,7 @@ future<host_id_set> simple_strategy::calculate_natural_endpoints(const token& t,
         }
 
         auto ep = tm.get_endpoint(token);
-        assert(ep);
+        SCYLLA_ASSERT(ep);
 
         endpoints.push_back(*ep);
         co_await coroutine::maybe_yield();

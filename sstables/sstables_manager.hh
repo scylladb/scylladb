@@ -12,6 +12,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 
+#include "utils/assert.hh"
 #include "utils/disk-error-handler.hh"
 #include "gc_clock.hh"
 #include "sstables/sstables.hh"
@@ -143,12 +144,12 @@ public:
             size_t buffer_size = default_sstable_buffer_size);
 
     shared_ptr<s3::client> get_endpoint_client(sstring endpoint) const {
-        assert(_storage != nullptr);
+        SCYLLA_ASSERT(_storage != nullptr);
         return _storage->get_endpoint_client(std::move(endpoint));
     }
 
     bool is_known_endpoint(sstring endpoint) const {
-        assert(_storage != nullptr);
+        SCYLLA_ASSERT(_storage != nullptr);
         return _storage->is_known_endpoint(std::move(endpoint));
     }
 
@@ -180,7 +181,7 @@ public:
 
     // Only for sstable::storage usage
     sstables::sstables_registry& sstables_registry() const noexcept {
-        assert(_sstables_registry && "sstables_registry is not plugged");
+        SCYLLA_ASSERT(_sstables_registry && "sstables_registry is not plugged");
         return *_sstables_registry;
     }
 

@@ -15,6 +15,7 @@
 #include "clustering_key_filter.hh"
 #include "clustering_ranges_walker.hh"
 #include "concrete_types.hh"
+#include "utils/assert.hh"
 #include "utils/to_string.hh"
 
 namespace sstables {
@@ -266,7 +267,7 @@ private:
     std::optional<collection_mutation> _pending_collection = {};
 
     collection_mutation& pending_collection(const column_definition *cdef) {
-        assert(cdef->is_multi_cell() && "frozen set should behave like a cell\n");
+        SCYLLA_ASSERT(cdef->is_multi_cell() && "frozen set should behave like a cell\n");
         if (!_pending_collection || _pending_collection->is_new_collection(cdef)) {
             flush_pending_collection(*_schema);
             _pending_collection = collection_mutation(cdef);
@@ -434,7 +435,7 @@ public:
         flush_pending_collection(*_schema);
         // If _ready is already set we have a bug: get_mutation_fragment()
         // was not called, and below we will lose one clustering row!
-        assert(!_ready);
+        SCYLLA_ASSERT(!_ready);
         if (!_skip_in_progress) {
             _ready = std::exchange(_in_progress, { });
             return push_ready_fragments_with_ready_set();
@@ -1122,7 +1123,7 @@ public:
             _state = state::ATOM_START;
             break;
         default:
-            assert(0);
+            SCYLLA_ASSERT(0);
         }
         _consumer.reset(el);
         _gen = do_process_state();
@@ -1212,7 +1213,7 @@ private:
                 _read_enabled = false;
                 return make_ready_future<>();
             }
-            assert(_index_reader->element_kind() == indexable_element::partition);
+            SCYLLA_ASSERT(_index_reader->element_kind() == indexable_element::partition);
             return skip_to(_index_reader->element_kind(), start).then([this] {
                 _sst->get_stats().on_partition_seek();
             });
@@ -1292,7 +1293,7 @@ private:
         if (!pos || pos->is_before_all_fragments(*_schema)) {
             return make_ready_future<>();
         }
-        assert (_current_partition_key);
+        SCYLLA_ASSERT (_current_partition_key);
         return [this] {
             if (!_index_in_current_partition) {
                 _index_in_current_partition = true;
@@ -1334,7 +1335,7 @@ private:
         }
 
         auto [begin, end] = _index_reader->data_file_positions();
-        assert(end);
+        SCYLLA_ASSERT(end);
 
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
@@ -1383,11 +1384,11 @@ public:
                 _partition_finished = true;
                 _before_partition = true;
                 _end_of_stream = false;
-                assert(_index_reader);
+                SCYLLA_ASSERT(_index_reader);
                 auto f1 = _index_reader->advance_to(pr);
                 return f1.then([this] {
                     auto [start, end] = _index_reader->data_file_positions();
-                    assert(end);
+                    SCYLLA_ASSERT(end);
                     if (start != *end) {
                         _read_enabled = true;
                         _index_in_current_partition = true;

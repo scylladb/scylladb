@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <concepts>
 
 #include "cql3/result_set.hh"
@@ -69,7 +70,7 @@ public:
     void visit(const result_message::prepared::cql&) override {};
     void visit(const result_message::schema_change&) override {};
     void visit(const result_message::rows&) override {};
-    void visit(const result_message::bounce_to_shard&) override { assert(false); };
+    void visit(const result_message::bounce_to_shard&) override { SCYLLA_ASSERT(false); };
     void visit(const result_message::exception&) override;
 };
 

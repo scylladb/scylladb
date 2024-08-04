@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "cql3/keyspace_element_name.hh"
 
 namespace cql3 {
@@ -24,7 +25,7 @@ bool keyspace_element_name::has_keyspace() const
 
 const sstring& keyspace_element_name::get_keyspace() const
 {
-    assert(_ks_name);
+    SCYLLA_ASSERT(_ks_name);
     return *_ks_name;
 }
 

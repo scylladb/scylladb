@@ -1,4 +1,5 @@
 #include <seastar/core/abort_source.hh>
+#include "utils/assert.hh"
 #include "utils/small_vector.hh"
 #include "seastarx.hh"
 
@@ -14,7 +15,7 @@ public:
     void add(abort_source& as) {
         as.check();
         auto sub = as.subscribe([this]() noexcept { _as.request_abort(); });
-        assert(sub);
+        SCYLLA_ASSERT(sub);
         _subscriptions.push_back(std::move(*sub));
     }
     abort_source& abort_source() noexcept {

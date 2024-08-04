@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <fmt/core.h>
 #include <cassert>
 
@@ -98,7 +99,7 @@ public:
         if (_cookie != nullptr) {
             delete _cookie;
         }
-        assert(_p_cookie != nullptr);
+        SCYLLA_ASSERT(_p_cookie != nullptr);
         delete _p_cookie;
     }
 };

@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "maps.hh"
 #include "operation.hh"
 #include "update_parameters.hh"
@@ -44,7 +45,7 @@ maps::setter_by_key::fill_prepare_context(prepare_context& ctx) {
 void
 maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     using exceptions::invalid_request_exception;
-    assert(column.type->is_multi_cell()); // "Attempted to set a value for a single key on a frozen map"m
+    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to set a value for a single key on a frozen map"m
     auto key = expr::evaluate(_k, params._options);
     auto value = expr::evaluate(*_e, params._options);
     if (key.is_null()) {
@@ -62,7 +63,7 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
 
 void
 maps::putter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen map";
+    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to add items to a frozen map";
     cql3::raw_value value = expr::evaluate(*_e, params._options);
     do_put(m, prefix, params, value, column);
 }
@@ -95,7 +96,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
 
 void
 maps::discarder_by_key::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    assert(column.type->is_multi_cell()); // "Attempted to delete a single key in a frozen map";
+    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to delete a single key in a frozen map";
     cql3::raw_value key = expr::evaluate(*_e, params._options);
     if (key.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null map key");

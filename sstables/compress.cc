@@ -20,6 +20,7 @@
 #include "exceptions.hh"
 #include "unimplemented.hh"
 #include "segmented_compress_params.hh"
+#include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 #include "reader_permit.hh"
 
@@ -155,7 +156,7 @@ void compression::segmented_offsets::state::update_position_trackers(std::size_t
 }
 
 void compression::segmented_offsets::init(uint32_t chunk_size) {
-    assert(chunk_size != 0);
+    SCYLLA_ASSERT(chunk_size != 0);
 
     _chunk_size = chunk_size;
 
@@ -436,7 +437,7 @@ public:
 
     virtual future<temporary_buffer<char>> skip(uint64_t n) override {
         _pos += n;
-        assert(_pos <= _end_pos);
+        SCYLLA_ASSERT(_pos <= _end_pos);
         if (_pos == _end_pos) {
             return make_ready_future<temporary_buffer<char>>();
         }

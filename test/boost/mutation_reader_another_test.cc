@@ -24,6 +24,7 @@
 #include "replica/memtable.hh"
 #include "row_cache.hh"
 #include "mutation/mutation_rebuilder.hh"
+#include "utils/assert.hh"
 #include "utils/to_string.hh"
 
 #include "test/lib/simple_schema.hh"
@@ -574,7 +575,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
 
     auto consume_fn = [&] (mutation_reader& fmr, flat_stream_consumer fsc) {
         if (thread) {
-            assert(bool(!reversed));
+            SCYLLA_ASSERT(bool(!reversed));
             return fmr.consume_in_thread(std::move(fsc));
         } else {
             if (reversed) {

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "mutation/mutation_fragment_v2.hh"
 #include "schema/schema_registry.hh"
@@ -150,7 +151,7 @@ future<stop_iteration> multishard_writer::handle_mutation_fragment(mutation_frag
         }
     }
     return f.then([this, mf = std::move(mf)] () mutable {
-        assert(!_current_shards.empty());
+        SCYLLA_ASSERT(!_current_shards.empty());
         if (_current_shards.size() == 1) [[likely]] {
             return _queue_reader_handles[_current_shards[0]]->push(std::move(mf));
         }

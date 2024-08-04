@@ -21,6 +21,7 @@
 #include "schema/schema.hh"
 #include "types/types.hh"
 #include "schema/schema_builder.hh"
+#include "utils/assert.hh"
 #include "utils/to_string.hh"
 
 #include "test/lib/simple_schema.hh"
@@ -631,11 +632,11 @@ SEASTAR_THREAD_TEST_CASE(test_find_first_token_for_shard) {
     auto second_boundary = sharder.token_for_next_shard_for_reads(dht::minimum_token(), 2);
     auto third_boundary = sharder.token_for_next_shard_for_reads(dht::minimum_token(), 0);
     auto next_token = [] (dht::token t) {
-        assert(dht::token::to_int64(t) < std::numeric_limits<int64_t>::max());
+        SCYLLA_ASSERT(dht::token::to_int64(t) < std::numeric_limits<int64_t>::max());
         return dht::token::from_int64(dht::token::to_int64(t) + 1);
     };
     auto prev_token = [] (dht::token t) {
-        assert(dht::token::to_int64(t) > std::numeric_limits<int64_t>::min() + 1);
+        SCYLLA_ASSERT(dht::token::to_int64(t) > std::numeric_limits<int64_t>::min() + 1);
         return dht::token::from_int64(dht::token::to_int64(t) - 1);
     };
 

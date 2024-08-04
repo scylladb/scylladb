@@ -46,6 +46,7 @@
 #include "mutation_writer/partition_based_splitting_writer.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/pretty_printers.hh"
 #include "readers/multi_range.hh"
@@ -283,7 +284,7 @@ private:
 
     utils::observer<> make_stop_request_observer(utils::observable<>& sro) {
         return sro.observe([this] () mutable {
-            assert(!_unclosed_partition);
+            SCYLLA_ASSERT(!_unclosed_partition);
             consume_end_of_stream();
         });
     }

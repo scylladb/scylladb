@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <vector>
 #include <memory>
 #include <seastar/core/shared_future.hh>
@@ -200,7 +201,7 @@ public:
     loading_shared_values(loading_shared_values&&) = default;
     loading_shared_values(const loading_shared_values&) = delete;
     ~loading_shared_values() {
-         assert(!_set.size());
+         SCYLLA_ASSERT(!_set.size());
     }
 
     /// \brief

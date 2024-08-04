@@ -19,6 +19,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "types/types.hh"
+#include "utils/assert.hh"
 #include "utils/serialization.hh"
 #include "vint-serialization.hh"
 #include <cmath>
@@ -518,7 +519,7 @@ listlike_collection_type_impl::listlike_collection_type_impl(
 
 std::strong_ordering listlike_collection_type_impl::compare_with_map(const map_type_impl& map_type, bytes_view list, bytes_view map) const
 {
-    assert((is_set() && map_type.get_keys_type() == _elements) || (!is_set() && map_type.get_values_type() == _elements));
+    SCYLLA_ASSERT((is_set() && map_type.get_keys_type() == _elements) || (!is_set() && map_type.get_values_type() == _elements));
 
     if (list.empty()) {
         return map.empty() ? std::strong_ordering::equal : std::strong_ordering::less;
@@ -558,7 +559,7 @@ std::strong_ordering listlike_collection_type_impl::compare_with_map(const map_t
 
 bytes listlike_collection_type_impl::serialize_map(const map_type_impl& map_type, const data_value& value) const
 {
-    assert((is_set() && map_type.get_keys_type() == _elements) || (!is_set() && map_type.get_values_type() == _elements));
+    SCYLLA_ASSERT((is_set() && map_type.get_keys_type() == _elements) || (!is_set() && map_type.get_values_type() == _elements));
     const std::vector<std::pair<data_value, data_value>>& map = map_type.from_value(value);
     // Lists are represented as vector<pair<timeuuid, value>>, sets are vector<pair<value, empty>>
     bool first = is_set();
@@ -1112,7 +1113,7 @@ map_type_impl::freeze() const {
 
 bool
 map_type_impl::is_compatible_with_frozen(const collection_type_impl& previous) const {
-    assert(!_is_multi_cell);
+    SCYLLA_ASSERT(!_is_multi_cell);
     auto* p = dynamic_cast<const map_type_impl*>(&previous);
     if (!p) {
         return false;
@@ -1123,7 +1124,7 @@ map_type_impl::is_compatible_with_frozen(const collection_type_impl& previous) c
 
 bool
 map_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previous) const {
-    assert(!_is_multi_cell);
+    SCYLLA_ASSERT(!_is_multi_cell);
     auto* p = dynamic_cast<const map_type_impl*>(&previous);
     if (!p) {
         return false;
@@ -1315,7 +1316,7 @@ set_type_impl::freeze() const {
 
 bool
 set_type_impl::is_compatible_with_frozen(const collection_type_impl& previous) const {
-    assert(!_is_multi_cell);
+    SCYLLA_ASSERT(!_is_multi_cell);
     auto* p = dynamic_cast<const set_type_impl*>(&previous);
     if (!p) {
         return false;
@@ -1459,7 +1460,7 @@ list_type_impl::freeze() const {
 
 bool
 list_type_impl::is_compatible_with_frozen(const collection_type_impl& previous) const {
-    assert(!_is_multi_cell);
+    SCYLLA_ASSERT(!_is_multi_cell);
     auto* p = dynamic_cast<const list_type_impl*>(&previous);
     if (!p) {
         return false;
@@ -1800,10 +1801,10 @@ void abstract_type::validate(bytes_view v) const {
 }
 
 static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::native_type* val, bytes::iterator& out) {
-    assert(val);
+    SCYLLA_ASSERT(val);
     auto& elems = *val;
 
-    assert(elems.size() <= type.size());
+    SCYLLA_ASSERT(elems.size() <= type.size());
 
     for (size_t i = 0; i < elems.size(); ++i) {
         const abstract_type& t = type.type(i)->without_reversed();
@@ -3353,15 +3354,15 @@ static bytes_ostream serialize_for_cql_aux(const list_type_impl&, collection_mut
 }
 
 static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collection_mutation_view_description mut) {
-    assert(type.is_multi_cell());
-    assert(mut.cells.size() <= type.size());
+    SCYLLA_ASSERT(type.is_multi_cell());
+    SCYLLA_ASSERT(mut.cells.size() <= type.size());
 
     bytes_ostream out;
 
     size_t curr_field_pos = 0;
     for (auto&& e : mut.cells) {
         auto field_pos = deserialize_field_index(e.first);
-        assert(field_pos < type.size());
+        SCYLLA_ASSERT(field_pos < type.size());
 
         // Some fields don't have corresponding cells -- these fields are null.
         while (curr_field_pos < field_pos) {
@@ -3391,7 +3392,7 @@ static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collectio
 }
 
 bytes_ostream serialize_for_cql(const abstract_type& type, collection_mutation_view v) {
-    assert(type.is_multi_cell());
+    SCYLLA_ASSERT(type.is_multi_cell());
 
     return v.with_deserialized(type, [&] (collection_mutation_view_description mv) {
         return visit(type, make_visitor(
@@ -3418,12 +3419,12 @@ bytes serialize_field_index(size_t idx) {
 }
 
 size_t deserialize_field_index(const bytes_view& b) {
-    assert(b.size() == sizeof(int16_t));
+    SCYLLA_ASSERT(b.size() == sizeof(int16_t));
     return read_be<int16_t>(reinterpret_cast<const char*>(b.data()));
 }
 
 size_t deserialize_field_index(managed_bytes_view b) {
-    assert(b.size_bytes() == sizeof(int16_t));
+    SCYLLA_ASSERT(b.size_bytes() == sizeof(int16_t));
     return be_to_cpu(read_simple_native<int16_t>(b));
 }
 

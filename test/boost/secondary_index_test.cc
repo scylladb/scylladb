@@ -19,6 +19,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "cql3/statements/select_statement.hh"
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 
 using namespace std::chrono_literals;
@@ -445,7 +446,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
         auto extract_paging_state = [] (::shared_ptr<cql_transport::messages::result_message> res) {
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
             auto paging_state = rows->rs().get_metadata().paging_state();
-            assert(paging_state);
+            SCYLLA_ASSERT(paging_state);
             return make_lw_shared<service::pager::paging_state>(*paging_state);
         };
 
@@ -829,7 +830,7 @@ SEASTAR_TEST_CASE(test_local_index_paging) {
         auto extract_paging_state = [] (::shared_ptr<cql_transport::messages::result_message> res) {
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
             auto paging_state = rows->rs().get_metadata().paging_state();
-            assert(paging_state);
+            SCYLLA_ASSERT(paging_state);
             return make_lw_shared<service::pager::paging_state>(*paging_state);
         };
 

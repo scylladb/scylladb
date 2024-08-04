@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "pretty_printers.hh"
 #include <tuple>
 #include <cassert>
@@ -13,7 +14,7 @@
 template <typename Suffixes>
 static constexpr std::tuple<size_t, std::string_view, std::string_view>
 do_format(size_t n, Suffixes suffixes, unsigned scale, unsigned precision, bool bytes) {
-    assert(scale < precision);
+    SCYLLA_ASSERT(scale < precision);
     size_t factor = n;
     const char* suffix = "";
     size_t remainder = 0;

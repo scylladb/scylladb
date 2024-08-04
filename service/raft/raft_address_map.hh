@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include "utils/assert.hh"
 #include "gms/inet_address.hh"
 #include "gms/generation-number.hh"
 #include "raft/raft.hh"
@@ -277,12 +278,12 @@ public:
     {}
 
     future<> stop() {
-        assert(_replication_fiber);
+        SCYLLA_ASSERT(_replication_fiber);
         co_await *std::exchange(_replication_fiber, std::nullopt);
     }
 
     ~raft_address_map_t() {
-        assert(!_replication_fiber);
+        SCYLLA_ASSERT(!_replication_fiber);
     }
 
     // Find a mapping with a given id.

@@ -10,6 +10,7 @@
 #pragma once
 
 // Seastar features.
+#include "utils/assert.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/lowres_clock.hh>
@@ -167,7 +168,7 @@ public:
     manager& operator=(manager&&) = delete;
 
     ~manager() noexcept {
-        assert(_ep_managers.empty());
+        SCYLLA_ASSERT(_ep_managers.empty());
     }
 
 public:

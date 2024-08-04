@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "redis/keyspace_utils.hh"
@@ -138,7 +139,7 @@ schema_ptr zsets_schema(sstring ks_name) {
 }
 
 future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_proxy>& proxy, data_dictionary::database db, seastar::sharded<service::migration_manager>& mm, db::config& config, int default_replication_factor) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     auto keyspace_replication_strategy_options = config.redis_keyspace_replication_strategy_options();
     if (!keyspace_replication_strategy_options.contains("class")) {
         keyspace_replication_strategy_options["class"] = "SimpleStrategy";

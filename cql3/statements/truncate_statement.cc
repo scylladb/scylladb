@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "cql3/statements/raw/truncate_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
@@ -30,8 +31,8 @@ truncate_statement::truncate_statement(cf_name name, std::unique_ptr<attributes:
 {
     // Validate the attributes.
     // Currently, TRUNCATE supports only USING TIMEOUT
-    assert(!_attrs->timestamp.has_value());
-    assert(!_attrs->time_to_live.has_value());
+    SCYLLA_ASSERT(!_attrs->timestamp.has_value());
+    SCYLLA_ASSERT(!_attrs->time_to_live.has_value());
 }
 
 std::unique_ptr<prepared_statement> truncate_statement::prepare(data_dictionary::database db, cql_stats& stats) {

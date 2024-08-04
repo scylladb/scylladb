@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include "utils/assert.hh"
 #include "raft.hh"
 
 namespace raft {
@@ -78,12 +79,12 @@ public:
             // All log entries following the snapshot must
             // be present, otherwise we will not be able to
             // perform an initial state transfer.
-            assert(_first_idx <= _snapshot.idx + 1);
+            SCYLLA_ASSERT(_first_idx <= _snapshot.idx + 1);
         }
         _memory_usage = range_memory_usage(_log.begin(), _log.end());
         // The snapshot index is at least 0, so _first_idx
         // is at least 1
-        assert(_first_idx > 0);
+        SCYLLA_ASSERT(_first_idx > 0);
         stable_to(last_idx());
         init_last_conf_idx();
     }

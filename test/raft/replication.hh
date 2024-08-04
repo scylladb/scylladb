@@ -26,6 +26,7 @@
 #include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
+#include "utils/assert.hh"
 #include "utils/xx_hasher.hh"
 #include "utils/to_string.hh"
 #include "test/raft/helpers.hh"
@@ -1287,7 +1288,7 @@ future<> raft_cluster<Clock>::partition(::partition p) {
         } else if (std::holds_alternative<struct range>(s)) {
             auto range = std::get<struct range>(s);
             for (size_t id = range.start; id <= range.end; id++) {
-                assert(id < _servers.size());
+                SCYLLA_ASSERT(id < _servers.size());
                 partition_servers.insert(id);
             }
         } else {

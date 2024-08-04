@@ -22,6 +22,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptors.hpp>
 #include "exceptions/exceptions.hh"
+#include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 #include "utils/hash.hh"
 
@@ -195,7 +196,7 @@ public:
         , _racks(_tp.get_datacenter_racks())
     {
         // not aware of any cluster members
-        assert(!_all_endpoints.empty() && !_racks.empty());
+        SCYLLA_ASSERT(!_all_endpoints.empty() && !_racks.empty());
 
         auto size_for = [](auto& map, auto& k) {
             auto i = map.find(k);

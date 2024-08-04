@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <atomic>
 #include <vector>
 #include <optional>
@@ -99,7 +100,7 @@ public:
         // barrier, because it will likely be copied between sharded
         // users on sharded::start. The best check in this situation
         // is to make sure the local promise is not set up.
-        assert(!_b->wakeup[this_shard_id()].has_value());
+        SCYLLA_ASSERT(!_b->wakeup[this_shard_id()].has_value());
         auto i = _b->counter.fetch_add(-1);
         return i == 1 ? complete() : wait();
     }
@@ -130,7 +131,7 @@ private:
             if (this_shard_id() != sid) {
                 std::optional<promise<>>& w = b->wakeup[this_shard_id()];
                 if (alive) {
-                    assert(w.has_value());
+                    SCYLLA_ASSERT(w.has_value());
                     w->set_value();
                     w.reset();
                 } else if (w.has_value()) {

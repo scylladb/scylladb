@@ -42,6 +42,7 @@
 #include "service/tablet_allocator.hh"
 #include "service/topology_state_machine.hh"
 #include "topology_mutation.hh"
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/stall_free.hh"
 #include "utils/to_string.hh"
@@ -311,7 +312,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         auto& topo = _topo_sm._topology;
 
         auto it = topo.find(id);
-        assert(it);
+        SCYLLA_ASSERT(it);
 
         std::optional<topology_request> req;
         auto rit = topo.requests.find(id);
@@ -1581,7 +1582,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 switch (node.rs->state) {
                     case node_state::bootstrapping: {
-                        assert(!node.rs->ring);
+                        SCYLLA_ASSERT(!node.rs->ring);
                         auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
                         auto tokens_string = std::get<join_param>(node.req_param.value()).tokens_string;
                         // A node have just been accepted and does not have tokens assigned yet
@@ -1610,7 +1611,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                         break;
                     case node_state::replacing: {
-                        assert(!node.rs->ring);
+                        SCYLLA_ASSERT(!node.rs->ring);
                         // Make sure all nodes are no longer trying to write to a node being replaced. This is important if the new node have the same IP, so that old write will not
                         // go to the new node by mistake
                         try {
@@ -1629,8 +1630,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                         auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
                         auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
-                        assert(it != _topo_sm._topology.normal_nodes.end());
-                        assert(it->second.ring && it->second.state == node_state::normal);
+                        SCYLLA_ASSERT(it != _topo_sm._topology.normal_nodes.end());
+                        SCYLLA_ASSERT(it->second.ring && it->second.state == node_state::normal);
 
                         topology_mutation_builder builder(node.guard.write_timestamp());
 
@@ -2152,7 +2153,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 rtbuilder.set("start_time", db_clock::now());
                 switch (node.request.value()) {
                     case topology_request::join: {
-                        assert(!node.rs->ring);
+                        SCYLLA_ASSERT(!node.rs->ring);
                         // Write chosen tokens through raft.
                         builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
@@ -2163,7 +2164,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         break;
                         }
                     case topology_request::leave:
-                        assert(node.rs->ring);
+                        SCYLLA_ASSERT(node.rs->ring);
                         // start decommission and put tokens of decommissioning nodes into write_both_read_old state
                         // meaning that reads will go to the replica being decommissioned
                         // but writes will go to new owner as well
@@ -2176,7 +2177,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                                        "start decommission");
                         break;
                     case topology_request::remove: {
-                        assert(node.rs->ring);
+                        SCYLLA_ASSERT(node.rs->ring);
 
                         builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
@@ -2188,7 +2189,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         break;
                         }
                     case topology_request::replace: {
-                        assert(!node.rs->ring);
+                        SCYLLA_ASSERT(!node.rs->ring);
 
                         builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
@@ -2289,7 +2290,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         auto id = node.id;
 
-        assert(!_topo_sm._topology.transition_nodes.empty());
+        SCYLLA_ASSERT(!_topo_sm._topology.transition_nodes.empty());
 
         release_node(std::move(node));
 
@@ -2924,7 +2925,7 @@ future<> topology_coordinator::stop() {
         // but let's check all of them because we never reset these holders
         // once they are added as barriers
         for (auto& [stage, barrier]: tablet_state.barriers) {
-            assert(barrier.has_value());
+            SCYLLA_ASSERT(barrier.has_value());
             try {
                 co_await std::move(*barrier);
             } catch (...) {

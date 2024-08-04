@@ -9,6 +9,7 @@
 #include <boost/test/unit_test.hpp>
 #include "replica/database.hh"
 #include "db/config.hh"
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
@@ -52,7 +53,7 @@ static bytes make_unique_bytes() {
 }
 
 static void set_column(mutation& m, const sstring& column_name) {
-    assert(m.schema()->get_column_definition(to_bytes(column_name))->type == bytes_type);
+    SCYLLA_ASSERT(m.schema()->get_column_definition(to_bytes(column_name))->type == bytes_type);
     auto value = data_value(make_unique_bytes());
     m.set_clustered_cell(clustering_key::make_empty(), to_bytes(column_name), value, next_timestamp());
 }
@@ -169,7 +170,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto make_memtable = [] (replica::dirty_memory_manager& mgr, replica::memtable_table_shared_data& table_shared_data, replica::table_stats& tbl_stats, std::vector<mutation> muts) {
-            assert(!muts.empty());
+            SCYLLA_ASSERT(!muts.empty());
             auto mt = make_lw_shared<replica::memtable>(muts.front().schema(), mgr, table_shared_data, tbl_stats);
             for (auto& m : muts) {
                 mt->apply(m);
@@ -959,7 +960,7 @@ SEASTAR_TEST_CASE(memtable_flush_compresses_mutations) {
         // Flush to make sure all the modifications make it to disk
         t.flush().get();
 
-        // Treat the table as mutation_source and assert we get the expected mutation and end of stream
+        // Treat the table as mutation_source and SCYLLA_ASSERT we get the expected mutation and end of stream
         mutation_source ms = t.as_mutation_source();
         assert_that(ms.make_reader_v2(s, semaphore.make_permit()))
             .produces(m2)

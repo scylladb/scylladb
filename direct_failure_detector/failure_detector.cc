@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <unordered_set>
 
 #include <seastar/core/abort_source.hh>
@@ -192,7 +193,7 @@ failure_detector::impl::impl(
 }
 
 void failure_detector::impl::send_update_endpoint(pinger::endpoint_id ep, endpoint_update update) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     auto it = _endpoint_updates.find(ep);
     if (it == _endpoint_updates.end()) {
@@ -205,7 +206,7 @@ void failure_detector::impl::send_update_endpoint(pinger::endpoint_id ep, endpoi
 }
 
 future<> failure_detector::impl::update_endpoint_fiber() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     while (true) {
         co_await _endpoint_changed.wait([this] { return !_endpoint_updates.empty(); });
@@ -246,7 +247,7 @@ future<> failure_detector::impl::update_endpoint_fiber() {
 }
 
 future<> failure_detector::impl::add_endpoint(pinger::endpoint_id ep) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     if (_workers.contains(ep)) {
         co_return;
@@ -254,7 +255,7 @@ future<> failure_detector::impl::add_endpoint(pinger::endpoint_id ep) {
 
     // Pick a shard with the smallest number of workers to create a new worker.
     auto shard = std::distance(_num_workers.begin(), std::min_element(_num_workers.begin(), _num_workers.end()));
-    assert(_num_workers.size() == smp::count);
+    SCYLLA_ASSERT(_num_workers.size() == smp::count);
 
     ++_num_workers[shard];
     auto [it, _] = _workers.emplace(ep, shard);
@@ -269,7 +270,7 @@ future<> failure_detector::impl::add_endpoint(pinger::endpoint_id ep) {
 }
 
 future<> failure_detector::impl::remove_endpoint(pinger::endpoint_id ep) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     auto it = _workers.find(ep);
     if (it == _workers.end()) {
@@ -279,8 +280,8 @@ future<> failure_detector::impl::remove_endpoint(pinger::endpoint_id ep) {
     auto shard = it->second;
     co_await _parent.container().invoke_on(shard, [ep] (failure_detector& fd) { return fd._impl->destroy_worker(ep); });
 
-    assert(_num_workers.size() == smp::count);
-    assert(shard < _num_workers.size());
+    SCYLLA_ASSERT(_num_workers.size() == smp::count);
+    SCYLLA_ASSERT(shard < _num_workers.size());
     --_num_workers[shard];
     _workers.erase(it);
 
@@ -374,8 +375,8 @@ endpoint_worker::endpoint_worker(failure_detector::impl& fd, pinger::endpoint_id
 }
 
 endpoint_worker::~endpoint_worker() {
-    assert(_ping_fiber.available());
-    assert(_notify_fiber.available());
+    SCYLLA_ASSERT(_ping_fiber.available());
+    SCYLLA_ASSERT(_notify_fiber.available());
 }
 
 future<subscription> failure_detector::register_listener(listener& l, clock::interval_t threshold) {
@@ -624,7 +625,7 @@ future<> endpoint_worker::notify_fiber() noexcept {
             auto& listeners = it->second.listeners;
             auto& endpoint_liveness = it->second.endpoint_liveness[_id];
             bool alive = endpoint_liveness.alive;
-            assert(alive != endpoint_liveness.marked_alive);
+            SCYLLA_ASSERT(alive != endpoint_liveness.marked_alive);
             endpoint_liveness.marked_alive = alive;
 
             try {
@@ -680,7 +681,7 @@ future<> failure_detector::stop() {
 
     co_await container().invoke_on_all([] (failure_detector& fd) -> future<> {
         // All subscriptions must be destroyed before stopping the fd.
-        assert(fd._impl->_registered.empty());
+        SCYLLA_ASSERT(fd._impl->_registered.empty());
 
         // There are no concurrent `{create,destroy}_worker` calls running since we waited for `update_endpoint_fiber` to finish.
         while (!fd._impl->_shard_workers.empty()) {
@@ -697,13 +698,13 @@ future<> failure_detector::stop() {
 }
 
 failure_detector::impl::~impl() {
-    assert(_shard_workers.empty());
-    assert(_destroy_subscriptions.available());
-    assert(_update_endpoint_fiber.available());
+    SCYLLA_ASSERT(_shard_workers.empty());
+    SCYLLA_ASSERT(_destroy_subscriptions.available());
+    SCYLLA_ASSERT(_update_endpoint_fiber.available());
 }
 
 failure_detector::~failure_detector() {
-    assert(!_impl);
+    SCYLLA_ASSERT(!_impl);
 }
 
 } // namespace direct_failure_detector

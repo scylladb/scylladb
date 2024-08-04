@@ -10,6 +10,7 @@
 
 #include <boost/intrusive/unordered_set.hpp>
 
+#include "utils/assert.hh"
 #include "utils/small_vector.hh"
 #include "mutation/mutation_partition.hh"
 #include "utils/xx_hasher.hh"
@@ -342,7 +343,7 @@ public:
     { }
 
     ~cell_locker() {
-        assert(_partitions.empty());
+        SCYLLA_ASSERT(_partitions.empty());
     }
 
     void set_schema(schema_ptr s) {

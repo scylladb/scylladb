@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "types/map.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
@@ -378,7 +379,7 @@ inline void match(const row& row, const schema& s, bytes col, const data_value& 
 
     auto expected = cdef->type->decompose(value);
     auto val = c.value().linearize();
-    assert(val == expected);
+    SCYLLA_ASSERT(val == expected);
     BOOST_REQUIRE(c.value().linearize() == expected);
     if (timestamp) {
         BOOST_REQUIRE(c.timestamp() == timestamp);

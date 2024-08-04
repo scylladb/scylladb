@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <boost/algorithm/string/join.hpp>
 #include <fmt/chrono.h>
 #include <lua.hpp>
@@ -64,7 +65,7 @@ template <> struct type_to_metatable<json_writer> { static constexpr const char*
 template <typename T>
 const char* get_metatable_name() {
     const auto metatable_name = type_to_metatable<std::remove_cv_t<T>>::metatable_name;
-    assert(metatable_name);
+    SCYLLA_ASSERT(metatable_name);
     return metatable_name;
 }
 

@@ -34,6 +34,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include <seastar/util/closeable.hh>
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 
 // partitions must be sorted by decorated key
@@ -67,7 +68,7 @@ public:
     void fast_forward_if_needed(flat_reader_assertions_v2& mr, const mutation& expected, bool verify_eos = true) {
         while (!current_range().contains(expected.decorated_key(), dht::ring_position_comparator(*expected.schema()))) {
             _current_position++;
-            assert(_current_position < _ranges.size());
+            SCYLLA_ASSERT(_current_position < _ranges.size());
             if (verify_eos) {
                 mr.produces_end_of_stream();
             }
@@ -409,7 +410,7 @@ static void test_streamed_mutation_forwarding_guarantees(tests::reader_concurren
     };
 
     const int n_keys = 1001;
-    assert(!contains_key(n_keys - 1)); // so that we can form a range with position greater than all keys
+    SCYLLA_ASSERT(!contains_key(n_keys - 1)); // so that we can form a range with position greater than all keys
 
     mutation m(s, table.make_pkey());
     std::vector<clustering_key> keys;
@@ -1959,7 +1960,7 @@ void for_each_mutation_pair(std::function<void(const mutation&, const mutation&,
     auto&& ms = get_mutation_sets();
     for (auto&& mutations : ms.equal) {
         auto i = mutations.begin();
-        assert(i != mutations.end());
+        SCYLLA_ASSERT(i != mutations.end());
         const mutation& first = *i++;
         while (i != mutations.end()) {
             callback(first, *i, are_equal::yes);
@@ -1968,7 +1969,7 @@ void for_each_mutation_pair(std::function<void(const mutation&, const mutation&,
     }
     for (auto&& mutations : ms.unequal) {
         auto i = mutations.begin();
-        assert(i != mutations.end());
+        SCYLLA_ASSERT(i != mutations.end());
         const mutation& first = *i++;
         while (i != mutations.end()) {
             callback(first, *i, are_equal::no);
@@ -2100,7 +2101,7 @@ public:
     }
 
     void set_key_cardinality(size_t n_keys) {
-        assert(n_keys <= n_blobs);
+        SCYLLA_ASSERT(n_keys <= n_blobs);
         _ck_index_dist = std::uniform_int_distribution<size_t>{0, n_keys - 1};
     }
 
@@ -2308,7 +2309,7 @@ public:
                 case 1: return row_marker(random_tombstone(timestamp_level::row_marker_tombstone));
                 case 2: return row_marker(gen_timestamp(timestamp_level::data));
                 case 3: return row_marker(gen_timestamp(timestamp_level::data), std::chrono::seconds(1), new_expiry());
-                default: assert(0);
+                default: SCYLLA_ASSERT(0);
             }
             abort();
         };
@@ -2769,33 +2770,33 @@ mutation forwardable_reader_to_mutation(mutation_reader r, const std::vector<pos
             , _builder(builder) { }
 
         void consume_new_partition(const dht::decorated_key& dk) {
-            assert(!_builder);
+            SCYLLA_ASSERT(!_builder);
             _builder = mutation_rebuilder_v2(std::move(_s));
             _builder->consume_new_partition(dk);
         }
 
         stop_iteration consume(tombstone t) {
-            assert(_builder);
+            SCYLLA_ASSERT(_builder);
             return _builder->consume(t);
         }
 
         stop_iteration consume(range_tombstone_change&& rt) {
-            assert(_builder);
+            SCYLLA_ASSERT(_builder);
             return _builder->consume(std::move(rt));
         }
 
         stop_iteration consume(static_row&& sr) {
-            assert(_builder);
+            SCYLLA_ASSERT(_builder);
             return _builder->consume(std::move(sr));
         }
 
         stop_iteration consume(clustering_row&& cr) {
-            assert(_builder);
+            SCYLLA_ASSERT(_builder);
             return _builder->consume(std::move(cr));
         }
 
         stop_iteration consume_end_of_partition() {
-            assert(_builder);
+            SCYLLA_ASSERT(_builder);
             return stop_iteration::yes;
         }
 

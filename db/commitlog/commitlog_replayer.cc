@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include <memory>
 #include <vector>
 #include <algorithm>
@@ -69,7 +70,7 @@ public:
     };
 
     // move start/stop of the thread local bookkeep to "top level"
-    // and also make sure to assert on it actually being started.
+    // and also make sure to SCYLLA_ASSERT on it actually being started.
     future<> start() {
         return _column_mappings.start();
     }
@@ -164,7 +165,7 @@ future<> db::commitlog_replayer::impl::init() {
 
 future<db::commitlog_replayer::impl::stats>
 db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix) const {
-    assert(_column_mappings.local_is_initialized());
+    SCYLLA_ASSERT(_column_mappings.local_is_initialized());
 
     replay_position rp{commitlog::descriptor(file, fname_prefix)};
     auto gp = min_pos(rp.shard_id());

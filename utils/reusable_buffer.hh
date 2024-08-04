@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include <seastar/core/timer.hh>
 #include <seastar/core/memory.hh>
@@ -42,7 +43,7 @@ protected:
     reusable_buffer_impl() = default;
 
     ~reusable_buffer_impl() {
-        assert(_refcount == 0);
+        SCYLLA_ASSERT(_refcount == 0);
     }
 
     void resize(size_t new_size) & {
@@ -214,7 +215,7 @@ private:
     period_type _decay_period;
 
     void decay() & {
-        assert(_refcount == 0);
+        SCYLLA_ASSERT(_refcount == 0);
         if (_high_watermark <= _buf_size / 16) {
             // We shrink when the size falls at least by four power-of-2
             // notches, instead of just one notch. This adds hysteresis:
@@ -238,10 +239,10 @@ public:
     }
 };
 
-/* Exists only to assert that there exists at most one reference to the
+/* Exists only to SCYLLA_ASSERT that there exists at most one reference to the
  * reusable_buffer, to hopefully make it less of a footgun.
  *
- * The reference/use counts exist only for assert purposes.
+ * The reference/use counts exist only for SCYLLA_ASSERT purposes.
  * They don't influence the program otherwise.
  *
  * Never keep the guard across preemption points.
@@ -258,7 +259,7 @@ private:
     bool used = false;
 private:
     void mark_used() {
-        assert(!used);
+        SCYLLA_ASSERT(!used);
         used = true;
     }
 public:
@@ -268,7 +269,7 @@ public:
     reusable_buffer_guard(reusable_buffer_impl& _buf)
         : _buf(_buf)
     {
-        assert(_buf._refcount == 0);
+        SCYLLA_ASSERT(_buf._refcount == 0);
         _buf._refcount += 1;
     }
 

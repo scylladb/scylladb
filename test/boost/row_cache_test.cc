@@ -34,6 +34,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/sstable_utils.hh"
+#include "utils/assert.hh"
 #include "utils/throttle.hh"
 
 #include <fmt/ranges.h>
@@ -87,7 +88,7 @@ snapshot_source make_decorated_snapshot_source(snapshot_source src, std::functio
 
 mutation_source make_source_with(mutation m) {
     return mutation_source([m] (schema_ptr s, reader_permit permit, const dht::partition_range&, const query::partition_slice&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
-        assert(m.schema() == s);
+        SCYLLA_ASSERT(m.schema() == s);
         return make_mutation_reader_from_mutations_v2(s, std::move(permit), m, std::move(fwd));
     });
 }
@@ -285,7 +286,7 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
             const query::partition_slice&,
             tracing::trace_state_ptr,
             streamed_mutation::forwarding fwd) {
-        assert(m.schema() == s);
+        SCYLLA_ASSERT(m.schema() == s);
         if (range.contains(dht::ring_position(m.decorated_key()), dht::ring_position_comparator(*s))) {
             return make_counting_reader(make_mutation_reader_from_mutations_v2(s, std::move(permit), m, std::move(fwd)), secondary_calls_count);
         } else {
@@ -1571,7 +1572,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             assert_that(std::move(rd3)).has_monotonic_positions();
 
             if (with_active_memtable_reader) {
-                assert(mt1_reader_opt);
+                SCYLLA_ASSERT(mt1_reader_opt);
                 auto mt1_reader_mutation = read_mutation_from_mutation_reader(*mt1_reader_opt).get();
                 BOOST_REQUIRE(mt1_reader_mutation);
                 assert_that(*mt1_reader_mutation).is_equal_to_compacted(m2);
@@ -1699,7 +1700,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
 
 static void evict_one_partition(cache_tracker& tracker) {
     auto initial = tracker.partitions();
-    assert(initial > 0);
+    SCYLLA_ASSERT(initial > 0);
     while (tracker.partitions() == initial) {
         auto ret = tracker.region().evict_some();
         BOOST_REQUIRE(ret == memory::reclaiming_result::reclaimed_something);
@@ -1708,7 +1709,7 @@ static void evict_one_partition(cache_tracker& tracker) {
 
 static void evict_one_row(cache_tracker& tracker) {
     auto initial = tracker.get_stats().rows;
-    assert(initial > 0);
+    SCYLLA_ASSERT(initial > 0);
     while (tracker.get_stats().rows == initial) {
         auto ret = tracker.region().evict_some();
         BOOST_REQUIRE(ret == memory::reclaiming_result::reclaimed_something);
@@ -4461,7 +4462,7 @@ SEASTAR_THREAD_TEST_CASE(test_population_of_subrange_of_expired_partition) {
 // Reproducer for #14110.
 // Forces a scenario where digest is calculated for rows in old MVCC
 // versions, incompatible with the current schema.
-// In the original issue, this crashed the node with an assert failure,
+// In the original issue, this crashed the node with an SCYLLA_ASSERT failure,
 // because the digest calculation was passed the current schema,
 // instead of the row's actual old schema.
 SEASTAR_THREAD_TEST_CASE(test_digest_read_during_schema_upgrade) {
@@ -4517,7 +4518,7 @@ SEASTAR_THREAD_TEST_CASE(test_digest_read_during_schema_upgrade) {
     auto close_rd = deferred_close(rd);
 
     // In the original issue reproduced by this test, the read would crash
-    // on an assert.
+    // on an SCYLLA_ASSERT.
     // So what we are really testing below is that the read doesn't crash.
     // The comparison with m2 is just a sanity check.
     auto m2 = m1;

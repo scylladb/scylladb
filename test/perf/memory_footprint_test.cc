@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <boost/range/irange.hpp>
 
 #include <seastar/util/defer.hh>
@@ -186,7 +187,7 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
 
     auto cache_initial_occupancy = tracker.region().occupancy().used_space();
 
-    assert(mt->occupancy().used_space() == 0);
+    SCYLLA_ASSERT(mt->occupancy().used_space() == 0);
 
     std::vector<mutation> muts;
     for (size_t i = 0; i < settings.partition_count; ++i) {

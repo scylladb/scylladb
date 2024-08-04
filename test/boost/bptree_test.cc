@@ -12,6 +12,7 @@
 #include <boost/test/unit_test.hpp>
 #include <fmt/core.h>
 
+#include "utils/assert.hh"
 #include "utils/bptree.hh"
 #include "test/unit/tree_test_key.hh"
 
@@ -253,7 +254,7 @@ public:
     tree_data(int key, int cookie) : _key(key), _cookie(cookie) {}
     int cookie() const { return _cookie; }
     int key() const {
-        assert(_key != -1);
+        SCYLLA_ASSERT(_key != -1);
         return _key;
     }
 };

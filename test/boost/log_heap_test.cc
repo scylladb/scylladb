@@ -11,6 +11,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include "utils/assert.hh"
 #include "utils/log_heap.hh"
 
 template<const log_heap_options& opts>
@@ -52,7 +53,7 @@ void test_with_options() {
             ++count;
             auto key = t.v;
             if (prev_key) {
-                assert(key > prev_key);
+                SCYLLA_ASSERT(key > prev_key);
             }
             max_key = std::max(max_key, key);
         }

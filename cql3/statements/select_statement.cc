@@ -44,6 +44,7 @@
 #include "test/lib/select_statement_utils.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "gms/feature_service.hh"
+#include "utils/assert.hh"
 #include "utils/result_combinators.hh"
 #include "utils/result_loop.hh"
 #include "replica/database.hh"
@@ -815,7 +816,7 @@ select_statement::execute_without_checking_exception_message_non_aggregate_unpag
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &qp, &state, &options, cmd, timeout](auto& prs) {
-            assert(cmd->partition_limit == query::max_partitions);
+            SCYLLA_ASSERT(cmd->partition_limit == query::max_partitions);
             query::result_merger merger(cmd->get_row_limit() * prs.size(), query::max_partitions);
             return utils::result_map_reduce(prs.begin(), prs.end(), [this, &qp, &state, &options, cmd, timeout] (auto& pr) {
                 dht::partition_range_vector prange { pr };
@@ -1110,7 +1111,7 @@ indexed_table_select_statement::do_execute(query_processor& qp,
             ? source_selector::INTERNAL : source_selector::USER;
     ++_stats.query_cnt(src_sel, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
 
-    assert(_restrictions->uses_secondary_indexing());
+    SCYLLA_ASSERT(_restrictions->uses_secondary_indexing());
 
     _stats.unpaged_select_queries(_ks_sel) += options.get_page_size() <= 0;
 
@@ -1842,8 +1843,8 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
 namespace raw {
 
 static void validate_attrs(const cql3::attributes::raw& attrs) {
-    assert(!attrs.timestamp.has_value());
-    assert(!attrs.time_to_live.has_value());
+    SCYLLA_ASSERT(!attrs.timestamp.has_value());
+    SCYLLA_ASSERT(!attrs.time_to_live.has_value());
 }
 
 select_statement::select_statement(cf_name cf_name,
@@ -1975,7 +1976,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     bool is_reversed_ = false;
 
     if (!_parameters->orderings().empty()) {
-        assert(!for_view);
+        SCYLLA_ASSERT(!for_view);
         verify_ordering_is_allowed(*_parameters, *restrictions);
         prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
         verify_ordering_is_valid(prepared_orderings, *schema, *restrictions);

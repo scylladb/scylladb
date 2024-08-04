@@ -18,6 +18,7 @@
 
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/variant_utils.hh>
+#include "utils/assert.hh"
 #include "utils/chunked_vector.hh"
 
 #include "test/raft/future_set.hh"
@@ -46,7 +47,7 @@ namespace operation {
 using thread_set = std::unordered_set<thread_id>;
 
 thread_id some(const thread_set& s) {
-    assert(!s.empty());
+    SCYLLA_ASSERT(!s.empty());
     return *s.begin();
 }
 
@@ -57,7 +58,7 @@ auto take_impl(const std::vector<thread_id>& vec, std::index_sequence<I...>) {
 
 template <size_t N>
 auto take(const thread_set& s) {
-    assert(N <= s.size());
+    SCYLLA_ASSERT(N <= s.size());
     auto end = s.begin();
     std::advance(end, N);
     std::vector<thread_id> vec{s.begin(), end};
@@ -303,8 +304,8 @@ public:
         , _timer(timer)
         , _record(std::move(record))
     {
-        assert(!_all_threads.empty());
-        assert(_max_pending_interval > raft::logical_clock::duration{0});
+        SCYLLA_ASSERT(!_all_threads.empty());
+        SCYLLA_ASSERT(_max_pending_interval > raft::logical_clock::duration{0});
     }
 
     // Run the interpreter and record all operation invocations and completions.
@@ -317,8 +318,8 @@ public:
             if (auto r = co_await _invocations.poll(_timer, _poll_timeout)) {
                 auto [res, tid] = std::move(*r);
 
-                assert(_all_threads.contains(tid));
-                assert(!_free_threads.contains(tid));
+                SCYLLA_ASSERT(_all_threads.contains(tid));
+                SCYLLA_ASSERT(!_free_threads.contains(tid));
                 _free_threads.insert(tid);
 
                 _record(operation::completion<Op> {
@@ -370,7 +371,7 @@ public:
                         op.thread = some(_free_threads);
                     }
 
-                    assert(_free_threads.contains(*op.thread));
+                    SCYLLA_ASSERT(_free_threads.contains(*op.thread));
                     _free_threads.erase(*op.thread);
 
                     _record(op);
@@ -393,7 +394,7 @@ public:
 
     ~interpreter() {
         // Ensured by `exit()`.
-        assert(_invocations.empty());
+        SCYLLA_ASSERT(_invocations.empty());
     }
 
 private:
@@ -632,7 +633,7 @@ struct on_threads_gen {
 
         if (auto i = std::get_if<operation_type>(&op)) {
             if (i->thread) {
-                assert(masked_free_threads.contains(*i->thread));
+                SCYLLA_ASSERT(masked_free_threads.contains(*i->thread));
             } else {
                 // The underlying generator didn't assign a thread so we do it.
                 i->thread = some(masked_free_threads);

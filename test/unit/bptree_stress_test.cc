@@ -14,6 +14,7 @@
 constexpr int TEST_NODE_SIZE = 16;
 
 #include "tree_test_key.hh"
+#include "utils/assert.hh"
 #include "utils/bptree.hh"
 #include "bptree_validation.hh"
 #include "collection_stress.hh"
@@ -78,7 +79,7 @@ int main(int argc, char **argv) {
 
                     if (rep % 2 != 1) {
                         auto ir = t->emplace(copy_key(k), k);
-                        assert(ir.second);
+                        SCYLLA_ASSERT(ir.second);
                     } else {
                         auto ir = t->lower_bound(k);
                         ir.emplace_before(copy_key(k), test_key_compare{}, k);
@@ -107,7 +108,7 @@ int main(int argc, char **argv) {
                         auto ni = ri;
                         ni++;
                         auto eni = ri.erase(test_key_compare{});
-                        assert(ni == eni);
+                        SCYLLA_ASSERT(ni == eni);
                     }
                     oracle.erase(key);
 

@@ -12,6 +12,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/closeable.hh>
 
+#include "utils/assert.hh"
 #include "utils/logalloc.hh"
 #include "row_cache.hh"
 #include "log.hh"
@@ -109,7 +110,7 @@ int main(int argc, char** argv) {
 
             // We need to have enough Free memory to copy memtable into cache
             // When this assertion fails, increase amount of memory
-            assert(mt->occupancy().used_space() < reclaimable_memory());
+            SCYLLA_ASSERT(mt->occupancy().used_space() < reclaimable_memory());
 
             std::deque<dht::decorated_key> cache_stuffing;
             auto fill_cache_to_the_top = [&] {
@@ -179,8 +180,8 @@ int main(int argc, char** argv) {
                 auto reader = cache.make_reader(s, semaphore.make_permit(), range);
                 auto close_reader = deferred_close(reader);
                 auto mo = read_mutation_from_mutation_reader(reader).get();
-                assert(mo);
-                assert(mo->partition().live_row_count(*s) ==
+                SCYLLA_ASSERT(mo);
+                SCYLLA_ASSERT(mo->partition().live_row_count(*s) ==
                        row_count + 1 /* one row was already in cache before update()*/);
             }
 
@@ -197,8 +198,8 @@ int main(int argc, char** argv) {
                 auto reader = cache.make_reader(s, semaphore.make_permit(), range);
                 auto close_reader = deferred_close(reader);
                 auto mfopt = reader().get();
-                assert(mfopt);
-                assert(mfopt->is_partition_start());
+                SCYLLA_ASSERT(mfopt);
+                SCYLLA_ASSERT(mfopt->is_partition_start());
             }
 
             std::cout << "Testing reading when memory can't be reclaimed.\n";
@@ -235,12 +236,12 @@ int main(int argc, char** argv) {
                 try {
                     auto reader = cache.make_reader(s, semaphore.make_permit(), range);
                     auto close_reader = deferred_close(reader);
-                    assert(!reader().get());
+                    SCYLLA_ASSERT(!reader().get());
                     auto evicted_from_cache = logalloc::segment_size + large_cell_size;
                     // GCC's -fallocation-dce can remove dead calls to new and malloc, so
                     // assign the result to a global variable to disable it.
                     leak = new char[evicted_from_cache + logalloc::segment_size];
-                    assert(false); // The test is not invoking the case which it's supposed to test
+                    SCYLLA_ASSERT(false); // The test is not invoking the case which it's supposed to test
                 } catch (const std::bad_alloc&) {
                     // expected
                 }

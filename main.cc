@@ -21,6 +21,7 @@
 #include <seastar/core/timer.hh>
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "tasks/task_manager.hh"
+#include "utils/assert.hh"
 #include "utils/build_id.hh"
 #include "supervisor.hh"
 #include "replica/database.hh"
@@ -528,7 +529,7 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
 
                 // Call _exit() rather than exit() to exit immediately
                 // without calling exit handlers, avoiding
-                // boost::intrusive::detail::destructor_impl assert failure
+                // boost::intrusive::detail::destructor_impl SCYLLA_ASSERT failure
                 // from ~segment_pool exit handler.
                 _exit(255);
             }

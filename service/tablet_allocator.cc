@@ -12,6 +12,7 @@
 #include "replica/database.hh"
 #include "service/migration_listener.hh"
 #include "service/tablet_allocator.hh"
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/stall_free.hh"
 #include "db/config.hh"
@@ -1945,7 +1946,7 @@ public:
     tablet_allocator_impl(tablet_allocator_impl&&) = delete; // "this" captured.
 
     ~tablet_allocator_impl() {
-        assert(_stopped);
+        SCYLLA_ASSERT(_stopped);
     }
 
     future<> stop() {

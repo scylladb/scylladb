@@ -48,6 +48,7 @@
 #include "replica/database.hh"
 #include "partition_slice_builder.hh"
 #include "schema/schema_registry.hh"
+#include "utils/assert.hh"
 #include "utils/ranges.hh"
 #include "mutation/mutation_rebuilder.hh"
 
@@ -695,7 +696,7 @@ public:
         return ret;
     }
     virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
-        assert(false); // Fast forward not supported by this reader
+        SCYLLA_ASSERT(false); // Fast forward not supported by this reader
         return {};
     }
 };
@@ -3310,7 +3311,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_drop_flags) {
         }
         size_t add_mutation_fragment(mutation_fragment_v2&& mf, bool only_to_frags = false) {
             if (!only_to_frags) {
-                assert(mut_rebuilder);
+                SCYLLA_ASSERT(mut_rebuilder);
                 mut_rebuilder->consume(mutation_fragment_v2(*s.schema(), permit, mf));
             }
             size += frags.emplace_back(*s.schema(), permit, std::move(mf)).memory_usage();
@@ -3803,7 +3804,7 @@ struct clustering_order_merger_test_generator {
 
         std::vector<position_range> fwd_ranges;
         for (size_t i = 0; i < num_ranges; ++i) {
-            assert(2*i+1 < positions.size());
+            SCYLLA_ASSERT(2*i+1 < positions.size());
             fwd_ranges.push_back(position_range(std::move(positions[2*i]), std::move(positions[2*i+1])));
         }
 
@@ -3935,7 +3936,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
                 // for our partition (not even `partition_start`). For that we create an sstable
                 // with a different partition.
                 auto pk = pkeys[1];
-                assert(!pk.equal(*g._s, g._pk));
+                SCYLLA_ASSERT(!pk.equal(*g._s, g._pk));
 
                 sst = make_sstable_containing(sst_factory, {mutation(table_schema, pk)});
                 sst_set.insert(sst);
@@ -4009,7 +4010,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             , _it(std::partition_point(_readers.begin(), _readers.end(), [this, cmp = dht::ring_position_comparator(*_schema)]
                     (auto& r) { return _range.get().before(r.first, cmp); }))
         {
-            assert(!_readers.empty());
+            SCYLLA_ASSERT(!_readers.empty());
         }
 
         virtual future<> fill_buffer() override {
@@ -4033,7 +4034,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                     // => current partition is _it, we need to move forward
                     //    _it might be the end of current forwarding range, but that's no problem;
                     //    in that case we'll go into eos mode until forwarded
-                    assert(_it != _readers.end());
+                    SCYLLA_ASSERT(_it != _readers.end());
                     _inside_partition = false;
                     ++_it;
                 } else {
@@ -4062,7 +4063,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                 // while inside partition. But if it happens for whatever reason just do nothing
                 return make_ready_future<>();
             }
-            assert(_it != _readers.end());
+            SCYLLA_ASSERT(_it != _readers.end());
             // all fragments currently in the buffer come from the current position range
             // and pr must be strictly greater, so just clear the buffer
             clear_buffer();

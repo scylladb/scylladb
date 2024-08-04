@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <seastar/core/print.hh>
 #include "exceptions/exceptions.hh"
 
@@ -56,8 +57,8 @@ namespace bloom_calculations {
      * @return A spec that minimizes the false positive rate.
      */
     inline bloom_specification compute_bloom_spec(int buckets_per_element) {
-        assert(buckets_per_element >= 1);
-        assert(buckets_per_element <= int(probs.size()) - 1);
+        SCYLLA_ASSERT(buckets_per_element >= 1);
+        SCYLLA_ASSERT(buckets_per_element <= int(probs.size()) - 1);
         return bloom_specification(opt_k_per_buckets[buckets_per_element], buckets_per_element);
     }
 
@@ -76,8 +77,8 @@ namespace bloom_calculations {
      * @throws unsupported_operation_exception if a filter satisfying the parameters cannot be met
      */
     inline bloom_specification compute_bloom_spec(int max_buckets_per_element, double max_false_pos_prob) {
-        assert(max_buckets_per_element >= 1);
-        assert(max_buckets_per_element <= int(probs.size()) - 1);
+        SCYLLA_ASSERT(max_buckets_per_element >= 1);
+        SCYLLA_ASSERT(max_buckets_per_element <= int(probs.size()) - 1);
 
         auto max_k = int(probs[max_buckets_per_element].size()) - 1;
 
@@ -219,8 +220,8 @@ class BloomCalculations {
      */
     public static BloomSpecification computeBloomSpec(int bucketsPerElement)
     {
-        assert bucketsPerElement >= 1;
-        assert bucketsPerElement <= probs.length - 1;
+        SCYLLA_ASSERT bucketsPerElement >= 1;
+        SCYLLA_ASSERT bucketsPerElement <= probs.length - 1;
         return new BloomSpecification(optKPerBuckets[bucketsPerElement], bucketsPerElement);
     }
 
@@ -261,8 +262,8 @@ class BloomCalculations {
      */
     public static BloomSpecification computeBloomSpec(int maxBucketsPerElement, double maxFalsePosProb)
     {
-        assert maxBucketsPerElement >= 1;
-        assert maxBucketsPerElement <= probs.length - 1;
+        SCYLLA_ASSERT maxBucketsPerElement >= 1;
+        SCYLLA_ASSERT maxBucketsPerElement <= probs.length - 1;
         int maxK = probs[maxBucketsPerElement].length - 1;
 
         // Handle the trivial cases

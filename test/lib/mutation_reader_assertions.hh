@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 #include <seastar/util/backtrace.hh>
 #include "readers/mutation_reader.hh"
@@ -261,7 +262,7 @@ public:
                 BOOST_FAIL(format("Expected row with column {}, but it is not present", columns[i].name));
             }
             auto& cdef = _reader.schema()->regular_column_at(columns[i].id);
-            assert (!cdef.is_multi_cell());
+            SCYLLA_ASSERT (!cdef.is_multi_cell());
             auto cmp = compare_unsigned(columns[i].value, cell->as_atomic_cell(cdef).value().linearize());
             if (cmp != 0) {
                 BOOST_FAIL(format("Expected row with column {} having value {}, but it has value {}",
