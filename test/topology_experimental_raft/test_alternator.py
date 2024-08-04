@@ -297,13 +297,24 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
     response = requests.get(localnodes_request)
     j = json.loads(response.content.decode('utf-8'))
     assert len(j) == 1
-    # Ending the test here will kill both servers. We don't wait for the
-    # second server to finish its long injection-caused bootstrap delay,
-    # so we don't check here that when the second server finally comes up,
-    # both nodes will finally be visible in /localnodes. This case is checked
-    # in other tests, where bootstrap finishes normally - we don't need to
-    # check this case again here.
-    task.cancel()
+
+    # We don't want to wait for the second server to finish its long
+    # injection-caused bootstrap delay, so we won't check here that when the
+    # second server finally comes up, both nodes will finally be visible in
+    # /localnodes. This case is checked in other tests, where bootstrap
+    # finishes normally, so we don't need to check this case again here.
+    # But we can't just finish here with "task" unwaited or we'll get a
+    # warning about an unwaited coroutine, and the ScyllaClusterManager's
+    # tasks_history will wait for it anyway. For the same reason we can't
+    # task.cancel() (this will cause ScyllaClusterManager's tasks_history
+    # to report the ScyllaClusterManager got BROKEN and fail the next test).
+    # Sadly even abruptly killing the servers (with manager.server_stop())
+    # (with the intention to then "await task" quickly) doesn't work,
+    # probably because of a bug in the library. So we "await task"
+    # anyway, and this test takes 2 minutes :-(
+    #for server in await manager.all_servers():
+    #    await manager.server_stop(server.server_id)
+    await task
 
 # TODO: add a more thorough test for /localnodes, creating a cluster with
 # multiple nodes in multiple data centers, and check that we can get a list
