@@ -316,7 +316,7 @@ public:
             utils::updateable_value<uint32_t> cpu_concurrency = utils::updateable_value<uint32_t>(1),
             register_metrics metrics = register_metrics::no)
         : reader_concurrency_semaphore(utils::updateable_value(count), memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler),
-                std::move(kill_limit_multipler), std::move(cpu_concurrency), register_metrics::no)
+                std::move(kill_limit_multipler), std::move(cpu_concurrency), metrics)
     {}
 
     virtual ~reader_concurrency_semaphore();
