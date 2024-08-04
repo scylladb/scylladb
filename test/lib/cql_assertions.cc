@@ -13,6 +13,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
 #include "transport/messages/result_message.hh"
+#include "utils/assert.hh"
 #include "utils/to_string.hh"
 #include "bytes.hh"
 
@@ -260,23 +261,23 @@ future<> require_column_has_value(cql_test_env& e, const sstring& table_name,
       auto& cf = db.find_column_family("ks", table_name);
       auto schema = cf.schema();
       return cf.find_row(schema, make_reader_permit(e), dk, ckey).then([schema, column_name, exp] (auto row) {
-        assert(row != nullptr);
+        SCYLLA_ASSERT(row != nullptr);
         auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
-        assert(col_def != nullptr);
+        SCYLLA_ASSERT(col_def != nullptr);
         const atomic_cell_or_collection* cell = row->find_cell(col_def->id);
         if (!cell) {
-            assert(((void)"column not set", 0));
+            SCYLLA_ASSERT(((void)"column not set", 0));
         }
         bytes actual;
         if (!col_def->type->is_multi_cell()) {
             auto c = cell->as_atomic_cell(*col_def);
-            assert(c.is_live());
+            SCYLLA_ASSERT(c.is_live());
             actual = c.value().linearize();
         } else {
             actual = linearized(serialize_for_cql(*col_def->type,
                     cell->as_collection_mutation()));
         }
-        assert(col_def->type->equal(actual, exp));
+        SCYLLA_ASSERT(col_def->type->equal(actual, exp));
       });
     });
 }

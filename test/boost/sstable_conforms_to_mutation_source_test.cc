@@ -7,6 +7,7 @@
  */
 
 
+#include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
@@ -137,7 +138,7 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_md_large) {
     return test_sstable_conforms_to_mutation_source(writable_sstable_versions[1], block_sizes[2]);
 }
 
-// This assert makes sure we don't miss writable vertions
+// This SCYLLA_ASSERT makes sure we don't miss writable vertions
 static_assert(writable_sstable_versions.size() == 3);
 
 // `keys` may contain repetitions.
@@ -219,7 +220,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
 
     std::vector<query::clustering_range> ranges;
     for (auto& r: fwd_ranges) {
-        assert(position_in_partition::less_compare(*query_schema)(r.start(), r.end()));
+        SCYLLA_ASSERT(position_in_partition::less_compare(*query_schema)(r.start(), r.end()));
         auto cr_opt = position_range_to_clustering_range(r, *query_schema);
         if (!cr_opt) {
             continue;

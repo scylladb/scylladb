@@ -9,6 +9,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/on_internal_error.hh>
+#include "utils/assert.hh"
 #include "utils/small_vector.hh"
 #include "raft.hh"
 #include "tracker.hh"
@@ -314,7 +315,7 @@ private:
 
     // Issue the next read identifier
     read_id next_read_id() {
-        assert(is_leader());
+        SCYLLA_ASSERT(is_leader());
         ++leader_state().last_read_id;
         leader_state().last_read_id_changed = true;
         _sm_events.signal();
@@ -399,7 +400,7 @@ public:
 
     // Ask to search for a leader if one is not known.
     void ping_leader() {
-        assert(!current_leader());
+        SCYLLA_ASSERT(!current_leader());
         _ping_leader = true;
     }
 

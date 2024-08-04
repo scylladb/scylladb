@@ -8,6 +8,7 @@
 
 #define BOOST_TEST_MODULE core
 
+#include "utils/assert.hh"
 #include <boost/range/algorithm/for_each.hpp>
 
 #include <seastar/util/variant_utils.hh>
@@ -27,7 +28,7 @@ void append_sequence(bytes_ostream& buf, int count) {
 
 void assert_sequence(bytes_ostream& buf, int count) {
     auto in = ser::as_input_stream(buf.linearize());
-    assert(buf.size() == count * sizeof(int));
+    SCYLLA_ASSERT(buf.size() == count * sizeof(int));
     for (int i = 0; i < count; i++) {
         auto val = ser::deserialize(in, boost::type<int>());
         BOOST_REQUIRE_EQUAL(val, i);
@@ -163,7 +164,7 @@ BOOST_AUTO_TEST_CASE(test_fragment_iteration) {
 
     // If this fails, we will only have one fragment, and the test will be weak.
     // Bump up the 'count' if this is triggered.
-    assert(!buf2.is_linearized());
+    SCYLLA_ASSERT(!buf2.is_linearized());
 
     assert_sequence(buf2, count);
 }

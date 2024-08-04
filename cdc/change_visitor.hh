@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "mutation/mutation.hh"
 
 /*
@@ -246,7 +247,7 @@ void inspect_mutation(const mutation& m, V& v) {
 
         if (r.deleted_at()) {
             auto t = r.deleted_at().tomb();
-            assert(t.timestamp != api::missing_timestamp);
+            SCYLLA_ASSERT(t.timestamp != api::missing_timestamp);
             v.clustered_row_delete(cr.key(), t);
             if (v.finished()) {
                 return;
@@ -255,7 +256,7 @@ void inspect_mutation(const mutation& m, V& v) {
     }
 
     for (auto& rt: p.row_tombstones()) {
-        assert(rt.tombstone().tomb.timestamp != api::missing_timestamp);
+        SCYLLA_ASSERT(rt.tombstone().tomb.timestamp != api::missing_timestamp);
         v.range_delete(rt.tombstone());
         if (v.finished()) {
             return;

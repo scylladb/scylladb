@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "cql3/update_parameters.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/expr/expression.hh"
@@ -50,7 +51,7 @@ update_parameters::get_prefetched_list(const partition_key& pkey, const clusteri
     }
 
     // Ensured by collections_as_maps flag in read_command flags
-    assert(type->is_map());
+    SCYLLA_ASSERT(type->is_map());
 
     auto cell = type->deserialize(managed_bytes_view(*val));
     const map_type_impl& map_type = static_cast<const map_type_impl&>(*cell.type());
@@ -104,7 +105,7 @@ public:
     }
 
     void accept_new_partition(uint64_t row_count) {
-        assert(0);
+        SCYLLA_ASSERT(0);
     }
 
     void accept_new_row(const clustering_key& key, const query::result_row_view& static_row,
@@ -118,7 +119,7 @@ public:
     }
 
     void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
-        assert(0);
+        SCYLLA_ASSERT(0);
     }
 
     void accept_partition_end(const query::result_row_view& static_row) {

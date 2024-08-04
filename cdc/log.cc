@@ -32,6 +32,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "cql3/untyped_result_set.hh"
 #include "log.hh"
+#include "utils/assert.hh"
 #include "utils/rjson.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/managed_bytes.hh"
@@ -148,7 +149,7 @@ public:
         _ctxt._migration_notifier.register_listener(this);
     }
     ~impl() {
-        assert(_stopped);
+        SCYLLA_ASSERT(_stopped);
     }
 
     future<> stop() {
@@ -455,7 +456,7 @@ schema_ptr get_base_table(const replica::database& db, sstring_view ks_name,std:
 }
 
 seastar::sstring base_name(std::string_view log_name) {
-    assert(is_log_name(log_name));
+    SCYLLA_ASSERT(is_log_name(log_name));
     return sstring(log_name.data(), log_name.size() - cdc_log_suffix.size());
 }
 
@@ -655,7 +656,7 @@ private:
 
 template<>
 void collection_iterator<std::pair<managed_bytes_view, managed_bytes_view>>::parse() {
-    assert(_rem > 0);
+    SCYLLA_ASSERT(_rem > 0);
     _next = _v;
     auto k = read_collection_key(_next);
     auto v = read_collection_value_nonnull(_next);
@@ -664,7 +665,7 @@ void collection_iterator<std::pair<managed_bytes_view, managed_bytes_view>>::par
 
 template<>
 void collection_iterator<managed_bytes_view>::parse() {
-    assert(_rem > 0);
+    SCYLLA_ASSERT(_rem > 0);
     _next = _v;
     auto k = read_collection_key(_next);
     _current = k;
@@ -672,7 +673,7 @@ void collection_iterator<managed_bytes_view>::parse() {
 
 template<>
 void collection_iterator<managed_bytes_view_opt>::parse() {
-    assert(_rem > 0);
+    SCYLLA_ASSERT(_rem > 0);
     _next = _v;
     auto k = read_collection_value_nonnull(_next);
     _current = k;
@@ -1065,7 +1066,7 @@ struct process_row_visitor {
     void update_row_state(const column_definition& cdef, managed_bytes_opt value) {
         if (!_row_state) {
             // static row always has a valid state, so this must be a clustering row missing
-            assert(_base_ck);
+            SCYLLA_ASSERT(_base_ck);
             auto [it, _] = _clustering_row_states.try_emplace(*_base_ck);
             _row_state = &it->second;
         }
@@ -1496,12 +1497,12 @@ public:
     }
 
     void generate_image(operation op, const clustering_key* ck, const one_kind_column_set* affected_columns) {
-        assert(op == operation::pre_image || op == operation::post_image);
+        SCYLLA_ASSERT(op == operation::pre_image || op == operation::post_image);
 
-        // assert that post_image is always full
-        assert(!(op == operation::post_image && affected_columns));
+        // SCYLLA_ASSERT that post_image is always full
+        SCYLLA_ASSERT(!(op == operation::post_image && affected_columns));
 
-        assert(_builder);
+        SCYLLA_ASSERT(_builder);
 
         const auto kind = ck ? column_kind::regular_column : column_kind::static_column;
 
@@ -1571,7 +1572,7 @@ public:
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
     // more details like tombstones/ttl? Probably not but keep in mind.
     void process_change(const mutation& m) override {
-        assert(_builder);
+        SCYLLA_ASSERT(_builder);
         process_change_visitor v {
             ._touched_parts = _touched_parts,
             ._builder = *_builder,
@@ -1584,7 +1585,7 @@ public:
     }
 
     void end_record() override {
-        assert(_builder);
+        SCYLLA_ASSERT(_builder);
         _builder->end_record();
     }
 

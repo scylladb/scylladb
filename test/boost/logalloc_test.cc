@@ -24,6 +24,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
 
+#include "utils/assert.hh"
 #include "utils/logalloc.hh"
 #include "utils/managed_ref.hh"
 #include "utils/managed_bytes.hh"
@@ -544,7 +545,7 @@ SEASTAR_THREAD_TEST_CASE(test_hold_reserve) {
 
     as.with_reserve(region, [&] {
         with_allocator(region.allocator(), [&] {
-            assert(sizeof(entry) + 128 < current_allocator().preferred_max_contiguous_allocation());
+            SCYLLA_ASSERT(sizeof(entry) + 128 < current_allocator().preferred_max_contiguous_allocation());
             logalloc::reclaim_lock rl(region);
 
             // Reserve a segment.

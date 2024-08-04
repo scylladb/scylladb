@@ -7,6 +7,7 @@
  */
 
 
+#include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 #include <seastar/testing/test_case.hh>
 
@@ -52,7 +53,7 @@ public:
 
             auto ck_to_int = [] (const clustering_key& ck) -> int64_t {
                 auto exploded = ck.explode();
-                assert(exploded.size() == 1);
+                SCYLLA_ASSERT(exploded.size() == 1);
                 return value_cast<int64_t>(long_type->deserialize(exploded[0]));
             };
 

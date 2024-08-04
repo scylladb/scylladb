@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
@@ -188,7 +189,7 @@ static future<std::vector<token_range>> get_local_ranges(replica::database& db, 
         auto ranges = db.get_token_metadata().get_primary_ranges_for(std::move(tokens));
         std::vector<token_range> local_ranges;
         auto to_bytes = [](const std::optional<dht::token_range::bound>& b) {
-            assert(b);
+            SCYLLA_ASSERT(b);
             return utf8_type->decompose(b->value().to_sstring());
         };
         // We merge the ranges to be compatible with how Cassandra shows it's size estimates table.

@@ -11,6 +11,7 @@
 #include <seastar/util/defer.hh>
 #include "range_tombstone.hh"
 #include "query-request.hh"
+#include "utils/assert.hh"
 #include "utils/preempt.hh"
 #include "utils/chunked_vector.hh"
 #include <variant>
@@ -238,7 +239,7 @@ public:
     // The list is assumed not to be empty
     range_tombstone pop_front_and_lock() {
         range_tombstone_entry* rt = _tombstones.unlink_leftmost_without_rebalance();
-        assert(rt != nullptr);
+        SCYLLA_ASSERT(rt != nullptr);
         auto _ = seastar::defer([rt] () noexcept { current_deleter<range_tombstone_entry>()(rt); });
         return std::move(rt->tombstone());
     }

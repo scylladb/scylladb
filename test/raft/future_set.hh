@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/condition-variable.hh>
@@ -53,7 +54,7 @@ public:
             co_await _container.v.wait(wake_condition);
         }
 
-        assert(wake_condition());
+        SCYLLA_ASSERT(wake_condition());
 
         for (auto& f : _futures) {
             if (f.available()) {
@@ -65,7 +66,7 @@ public:
         }
 
         // No future was available, so `wake_condition()` implies:
-        assert(timer.now() >= timeout);
+        SCYLLA_ASSERT(timer.now() >= timeout);
         co_return std::nullopt;
     }
 
@@ -88,6 +89,6 @@ public:
     }
 
     ~future_set() {
-        assert(_futures.empty());
+        SCYLLA_ASSERT(_futures.empty());
     }
 };

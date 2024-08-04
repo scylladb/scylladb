@@ -8,6 +8,7 @@
 #include "fsm.hh"
 #include <random>
 #include <seastar/core/coroutine.hh>
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 
 namespace raft {
@@ -140,7 +141,7 @@ void fsm::advance_commit_idx(index_t leader_commit_idx) {
 
 void fsm::update_current_term(term_t current_term)
 {
-    assert(_current_term < current_term);
+    SCYLLA_ASSERT(_current_term < current_term);
     _current_term = current_term;
     _voted_for = server_id{};
 }
@@ -156,7 +157,7 @@ void fsm::reset_election_timeout() {
 }
 
 void fsm::become_leader() {
-    assert(!std::holds_alternative<leader>(_state));
+    SCYLLA_ASSERT(!std::holds_alternative<leader>(_state));
     _output.state_changed = true;
     _state.emplace<leader>(_config.max_log_size, *this);
 
@@ -258,7 +259,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
         // This means we must still have access to the previous configuration.
         // Become a candidate only if we were previously a voter.
         auto prev_cfg = _log.get_prev_configuration();
-        assert(prev_cfg);
+        SCYLLA_ASSERT(prev_cfg);
         if (!prev_cfg->can_vote(_my_id)) {
             // We weren't a voter before.
             become_follower(server_id{});
@@ -628,7 +629,7 @@ void fsm::append_entries(server_id from, append_request&& request) {
             _my_id, request.current_term, request.prev_log_idx, request.prev_log_term,
             request.leader_commit_idx, request.entries.size() ? request.entries[0]->idx : index_t(0), request.entries.size());
 
-    assert(is_follower());
+    SCYLLA_ASSERT(is_follower());
 
     // Ensure log matching property, even if we append no entries.
     // 3.5
@@ -663,7 +664,7 @@ void fsm::append_entries(server_id from, append_request&& request) {
 }
 
 void fsm::append_entries_reply(server_id from, append_reply&& reply) {
-    assert(is_leader());
+    SCYLLA_ASSERT(is_leader());
 
     follower_progress* opt_progress = leader_state().tracker.find(from);
     if (opt_progress == nullptr) {
@@ -754,7 +755,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
 
         // By `is_stray_reject(rejected) == false` we know that `rejected.non_matching_idx > progress.match_idx`
         // and `rejected.last_idx + 1 > progress.match_idx`. By the assignment to `progress.next_idx` above, we get:
-        assert(progress.next_idx > progress.match_idx);
+        SCYLLA_ASSERT(progress.next_idx > progress.match_idx);
     }
 
     // We may have just applied a configuration that removes this
@@ -773,7 +774,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // We can cast a vote in any state. If the candidate's term is
     // lower than ours, we ignore the request. Otherwise we first
     // update our current term and convert to a follower.
-    assert(request.is_prevote || _current_term == request.current_term);
+    SCYLLA_ASSERT(request.is_prevote || _current_term == request.current_term);
 
     bool can_vote =
         // We can vote if this is a repeat of a vote we've already cast...
@@ -824,7 +825,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 }
 
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
-    assert(is_candidate());
+    SCYLLA_ASSERT(is_candidate());
 
     logger.trace("request_vote_reply[{}] received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
@@ -961,7 +962,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 }
 
 void fsm::replicate() {
-    assert(is_leader());
+    SCYLLA_ASSERT(is_leader());
     for (auto& [id, progress] : leader_state().tracker) {
         if (progress.id != _my_id) {
             replicate_to(progress, false);
@@ -999,7 +1000,7 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
     // If the snapshot is locally generated, all entries up to its index must have been locally applied,
     // so in particular they must have been observed as committed.
     // Remote snapshots are only applied if we're a follower.
-    assert((local && snp.idx <= _observed._commit_idx) || (!local && is_follower()));
+    SCYLLA_ASSERT((local && snp.idx <= _observed._commit_idx) || (!local && is_follower()));
 
     // We don't apply snapshots older than the last applied one.
     // Furthermore, for remote snapshots, we can *only* apply them if they are fresher than our commit index.
@@ -1074,7 +1075,7 @@ void fsm::broadcast_read_quorum(read_id id) {
 }
 
 void fsm::handle_read_quorum_reply(server_id from, const read_quorum_reply& reply) {
-    assert(is_leader());
+    SCYLLA_ASSERT(is_leader());
     logger.trace("handle_read_quorum_reply[{}] got reply from {} for id {}", _my_id, from, reply.id);
     auto& state = leader_state();
     follower_progress* progress = state.tracker.find(from);
@@ -1114,7 +1115,7 @@ std::optional<std::pair<read_id, index_t>> fsm::start_read_barrier(server_id req
     }
 
     auto term_for_commit_idx = _log.term_for(_commit_idx);
-    assert(term_for_commit_idx);
+    SCYLLA_ASSERT(term_for_commit_idx);
 
     if (*term_for_commit_idx != _current_term) {
         return {};

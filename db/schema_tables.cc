@@ -19,6 +19,7 @@
 #include "query-result-writer.hh"
 #include "schema/schema_builder.hh"
 #include "map_difference.hh"
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/to_string.hh"
 #include <seastar/coroutine/all.hh>
@@ -452,9 +453,9 @@ const std::unordered_set<table_id>& schema_tables_holding_schema_mutations() {
                 db::system_keyspace::legacy::column_families(),
                 db::system_keyspace::legacy::columns(),
                 db::system_keyspace::legacy::triggers()}) {
-            assert(s->clustering_key_size() > 0);
+            SCYLLA_ASSERT(s->clustering_key_size() > 0);
             auto&& first_column_name = s->clustering_column_at(0).name_as_text();
-            assert(first_column_name == "table_name"
+            SCYLLA_ASSERT(first_column_name == "table_name"
                 || first_column_name == "view_name"
                 || first_column_name == "columnfamily_name");
             ids.emplace(s->id());
@@ -904,7 +905,7 @@ read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, s
 future<mutation>
 read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, schema_ptr schema, const sstring& keyspace_name, const sstring& table_name)
 {
-    assert(schema_tables_holding_schema_mutations().contains(schema->id()));
+    SCYLLA_ASSERT(schema_tables_holding_schema_mutations().contains(schema->id()));
     auto keyspace_key = partition_key::from_singular(*schema, keyspace_name);
     auto clustering_range = query::clustering_range(clustering_key_prefix::from_clustering_prefix(
             *schema, exploded_clustering_prefix({utf8_type->decompose(table_name)})));
@@ -942,7 +943,7 @@ future<> merge_unlock() {
 }
 
 future<semaphore_units<>> hold_merge_lock() noexcept {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     if (slogger.is_enabled(log_level::trace)) {
         slogger.trace("hold_merge_lock at {}", current_backtrace());
@@ -2074,7 +2075,7 @@ template<typename K, typename Map>
 static void store_map(mutation& m, const K& ckey, const bytes& name, api::timestamp_type timestamp, const Map& map) {
     auto s = m.schema();
     auto column = s->get_column_definition(name);
-    assert(column);
+    SCYLLA_ASSERT(column);
     set_cell_or_clustered(m, ckey, *column, make_map_mutation(map, *column, timestamp));
 }
 

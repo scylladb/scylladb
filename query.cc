@@ -22,6 +22,7 @@
 #include "query_result_merger.hh"
 #include "partition_slice_builder.hh"
 #include "schema/schema_registry.hh"
+#include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 
 namespace query {
@@ -115,7 +116,7 @@ void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& range
             it = ranges.erase(it);
             continue;
         } else if (cmp(start_bound(*it), pos) <= 0) {
-            assert(cmp(pos, end_bound(*it)) < 0);
+            SCYLLA_ASSERT(cmp(pos, end_bound(*it)) < 0);
             auto r = reversed ?
                 clustering_range(it->start(), clustering_range::bound(pos.key(), pos.get_bound_weight() != bound_weight::before_all_prefixed)) :
                 clustering_range(clustering_range::bound(pos.key(), pos.get_bound_weight() != bound_weight::after_all_prefixed), it->end());
@@ -266,7 +267,7 @@ void partition_slice::clear_range(const schema& s, const partition_key& k) {
         // just in case someone changes the impl above,
         // we should do actual remove if specific_ranges suddenly
         // becomes an actual map
-        assert(_specific_ranges->size() == 1);
+        SCYLLA_ASSERT(_specific_ranges->size() == 1);
         _specific_ranges = nullptr;
     }
 }
@@ -426,12 +427,12 @@ std::ostream& operator<<(std::ostream& out, const query::mapreduce_result::print
 }
 
 std::optional<query::clustering_range> position_range_to_clustering_range(const position_range& r, const schema& s) {
-    assert(r.start().get_type() == partition_region::clustered);
-    assert(r.end().get_type() == partition_region::clustered);
+    SCYLLA_ASSERT(r.start().get_type() == partition_region::clustered);
+    SCYLLA_ASSERT(r.end().get_type() == partition_region::clustered);
 
     if (r.start().has_key() && r.end().has_key()
             && clustering_key_prefix::equality(s)(r.start().key(), r.end().key())) {
-        assert(r.start().get_bound_weight() != r.end().get_bound_weight());
+        SCYLLA_ASSERT(r.start().get_bound_weight() != r.end().get_bound_weight());
 
         if (r.end().get_bound_weight() == bound_weight::after_all_prefixed
                 && r.start().get_bound_weight() != bound_weight::after_all_prefixed) {
@@ -452,16 +453,16 @@ std::optional<query::clustering_range> position_range_to_clustering_range(const 
 
     auto to_bound = [&s] (const position_in_partition& p, bool left) -> std::optional<query::clustering_range::bound> {
         if (p.is_before_all_clustered_rows(s)) {
-            assert(left);
+            SCYLLA_ASSERT(left);
             return {};
         }
 
         if (p.is_after_all_clustered_rows(s)) {
-            assert(!left);
+            SCYLLA_ASSERT(!left);
             return {};
         }
 
-        assert(p.has_key());
+        SCYLLA_ASSERT(p.has_key());
 
         auto bw = p.get_bound_weight();
         bool inclusive = left

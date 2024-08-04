@@ -30,6 +30,7 @@
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/commitlog/commitlog.hh"
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 
 struct test_config {
@@ -120,7 +121,7 @@ struct commitlog_service {
     {}
 
     future<> init(const db::commitlog::config& cfg) {
-        assert(!log);
+        SCYLLA_ASSERT(!log);
         log.emplace(co_await db::commitlog::create_commitlog(cfg));
         fa.emplace(log->add_flush_handler(std::bind(&commitlog_service::flush_handler, this, std::placeholders::_1, std::placeholders::_2)));
     }

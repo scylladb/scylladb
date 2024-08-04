@@ -20,6 +20,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/net/byteorder.hh>
 #include "bytes.hh"
+#include "utils/assert.hh"
 #include "utils/hashing.hh"
 #include "utils/serialization.hh"
 
@@ -57,7 +58,7 @@ public:
         //if (version() != 1) {
         //     throw new UnsupportedOperationException("Not a time-based UUID");
         //}
-        assert(is_timestamp());
+        SCYLLA_ASSERT(is_timestamp());
 
         return ((most_sig_bits & 0xFFF) << 48) |
                (((most_sig_bits >> 16) & 0xFFFF) << 32) |

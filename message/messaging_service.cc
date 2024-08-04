@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -661,9 +662,9 @@ static constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> 
     for (size_t i = 0; i < tab.size(); ++i) {
         tab[i] = do_get_rpc_client_idx(messaging_verb(i));
 
-        // This assert guards against adding new connection types without
+        // This SCYLLA_ASSERT guards against adding new connection types without
         // updating *_CONNECTION_COUNT constants.
-        assert(tab[i] < PER_TENANT_CONNECTION_COUNT + PER_SHARD_CONNECTION_COUNT);
+        SCYLLA_ASSERT(tab[i] < PER_TENANT_CONNECTION_COUNT + PER_SHARD_CONNECTION_COUNT);
     }
     return tab;
 }
@@ -709,7 +710,7 @@ messaging_service::initial_scheduling_info() const {
         }
     }
 
-    assert(sched_infos.size() == PER_SHARD_CONNECTION_COUNT +
+    SCYLLA_ASSERT(sched_infos.size() == PER_SHARD_CONNECTION_COUNT +
         _scheduling_config.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT);
     return sched_infos;
 };
@@ -798,7 +799,7 @@ gms::inet_address messaging_service::get_public_endpoint_for(const gms::inet_add
 }
 
 shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, msg_addr id) {
-    assert(!_shutting_down);
+    SCYLLA_ASSERT(!_shutting_down);
     if (_cfg.maintenance_mode) {
         on_internal_error(mlogger, "This node is in maintenance mode, it shouldn't contact other nodes");
     }
@@ -900,7 +901,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
     opts.metrics_domain = client_metrics_domain(idx, id.addr); // not just `addr` as the latter may be internal IP
 
-    assert(!must_encrypt || _credentials);
+    SCYLLA_ASSERT(!must_encrypt || _credentials);
 
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
@@ -916,7 +917,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     // the topology (so we always set `topology_ignored` to `false` in that case).
     bool topology_ignored = idx != TOPOLOGY_INDEPENDENT_IDX && topology_status.has_value() && *topology_status == false;
     auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored));
-    assert(res.second);
+    SCYLLA_ASSERT(res.second);
     it = res.first;
     uint32_t src_cpu_id = this_shard_id();
     // No reply is received, nothing to wait for.

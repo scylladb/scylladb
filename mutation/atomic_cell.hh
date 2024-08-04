@@ -12,6 +12,7 @@
 #include "timestamp.hh"
 #include "mutation/tombstone.hh"
 #include "gc_clock.hh"
+#include "utils/assert.hh"
 #include "utils/managed_bytes.hh"
 #include <seastar/net//byteorder.hh>
 #include <seastar/util/bool_class.hh>
@@ -126,18 +127,18 @@ public:
     }
     // Can be called only when is_dead() is true.
     static gc_clock::time_point deletion_time(atomic_cell_value_view cell) {
-        assert(is_dead(cell));
+        SCYLLA_ASSERT(is_dead(cell));
         return gc_clock::time_point(gc_clock::duration(get_field<int64_t>(cell, deletion_time_offset)));
     }
     // Can be called only when is_live_and_has_ttl() is true.
     static gc_clock::time_point expiry(atomic_cell_value_view cell) {
-        assert(is_live_and_has_ttl(cell));
+        SCYLLA_ASSERT(is_live_and_has_ttl(cell));
         auto expiry = get_field<int64_t>(cell, expiry_offset);
         return gc_clock::time_point(gc_clock::duration(expiry));
     }
     // Can be called only when is_live_and_has_ttl() is true.
     static gc_clock::duration ttl(atomic_cell_value_view cell) {
-        assert(is_live_and_has_ttl(cell));
+        SCYLLA_ASSERT(is_live_and_has_ttl(cell));
         return gc_clock::duration(get_field<int32_t>(cell, ttl_offset));
     }
     static managed_bytes make_dead(api::timestamp_type timestamp, gc_clock::time_point deletion_time) {

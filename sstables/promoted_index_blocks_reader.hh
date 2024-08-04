@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "consumer.hh"
 #include "column_translation.hh"
 #include "sstables/mx/parsers.hh"
@@ -172,7 +173,7 @@ public:
         std::visit([this, &data] (auto& ctx) mutable { return process_state(data, ctx); }, _ctx);
 
         if (_mode == consuming_mode::consume_until) {
-            assert(_pos);
+            SCYLLA_ASSERT(_pos);
             auto cmp_with_start = [this, pos_cmp = promoted_index_block_compare(_s)]
                     (position_in_partition_view pos, const promoted_index_block& block) -> bool {
                 return pos_cmp(pos, block.start(_s));

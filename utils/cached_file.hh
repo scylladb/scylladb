@@ -9,6 +9,7 @@
 #pragma once
 
 #include "reader_permit.hh"
+#include "utils/assert.hh"
 #include "utils/div_ceil.hh"
 #include "utils/bptree.hh"
 #include "utils/logalloc.hh"
@@ -97,7 +98,7 @@ private:
         }
 
         ~cached_page() {
-            assert(!_use_count);
+            SCYLLA_ASSERT(!_use_count);
         }
 
         void on_evicted() noexcept override;
@@ -364,7 +365,7 @@ public:
 
     ~cached_file() {
         evict_range(_cache.begin(), _cache.end());
-        assert(_cache.empty());
+        SCYLLA_ASSERT(_cache.empty());
     }
 
     /// \brief Invalidates [start, end) or less.

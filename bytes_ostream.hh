@@ -11,6 +11,7 @@
 #include <boost/range/iterator_range.hpp>
 
 #include "bytes.hh"
+#include "utils/assert.hh"
 #include "utils/managed_bytes.hh"
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/loop.hh>
@@ -269,7 +270,7 @@ public:
 
     // Call only when is_linearized()
     bytes_view view() const {
-        assert(is_linearized());
+        SCYLLA_ASSERT(is_linearized());
         if (!_current) {
             return bytes_view();
         }

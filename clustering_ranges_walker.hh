@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "schema/schema.hh"
 #include "query-request.hh"
 #include "mutation/mutation_fragment.hh"
@@ -249,7 +250,7 @@ public:
             auto range_end = position_in_partition_view::for_range_end(rng);
             if (!less(rt.position(), range_start) && !less(range_end, rt.end_position())) {
                 // Fully enclosed by this range.
-                assert(!first);
+                SCYLLA_ASSERT(!first);
                 return std::move(rt);
             }
             auto this_range_rt = rt;

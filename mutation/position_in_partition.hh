@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "types/types.hh"
 #include "keys.hh"
 #include "clustering_bounds_comparator.hh"
@@ -238,12 +239,12 @@ public:
 
     // Can be called only when !is_static_row && !is_clustering_row().
     bound_view as_start_bound_view() const {
-        assert(_bound_weight != bound_weight::equal);
+        SCYLLA_ASSERT(_bound_weight != bound_weight::equal);
         return bound_view(*_ck, _bound_weight == bound_weight::before_all_prefixed ? bound_kind::incl_start : bound_kind::excl_start);
     }
 
     bound_view as_end_bound_view() const {
-        assert(_bound_weight != bound_weight::equal);
+        SCYLLA_ASSERT(_bound_weight != bound_weight::equal);
         return bound_view(*_ck, _bound_weight == bound_weight::before_all_prefixed ? bound_kind::excl_end : bound_kind::incl_end);
     }
 

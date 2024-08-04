@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "raw/cf_statement.hh"
 #include "service/client_state.hh"
 
@@ -40,13 +41,13 @@ void cf_statement::prepare_keyspace(std::string_view keyspace)
 }
 
 bool cf_statement::has_keyspace() const {
-    assert(_cf_name.has_value());
+    SCYLLA_ASSERT(_cf_name.has_value());
     return _cf_name->has_keyspace();
 }
 
 const sstring& cf_statement::keyspace() const
 {
-    assert(_cf_name->has_keyspace()); // "The statement hasn't be prepared correctly";
+    SCYLLA_ASSERT(_cf_name->has_keyspace()); // "The statement hasn't be prepared correctly";
     return _cf_name->get_keyspace();
 }
 

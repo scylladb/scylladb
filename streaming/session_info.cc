@@ -8,12 +8,13 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "streaming/session_info.hh"
 
 namespace streaming {
 
 void session_info::update_progress(progress_info new_progress) {
-    assert(peer == new_progress.peer);
+    SCYLLA_ASSERT(peer == new_progress.peer);
     auto& current_files = new_progress.dir == progress_info::direction::IN
         ? receiving_files : sending_files;
     current_files[new_progress.file_name] = new_progress;

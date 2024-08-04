@@ -52,6 +52,7 @@
 #include <boost/range/algorithm/partition.hpp>
 #include <boost/intrusive/list.hpp>
 #include <boost/outcome/result.hpp>
+#include "utils/assert.hh"
 #include "utils/latency.hh"
 #include "schema/schema.hh"
 #include "query_ranges_to_vnodes.hh"
@@ -233,7 +234,7 @@ public:
     }
 
     ~remote() {
-        assert(_stopped);
+        SCYLLA_ASSERT(_stopped);
     }
 
     // Must call before destroying the `remote` object.
@@ -734,7 +735,7 @@ private:
 
         co_await utils::get_local_injector().inject("storage_proxy::handle_read", [s] (auto& handler) -> future<> {
             const auto cf_name = handler.get("cf_name");
-            assert(cf_name);
+            SCYLLA_ASSERT(cf_name);
             if (s->cf_name() != cf_name) {
                 co_return;
             }
@@ -1898,7 +1899,7 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
                 co_await sleep_approx_50ms();
                 continue;
             }
-            assert(true); // no fall through
+            SCYLLA_ASSERT(true); // no fall through
         }
 
         // To be able to propose our value on a new round, we need a quorum of replica to have learn
@@ -2414,13 +2415,13 @@ void storage_proxy::unthrottle() {
 storage_proxy::response_id_type storage_proxy::register_response_handler(shared_ptr<abstract_write_response_handler>&& h) {
     auto id = h->id();
     auto e = _response_handlers.emplace(id, std::move(h));
-    assert(e.second);
+    SCYLLA_ASSERT(e.second);
     return id;
 }
 
 void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) {
     auto entry = _response_handlers.find(id);
-    assert(entry != _response_handlers.end());
+    SCYLLA_ASSERT(entry != _response_handlers.end());
     remove_response_handler_entry(std::move(entry));
 }
 
@@ -2922,7 +2923,7 @@ namespace service {
 using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {
-    assert(!_remote);
+    SCYLLA_ASSERT(!_remote);
 }
 
 storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
@@ -3405,7 +3406,7 @@ future<result<>> storage_proxy::mutate_begin(unique_response_handler_vector ids,
 // this function should be called with a future that holds result of mutation attempt (usually
 // future returned by mutate_begin()). The future should be ready when function is called.
 future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils::latency_counter lc, write_stats& stats, tracing::trace_state_ptr trace_state) {
-    assert(mutate_result.available());
+    SCYLLA_ASSERT(mutate_result.available());
     stats.write.mark(lc.stop().latency());
 
     return utils::result_futurize_try([&] {
@@ -3704,7 +3705,7 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
     bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
     warn(unimplemented::cause::TRIGGERS);
     if (should_mutate_atomically) {
-        assert(!raw_counters);
+        SCYLLA_ASSERT(!raw_counters);
         return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit));
     }
     return mutate_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), allow_limit, raw_counters);
@@ -4387,7 +4388,7 @@ public:
         }
     }
     bool digests_match() const {
-        assert(response_count());
+        SCYLLA_ASSERT(response_count());
         if (response_count() == 1) {
             return true;
         }
@@ -4599,7 +4600,7 @@ private:
                 break;
             }
         }
-        assert(last_partition);
+        SCYLLA_ASSERT(last_partition);
         return get_last_row(s, *last_partition, is_reversed);
     }
 
@@ -4791,7 +4792,7 @@ public:
     }
     future<std::optional<reconcilable_result>> resolve(schema_ptr schema, const query::read_command& cmd, uint64_t original_row_limit, uint64_t original_per_partition_limit,
             uint32_t original_partition_limit) {
-        assert(_data_results.size());
+        SCYLLA_ASSERT(_data_results.size());
 
         if (_data_results.size() == 1) {
             // if there is a result only from one node there is nothing to reconcile
@@ -6232,8 +6233,8 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
         co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));
     }
 
-    assert(partition_ranges.size() == 1);
-    assert(query::is_single_partition(partition_ranges[0]));
+    SCYLLA_ASSERT(partition_ranges.size() == 1);
+    SCYLLA_ASSERT(query::is_single_partition(partition_ranges[0]));
 
     db::validate_for_cas(cl_for_paxos);
     db::validate_for_cas_learn(cl_for_learn, schema->ks_name());
@@ -6672,7 +6673,7 @@ void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint, const lo
 void storage_proxy::on_up(const gms::inet_address& endpoint) {};
 
 void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun) {
-    assert(thread::running_in_thread());
+    SCYLLA_ASSERT(thread::running_in_thread());
     auto it = _cancellable_write_handlers_list->begin();
     while (it != _cancellable_write_handlers_list->end()) {
         auto guard = it->shared_from_this();

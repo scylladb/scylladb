@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <boost/signals2.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 
@@ -81,7 +82,7 @@ public:
      */
     virtual gms::application_state_map get_app_states() const = 0;
 
-    virtual ~i_endpoint_snitch() { assert(_state == snitch_state::stopped); };
+    virtual ~i_endpoint_snitch() { SCYLLA_ASSERT(_state == snitch_state::stopped); };
 
     // noop by default
     virtual future<> stop() {

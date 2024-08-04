@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <vector>
 #include "row_cache.hh"
 #include "mutation/mutation_fragment.hh"
@@ -283,7 +284,7 @@ future<> cache_mutation_reader::process_static_row() {
         return ensure_underlying().then([this] {
             return (*_underlying)().then([this] (mutation_fragment_v2_opt&& sr) {
                 if (sr) {
-                    assert(sr->is_static_row());
+                    SCYLLA_ASSERT(sr->is_static_row());
                     maybe_add_to_cache(sr->as_static_row());
                     push_mutation_fragment(std::move(*sr));
                 }
@@ -382,7 +383,7 @@ future<> cache_mutation_reader::do_fill_buffer() {
     if (_state == state::reading_from_underlying) {
         return read_from_underlying();
     }
-    // assert(_state == state::reading_from_cache)
+    // SCYLLA_ASSERT(_state == state::reading_from_cache)
     return _lsa_manager.run_in_read_section([this] {
         auto next_valid = _next_row.iterators_valid();
         clogger.trace("csm {}: reading_from_cache, range=[{}, {}), next={}, valid={}, rt={}", fmt::ptr(this), _lower_bound,
@@ -990,7 +991,7 @@ void cache_mutation_reader::offer_from_underlying(mutation_fragment_v2&& mf) {
         maybe_add_to_cache(mf.as_clustering_row());
         add_clustering_row_to_buffer(std::move(mf));
     } else {
-        assert(mf.is_range_tombstone_change());
+        SCYLLA_ASSERT(mf.is_range_tombstone_change());
         auto& chg = mf.as_range_tombstone_change();
         if (maybe_add_to_cache(chg)) {
             add_to_buffer(std::move(mf).as_range_tombstone_change());

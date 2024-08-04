@@ -20,6 +20,7 @@
 #include "compaction/compaction_manager.hh"
 #include "log.hh"
 #include "sstable_directory.hh"
+#include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/directories.hh"
@@ -433,7 +434,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
             return make_ready_future<>();
         }
         // Should be empty, since an SSTable that belongs to this shard is not remote.
-        assert(shard_id != this_shard_id());
+        SCYLLA_ASSERT(shard_id != this_shard_id());
         dirlog.debug("Moving {} unshared SSTables to shard {} ", info_vec.size(), shard_id);
         return source_directory.invoke_on(shard_id, &sstables::sstable_directory::load_foreign_sstables, std::move(info_vec));
     });
@@ -469,7 +470,7 @@ sstable_directory::collect_output_unshared_sstables(std::vector<sstables::shared
     dirlog.debug("Collecting {} output SSTables (remote={})", resharded_sstables.size(), remote_ok);
     return parallel_for_each(std::move(resharded_sstables), [this, remote_ok] (sstables::shared_sstable sst) {
         auto shards = sst->get_shards_for_this_sstable();
-        assert(shards.size() == 1);
+        SCYLLA_ASSERT(shards.size() == 1);
         auto shard = shards[0];
 
         if (shard == this_shard_id()) {

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "counters.hh"
 #include "mutation/mutation.hh"
 #include "combine.hh"
@@ -104,8 +105,8 @@ void counter_cell_view::apply(const column_definition& cdef, atomic_cell_or_coll
         return;
     }
 
-    assert(!dst_ac.is_counter_update());
-    assert(!src_ac.is_counter_update());
+    SCYLLA_ASSERT(!dst_ac.is_counter_update());
+    SCYLLA_ASSERT(!src_ac.is_counter_update());
 
     auto src_ccv = counter_cell_view(src_ac);
     auto dst_ccv = counter_cell_view(dst_ac);
@@ -132,8 +133,8 @@ void counter_cell_view::apply(const column_definition& cdef, atomic_cell_or_coll
 
 std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, atomic_cell_view b)
 {
-    assert(!a.is_counter_update());
-    assert(!b.is_counter_update());
+    SCYLLA_ASSERT(!a.is_counter_update());
+    SCYLLA_ASSERT(!b.is_counter_update());
 
     if (!b.is_live() || !a.is_live()) {
         if (b.is_live() || (!a.is_live() && compare_atomic_cell_for_merge(b, a) < 0)) {

@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "bytes.hh"
 #include "schema/schema_fwd.hh"
 #include "query-result-reader.hh"
@@ -331,7 +332,7 @@ public:
                     add_value(*def, static_row_iterator);
                     break;
                 default:
-                    assert(0);
+                    SCYLLA_ASSERT(0);
                 }
             }
             _builder.complete_row();

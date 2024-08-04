@@ -7,6 +7,7 @@
  */
 
 
+#include "utils/assert.hh"
 #include <fmt/ranges.h>
 
 #include <boost/range/adaptor/transformed.hpp>
@@ -50,19 +51,19 @@ static schema_ptr make_schema() {
 
 struct mutation_less_cmp {
     bool operator()(const mutation& m1, const mutation& m2) const {
-        assert(m1.schema() == m2.schema());
+        SCYLLA_ASSERT(m1.schema() == m2.schema());
         return m1.decorated_key().less_compare(*m1.schema(), m2.decorated_key());
     }
 };
 static mutation_source make_source(std::vector<mutation> mutations) {
     return mutation_source([mutations = std::move(mutations)] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
             tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
-        assert(range.is_full()); // slicing not implemented yet
+        SCYLLA_ASSERT(range.is_full()); // slicing not implemented yet
         for (auto&& m : mutations) {
             if (slice.is_reversed()) {
-                assert(m.schema()->make_reversed()->version() == s->version());
+                SCYLLA_ASSERT(m.schema()->make_reversed()->version() == s->version());
             } else {
-                assert(m.schema() == s);
+                SCYLLA_ASSERT(m.schema() == s);
             }
         }
         return make_mutation_reader_from_mutations_v2(s, std::move(permit), mutations, slice, fwd);

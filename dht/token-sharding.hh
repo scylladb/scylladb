@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "dht/token.hh"
 #include <seastar/core/smp.hh>
 #include <boost/container/static_vector.hpp>
@@ -62,7 +63,7 @@ public:
      *
      *   [] (const token& t) {
      *      auto shards = shard_for_writes();
-     *      assert(shards.size() <= 1);
+     *      SCYLLA_ASSERT(shards.size() <= 1);
      *      return shards.empty() ? 0 : shards[0];
      *   }
      *

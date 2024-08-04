@@ -16,6 +16,7 @@
 #include "cql3/cql_config.hh"
 #include "types/set.hh"
 #include "types/map.hh"
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/class_registrator.hh"
 #include "service/storage_proxy.hh"
@@ -436,7 +437,7 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
         return with_semaphore(write_sem, 1, [this, records, session_record_is_ready, &events_records] {
             // This code is inside the _pending_writes gate and the qp pointer
             // is cleared on ::stop() after the gate is closed.
-            assert(_qp_anchor != nullptr && _mm_anchor != nullptr);
+            SCYLLA_ASSERT(_qp_anchor != nullptr && _mm_anchor != nullptr);
             cql3::query_processor& qp = *_qp_anchor;
             service::migration_manager& mm = *_mm_anchor;
             return apply_events_mutation(qp, mm, records, events_records).then([this, &qp, &mm, session_record_is_ready, records] {

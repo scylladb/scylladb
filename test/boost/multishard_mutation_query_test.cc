@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "multishard_mutation_query.hh"
 #include "schema/schema_registry.hh"
 #include "db/config.hh"
@@ -303,7 +304,7 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
         while (!ranges->front().contains(res_builder.last_pkey(), cmp)) {
             ranges->erase(ranges->begin());
         }
-        assert(!ranges->empty());
+        SCYLLA_ASSERT(!ranges->empty());
 
         const auto pkrange_begin_inclusive = res_builder.last_ckey() && res_builder.last_pkey_rows() < slice.partition_row_limit();
 
@@ -896,7 +897,7 @@ namespace {
 
 template <typename RandomEngine>
 static interval<int> generate_range(RandomEngine& rnd_engine, int start, int end, bool allow_open_ended_start = true) {
-    assert(start < end);
+    SCYLLA_ASSERT(start < end);
 
     std::uniform_int_distribution<int> defined_bound_dist(0, 7);
     std::uniform_int_distribution<int8_t> inclusive_dist(0, 1);

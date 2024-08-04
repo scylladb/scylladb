@@ -18,6 +18,7 @@
 #include "allocation_strategy.hh"
 #include "seastarx.hh"
 #include "db/timeout_clock.hh"
+#include "utils/assert.hh"
 #include "utils/entangled.hh"
 #include "utils/memory_limit_reached.hh"
 
@@ -304,7 +305,7 @@ public:
     tracker& get_tracker() { return _tracker; }
 
     void set_reclaiming_enabled(bool enabled) noexcept {
-        assert(this_shard_id() == _cpu);
+        SCYLLA_ASSERT(this_shard_id() == _cpu);
         _reclaiming_enabled = enabled;
     }
 
@@ -494,7 +495,7 @@ public:
     //
     template<typename Func>
     decltype(auto) with_reclaiming_disabled(logalloc::region& r, Func&& fn) {
-        assert(r.reclaiming_enabled());
+        SCYLLA_ASSERT(r.reclaiming_enabled());
         maybe_decay_reserve();
         while (true) {
             try {

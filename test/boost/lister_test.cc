@@ -20,6 +20,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 
+#include "utils/assert.hh"
 #include "utils/lister.hh"
 
 class expected_exception : public std::exception {
@@ -82,7 +83,7 @@ SEASTAR_TEST_CASE(test_lister_abort) {
     std::unordered_set<std::string> dir_names;
 
     auto count = co_await generate_random_content(tmp, file_names, dir_names, 1, tests::random::get_int(100, 1000));
-    assert(count > 0);
+    SCYLLA_ASSERT(count > 0);
     BOOST_TEST_MESSAGE(fmt::format("Generated {} dir entries", count));
 
     size_t initial = tests::random::get_int<size_t>(1, count);

@@ -27,6 +27,7 @@
 #include "gms/feature_service.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 
 #include <seastar/core/smp.hh>
@@ -269,7 +270,7 @@ static future<discovery::peer_list> load_discovered_peers(cql3::query_processor&
             "SELECT ip_addr, raft_server_id FROM system.{} WHERE key = '{}'",
             db::system_keyspace::DISCOVERY, DISCOVERY_KEY);
     auto rs = co_await qp.execute_internal(load_cql, cql3::query_processor::cache_internal::yes);
-    assert(rs);
+    SCYLLA_ASSERT(rs);
 
     discovery::peer_list peers;
     for (auto& r: *rs) {
@@ -286,7 +287,7 @@ static mutation make_discovery_mutation(discovery::peer_list peers) {
     auto s = db::system_keyspace::discovery();
     auto ts = api::new_timestamp();
     auto raft_id_cdef = s->get_column_definition("raft_server_id");
-    assert(raft_id_cdef);
+    SCYLLA_ASSERT(raft_id_cdef);
 
     mutation m(s, partition_key::from_singular(*s, DISCOVERY_KEY));
     for (auto& p: peers) {
@@ -389,7 +390,7 @@ future<> raft_group0::abort() {
 }
 
 future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
-    assert(group0_id != raft::group_id{});
+    SCYLLA_ASSERT(group0_id != raft::group_id{});
     // The address map may miss our own id in case we connect
     // to an existing Raft Group 0 leader.
     auto my_id = load_my_id();
@@ -442,8 +443,8 @@ future<> raft_group0::leadership_monitor_fiber() {
 
 future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_ptr<service::group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
                                   db::system_keyspace& sys_ks, bool topology_change_enabled) {
-    assert(this_shard_id() == 0);
-    assert(!joined_group0());
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    SCYLLA_ASSERT(!joined_group0());
 
     auto group0_id = raft::group_id{co_await sys_ks.get_raft_group0_id()};
     if (group0_id) {
@@ -501,7 +502,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
             // state is present, and if it is, do nothing.
         }
 
-        assert(server);
+        SCYLLA_ASSERT(server);
         if (server->get_configuration().contains(my_id)) {
             // True if we started a new group or completed a configuration change initiated earlier.
             group0_log.info("server {} already in group 0 (id {}) as {}", my_id, group0_id,
@@ -614,7 +615,7 @@ static future<bool> synchronize_schema(
         abort_source&);
 
 future<bool> raft_group0::use_raft() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     if (((co_await _client.get_group0_upgrade_state()).second) == group0_upgrade_state::recovery) {
         group0_log.warn("setup_group0: Raft RECOVERY mode, skipping group 0 setup.");
@@ -868,7 +869,7 @@ future<> raft_group0::remove_from_group0(raft::server_id node) {
 }
 
 future<bool> raft_group0::wait_for_raft() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     auto upgrade_state = (co_await _client.get_group0_upgrade_state()).second;
     if (upgrade_state == group0_upgrade_state::recovery) {
@@ -1609,7 +1610,7 @@ static auto warn_if_upgrade_takes_too_long() {
 }
 
 future<> raft_group0::upgrade_to_group0(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     auto start_state = (co_await _client.get_group0_upgrade_state()).second;
     switch (start_state) {
@@ -1648,7 +1649,7 @@ future<> raft_group0::upgrade_to_group0(service::storage_service& ss, cql3::quer
 
 // `start_state` is either `use_pre_raft_procedures` or `synchronize`.
 future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     // Check if every peer knows about the upgrade procedure.
     //

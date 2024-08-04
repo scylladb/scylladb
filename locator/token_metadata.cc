@@ -21,6 +21,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/adaptors.hpp>
 #include <seastar/core/smp.hh>
+#include "utils/assert.hh"
 #include "utils/stall_free.hh"
 
 namespace locator {
@@ -1216,7 +1217,7 @@ future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_funct
 
 future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func) {
     auto base_shard = this_shard_id();
-    assert(base_shard == 0);
+    SCYLLA_ASSERT(base_shard == 0);
     auto lk = co_await stm.local().get_lock();
 
     std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;

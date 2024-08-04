@@ -43,6 +43,7 @@
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
 #include "seastar/rpc/rpc_types.hh"
+#include "utils/assert.hh"
 #include "utils/exceptions.hh"
 #include "utils/error_injection.hh"
 #include "utils/to_string.hh"
@@ -842,7 +843,7 @@ gossiper::endpoint_permit::~endpoint_permit() {
 
 bool gossiper::endpoint_permit::release() noexcept {
     if (auto ptr = std::exchange(_ptr, nullptr)) {
-        assert(ptr->pid == _permit_id);
+        SCYLLA_ASSERT(ptr->pid == _permit_id);
         logger.debug("{}: lock_endpoint {}: released: permit_id={} holders={}", _caller.function_name(), _addr, _permit_id, ptr->holders);
         if (!--ptr->holders) {
             logger.debug("{}: lock_endpoint {}: released: permit_id={}", _caller.function_name(), _addr, _permit_id);
@@ -885,7 +886,7 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permi
         auto sub = _abort_source.subscribe([&aoe] () noexcept {
             aoe.abort_source().request_abort();
         });
-        assert(sub); // due to check() above
+        SCYLLA_ASSERT(sub); // due to check() above
         try {
             eptr->units = co_await get_units(eptr->sem, 1, aoe.abort_source());
             break;
@@ -1043,7 +1044,7 @@ future<> gossiper::failure_detector_loop() {
 // This needs to be run with a lock
 future<> gossiper::replicate_live_endpoints_on_change(foreign_ptr<std::unique_ptr<live_and_unreachable_endpoints>> data0, uint64_t new_version) {
     auto coordinator = this_shard_id();
-    assert(coordinator == 0);
+    SCYLLA_ASSERT(coordinator == 0);
     //
     // Gossiper task runs only on CPU0:
     //
@@ -1721,7 +1722,7 @@ future<> gossiper::real_mark_alive(inet_address addr) {
 
         locator::host_id id(utils::UUID(app_state_ptr->value()));
         auto second_node_ip = handler.get("second_node_ip");
-        assert(second_node_ip);
+        SCYLLA_ASSERT(second_node_ip);
 
         logger.info("real_mark_alive {}/{} second_node_ip={}", id, endpoint, *second_node_ip);
         if (endpoint == gms::inet_address(sstring{*second_node_ip})) {
@@ -1888,7 +1889,7 @@ bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
 }
 
 future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id pid) {
-    // don't assert here, since if the node restarts the version will go back to zero
+    // don't SCYLLA_ASSERT here, since if the node restarts the version will go back to zero
     //int oldVersion = local_state.get_heart_beat_state().get_heart_beat_version();
 
     verify_permit(addr, pid);

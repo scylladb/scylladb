@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "transport/event.hh"
 
 namespace cql_transport {
@@ -57,17 +58,17 @@ event::schema_change::schema_change(change_type change, target_type target, sstr
 {
     switch (target) {
     case event::schema_change::target_type::KEYSPACE:
-        assert(this->arguments.empty());
+        SCYLLA_ASSERT(this->arguments.empty());
         break;
     case event::schema_change::target_type::TYPE:
     case event::schema_change::target_type::TABLE:
         // just the name
-        assert(this->arguments.size() == 1);
+        SCYLLA_ASSERT(this->arguments.size() == 1);
         break;
     case event::schema_change::target_type::FUNCTION:
     case event::schema_change::target_type::AGGREGATE:
         // at least the name
-        assert(this->arguments.size() >= 1);
+        SCYLLA_ASSERT(this->arguments.size() >= 1);
         break;
     }
 }

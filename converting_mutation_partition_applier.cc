@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "concrete_types.hh"
 
@@ -53,7 +54,7 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
 
     visit(old_type, make_visitor(
         [&] (const collection_type_impl& old_ctype) {
-            assert(new_def.type->is_collection()); // because is_compatible
+            SCYLLA_ASSERT(new_def.type->is_collection()); // because is_compatible
             auto& new_ctype = static_cast<const collection_type_impl&>(*new_def.type);
 
             auto& new_value_type = *new_ctype.value_comparator();
@@ -67,13 +68,13 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
             }
         },
         [&] (const user_type_impl& old_utype) {
-            assert(new_def.type->is_user_type()); // because is_compatible
+            SCYLLA_ASSERT(new_def.type->is_user_type()); // because is_compatible
             auto& new_utype = static_cast<const user_type_impl&>(*new_def.type);
 
             for (auto& c : old_view.cells) {
                 if (c.second.timestamp() > new_def.dropped_at()) {
                     auto idx = deserialize_field_index(c.first);
-                    assert(idx < new_utype.size() && idx < old_utype.size());
+                    SCYLLA_ASSERT(idx < new_utype.size() && idx < old_utype.size());
 
                     new_view.cells.emplace_back(c.first, upgrade_cell(
                             *new_utype.type(idx), *old_utype.type(idx), c.second, atomic_cell::collection_member::yes));

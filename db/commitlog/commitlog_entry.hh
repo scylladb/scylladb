@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <optional>
 
 #include "commitlog_types.hh"
@@ -111,7 +112,7 @@ public:
     }
 
     size_t size() const {
-        assert(_size != std::numeric_limits<size_t>::max());
+        SCYLLA_ASSERT(_size != std::numeric_limits<size_t>::max());
         return _size;
     }
 

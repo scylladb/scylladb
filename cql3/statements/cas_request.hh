@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #pragma once
+#include "utils/assert.hh"
 #include "service/paxos/cas_request.hh"
 #include "cql3/statements/modification_statement.hh"
 
@@ -49,7 +50,7 @@ public:
           , _key(std::move(key_arg))
           , _rows(schema_arg)
     {
-        assert(_key.size() == 1 && query::is_single_partition(_key.front()));
+        SCYLLA_ASSERT(_key.size() == 1 && query::is_single_partition(_key.front()));
     }
 
     dht::partition_range_vector key() const {

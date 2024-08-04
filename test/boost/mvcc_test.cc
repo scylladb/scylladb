@@ -7,6 +7,7 @@
  */
 
 
+#include "utils/assert.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
@@ -207,7 +208,7 @@ void mvcc_partition::apply_to_evictable(partition_entry&& src, schema_ptr src_sc
 }
 
 mvcc_partition& mvcc_partition::operator+=(mvcc_partition&& src) {
-    assert(_evictable);
+    SCYLLA_ASSERT(_evictable);
     apply_to_evictable(std::move(src.entry()), src.schema());
     return *this;
 }

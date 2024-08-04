@@ -7,6 +7,7 @@
  */
 #include "server.hh"
 
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/transformed.hpp>
@@ -487,7 +488,7 @@ future<bool> server_impl::trigger_snapshot(seastar::abort_source* as) {
         if (as) {
             as->check();
             sub = as->subscribe([this] () noexcept { _snapshot_desc_idx_changed.broadcast(); });
-            assert(sub); // due to `check()` above
+            SCYLLA_ASSERT(sub); // due to `check()` above
         }
         co_await _snapshot_desc_idx_changed.when([this, as, awaited_idx] {
             return (as && as->abort_requested()) || awaited_idx <= _snapshot_desc_idx;
@@ -536,8 +537,8 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
                 // was created, it included the entry `eid`.
                 auto snap_idx = _fsm->log_last_snapshot_idx();
                 auto snap_term = _fsm->log_term_for(snap_idx);
-                assert(snap_term);
-                assert(snap_idx >= eid.idx);
+                SCYLLA_ASSERT(snap_term);
+                SCYLLA_ASSERT(snap_idx >= eid.idx);
                 if (type == wait_type::committed && snap_term == eid.term) {
                     logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away, but has the snapshot's term"
                                  " (snapshot index: {})", id(), eid.term, eid.idx, snap_idx);
@@ -585,7 +586,7 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
     auto [it, inserted] = container.emplace(eid.idx, op_status{eid.term, promise<>()});
     if (!inserted) {
         // No two leaders can exist with the same term.
-        assert(it->second.term != eid.term);
+        SCYLLA_ASSERT(it->second.term != eid.term);
 
         auto term_of_commit_idx = *_fsm->log_term_for(_fsm->commit_idx());
         if (it->second.term > eid.term) {
@@ -621,13 +622,13 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
             _stats.waiters_dropped++;
         }
     }
-    assert(inserted);
+    SCYLLA_ASSERT(inserted);
     if (as) {
         it->second.abort = as->subscribe([it = it, &container] () noexcept {
             it->second.done.set_exception(request_aborted());
             container.erase(it);
         });
-        assert(it->second.abort);
+        SCYLLA_ASSERT(it->second.abort);
     }
     co_await it->second.done.get_future();
     logger.trace("[{}] done waiting for {}.{}", id(), eid.term, eid.idx);
@@ -929,7 +930,7 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
 
         // if there is a waiter entry with an index smaller than first entry
         // it means that notification is out of order which is prohibited
-        assert(entry_idx >= first_idx);
+        SCYLLA_ASSERT(entry_idx >= first_idx);
 
         waiters.erase(it);
         if (status.term == entries[entry_idx - first_idx]->term) {
@@ -1033,7 +1034,7 @@ void server_impl::send_message(server_id id, Message m) {
             send_snapshot(id, std::move(m));
         } else if constexpr (std::is_same_v<T, snapshot_reply>) {
             _stats.snapshot_reply_sent++;
-            assert(_snapshot_application_done.contains(id));
+            SCYLLA_ASSERT(_snapshot_application_done.contains(id));
             // Send a reply to install_snapshot after
             // snapshot application is done.
             _snapshot_application_done[id].set_value(std::move(m));
@@ -1273,7 +1274,7 @@ void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
         });
     });
     auto res = _snapshot_transfers.emplace(dst, snapshot_transfer{std::move(f), std::move(as), id});
-    assert(res.second);
+    SCYLLA_ASSERT(res.second);
 }
 
 future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snapshot snp) {
@@ -1320,7 +1321,7 @@ future<> server_impl::applier_fiber() {
 
                 index_t last_idx = batch.back()->idx;
                 term_t last_term = batch.back()->term;
-                assert(last_idx == _applied_idx + batch.size());
+                SCYLLA_ASSERT(last_idx == _applied_idx + batch.size());
 
                 boost::range::copy(
                        batch |
@@ -1379,7 +1380,7 @@ future<> server_impl::applier_fiber() {
                }
             },
             [this] (snapshot_descriptor& snp) -> future<> {
-                assert(snp.idx >= _applied_idx);
+                SCYLLA_ASSERT(snp.idx >= _applied_idx);
                 // Apply snapshot it to the state machine
                 logger.trace("[{}] apply_fiber applying snapshot {}", _id, snp.id);
                 co_await _state_machine->load_snapshot(snp.id);
@@ -1397,7 +1398,7 @@ future<> server_impl::applier_fiber() {
             [this] (const trigger_snapshot_msg&) -> future<> {
                 auto applied_term = _fsm->log_term_for(_applied_idx);
                 // last truncation index <= snapshot index <= applied index
-                assert(applied_term);
+                SCYLLA_ASSERT(applied_term);
 
                 snapshot_descriptor snp;
                 snp.term = *applied_term;
@@ -1443,7 +1444,7 @@ future<> server_impl::wait_for_apply(index_t idx, abort_source* as) {
                 it->second.promise.set_exception(request_aborted());
                 _awaited_indexes.erase(it);
             });
-            assert(it->second.abort);
+            SCYLLA_ASSERT(it->second.abort);
         }
         co_await it->second.promise.get_future();
     }
@@ -1476,7 +1477,7 @@ future<read_barrier_reply> server_impl::execute_read_barrier(server_id from, sea
             read->promise.set_exception(request_aborted());
             _reads.erase(read);
         });
-        assert(read->abort);
+        SCYLLA_ASSERT(read->abort);
     }
     return read->promise.get_future();
 }
@@ -1679,7 +1680,7 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
         _non_joint_conf_commit_promise->abort = as->subscribe([this] () noexcept {
             // If we're inside this callback, the subscription wasn't destroyed yet.
             // The subscription is destroyed when the field is reset, so if we're here, the field must be engaged.
-            assert(_non_joint_conf_commit_promise);
+            SCYLLA_ASSERT(_non_joint_conf_commit_promise);
             // Whoever resolves the promise must reset the field. Thus, if we're here, the promise is not resolved.
             std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_exception(request_aborted{});
         });
@@ -1877,7 +1878,7 @@ size_t server_impl::max_command_size() const {
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
     std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
     seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) {
-    assert(uuid != raft::server_id{utils::UUID(0, 0)});
+    SCYLLA_ASSERT(uuid != raft::server_id{utils::UUID(0, 0)});
     return std::make_unique<raft::server_impl>(uuid, std::move(rpc), std::move(state_machine),
         std::move(persistence), failure_detector, config);
 }

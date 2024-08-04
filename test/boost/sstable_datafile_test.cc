@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <fmt/ranges.h>
 
 #include <seastar/core/sstring.hh>
@@ -2057,7 +2058,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
         };
 
         auto assert_sstable_owners = [&] (std::unordered_set<unsigned> expected_owners, unsigned ignore_msb, unsigned smp_count) {
-            assert(expected_owners.size() <= smp_count);
+            SCYLLA_ASSERT(expected_owners.size() <= smp_count);
             auto sst = make_shared_sstable(expected_owners, ignore_msb, smp_count);
             auto owners = boost::copy_range<std::unordered_set<unsigned>>(sst->get_shards_for_this_sstable());
             BOOST_REQUIRE(boost::algorithm::all_of(expected_owners, [&] (unsigned expected_owner) {
@@ -2596,7 +2597,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
             auto close_mr = deferred_close(sst_mr);
             auto sst_mut = read_mutation_from_mutation_reader(sst_mr).get();
 
-            // The real test here is that we don't assert() in
+            // The real test here is that we don't SCYLLA_ASSERT() in
             // sstables::prepare_summary() with the write_components() call above,
             // this is only here as a sanity check.
             BOOST_REQUIRE(sst_mr.is_buffer_empty());

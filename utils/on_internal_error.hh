@@ -6,8 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-// Seastar's on_internal_error() is a replacement for assert(). Instead of
-// crashing like assert(), on_internal_error() logs a message with a
+// Seastar's on_internal_error() is a replacement for SCYLLA_ASSERT(). Instead of
+// crashing like SCYLLA_ASSERT(), on_internal_error() logs a message with a
 // backtrace and throws an exception (and optionally also crashes - this can
 // be useful for testing). However, Seastar's function is inconvenient because
 // it requires specifying a logger. This makes it hard to call it from source
@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <string_view>
 
 namespace utils {

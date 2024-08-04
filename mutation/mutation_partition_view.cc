@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -103,7 +104,7 @@ collection_mutation read_collection_cell(const abstract_type& type, ser::collect
             for (auto&& e : elements) {
                 bytes key = e.key();
                 auto idx = deserialize_field_index(key);
-                assert(idx < utype.size());
+                SCYLLA_ASSERT(idx < utype.size());
 
                 mut.cells.emplace_back(key, read_atomic_cell(*utype.type(idx), e.value(), atomic_cell::collection_member::yes));
             }

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <functional>
 #include <optional>
 #include <unordered_map>
@@ -356,7 +357,7 @@ public:
         return is_primary_key();
     }
     uint32_t component_index() const {
-        assert(has_component_index());
+        SCYLLA_ASSERT(has_component_index());
         return id;
     }
     uint32_t position() const {
@@ -962,8 +963,8 @@ public:
     //
     //      auto schema = make_schema();
     //      auto reverse_schema = schema->get_reversed();
-    //      assert(reverse_schema->get_reversed().get() == schema.get());
-    //      assert(schema->get_reversed().get() == reverse_schema.get());
+    //      SCYLLA_ASSERT(reverse_schema->get_reversed().get() == schema.get());
+    //      SCYLLA_ASSERT(schema->get_reversed().get() == reverse_schema.get());
     //
     schema_ptr get_reversed() const;
 };
@@ -982,7 +983,7 @@ class view_ptr final {
 public:
     explicit view_ptr(schema_ptr schema) noexcept : _schema(schema) {
         if (schema) {
-            assert(_schema->is_view());
+            SCYLLA_ASSERT(_schema->is_view());
         }
     }
 

@@ -14,6 +14,7 @@
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
 
+#include "utils/assert.hh"
 #include "utils/compact-radix-tree.hh"
 #include "radix_tree_printer.hh"
 #include "collection_stress.hh"
@@ -97,30 +98,30 @@ int main(int argc, char **argv) {
                         if (vld == validate::oracle) {
                             for (auto&& d : oracle) {
                                 test_data* td = t->get(d.first);
-                                assert(td != nullptr);
-                                assert(td->value() == d.second.value());
+                                SCYLLA_ASSERT(td != nullptr);
+                                SCYLLA_ASSERT(td->value() == d.second.value());
                             }
                             vld = validate::iterator;
                         } else if (vld == validate::iterator) {
                             unsigned nr = 0;
                             auto ti = t->begin();
                             while (ti != t->end()) {
-                                assert(ti->value() == ti.key());
+                                SCYLLA_ASSERT(ti->value() == ti.key());
                                 nr++;
                                 ti++;
-                                assert(nr <= col_size);
+                                SCYLLA_ASSERT(nr <= col_size);
                             }
-                            assert(nr == col_size);
+                            SCYLLA_ASSERT(nr == col_size);
                             vld = validate::walk;
                         } else if (vld == validate::walk) {
                             unsigned nr = 0;
                             t->walk([&nr, col_size] (unsigned idx, test_data& td) {
-                                assert(idx == td.value());
+                                SCYLLA_ASSERT(idx == td.value());
                                 nr++;
-                                assert(nr <= col_size);
+                                SCYLLA_ASSERT(nr <= col_size);
                                 return true;
                             });
-                            assert(nr == col_size);
+                            SCYLLA_ASSERT(nr == col_size);
                             vld = validate::lower_bound;
                         } else if (vld == validate::lower_bound) {
                             unsigned nr = 0;
@@ -130,12 +131,12 @@ int main(int argc, char **argv) {
                                 if (td == nullptr) {
                                     break;
                                 }
-                                assert(td->value() >= idx);
+                                SCYLLA_ASSERT(td->value() >= idx);
                                 nr++;
                                 idx = td->value() + 1;
-                                assert(nr <= col_size);
+                                SCYLLA_ASSERT(nr <= col_size);
                             }
-                            assert(nr == col_size);
+                            SCYLLA_ASSERT(nr == col_size);
                             vld = validate::oracle;
                         }
                     },

@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/strongly_consistent_modification_statement.hh"
@@ -422,7 +423,7 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
      * partition to check conditions.
      */
     if (_if_exists || _if_not_exists) {
-        assert(!_has_static_column_conditions && !_has_regular_column_conditions);
+        SCYLLA_ASSERT(!_has_static_column_conditions && !_has_regular_column_conditions);
         if (s->has_static_columns() && !_restrictions->has_clustering_columns_restriction()) {
             _has_static_column_conditions = true;
         } else {
@@ -604,13 +605,13 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
 
         if (_if_not_exists) {
             // To have both 'IF NOT EXISTS' and some other conditions doesn't make sense.
-            // So far this is enforced by the parser, but let's assert it for sanity if ever the parse changes.
-            assert(!_conditions);
-            assert(!_if_exists);
+            // So far this is enforced by the parser, but let's SCYLLA_ASSERT it for sanity if ever the parse changes.
+            SCYLLA_ASSERT(!_conditions);
+            SCYLLA_ASSERT(!_if_exists);
             stmt.set_if_not_exist_condition();
         } else if (_if_exists) {
-            assert(!_conditions);
-            assert(!_if_not_exists);
+            SCYLLA_ASSERT(!_conditions);
+            SCYLLA_ASSERT(!_if_not_exists);
             stmt.set_if_exist_condition();
         } else {
             stmt._condition = column_condition_prepare(*_conditions, db, keyspace(), schema);

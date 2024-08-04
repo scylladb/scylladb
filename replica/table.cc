@@ -25,6 +25,7 @@
 #include "sstables/sstables_manager.hh"
 #include "db/schema_tables.hh"
 #include "cell_locking.hh"
+#include "utils/assert.hh"
 #include "utils/logalloc.hh"
 #include "checked-file-impl.hh"
 #include "view_info.hh"
@@ -84,7 +85,7 @@ void table::update_sstables_known_generation(sstables::generation_type generatio
 }
 
 sstables::generation_type table::calculate_generation_for_new_table() {
-    assert(_sstable_generation_generator);
+    SCYLLA_ASSERT(_sstable_generation_generator);
     auto ret = std::invoke(*_sstable_generation_generator,
                            sstables::uuid_identifiers{_sstables_manager.uuid_sstable_identifiers()});
     tlogger.debug("{}.{} new sstable generation {}", schema()->ks_name(), schema()->cf_name(), ret);
@@ -368,7 +369,7 @@ mutation_reader table::make_nonpopulating_cache_reader(schema_ptr schema, reader
 }
 
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
-    assert(m.schema() == _counter_cell_locks->schema());
+    SCYLLA_ASSERT(m.schema() == _counter_cell_locks->schema());
     return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
 }
 
@@ -2826,7 +2827,7 @@ db::commitlog* table::commitlog() const {
 }
 
 void table::set_schema(schema_ptr s) {
-    assert(s->is_counter() == _schema->is_counter());
+    SCYLLA_ASSERT(s->is_counter() == _schema->is_counter());
     tlogger.debug("Changing schema version of {}.{} ({}) from {} to {}",
                 _schema->ks_name(), _schema->cf_name(), _schema->id(), _schema->version(), s->version());
 

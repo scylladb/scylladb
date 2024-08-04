@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 
 #include <fmt/ranges.h>
@@ -182,7 +183,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_or_update_by_host_id) {
 
     // In this test we check that add_or_update_endpoint searches by host_id first.
     // We create two nodes, one matches by id, another - by ip,
-    // and assert that add_or_update_endpoint updates the first.
+    // and SCYLLA_ASSERT that add_or_update_endpoint updates the first.
     // We need to make the second node 'being_decommissioned', so that
     // it gets removed from ip index and we don't get the non-unique IP error.
 

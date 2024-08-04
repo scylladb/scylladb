@@ -14,6 +14,7 @@
 #include "replica/memtable.hh"
 #include "row_cache.hh"
 #include "partition_slice_builder.hh"
+#include "utils/assert.hh"
 #include "utils/int_range.hh"
 #include "utils/div_ceil.hh"
 #include "utils/to_string.hh"
@@ -411,8 +412,8 @@ int main(int argc, char** argv) {
             t.tracker.cleaner().drain().get();
             t.tracker.memtable_cleaner().drain().get();
 
-            assert(t.tracker.get_stats().partitions == 0);
-            assert(t.tracker.get_stats().rows == 0);
+            SCYLLA_ASSERT(t.tracker.get_stats().partitions == 0);
+            SCYLLA_ASSERT(t.tracker.get_stats().rows == 0);
         });
     });
 }

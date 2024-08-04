@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -281,7 +282,7 @@ public:
 };
 
 void evictable_reader_v2::do_pause(mutation_reader reader) noexcept {
-    assert(!_irh);
+    SCYLLA_ASSERT(!_irh);
     _irh = _permit.semaphore().register_inactive_read(std::move(reader));
 }
 

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <list>
 #include <vector>
 #include <optional>
@@ -138,7 +139,7 @@ public:
     // the point is before the interval (works only for non wrapped intervals)
     // Comparator must define a total ordering on T.
     bool before(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
-        assert(!is_wrap_around(cmp));
+        SCYLLA_ASSERT(!is_wrap_around(cmp));
         if (!start()) {
             return false; //open start, no points before
         }
@@ -154,8 +155,8 @@ public:
     // the other interval is before this interval (works only for non wrapped intervals)
     // Comparator must define a total ordering on T.
     bool other_is_before(const wrapping_interval<T>& o, IntervalComparatorFor<T> auto&& cmp) const {
-        assert(!is_wrap_around(cmp));
-        assert(!o.is_wrap_around(cmp));
+        SCYLLA_ASSERT(!is_wrap_around(cmp));
+        SCYLLA_ASSERT(!o.is_wrap_around(cmp));
         if (!start() || !o.end()) {
             return false;
         }
@@ -181,7 +182,7 @@ public:
     // the point is after the interval (works only for non wrapped intervals)
     // Comparator must define a total ordering on T.
     bool after(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
-        assert(!is_wrap_around(cmp));
+        SCYLLA_ASSERT(!is_wrap_around(cmp));
         if (!end()) {
             return false; //open end, no points after
         }
@@ -211,8 +212,8 @@ public:
         }
 
         // No interval should reach this point as wrap around.
-        assert(!this_wraps);
-        assert(!other_wraps);
+        SCYLLA_ASSERT(!this_wraps);
+        SCYLLA_ASSERT(!other_wraps);
 
         // if both this and other have an open start, the two intervals will overlap.
         if (!start() && !other.start()) {
@@ -377,7 +378,7 @@ public:
     // split_point will belong to first interval
     // Comparator must define a total ordering on T.
     std::pair<wrapping_interval<T>, wrapping_interval<T>> split(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
-        assert(contains(split_point, std::forward<decltype(cmp)>(cmp)));
+        SCYLLA_ASSERT(contains(split_point, std::forward<decltype(cmp)>(cmp)));
         wrapping_interval left(start(), bound(split_point));
         wrapping_interval right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));
@@ -584,7 +585,7 @@ public:
     // split_point will belong to first interval
     // Comparator must define a total ordering on T.
     std::pair<interval<T>, interval<T>> split(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
-        assert(contains(split_point, std::forward<decltype(cmp)>(cmp)));
+        SCYLLA_ASSERT(contains(split_point, std::forward<decltype(cmp)>(cmp)));
         interval left(start(), bound(split_point));
         interval right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));

@@ -20,6 +20,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "compaction/compaction_garbage_collector.hh"
 #include "mutation_partition_view.hh"
+#include "utils/assert.hh"
 #include "utils/unconst.hh"
 
 extern logging::logger mplog;
@@ -34,7 +35,7 @@ mutation_partition_v2::mutation_partition_v2(const schema& s, const mutation_par
 #endif
 {
 #ifdef SEASTAR_DEBUG
-    assert(x._schema_version == _schema_version);
+    SCYLLA_ASSERT(x._schema_version == _schema_version);
 #endif
     auto cloner = [&s] (const rows_entry* x) -> rows_entry* {
         return current_allocator().construct<rows_entry>(s, *x);
@@ -117,8 +118,8 @@ void mutation_partition_v2::apply(const schema& s, mutation_partition_v2&& p, ca
 stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const schema& p_s, mutation_partition_v2&& p, cache_tracker* tracker,
         mutation_application_stats& app_stats, preemption_check need_preempt, apply_resume& res, is_evictable evictable) {
 #ifdef SEASTAR_DEBUG
-    assert(_schema_version == s.version());
-    assert(p._schema_version == p_s.version());
+    SCYLLA_ASSERT(_schema_version == s.version());
+    SCYLLA_ASSERT(p._schema_version == p_s.version());
 #endif
     bool same_schema = s.version() == p_s.version();
     _tombstone.apply(p._tombstone);
@@ -217,7 +218,7 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
         // some memory for the new tree nodes. This is done by the `hold_reserve`
         // constructed after the lambda.
         if (this_sentinel) {
-            assert(p_i != p._rows.end());
+            SCYLLA_ASSERT(p_i != p._rows.end());
             auto rt = this_sentinel->range_tombstone();
             auto insert_result = _rows.insert_before_hint(i, std::move(this_sentinel), cmp);
             auto i2 = insert_result.first;
@@ -233,10 +234,10 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
             }
         }
         if (p_sentinel) {
-            assert(p_i != p._rows.end());
+            SCYLLA_ASSERT(p_i != p._rows.end());
             if (cmp(p_i->position(), p_sentinel->position()) == 0) {
                 mplog.trace("{}: clearing attributes on {}", fmt::ptr(&p), p_i->position());
-                assert(p_i->dummy());
+                SCYLLA_ASSERT(p_i->dummy());
                 p_i->set_continuous(false);
                 p_i->set_range_tombstone({});
             } else {
@@ -409,7 +410,7 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
                 lb_i->set_continuous(true);
             }
         } else {
-            assert(i->dummy() == src_e.dummy());
+            SCYLLA_ASSERT(i->dummy() == src_e.dummy());
             alloc_strategy_unique_ptr<rows_entry> s1;
             alloc_strategy_unique_ptr<rows_entry> s2;
 
@@ -521,7 +522,7 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
 void
 mutation_partition_v2::apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t) {
     check_schema(schema);
-    assert(!prefix.is_full(schema));
+    SCYLLA_ASSERT(!prefix.is_full(schema));
     auto start = prefix;
     apply_row_tombstone(schema, range_tombstone{std::move(start), std::move(prefix), std::move(t)});
 }
@@ -842,8 +843,8 @@ bool mutation_partition_v2::equal(const schema& s, const mutation_partition_v2& 
 
 bool mutation_partition_v2::equal(const schema& this_schema, const mutation_partition_v2& p, const schema& p_schema) const {
 #ifdef SEASTAR_DEBUG
-    assert(_schema_version == this_schema.version());
-    assert(p._schema_version == p_schema.version());
+    SCYLLA_ASSERT(_schema_version == this_schema.version());
+    SCYLLA_ASSERT(p._schema_version == p_schema.version());
 #endif
     if (_tombstone != p._tombstone) {
         return false;
@@ -1010,7 +1011,7 @@ void mutation_partition_v2::set_continuity(const schema& s, const position_range
         i = _rows.insert_before(i, std::move(e));
     }
 
-    assert(i != end);
+    SCYLLA_ASSERT(i != end);
     ++i;
 
     while (1) {

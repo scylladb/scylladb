@@ -10,6 +10,7 @@
 
 #include <concepts>
 #include <type_traits>
+#include "utils/assert.hh"
 #include "utils/result.hh"
 
 namespace utils {
@@ -63,7 +64,7 @@ concept ConvertsWithTo = std::convertible_to<typename Converter::template wrappe
 
 // We require forall<ExceptionContainerResult R> ExceptionHandle<H, R>.
 // However, C++ does not support quantification like that in the constraints.
-// Here, we use the dummy_result to assert that the handles defined below
+// Here, we use the dummy_result to SCYLLA_ASSERT that the handles defined below
 // at least work with dummy_result.
 template<typename T = void>
 using dummy_result = result_with_exception<T, std::exception>;

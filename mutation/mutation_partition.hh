@@ -24,6 +24,7 @@
 #include "atomic_cell_or_collection.hh"
 #include "hashing_partition_visitor.hh"
 #include "range_tombstone_list.hh"
+#include "utils/assert.hh"
 #include "utils/intrusive_btree.hh"
 #include "utils/preempt.hh"
 #include "utils/lru.hh"
@@ -1486,7 +1487,7 @@ private:
 
     void check_schema(const schema& s) const {
 #ifdef SEASTAR_DEBUG
-        assert(s.version() == _schema_version);
+        SCYLLA_ASSERT(s.version() == _schema_version);
 #endif
     }
 };

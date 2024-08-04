@@ -12,6 +12,7 @@
 #include <cassert>
 #include <seastar/util/concepts.hh>
 
+#include "utils/assert.hh"
 #include "utils/allocation_strategy.hh"
 #include "utils/collection-concepts.hh"
 
@@ -140,7 +141,7 @@ public:
             new (&_data[i].object) T(std::move(from._data[i - off].object));
         }
 
-        assert(grow.add_pos <= i && i < max_len);
+        SCYLLA_ASSERT(grow.add_pos <= i && i < max_len);
 
         new (&_data[grow.add_pos].object) T(std::forward<Args>(args)...);
 
@@ -212,15 +213,15 @@ public:
      * altogether if needed
      */
     void erase(int pos) noexcept {
-        assert(!is_single_element());
-        assert(pos < max_len);
+        SCYLLA_ASSERT(!is_single_element());
+        SCYLLA_ASSERT(pos < max_len);
 
         bool with_train = _data[0].object.with_train();
         bool tail = _data[pos].object.is_tail();
         _data[pos].object.~T();
 
         if (tail) {
-            assert(pos > 0);
+            SCYLLA_ASSERT(pos > 0);
             _data[pos - 1].object.set_tail(true);
         } else {
             while (!tail) {
@@ -233,7 +234,7 @@ public:
 
         _data[0].object.set_train(true);
         unsigned short train_len = with_train ? _data[pos + 1].train_len : 0;
-        assert(train_len < max_len);
+        SCYLLA_ASSERT(train_len < max_len);
         _data[pos].train_len = train_len + 1;
     }
 
@@ -324,7 +325,7 @@ public:
     static intrusive_array& from_element(T* ptr, int& idx) noexcept {
         idx = 0;
         while (!ptr->is_head()) {
-            assert(idx < max_len); // may the force be with us...
+            SCYLLA_ASSERT(idx < max_len); // may the force be with us...
             idx++;
             ptr--;
         }

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "utils/limiting_data_source.hh"
 
 #include <boost/test/unit_test.hpp>
@@ -79,7 +80,7 @@ data_source prepare_test_skip() {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_get_smaller_than_limit) {
-    assert(test_data_source_impl::chunk_limit > 1);
+    SCYLLA_ASSERT(test_data_source_impl::chunk_limit > 1);
     test_get(test_data_source_impl::chunk_limit - 1);
 }
 

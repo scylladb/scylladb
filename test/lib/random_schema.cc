@@ -22,6 +22,7 @@
 #include "types/set.hh"
 #include "types/tuple.hh"
 #include "types/user.hh"
+#include "utils/assert.hh"
 #include "utils/big_decimal.hh"
 #include "utils/UUID_gen.hh"
 
@@ -178,7 +179,7 @@ public:
         , _regular_column_count_dist(regular_column_count_dist)
         , _static_column_count_dist(static_column_count_dist)
         , _type_generator(*this) {
-        assert(_partition_column_count_dist.a() > 0);
+        SCYLLA_ASSERT(_partition_column_count_dist.a() > 0);
     }
     virtual sstring table_name(std::mt19937& engine) override {
         return format("table{}", generate_unique_id(engine, _used_table_ids));
@@ -447,7 +448,7 @@ data_value generate_utf8_value(std::mt19937& engine, size_t min_size_in_bytes, s
     char* to_next;
     std::mbstate_t mb{};
     auto res = f.out(mb, &wstr[0], &wstr[wstr.size()], from_next, &utf8_str[0], &utf8_str[utf8_str.size()], to_next);
-    assert(res == codec::ok);
+    SCYLLA_ASSERT(res == codec::ok);
     utf8_str.resize(to_next - &utf8_str[0]);
 
     return data_value(std::move(utf8_str));
@@ -513,44 +514,44 @@ data_value generate_duration_value(std::mt19937& engine, size_t, size_t) {
 }
 
 data_value generate_frozen_tuple_value(std::mt19937& engine, const tuple_type_impl& type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
-    assert(!type.is_multi_cell());
+    SCYLLA_ASSERT(!type.is_multi_cell());
     return make_tuple_value(type.shared_from_this(), generate_frozen_tuple_values(engine, val_gen, type.all_types(), min_size_in_bytes, max_size_in_bytes));
 }
 
 data_value generate_frozen_user_value(std::mt19937& engine, const user_type_impl& type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
-    assert(!type.is_multi_cell());
+    SCYLLA_ASSERT(!type.is_multi_cell());
     return make_user_value(type.shared_from_this(), generate_frozen_tuple_values(engine, val_gen, type.all_types(), min_size_in_bytes, max_size_in_bytes));
 }
 
 data_model::mutation_description::collection generate_list_value(std::mt19937& engine, const list_type_impl& type, value_generator& val_gen) {
-    assert(type.is_multi_cell());
+    SCYLLA_ASSERT(type.is_multi_cell());
     return generate_collection(engine, *type.name_comparator(), *type.value_comparator(), val_gen);
 }
 
 data_value generate_frozen_list_value(std::mt19937& engine, const list_type_impl& type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
-    assert(!type.is_multi_cell());
+    SCYLLA_ASSERT(!type.is_multi_cell());
     return make_list_value(type.shared_from_this(),
             generate_frozen_list(engine, *type.get_elements_type(), val_gen, min_size_in_bytes, max_size_in_bytes));
 }
 
 data_model::mutation_description::collection generate_set_value(std::mt19937& engine, const set_type_impl& type, value_generator& val_gen) {
-    assert(type.is_multi_cell());
+    SCYLLA_ASSERT(type.is_multi_cell());
     return generate_collection(engine, *type.name_comparator(), *type.value_comparator(), val_gen);
 }
 
 data_value generate_frozen_set_value(std::mt19937& engine, const set_type_impl& type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
-    assert(!type.is_multi_cell());
+    SCYLLA_ASSERT(!type.is_multi_cell());
     return make_set_value(type.shared_from_this(),
             generate_frozen_set(engine, *type.get_elements_type(), val_gen, min_size_in_bytes, max_size_in_bytes));
 }
 
 data_model::mutation_description::collection generate_map_value(std::mt19937& engine, const map_type_impl& type, value_generator& val_gen) {
-    assert(type.is_multi_cell());
+    SCYLLA_ASSERT(type.is_multi_cell());
     return generate_collection(engine, *type.name_comparator(), *type.value_comparator(), val_gen);
 }
 
 data_value generate_frozen_map_value(std::mt19937& engine, const map_type_impl& type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
-    assert(!type.is_multi_cell());
+    SCYLLA_ASSERT(!type.is_multi_cell());
     return make_map_value(type.shared_from_this(),
             generate_frozen_map(engine, *type.get_keys_type(), *type.get_values_type(), val_gen, min_size_in_bytes, max_size_in_bytes));
 }
@@ -562,7 +563,7 @@ data_value value_generator::generate_atomic_value(std::mt19937& engine, const ab
 }
 
 data_value value_generator::generate_atomic_value(std::mt19937& engine, const abstract_type& type, size_t min_size_in_bytes, size_t max_size_in_bytes) {
-    assert(!type.is_multi_cell());
+    SCYLLA_ASSERT(!type.is_multi_cell());
     return get_atomic_value_generator(type)(engine, min_size_in_bytes, max_size_in_bytes);
 }
 
@@ -596,7 +597,7 @@ value_generator::value_generator()
 }
 
 size_t value_generator::min_size(const abstract_type& type) {
-    assert(!type.is_multi_cell());
+    SCYLLA_ASSERT(!type.is_multi_cell());
 
     auto it = _regular_value_min_sizes.find(&type);
     if (it != _regular_value_min_sizes.end()) {
@@ -633,7 +634,7 @@ size_t value_generator::min_size(const abstract_type& type) {
 }
 
 value_generator::atomic_value_generator value_generator::get_atomic_value_generator(const abstract_type& type) {
-    assert(!type.is_multi_cell());
+    SCYLLA_ASSERT(!type.is_multi_cell());
 
     auto it = _regular_value_generators.find(&type);
     if (it != _regular_value_generators.end()) {
@@ -807,7 +808,7 @@ schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec)
     auto builder = schema_builder(spec.keyspace_name(), spec.table_name(engine));
 
     auto pk_columns = spec.partition_key_columns(engine);
-    assert(!pk_columns.empty()); // Let's not pull in boost::test here
+    SCYLLA_ASSERT(!pk_columns.empty()); // Let's not pull in boost::test here
     for (size_t pk = 0; pk < pk_columns.size(); ++pk) {
         builder.with_column(to_bytes(format("pk{}", pk)), std::move(pk_columns[pk]), column_kind::partition_key);
     }
@@ -947,7 +948,7 @@ void decorate_with_timestamps(const schema& schema, std::mt19937& engine, timest
                         }
                         for (auto& [ key, value ] : c.elements) {
                             value.timestamp = ts_gen(engine, timestamp_destination::collection_cell_timestamp, c.tomb.timestamp);
-                            assert(!c.tomb || value.timestamp > c.tomb.timestamp);
+                            SCYLLA_ASSERT(!c.tomb || value.timestamp > c.tomb.timestamp);
                             if (auto expiry_opt = exp_gen(engine, timestamp_destination::collection_cell_timestamp)) {
                                 value.expiring = data_model::mutation_description::expiry_info{expiry_opt->ttl, expiry_opt->expiry_point};
                             }
@@ -977,7 +978,7 @@ data_model::mutation_description::key random_schema::make_partition_key(uint32_t
 }
 
 data_model::mutation_description::key random_schema::make_clustering_key(uint32_t n, value_generator& gen) const {
-    assert(_schema->clustering_key_size() > 0);
+    SCYLLA_ASSERT(_schema->clustering_key_size() > 0);
     return make_key(n, gen, _schema->clustering_key_columns(), std::numeric_limits<clustering_key::compound::element_type::size_type>::max());
 }
 

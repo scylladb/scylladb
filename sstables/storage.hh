@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <filesystem>
 
 #include <seastar/core/file.hh>
@@ -40,13 +41,13 @@ class storage {
 
     // Internal, but can also be used by tests
     virtual future<> change_dir_for_test(sstring nd) {
-        assert(false && "Changing directory not implemented");
+        SCYLLA_ASSERT(false && "Changing directory not implemented");
     }
     virtual future<> create_links(const sstable& sst, const std::filesystem::path& dir) const {
-        assert(false && "Direct links creation not implemented");
+        SCYLLA_ASSERT(false && "Direct links creation not implemented");
     }
     virtual future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) {
-        assert(false && "Direct move not implemented");
+        SCYLLA_ASSERT(false && "Direct move not implemented");
     }
 
 public:

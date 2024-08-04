@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "readers/multishard.hh"
 #include <seastar/core/gate.hh>
 
@@ -62,12 +63,12 @@ public:
     }
     virtual const dht::partition_range* get_read_range() const override {
         const auto shard = this_shard_id();
-        assert(_contexts[shard]);
+        SCYLLA_ASSERT(_contexts[shard]);
         return _contexts[shard]->range.get();
     }
     void update_read_range(lw_shared_ptr<const dht::partition_range> range) override {
         const auto shard = this_shard_id();
-        assert(_contexts[shard]);
+        SCYLLA_ASSERT(_contexts[shard]);
         _contexts[shard]->range = std::move(range);
     }
     virtual future<> destroy_reader(stopped_reader reader) noexcept override {

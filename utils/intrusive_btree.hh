@@ -12,6 +12,7 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <cassert>
 #include <fmt/core.h>
+#include "utils/assert.hh"
 #include "utils/collection-concepts.hh"
 #include "utils/neat-object-id.hh"
 #include "utils/allocation_strategy.hh"
@@ -144,7 +145,7 @@ public:
     node_base* node() const noexcept { return _node; }
 
     void attach_first(node_base& to) noexcept {
-        assert(to.num_keys == 0);
+        SCYLLA_ASSERT(to.num_keys == 0);
         to.num_keys = 1;
         to.keys[0] = this;
         _node = &to;
@@ -153,7 +154,7 @@ public:
     member_hook() noexcept = default;
     member_hook(const member_hook&) = delete;
     ~member_hook() {
-        assert(!attached());
+        SCYLLA_ASSERT(!attached());
     }
 
     member_hook(member_hook&& other) noexcept : _node(other._node) {
@@ -223,12 +224,12 @@ private:
     };
 
     static const tree* from_inline(const node_base* n) noexcept {
-        assert(n->is_inline());
+        SCYLLA_ASSERT(n->is_inline());
         return boost::intrusive::get_parent_from_member(n, &tree::_inline);
     }
 
     static tree* from_inline(node_base* n) noexcept {
-        assert(n->is_inline());
+        SCYLLA_ASSERT(n->is_inline());
         return boost::intrusive::get_parent_from_member(n, &tree::_inline);
     }
 
@@ -274,7 +275,7 @@ private:
             bool match;
 
             cur.idx = cur.n->index_for(key, cmp, match);
-            assert(cur.idx <= cur.n->_base.num_keys);
+            SCYLLA_ASSERT(cur.idx <= cur.n->_base.num_keys);
             if (match || cur.n->is_leaf()) {
                 return match;
             }
@@ -284,13 +285,13 @@ private:
     }
 
     void do_set_root(node& n) noexcept {
-        assert(n.is_root());
+        SCYLLA_ASSERT(n.is_root());
         n._parent.t = this;
         _root = &n;
     }
 
     void do_set_left(node& n) noexcept {
-        assert(n.is_leftmost());
+        SCYLLA_ASSERT(n.is_leftmost());
         if (!n.is_linear()) {
             n._leaf_tree = this;
         }
@@ -298,7 +299,7 @@ private:
     }
 
     void do_set_right(node& n) noexcept {
-        assert(n.is_rightmost());
+        SCYLLA_ASSERT(n.is_rightmost());
         if (!n.is_linear()) {
             n._leaf_tree = this;
         }
@@ -364,10 +365,10 @@ public:
     tree(const tree& other) = delete;
     ~tree() noexcept {
         if (!inline_root()) {
-            assert(_root->is_leaf());
+            SCYLLA_ASSERT(_root->is_leaf());
             node::destroy(*_root);
         } else {
-            assert(_inline.empty());
+            SCYLLA_ASSERT(_inline.empty());
         }
     }
 
@@ -486,7 +487,7 @@ public:
         cursor cur;
         match = key_lower_bound(k, cmp, cur);
         if (!match && cur.idx == cur.n->_base.num_keys) {
-            assert(cur.idx > 0);
+            SCYLLA_ASSERT(cur.idx > 0);
             cur.idx--;
             return ++const_iterator(cur);
         }
@@ -597,7 +598,7 @@ public:
             nb->num_keys = 0;
         } else {
             node* n = node::from_base(nb);
-            assert(n->is_leaf());
+            SCYLLA_ASSERT(n->is_leaf());
             n->remove_leftmost_light_rebalance();
         }
         return hook->to_key<Key, Hook>();
@@ -669,13 +670,13 @@ public:
 
         explicit iterator_base(tree_ptr t) noexcept : _tree(t), _idx(npos) {}
         iterator_base(key_hook_ptr h, key_index idx) noexcept : _hook(h), _idx(idx) {
-            assert(!is_end());
-            assert(h->attached());
+            SCYLLA_ASSERT(!is_end());
+            SCYLLA_ASSERT(h->attached());
         }
         explicit iterator_base(const cursor& cur) noexcept : _idx(cur.idx) {
-            assert(_idx < cur.n->_base.num_keys);
+            SCYLLA_ASSERT(_idx < cur.n->_base.num_keys);
             _hook = cur.n->_base.keys[_idx];
-            assert(_hook->attached());
+            SCYLLA_ASSERT(_hook->attached());
         }
         iterator_base() noexcept : _tree(static_cast<tree_ptr>(nullptr)), _idx(npos) {}
 
@@ -686,7 +687,7 @@ public:
          * and returns back the node that points to it.
          */
         node_base_ptr revalidate() noexcept {
-            assert(!is_end());
+            SCYLLA_ASSERT(!is_end());
             node_base_ptr n = _hook->node();
 
             /*
@@ -759,7 +760,7 @@ public:
         iterator_base& operator--() noexcept {
             if (is_end()) {
                 node_base_ptr n = _tree->rightmost_node();
-                assert(n->num_keys > 0);
+                SCYLLA_ASSERT(n->num_keys > 0);
                 _idx = n->num_keys - 1u;
                 _hook = n->keys[_idx];
                 return *this;
@@ -987,7 +988,7 @@ public:
 
     public:
         explicit key_grabber(iterator& it) : _it(it) {
-            assert(!_it.is_end());
+            SCYLLA_ASSERT(!_it.is_end());
         }
 
         key_grabber(const key_grabber&) = delete;
@@ -1086,8 +1087,8 @@ struct searcher<K, Key, Hook, Compare, key_search::both> {
         bool ml, mr;
         key_index rl = searcher<K, Key, Hook, Compare, key_search::linear>::ge(k, node, cmp, ml);
         key_index rb = searcher<K, Key, Hook, Compare, key_search::binary>::ge(k, node, cmp, mr);
-        assert(rl == rb);
-        assert(ml == mr);
+        SCYLLA_ASSERT(rl == rb);
+        SCYLLA_ASSERT(ml == mr);
         match = ml;
         return rl;
     }
@@ -1171,12 +1172,12 @@ class node {
     };
 
     tree* corner_tree() const noexcept {
-        assert(is_leaf());
+        SCYLLA_ASSERT(is_leaf());
         if (!is_linear()) {
             return _leaf_tree;
         }
 
-        assert(is_root());
+        SCYLLA_ASSERT(is_root());
         return _parent.t;
     }
 
@@ -1254,21 +1255,21 @@ private:
     }
 
     void unlink_corner_leaf() noexcept {
-        assert(!is_root());
+        SCYLLA_ASSERT(!is_root());
         node* p = _parent.n, *x;
 
         switch (_base.flags & (node_base::NODE_LEFTMOST | node_base::NODE_RIGHTMOST)) {
             case 0:
                 break;
             case node_base::NODE_LEFTMOST:
-                assert(p->_base.num_keys > 0 && p->_kids[0] == this);
+                SCYLLA_ASSERT(p->_base.num_keys > 0 && p->_kids[0] == this);
                 x = p->_kids[1];
                 _base.flags &= ~node_base::NODE_LEFTMOST;
                 x->_base.flags |= node_base::NODE_LEFTMOST;
                 _leaf_tree->do_set_left(*x);
                 break;
             case node_base::NODE_RIGHTMOST:
-                assert(p->_base.num_keys > 0 && p->_kids[p->_base.num_keys] == this);
+                SCYLLA_ASSERT(p->_base.num_keys > 0 && p->_kids[p->_base.num_keys] == this);
                 x = p->_kids[p->_base.num_keys - 1];
                 _base.flags &= ~node_base::NODE_RIGHTMOST;
                 x->_base.flags |= node_base::NODE_RIGHTMOST;
@@ -1279,17 +1280,17 @@ private:
                  * Right- and left-most at the same time can only be root,
                  * otherwise this would mean we have root with 0 keys.
                  */
-                assert(false);
+                SCYLLA_ASSERT(false);
         }
     }
 
     static const node* from_base(const node_base* nb) noexcept {
-        assert(!nb->is_inline());
+        SCYLLA_ASSERT(!nb->is_inline());
         return boost::intrusive::get_parent_from_member(nb, &node::_base);
     }
 
     static node* from_base(node_base* nb) noexcept {
-        assert(!nb->is_inline());
+        SCYLLA_ASSERT(!nb->is_inline());
         return boost::intrusive::get_parent_from_member(nb, &node::_base);
     }
 
@@ -1331,7 +1332,7 @@ public:
 
     node(const node& other) = delete;
     ~node() {
-        assert(_base.num_keys == 0);
+        SCYLLA_ASSERT(_base.num_keys == 0);
     }
 
     size_t storage_size() const noexcept {
@@ -1366,12 +1367,12 @@ private:
     }
 
     void drop() noexcept {
-        assert(!(is_leftmost() || is_rightmost()));
+        SCYLLA_ASSERT(!(is_leftmost() || is_rightmost()));
         if (Debug == with_debug::yes && !is_root()) {
             node* p = _parent.n;
             if (p->_base.num_keys != 0) {
                 for (kid_index i = 0; i <= p->_base.num_keys; i++) {
-                    assert(p->_kids[i] != this);
+                    SCYLLA_ASSERT(p->_kids[i] != this);
                 }
             }
         }
@@ -1389,7 +1390,7 @@ private:
 
     // Two helpers for raw pointers lookup.
     kid_index index_for(const node* kid) const noexcept {
-        assert(!is_leaf());
+        SCYLLA_ASSERT(!is_leaf());
 
         for (kid_index i = 0; i <= _base.num_keys; i++) {
             if (_kids[i] == kid) {
@@ -1530,7 +1531,7 @@ private:
                 move_key(src++, *root, root->_base.num_keys++);
                 leaf = nodes.pop(true);
                 root->set_kid(root->_base.num_keys, leaf);
-                assert(src != _base.num_keys); // need more keys for the next leaf
+                SCYLLA_ASSERT(src != _base.num_keys); // need more keys for the next leaf
             }
         }
         adjust_idx();
@@ -1539,12 +1540,12 @@ private:
         _base.flags &= ~(node_base::NODE_LEFTMOST | node_base::NODE_RIGHTMOST);
         drop();
 
-        assert(new_insertion != nullptr);
+        SCYLLA_ASSERT(new_insertion != nullptr);
         return new_insertion;
     }
 
     node* check_linear_capacity(kid_index& idx) {
-        assert(make_linear_root && is_root() && is_leaf());
+        SCYLLA_ASSERT(make_linear_root && is_root() && is_leaf());
 
         if (_base.num_keys < _base.capacity) {
             return this;
@@ -1585,7 +1586,7 @@ private:
          * starts with the leaf. Upper levels get their new keys
          * only if these come up from the deep.
          */
-        assert(is_leaf());
+        SCYLLA_ASSERT(is_leaf());
 
         if (_base.num_keys < _base.capacity) {
             /*
@@ -1656,7 +1657,7 @@ private:
                          */
                         idx--;
                     } else if (is_leaf()) {
-                        assert(kid == nullptr);
+                        SCYLLA_ASSERT(kid == nullptr);
                         p->move_key(i - 1, *left, left->_base.num_keys);
                         left->_base.num_keys++;
                         p->set_key(i - 1, &key);
@@ -1671,7 +1672,7 @@ private:
                     if (idx < _base.num_keys) {
                         right->grab_from_left(this, i + 1);
                     } else if (is_leaf()) {
-                        assert(kid == nullptr);
+                        SCYLLA_ASSERT(kid == nullptr);
                         right->shift_right(0);
                         p->move_key(i, *right, 0);
                         p->set_key(i, &key);
@@ -1988,7 +1989,7 @@ private:
     }
 
     void light_refill() noexcept {
-        assert(_parent.n->_base.num_keys > 0);
+        SCYLLA_ASSERT(_parent.n->_base.num_keys > 0);
         node* right = _parent.n->_kids[1];
 
         /*
@@ -2128,7 +2129,7 @@ private:
 
     size_t external_memory_usage() const noexcept {
         if (is_linear()) {
-            assert(is_leaf());
+            SCYLLA_ASSERT(is_leaf());
             return linear_node_size(_base.capacity);
         }
 
@@ -2137,7 +2138,7 @@ private:
         }
 
         size_t size = inner_node_size;
-        assert(_base.num_keys != 0);
+        SCYLLA_ASSERT(_base.num_keys != 0);
         for (kid_index i = 0; i <= _base.num_keys; i++) {
             size += _kids[i]->external_memory_usage();
         }
@@ -2153,7 +2154,7 @@ private:
         } else {
             st.nodes_filled[_base.num_keys]++;
             st.nodes++;
-            assert(_base.num_keys != 0);
+            SCYLLA_ASSERT(_base.num_keys != 0);
             for (kid_index i = 0; i <= _base.num_keys; i++) {
                 _kids[i]->fill_stats(st);
             }
@@ -2165,7 +2166,7 @@ private:
         node** _tail = &_nodes;
 
         node* pop() noexcept {
-            assert(!empty());
+            SCYLLA_ASSERT(!empty());
             node* ret = _nodes;
             _nodes = ret->_parent.n;
             if (_tail == &ret->_parent.n) {
@@ -2191,7 +2192,7 @@ private:
 
         node* pop(bool leaf) noexcept {
             node* ret = pop();
-            assert(leaf == ret->is_leaf());
+            SCYLLA_ASSERT(leaf == ret->is_leaf());
             return ret;
         }
 

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "db/system_keyspace.hh"
 #include "topology_mutation.hh"
 #include "types/tuple.hh"
@@ -34,7 +35,7 @@ topology_node_mutation_builder::topology_node_mutation_builder(topology_mutation
 template<typename Builder>
 Builder& topology_mutation_builder_base<Builder>::apply_atomic(const char* cell, const data_value& value) {
     const column_definition* cdef = self().schema().get_column_definition(cell);
-    assert(cdef);
+    SCYLLA_ASSERT(cdef);
     self().row().apply(*cdef, atomic_cell::make_live(*cdef->type, self().timestamp(), cdef->type->decompose(value), self().ttl()));
     return self();
 }
@@ -44,7 +45,7 @@ template<std::ranges::range C>
 requires std::convertible_to<std::ranges::range_value_t<C>, data_value>
 Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, collection_apply_mode apply_mode, const C& c) {
     const column_definition* cdef = self().schema().get_column_definition(cell);
-    assert(cdef);
+    SCYLLA_ASSERT(cdef);
     auto vtype = static_pointer_cast<const set_type_impl>(cdef->type)->get_elements_type();
 
     std::set<bytes, serialized_compare> cset(vtype->as_less_comparator());
@@ -69,7 +70,7 @@ Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, co
 template<typename Builder>
 Builder& topology_mutation_builder_base<Builder>::del(const char* cell) {
     auto cdef = self().schema().get_column_definition(cell);
-    assert(cdef);
+    SCYLLA_ASSERT(cdef);
     if (!cdef->type->is_multi_cell()) {
         self().row().apply(*cdef, atomic_cell::make_dead(self().timestamp(), gc_clock::now()));
     } else {

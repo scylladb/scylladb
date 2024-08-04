@@ -1,5 +1,6 @@
 #pragma once
 
+#include "utils/assert.hh"
 #include <seastar/core/future.hh>
 #include <optional>
 
@@ -51,7 +52,7 @@ public:
     }
 
     void unblock() {
-        assert(_block_counter);
+        SCYLLA_ASSERT(_block_counter);
         if (--_block_counter == 0) {
             _p.set_value();
         }

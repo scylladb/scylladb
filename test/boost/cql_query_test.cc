@@ -29,6 +29,7 @@
 #include "transport/messages/result_message.hh"
 #include "transport/messages/result_message_base.hh"
 #include "types/types.hh"
+#include "utils/assert.hh"
 #include "utils/big_decimal.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -3026,10 +3027,10 @@ SEASTAR_TEST_CASE(test_query_with_range_tombstones) {
 SEASTAR_TEST_CASE(test_alter_table_validation) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table tatv (p1 int, c1 int, c2 int, r1 int, r2 set<int>, PRIMARY KEY (p1, c1, c2));").discard_result().then_wrapped([&e] (future<> f) {
-            assert(!f.failed());
+            SCYLLA_ASSERT(!f.failed());
             return e.execute_cql("alter table tatv drop r2;").discard_result();
         }).then_wrapped([&e] (future<> f) {
-            assert(!f.failed());
+            SCYLLA_ASSERT(!f.failed());
             return e.execute_cql("alter table tatv add r2 list<int>;").discard_result();
         }).then_wrapped([&e] (future<> f) {
             assert_that_failed(f);
@@ -3038,7 +3039,7 @@ SEASTAR_TEST_CASE(test_alter_table_validation) {
             assert_that_failed(f);
             return e.execute_cql("alter table tatv add r2 set<int>;").discard_result();
         }).then_wrapped([&e] (future<> f) {
-            assert(!f.failed());
+            SCYLLA_ASSERT(!f.failed());
             return e.execute_cql("alter table tatv rename r2 to r3;").discard_result();
         }).then_wrapped([&e] (future<> f) {
             assert_that_failed(f);
@@ -3050,16 +3051,16 @@ SEASTAR_TEST_CASE(test_alter_table_validation) {
             assert_that_failed(f);
             return e.execute_cql("alter table tatv add r3 map<int, int>;").discard_result();
         }).then_wrapped([&e] (future<> f) {
-            assert(!f.failed());
+            SCYLLA_ASSERT(!f.failed());
             return e.execute_cql("alter table tatv add r4 set<text>;").discard_result();
         }).then_wrapped([&e] (future<> f) {
-            assert(!f.failed());
+            SCYLLA_ASSERT(!f.failed());
             return e.execute_cql("alter table tatv drop r3;").discard_result();
         }).then_wrapped([&e] (future<> f) {
-            assert(!f.failed());
+            SCYLLA_ASSERT(!f.failed());
             return e.execute_cql("alter table tatv drop r4;").discard_result();
         }).then_wrapped([&e] (future<> f) {
-            assert(!f.failed());
+            SCYLLA_ASSERT(!f.failed());
             return e.execute_cql("alter table tatv add r3 map<int, text>;").discard_result();
         }).then_wrapped([&e] (future<> f) {
             assert_that_failed(f);
@@ -3068,10 +3069,10 @@ SEASTAR_TEST_CASE(test_alter_table_validation) {
             assert_that_failed(f);
             return e.execute_cql("alter table tatv add r3 map<int, blob>;").discard_result();
         }).then_wrapped([&e] (future<> f) {
-            assert(!f.failed());
+            SCYLLA_ASSERT(!f.failed());
             return e.execute_cql("alter table tatv add r4 set<blob>;").discard_result();
         }).then_wrapped([] (future<> f) {
-            assert(!f.failed());
+            SCYLLA_ASSERT(!f.failed());
         });
     });
 }
@@ -4706,7 +4707,7 @@ SEASTAR_TEST_CASE(test_select_serial_consistency) {
         auto check_fails = [&e] (const sstring& query, const source_location& loc = source_location::current()) {
             try {
                 prepared_on_shard(e, query, {}, {}, db::consistency_level::SERIAL);
-                assert(false);
+                SCYLLA_ASSERT(false);
             } catch (const exceptions::invalid_request_exception& e) {
                 testlog.info("Query '{}' failed as expected with error: {}", query, e);
             } catch (...) {

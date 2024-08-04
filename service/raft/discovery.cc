@@ -5,6 +5,7 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+#include "utils/assert.hh"
 #include "service/raft/discovery.hh"
 
 namespace service {
@@ -61,7 +62,7 @@ void discovery::step(const peer_list& peers) {
             // If we have this peer, its ID must be the
             // same as we know (with the exceptions of seeds,
             // for which servers might not know ids at first).
-            assert(it == _peers.end() || it->id == addr.id || addr.id == raft::server_id{});
+            SCYLLA_ASSERT(it == _peers.end() || it->id == addr.id || addr.id == raft::server_id{});
         }
     }
     if (refresh_peer_list) {
@@ -114,7 +115,7 @@ std::optional<discovery::peer_list> discovery::request(const peer_list& peers) {
 }
 
 void discovery::response(discovery_peer from, const peer_list& peers) {
-    assert(_peers.contains(from));
+    SCYLLA_ASSERT(_peers.contains(from));
     _responded.emplace(from);
     step(peers);
 }

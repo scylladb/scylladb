@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "sstables/sstables.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include "cql3/statements/property_definitions.hh"
@@ -114,7 +115,7 @@ size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vect
 
     for(auto& sstable : sstables) {
         auto sstable_size = sstable->data_size();
-        assert(sstable_size != 0);
+        SCYLLA_ASSERT(sstable_size != 0);
 
         sstable_length_pairs.emplace_back(sstable, sstable_size);
     }

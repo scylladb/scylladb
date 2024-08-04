@@ -13,6 +13,7 @@
 #include "mutation_partition.hh"
 #include "keys.hh"
 #include "schema/schema_fwd.hh"
+#include "utils/assert.hh"
 #include "utils/hashing.hh"
 #include "mutation_fragment_v2.hh"
 #include "mutation_consumer.hh"
@@ -302,7 +303,7 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
       if (crs_it == crs_end && rts_it == rts_end) {
         flush_tombstones(position_in_partition::after_all_clustered_rows());
       } else {
-        assert(preempt && need_preempt());
+        SCYLLA_ASSERT(preempt && need_preempt());
         return std::nullopt;
       }
     }

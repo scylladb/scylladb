@@ -4,6 +4,7 @@
 
 /* Copyright 2020-present ScyllaDB */
 
+#include "utils/assert.hh"
 #include "util.hh"
 #include "cql3/expr/expr-utils.hh"
 
@@ -88,7 +89,7 @@ void do_with_parser_impl(const sstring_view& cql, noncopyable_function<void (cql
     };
     ucontext_t uc;
     auto r = getcontext(&uc);
-    assert(r == 0);
+    SCYLLA_ASSERT(r == 0);
     if (stack.get() <= (char*)&uc && (char*)&uc < stack.get() + stack_size) {
         // We are already running on the large stack, so just call the
         // parser directly.

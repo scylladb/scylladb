@@ -25,6 +25,7 @@
 #include "cache_mutation_reader.hh"
 #include "partition_snapshot_reader.hh"
 #include "clustering_key_filter.hh"
+#include "utils/assert.hh"
 #include "utils/updateable_value.hh"
 
 namespace cache {
@@ -1116,7 +1117,7 @@ future<> row_cache::update(external_updater eu, replica::memtable& m, preemption
         if (cache_i != partitions_end() && hint.match) {
             cache_entry& entry = *cache_i;
             upgrade_entry(entry);
-            assert(entry.schema() == _schema);
+            SCYLLA_ASSERT(entry.schema() == _schema);
             _tracker.on_partition_merge();
             mem_e.upgrade_schema(_tracker.region(), _schema, _tracker.memtable_cleaner());
             return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
@@ -1247,7 +1248,7 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
                                     break;
                                 }
                             }
-                            assert(it != _partitions.end());
+                            SCYLLA_ASSERT(it != _partitions.end());
                             _tracker.clear_continuity(*it);
                             return stop_iteration(it == end);
                         });
@@ -1351,7 +1352,7 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
 
     mutation_partition_v2::rows_type* rows = it.tree_if_singular();
     if (rows != nullptr) {
-        assert(it->is_last_dummy());
+        SCYLLA_ASSERT(it->is_last_dummy());
         partition_version& pv = partition_version::container_of(mutation_partition_v2::container_of(*rows));
         if (pv.is_referenced_from_entry()) {
             partition_entry& pe = partition_entry::container_of(pv);
@@ -1423,7 +1424,7 @@ const schema_ptr& row_cache::schema() const {
 void row_cache::upgrade_entry(cache_entry& e) {
     if (e.schema() != _schema && !e.partition().is_locked()) {
         auto& r = _tracker.region();
-        assert(!r.reclaiming_enabled());
+        SCYLLA_ASSERT(!r.reclaiming_enabled());
         e.partition().upgrade(r, _schema, _tracker.cleaner(), &_tracker);
     }
 }

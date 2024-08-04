@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <algorithm>
 #include <boost/algorithm/string.hpp>
 #include <fmt/ranges.h>
@@ -270,7 +271,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         auto prepared_statement = raw_statement->prepare(db, cql_stats);
         auto* statement = prepared_statement->statement.get();
         auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement);
-        assert(p);
+        SCYLLA_ASSERT(p);
         real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get(), feature_service));
         return db.find_keyspace(name);
     };

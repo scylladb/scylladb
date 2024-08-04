@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "memtable.hh"
 #include "replica/database.hh"
 #include "mutation/frozen_mutation.hh"
@@ -205,7 +206,7 @@ future<> memtable::clear_gently() noexcept {
 
 partition_entry&
 memtable::find_or_create_partition_slow(partition_key_view key) {
-    assert(!reclaiming_enabled());
+    SCYLLA_ASSERT(!reclaiming_enabled());
 
     // FIXME: Perform lookup using std::pair<token, partition_key_view>
     // to avoid unconditional copy of the partition key.
@@ -223,7 +224,7 @@ memtable::find_or_create_partition_slow(partition_key_view key) {
 
 partition_entry&
 memtable::find_or_create_partition(const dht::decorated_key& key) {
-    assert(!reclaiming_enabled());
+    SCYLLA_ASSERT(!reclaiming_enabled());
 
     // call lower_bound so we have a hint for the insert, just in case.
     partitions_type::bound_hint hint;
@@ -555,7 +556,7 @@ public:
         : _mt(mt)
 	{}
     ~flush_memory_accounter() {
-        assert(_mt._flushed_memory <= _mt.occupancy().total_space());
+        SCYLLA_ASSERT(_mt._flushed_memory <= _mt.occupancy().total_space());
     }
     uint64_t compute_size(memtable_entry& e, partition_snapshot& snp) {
         return e.size_in_allocator_without_rows(_mt.allocator())
@@ -851,7 +852,7 @@ void memtable_entry::upgrade_schema(logalloc::region& r, const schema_ptr& s, mu
 
 void memtable::upgrade_entry(memtable_entry& e) {
     if (e.schema() != _schema) {
-        assert(!reclaiming_enabled());
+        SCYLLA_ASSERT(!reclaiming_enabled());
         e.upgrade_schema(region(), _schema, cleaner());
     }
 }

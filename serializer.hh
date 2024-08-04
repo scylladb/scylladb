@@ -9,6 +9,7 @@
 
 #include <seastar/core/sstring.hh>
 #include <optional>
+#include "utils/assert.hh"
 #include "utils/managed_bytes.hh"
 #include "bytes_ostream.hh"
 #include <seastar/core/simple-stream.hh>
@@ -377,7 +378,7 @@ serialize_gc_clock_duration_value(Output& out, int64_t v) {
     if (!gc_clock_using_3_1_0_serialization) {
         // This should have been caught by the CQL layer, so this is just
         // for extra safety.
-        assert(int32_t(v) == v);
+        SCYLLA_ASSERT(int32_t(v) == v);
         serializer<int32_t>::write(out, v);
     } else {
         serializer<int64_t>::write(out, v);

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/numeric.hpp>
@@ -311,8 +312,8 @@ public:
     explicit basic_counter_cell_view(basic_atomic_cell_view<is_mutable> ac) noexcept
         : _cell(ac)
     {
-        assert(_cell.is_live());
-        assert(!_cell.is_counter_update());
+        SCYLLA_ASSERT(_cell.is_live());
+        SCYLLA_ASSERT(!_cell.is_counter_update());
     }
 
     api::timestamp_type timestamp() const { return _cell.timestamp(); }

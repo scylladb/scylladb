@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "big_decimal.hh"
 #include <cassert>
 #include "marshal_exception.hh"
@@ -186,7 +187,7 @@ big_decimal big_decimal::operator-(const big_decimal& other) const {
 big_decimal big_decimal::div(const ::uint64_t y, const rounding_mode mode) const
 {
     if (mode != rounding_mode::HALF_EVEN) {
-        assert(0);
+        SCYLLA_ASSERT(0);
     }
 
     // Implementation of Division with Half to Even (aka Bankers) Rounding

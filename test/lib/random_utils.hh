@@ -16,6 +16,7 @@
 #include <seastar/testing/test_runner.hh>
 
 #include "bytes.hh"
+#include "utils/assert.hh"
 #include "utils/preempt.hh"
 
 namespace tests::random {
@@ -164,7 +165,7 @@ inline sstring get_sstring() {
 // Picks a random subset of size `m` from the given vector.
 template <typename T>
 std::vector<T> random_subset(std::vector<T> v, unsigned m, std::mt19937& engine) {
-    assert(m <= v.size());
+    SCYLLA_ASSERT(m <= v.size());
     std::shuffle(v.begin(), v.end(), engine);
     return {v.begin(), v.begin() + m};
 }
@@ -172,7 +173,7 @@ std::vector<T> random_subset(std::vector<T> v, unsigned m, std::mt19937& engine)
 // Picks a random subset of size `m` from the set {0, ..., `n` - 1}.
 template<typename T>
 std::vector<T> random_subset(unsigned n, unsigned m, std::mt19937& engine) {
-    assert(m <= n);
+    SCYLLA_ASSERT(m <= n);
 
     std::vector<T> the_set(n);
     std::iota(the_set.begin(), the_set.end(), T{});

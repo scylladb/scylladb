@@ -12,6 +12,7 @@
 #include <random>
 #include <string>
 #include <seastar/core/thread.hh>
+#include "utils/assert.hh"
 #include "utils/logalloc.hh"
 
 struct stress_config {
@@ -112,13 +113,13 @@ public:
     }
 
     void link(reference& other) {
-        assert(_ref == nullptr);
+        SCYLLA_ASSERT(_ref == nullptr);
         _ref = &other;
         other._ref = this;
     }
 
     reference* get() {
-        assert(_ref != nullptr);
+        SCYLLA_ASSERT(_ref != nullptr);
         return _ref;
     }
 };

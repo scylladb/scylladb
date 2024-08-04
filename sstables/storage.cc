@@ -25,6 +25,7 @@
 #include "sstables/sstable_version.hh"
 #include "sstables/integrity_checked_file_impl.hh"
 #include "sstables/writer.hh"
+#include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/memory_data_sink.hh"
@@ -127,7 +128,7 @@ future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, comp
     options.buffer_size = sst.sstable_buffer_size;
     options.write_behind = 10;
 
-    assert(type == component_type::Data || type == component_type::Index);
+    SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
     return make_file_data_sink(type == component_type::Data ? std::move(sst._data_file) : std::move(sst._index_file), options);
 }
 
@@ -606,7 +607,7 @@ future<file> s3_storage::open_component(const sstable& sst, component_type type,
 }
 
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
-    assert(type == component_type::Data || type == component_type::Index);
+    SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
     co_return _client->make_upload_jumbo_sink(make_s3_object_name(sst, type));
 }

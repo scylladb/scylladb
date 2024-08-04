@@ -21,6 +21,7 @@
 #include "service/migration_listener.hh"
 #include "message/messaging_service.hh"
 #include "gms/feature_service.hh"
+#include "utils/assert.hh"
 #include "utils/runtime.hh"
 #include "gms/gossiper.hh"
 #include "view_info.hh"
@@ -896,7 +897,7 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 
 template<typename mutation_type>
 future<> migration_manager::announce_with_raft(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(std::move(schema), schema_features);
 
@@ -933,7 +934,7 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema, 
 static mutation make_group0_schema_version_mutation(const data_dictionary::database db, const group0_guard& guard) {
     auto s = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
     auto* cdef = s->get_column_definition("value");
-    assert(cdef);
+    SCYLLA_ASSERT(cdef);
 
     mutation m(s, partition_key::from_singular(*s, "group0_schema_version"));
     auto cell = guard.with_raft()
@@ -958,7 +959,7 @@ static void add_committed_by_group0_flag(std::vector<mutation>& schema, const gr
 
         auto& scylla_tables_schema = *mut.schema();
         auto cdef = scylla_tables_schema.get_column_definition("committed_by_group0");
-        assert(cdef);
+        SCYLLA_ASSERT(cdef);
 
         for (auto& cr: mut.partition().clustered_rows()) {
             cr.row().cells().apply(*cdef, atomic_cell::make_live(
@@ -992,7 +993,7 @@ template
 future<> migration_manager::announce<topology_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
 
 future<group0_guard> migration_manager::start_group0_operation() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     return _group0_client.start_operation(_as, raft_timeout{});
 }
 
@@ -1010,7 +1011,7 @@ void migration_manager::passive_announce(table_schema_version version) {
 }
 
 future<> migration_manager::passive_announce() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     mlogger.info("Gossiping my schema version {}", _schema_version_to_publish);
     return _gossiper.add_local_application_state(gms::application_state::SCHEMA, gms::versioned_value::schema(_schema_version_to_publish));
 }

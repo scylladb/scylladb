@@ -35,6 +35,7 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/exception.hh>
+#include "utils/assert.hh"
 #include "utils/s3/client.hh"
 #include "utils/http.hh"
 #include "utils/memory_data_sink.hh"
@@ -287,7 +288,7 @@ future<stats> client::get_object_stats(sstring object_name) {
 
 static rapidxml::xml_node<>* first_node_of(rapidxml::xml_node<>* root,
                                            std::initializer_list<std::string_view> names) {
-    assert(root);
+    SCYLLA_ASSERT(root);
     auto* node = root;
     for (auto name : names) {
         node = node->first_node(name.data(), name.size());
@@ -577,7 +578,7 @@ future<> dump_multipart_upload_parts(output_stream<char> out, const utils::chunk
 
         unsigned nr = 1;
         for (auto& etag : etags) {
-            assert(!etag.empty());
+            SCYLLA_ASSERT(!etag.empty());
             co_await out.write(format(multipart_upload_complete_entry.data(), etag, nr));
             nr++;
         }
@@ -981,8 +982,8 @@ class client::do_upload_file {
     }
 
     static size_t div_ceil(size_t x, size_t y) {
-        assert(std::in_range<long long>(x));
-        assert(std::in_range<long long>(y));
+        SCYLLA_ASSERT(std::in_range<long long>(x));
+        SCYLLA_ASSERT(std::in_range<long long>(y));
         auto [quot, rem] = std::lldiv(x, y);
         return rem ? quot + 1 : quot;
     }

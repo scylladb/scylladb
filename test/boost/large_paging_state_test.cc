@@ -7,6 +7,7 @@
  */
 
 
+#include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 #include "test/lib/scylla_test_case.hh"
 
@@ -69,7 +70,7 @@ SEASTAR_TEST_CASE(test_use_high_bits_of_remaining_rows_in_paging_state) {
             test_remaining = test_remaining - rows_fetched;
             if (has_more_pages(msg)) {
                 paging_state = extract_paging_state(msg);
-                assert(paging_state);
+                SCYLLA_ASSERT(paging_state);
                 BOOST_REQUIRE_EQUAL(test_remaining, paging_state->get_remaining());
             }
         }
@@ -107,7 +108,7 @@ SEASTAR_TEST_CASE(test_use_high_bits_of_remaining_rows_in_paging_state_filtering
             test_remaining = test_remaining - rows_fetched;
             if (has_more_pages(msg)) {
                 paging_state = extract_paging_state(msg);
-                assert(paging_state);
+                SCYLLA_ASSERT(paging_state);
                 BOOST_REQUIRE_EQUAL(test_remaining, paging_state->get_remaining());
             }
         }

@@ -13,6 +13,7 @@
 #include "cql3/expr/expr-utils.hh"
 #include <boost/iterator/transform_iterator.hpp>
 #include "types/list.hh"
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "mutation/mutation.hh"
 
@@ -62,7 +63,7 @@ lists::setter_by_index::fill_prepare_context(prepare_context& ctx) {
 void
 lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     // we should not get here for frozen lists
-    assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
+    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
 
     auto index = expr::evaluate(_idx, params._options);
     if (index.is_null()) {
@@ -105,7 +106,7 @@ lists::setter_by_uuid::requires_read() const {
 void
 lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     // we should not get here for frozen lists
-    assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
+    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
 
     auto index = expr::evaluate(_idx, params._options);
     auto value = expr::evaluate(*_e, params._options);
@@ -133,7 +134,7 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
 void
 lists::appender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     const cql3::raw_value value = expr::evaluate(*_e, params._options);
-    assert(column.type->is_multi_cell()); // "Attempted to append to a frozen list";
+    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to append to a frozen list";
     do_append(value, m, prefix, column, params);
 }
 
@@ -189,7 +190,7 @@ lists::do_append(const cql3::raw_value& list_value,
 
 void
 lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    assert(column.type->is_multi_cell()); // "Attempted to prepend to a frozen list";
+    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to prepend to a frozen list";
     cql3::raw_value lvalue = expr::evaluate(*_e, params._options);
     if (lvalue.is_null()) {
         return;
@@ -244,7 +245,7 @@ lists::discarder::requires_read() const {
 
 void
 lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    assert(column.type->is_multi_cell()); // "Attempted to delete from a frozen list";
+    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to delete from a frozen list";
 
     auto&& existing_list = params.get_prefetched_list(m.key(), prefix, column);
     // We want to call bind before possibly returning to reject queries where the value provided is not a list.
@@ -300,7 +301,7 @@ lists::discarder_by_index::requires_read() const {
 
 void
 lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    assert(column.type->is_multi_cell()); // "Attempted to delete an item by index from a frozen list";
+    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to delete an item by index from a frozen list";
     cql3::raw_value index = expr::evaluate(*_e, params._options);
     if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");

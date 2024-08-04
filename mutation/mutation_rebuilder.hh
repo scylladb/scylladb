@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "mutation.hh"
 #include "range_tombstone_assembler.hh"
 
@@ -20,31 +21,31 @@ public:
 
     // Returned reference is valid until consume_end_of_stream() or flush() is called.
     const mutation& consume_new_partition(const dht::decorated_key& dk) {
-        assert(!_m);
+        SCYLLA_ASSERT(!_m);
         _m = mutation(_s, dk);
         return *_m;
     }
 
     stop_iteration consume(tombstone t) {
-        assert(_m);
+        SCYLLA_ASSERT(_m);
         _m->partition().apply(t);
         return stop_iteration::no;
     }
 
     stop_iteration consume(range_tombstone&& rt) {
-        assert(_m);
+        SCYLLA_ASSERT(_m);
         _m->partition().apply_row_tombstone(*_s, std::move(rt));
         return stop_iteration::no;
     }
 
     stop_iteration consume(static_row&& sr) {
-        assert(_m);
+        SCYLLA_ASSERT(_m);
         _m->partition().static_row().apply(*_s, column_kind::static_column, std::move(sr.cells()));
         return stop_iteration::no;
     }
 
     stop_iteration consume(clustering_row&& cr) {
-        assert(_m);
+        SCYLLA_ASSERT(_m);
         auto& dr = _m->partition().clustered_row(*_s, std::move(cr.key()));
         dr.apply(cr.tomb());
         dr.apply(cr.marker());
@@ -53,7 +54,7 @@ public:
     }
 
     stop_iteration consume_end_of_partition() {
-        assert(_m);
+        SCYLLA_ASSERT(_m);
         return stop_iteration::yes;
     }
 
@@ -64,7 +65,7 @@ public:
     // Can be used to split the processing of a large mutation into
     // multiple smaller `mutation` objects (which add up to the full mutation).
     mutation flush() {
-        assert(_m);
+        SCYLLA_ASSERT(_m);
         return std::exchange(*_m, mutation(_s, _m->decorated_key()));
     }
 

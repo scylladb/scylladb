@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <boost/intrusive/parent_from_member.hpp>
 #include <assert.h>
 
@@ -33,7 +34,7 @@ class entangled final {
 private:
     struct init_tag {};
     entangled(init_tag, entangled& other) {
-        assert(!other._ref);
+        SCYLLA_ASSERT(!other._ref);
         _ref = &other;
         other._ref = this;
     }

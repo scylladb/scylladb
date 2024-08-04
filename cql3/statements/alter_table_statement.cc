@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include "cql3/query_options.hh"
 #include "cql3/statements/alter_table_statement.hh"
@@ -304,7 +305,7 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
 
     switch (_type) {
     case alter_table_statement::type::add:
-        assert(_column_changes.size());
+        SCYLLA_ASSERT(_column_changes.size());
         if (s->is_dense()) {
             throw exceptions::invalid_request_exception("Cannot add new column to a COMPACT STORAGE table");
         }
@@ -312,12 +313,12 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
         break;
 
     case alter_table_statement::type::alter:
-        assert(_column_changes.size() == 1);
+        SCYLLA_ASSERT(_column_changes.size() == 1);
         invoke_column_change_fn(std::mem_fn(&alter_table_statement::alter_column));
         break;
 
     case alter_table_statement::type::drop:
-        assert(_column_changes.size());
+        SCYLLA_ASSERT(_column_changes.size());
         if (!s->is_cql3_table()) {
             throw exceptions::invalid_request_exception("Cannot drop columns from a non-CQL3 table");
         }

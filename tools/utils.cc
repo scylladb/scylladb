@@ -15,6 +15,7 @@
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "tools/utils.hh"
+#include "utils/assert.hh"
 #include "utils/logalloc.hh"
 #include "init.hh"
 
@@ -220,7 +221,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
             ns.notify_all(configurable::system_state::started).get();
 
             logalloc::use_standard_allocator_segment_pool_backend(_cfg.lsa_segment_pool_backend_size_mb * 1024 * 1024).get();
-            assert(found_op);
+            SCYLLA_ASSERT(found_op);
             auto res = main_func(*found_op, app.configuration());
 
             ns.notify_all(configurable::system_state::stopped).get();

@@ -29,6 +29,7 @@
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/closeable.hh>
 
+#include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
@@ -802,7 +803,7 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_truncation) {
                 // Reading this segment will now get corruption at the above position,
                 // right before where we have truncated the file. It will try to skip
                 // to next chunk, which is past actual EOF. If #15269 is broken, this
-                // will assert and crash in file_data_source_impl. If not, we should 
+                // will SCYLLA_ASSERT and crash in file_data_source_impl. If not, we should 
                 // get a corruption exception and no more entries past the corrupt one.
                 db::position_type pos = 0;
                 try {
@@ -888,7 +889,7 @@ SEASTAR_TEST_CASE(test_allocation_failure){
 
             // Use us loads of memory so we can OOM at the appropriate place
             try {
-                assert(fragmented_temporary_buffer::default_fragment_size < size);
+                SCYLLA_ASSERT(fragmented_temporary_buffer::default_fragment_size < size);
                 for (;;) {
                     junk->emplace_back(new char[fragmented_temporary_buffer::default_fragment_size]);
                 }

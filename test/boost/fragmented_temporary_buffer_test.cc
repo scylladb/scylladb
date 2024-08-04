@@ -9,6 +9,7 @@
 #include <seastar/core/thread.hh>
 #include "test/lib/scylla_test_case.hh"
 
+#include "utils/assert.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 
 #include "test/lib/random_utils.hh"
@@ -245,7 +246,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_pod) {
 
 SEASTAR_THREAD_TEST_CASE(test_read_to) {
     auto test = [&] (bytes_view expected_value1, bytes_view expected_value2, fragmented_temporary_buffer& ftb) {
-        assert(expected_value2.size() < expected_value1.size());
+        SCYLLA_ASSERT(expected_value2.size() < expected_value1.size());
 
         bytes actual_value;
 
@@ -281,7 +282,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_to) {
 
 SEASTAR_THREAD_TEST_CASE(test_read_view) {
     auto test = [&] (bytes_view expected_value1, bytes_view expected_value2, fragmented_temporary_buffer& ftb) {
-        assert(expected_value2.size() < expected_value1.size());
+        SCYLLA_ASSERT(expected_value2.size() < expected_value1.size());
 
         auto in = ftb.get_istream();
         BOOST_CHECK_EQUAL(in.bytes_left(), expected_value1.size() + expected_value2.size());
@@ -312,7 +313,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_view) {
 SEASTAR_THREAD_TEST_CASE(test_read_bytes_view) {
     auto linearization_buffer = bytes_ostream();
     auto test = [&] (bytes_view expected_value1, bytes_view expected_value2, fragmented_temporary_buffer& ftb) {
-        assert(expected_value2.size() < expected_value1.size());
+        SCYLLA_ASSERT(expected_value2.size() < expected_value1.size());
 
         auto in = ftb.get_istream();
         BOOST_CHECK_EQUAL(in.read_bytes_view(0, linearization_buffer), bytes_view());

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include "version.hh"
 #include "build_mode.hh"
 
@@ -40,7 +41,7 @@ std::string doc_link(std::string_view url_tail) {
         std::vector<std::string> components;
         boost::split(components, version, boost::algorithm::is_any_of("."));
         // Version is compiled into the binary, testing will step on this immediately.
-        assert(components.size() >= 2);
+        SCYLLA_ASSERT(components.size() >= 2);
         branch = fmt::format("branch-{}.{}", components[0], components[1]);
     }
 

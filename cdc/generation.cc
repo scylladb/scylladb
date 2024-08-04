@@ -26,6 +26,7 @@
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/to_string.hh"
@@ -107,8 +108,8 @@ stream_id::stream_id(dht::token token, size_t vnode_index)
     copy_int_to_bytes(dht::token::to_int64(token), 0, _value);
     copy_int_to_bytes(low_qword, sizeof(int64_t), _value);
     // not a hot code path. make sure we did not mess up the shifts and masks.
-    assert(version() == version_1);
-    assert(index() == vnode_index);
+    SCYLLA_ASSERT(version() == version_1);
+    SCYLLA_ASSERT(index() == vnode_index);
 }
 
 stream_id::stream_id(bytes b)
@@ -126,7 +127,7 @@ bool stream_id::is_set() const {
 }
 
 static int64_t bytes_to_int64(bytes_view b, size_t offset) {
-    assert(b.size() >= offset + sizeof(int64_t));
+    SCYLLA_ASSERT(b.size() >= offset + sizeof(int64_t));
     int64_t res;
     std::copy_n(b.begin() + offset, sizeof(int64_t), reinterpret_cast<int8_t *>(&res));
     return net::ntoh(res);
@@ -411,7 +412,7 @@ future<cdc::generation_id> generation_service::legacy_make_new_generation(const 
 
     // Our caller should ensure that there are normal tokens in the token ring.
     auto normal_token_owners = tmptr->count_normal_token_owners();
-    assert(normal_token_owners);
+    SCYLLA_ASSERT(normal_token_owners);
 
     if (_feature_service.cdc_generations_v2) {
         cdc_log.info("Inserting new generation data at UUID {}", uuid);
@@ -811,7 +812,7 @@ future<> generation_service::stop() {
 }
 
 generation_service::~generation_service() {
-    assert(_stopped);
+    SCYLLA_ASSERT(_stopped);
 }
 
 future<> generation_service::after_join(std::optional<cdc::generation_id>&& startup_gen_id) {

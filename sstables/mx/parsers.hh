@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "sstables/consumer.hh"
 #include "sstables/types.hh"
 #include "sstables/column_translation.hh"
@@ -282,7 +283,7 @@ public:
             }
             [[fallthrough]];
         case state::END_OPEN_MARKER_FLAG:
-            assert(_primitive._i64 + width_base > 0);
+            SCYLLA_ASSERT(_primitive._i64 + width_base > 0);
             _width = (_primitive._i64 + width_base);
             if (_primitive.read_8(data) != read_status::ready) {
                 _state = state::END_OPEN_MARKER_LOCAL_DELETION_TIME;

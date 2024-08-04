@@ -15,6 +15,7 @@
 #include "log.hh"
 #include "locator/topology.hh"
 #include "locator/production_snitch_base.hh"
+#include "utils/assert.hh"
 #include "utils/stall_free.hh"
 #include "utils/to_string.hh"
 
@@ -117,7 +118,7 @@ topology::topology(topology&& o) noexcept
     , _sort_by_proximity(o._sort_by_proximity)
     , _datacenters(std::move(o._datacenters))
 {
-    assert(_shard == this_shard_id());
+    SCYLLA_ASSERT(_shard == this_shard_id());
     tlogger.trace("topology[{}]: move from [{}]", fmt::ptr(this), fmt::ptr(&o));
 
     for (auto& n : _nodes) {

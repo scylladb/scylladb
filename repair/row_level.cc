@@ -20,6 +20,7 @@
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
+#include "utils/assert.hh"
 #include "utils/xx_hasher.hh"
 #include "utils/UUID.hh"
 #include "replica/database.hh"
@@ -889,7 +890,7 @@ public:
             } else {
                 add_to_repair_meta_for_followers(*this);
             }
-            assert(all_live_peer_shards.size() == all_live_peer_nodes.size());
+            SCYLLA_ASSERT(all_live_peer_shards.size() == all_live_peer_nodes.size());
             _all_node_states.push_back(repair_node_state(myip(), this_shard_id()));
             for (unsigned i = 0; i < all_live_peer_nodes.size(); i++) {
                 _all_node_states.push_back(repair_node_state(all_live_peer_nodes[i], all_live_peer_shards[i].value_or(repair_unspecified_shard)));
@@ -926,7 +927,7 @@ public:
 
 public:
     std::optional<shard_id> get_peer_node_dst_cpu_id(uint32_t peer_node_idx) {
-        assert(peer_node_idx + 1 < all_nodes().size());
+        SCYLLA_ASSERT(peer_node_idx + 1 < all_nodes().size());
         return all_nodes()[peer_node_idx + 1].shard;
     }
 
@@ -3229,7 +3230,7 @@ future<> repair_service::stop() {
 }
 
 repair_service::~repair_service() {
-    assert(_stopped);
+    SCYLLA_ASSERT(_stopped);
 }
 
 static shard_id repair_id_to_shard(tasks::task_id& repair_id) {

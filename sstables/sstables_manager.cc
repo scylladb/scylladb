@@ -16,6 +16,7 @@
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
+#include "utils/assert.hh"
 #include "utils/s3/client.hh"
 #include "exceptions/exceptions.hh"
 
@@ -46,9 +47,9 @@ sstables_manager::sstables_manager(
 }
 
 sstables_manager::~sstables_manager() {
-    assert(_closing);
-    assert(_active.empty());
-    assert(_undergoing_close.empty());
+    SCYLLA_ASSERT(_closing);
+    SCYLLA_ASSERT(_active.empty());
+    SCYLLA_ASSERT(_undergoing_close.empty());
 }
 
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)

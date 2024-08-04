@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/seastar.hh>
@@ -274,7 +275,7 @@ private:
             , shared_data(make_lw_shared<injection_shared_data>(std::move(parameters), injection_name)) {}
 
         void receive_message() {
-            assert(shared_data);
+            SCYLLA_ASSERT(shared_data);
 
             ++shared_data->received_message_count;
             shared_data->received_message_cv.broadcast();

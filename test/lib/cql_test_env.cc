@@ -57,6 +57,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/sstables-format-selector.hh"
 #include "repair/row_level.hh"
+#include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "streaming/stream_manager.hh"
@@ -270,7 +271,7 @@ public:
         }
         auto stmt = prepared->statement;
 
-        assert(stmt->get_bound_terms() == qo->get_values_count());
+        SCYLLA_ASSERT(stmt->get_bound_terms() == qo->get_values_count());
         qo->prepare(prepared->bound_names);
 
         auto qs = make_query_state();
@@ -415,7 +416,7 @@ public:
             auto deactivate = defer([] {
                 bool old_active = true;
                 auto success = active.compare_exchange_strong(old_active, false);
-                assert(success);
+                SCYLLA_ASSERT(success);
             });
 
             // FIXME: make the function storage non static
@@ -691,7 +692,7 @@ private:
 
             // Normally the auth server is already stopped in here,
             // but if there is an initialization failure we have to
-            // make sure to stop it now or ~sharded will assert.
+            // make sure to stop it now or ~sharded will SCYLLA_ASSERT.
             auto stop_auth_server = defer([this] {
                 _auth_service.stop().get();
             });

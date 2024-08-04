@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "utils/assert.hh"
 #include "update_statement.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
@@ -121,7 +122,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
         auto rb = s->regular_begin();
         if (rb->name().empty() || rb->type == empty_type) {
             // There is no column outside the PK. So no operation could have passed through validation
-            assert(_column_operations.empty());
+            SCYLLA_ASSERT(_column_operations.empty());
             constants::setter(*s->regular_begin(), expr::constant(cql3::raw_value::make_value(bytes()), empty_type)).execute(m, prefix, params);
         } else {
             // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
@@ -438,7 +439,7 @@ insert_json_statement::prepare_internal(data_dictionary::database db, schema_ptr
 {
     // FIXME: handle _if_not_exists. For now, mark it used to quiet the compiler. #8682
     (void)_if_not_exists;
-    assert(expr::is<cql3::expr::untyped_constant>(_json_value) || expr::is<cql3::expr::bind_variable>(_json_value));
+    SCYLLA_ASSERT(expr::is<cql3::expr::untyped_constant>(_json_value) || expr::is<cql3::expr::bind_variable>(_json_value));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
     auto prepared_json_value = prepare_expression(_json_value, db, "", nullptr, make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
     expr::verify_no_aggregate_functions(prepared_json_value, "JSON clause");

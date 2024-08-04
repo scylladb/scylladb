@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/numeric.hpp>
 
@@ -186,7 +187,7 @@ public:
 
     full_position calculate_last_position() const {
         auto ps = _v.partitions();
-        assert(!ps.empty());
+        SCYLLA_ASSERT(!ps.empty());
         auto pit = ps.begin();
         auto pnext = pit;
         while (++pnext != ps.end()) {

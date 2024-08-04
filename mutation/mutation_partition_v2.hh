@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include <iosfwd>
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>
@@ -268,7 +269,7 @@ private:
 
     void check_schema(const schema& s) const {
 #ifdef SEASTAR_DEBUG
-        assert(s.version() == _schema_version);
+        SCYLLA_ASSERT(s.version() == _schema_version);
 #endif
     }
 };

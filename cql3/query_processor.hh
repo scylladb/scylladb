@@ -27,6 +27,7 @@
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
+#include "utils/assert.hh"
 #include "utils/observable.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
@@ -542,7 +543,7 @@ private:
                                    bound_terms,
                                    std::numeric_limits<uint16_t>::max()));
                 }
-                assert(bound_terms == prepared->bound_names.size());
+                SCYLLA_ASSERT(bound_terms == prepared->bound_names.size());
                 return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
             }).then([&key, &id_getter, &client_state] (auto prep_ptr) {
                 const auto& warnings = prep_ptr->warnings;

@@ -27,6 +27,7 @@
 #include <seastar/util/backtrace.hh>
 #include <seastar/util/later.hh>
 
+#include "utils/assert.hh"
 #include "utils/logalloc.hh"
 #include "log.hh"
 #include "utils/dynamic_bitset.hh"
@@ -60,7 +61,7 @@ template<typename T>
 template<typename T>
 void poison(const T* addr, size_t size) {
     // Both values and descriptors must be aligned.
-    assert(uintptr_t(addr) % 8 == 0);
+    SCYLLA_ASSERT(uintptr_t(addr) % 8 == 0);
     // This can be followed by
     // * 8 byte aligned descriptor (this is a value)
     // * 8 byte aligned value
@@ -194,7 +195,7 @@ migrate_fn_type::register_migrator(migrate_fn_type* m) {
     auto& migrators = *debug::static_migrators;
     auto idx = migrators.add(m);
     // object_descriptor encodes 2 * index() + 1
-    assert(idx * 2 + 1 < utils::uleb64_express_supreme);
+    SCYLLA_ASSERT(idx * 2 + 1 < utils::uleb64_express_supreme);
     m->_migrators = migrators.shared_from_this();
     return idx;
 }
@@ -540,7 +541,7 @@ public:
     void enable_abort_on_bad_alloc() noexcept { _abort_on_bad_alloc = true; }
     bool should_abort_on_bad_alloc() const noexcept { return _abort_on_bad_alloc; }
     void setup_background_reclaim(scheduling_group sg) {
-        assert(!_background_reclaimer);
+        SCYLLA_ASSERT(!_background_reclaimer);
         _background_reclaimer.emplace(sg, [this] (size_t target) {
             reclaim(target, is_preemptible::yes);
         });
@@ -927,14 +928,14 @@ public:
         if (_delegate_store) {
             return _delegate_store->segment_from_idx(idx);
         }
-        assert(idx < _segments.size());
+        SCYLLA_ASSERT(idx < _segments.size());
         return _segments[idx];
     }
     segment* segment_from_idx(size_t idx) noexcept {
         if (_delegate_store) {
             return _delegate_store->segment_from_idx(idx);
         }
-        assert(idx < _segments.size());
+        SCYLLA_ASSERT(idx < _segments.size());
         return _segments[idx];
     }
     size_t idx_from_segment(const segment* seg) const noexcept {
@@ -958,7 +959,7 @@ public:
         auto seg = new (p) segment;
         poison(seg, sizeof(segment));
         auto i = find_empty();
-        assert(i != _segments.end());
+        SCYLLA_ASSERT(i != _segments.end());
         *i = seg;
         size_t ret = i - _segments.begin();
         _segment_indexes[seg] = ret;
@@ -1103,7 +1104,7 @@ public:
         _non_lsa_memory_in_use += n;
     }
     void subtract_non_lsa_memory_in_use(size_t n) noexcept {
-        assert(_non_lsa_memory_in_use >= n);
+        SCYLLA_ASSERT(_non_lsa_memory_in_use >= n);
         _non_lsa_memory_in_use -= n;
     }
     size_t non_lsa_memory_in_use() const noexcept {
@@ -1335,7 +1336,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
 
 void segment_pool::deallocate_segment(segment* seg) noexcept
 {
-    assert(_lsa_owned_segments_bitmap.test(idx_from_segment(seg)));
+    SCYLLA_ASSERT(_lsa_owned_segments_bitmap.test(idx_from_segment(seg)));
     _lsa_free_segments_bitmap.set(idx_from_segment(seg));
     _free_segments++;
 }
@@ -1378,7 +1379,7 @@ segment_pool::containing_segment(const void* obj) noexcept {
 
 segment*
 segment_pool::segment_from(const segment_descriptor& desc) noexcept {
-    assert(desc._region);
+    SCYLLA_ASSERT(desc._region);
     auto index = &desc - &_segments[0];
     return segment_from_idx(index);
 }
@@ -1898,7 +1899,7 @@ private:
 
         if (seg != _buf_active) {
             if (desc.is_empty()) {
-                assert(desc._buf_pointers.empty());
+                SCYLLA_ASSERT(desc._buf_pointers.empty());
                 _segment_descs.erase(desc);
                 desc._buf_pointers = std::vector<entangled>();
                 free_segment(seg, desc);
@@ -1924,7 +1925,7 @@ private:
             for (entangled& e : _buf_ptrs_for_compact_segment) {
                 if (e) {
                     lsa_buffer* old_ptr = e.get(&lsa_buffer::_link);
-                    assert(&desc == old_ptr->_desc);
+                    SCYLLA_ASSERT(&desc == old_ptr->_desc);
                     lsa_buffer dst = alloc_buf(old_ptr->_size);
                     memcpy(dst._buf, old_ptr->_buf, dst._size);
                     old_ptr->_link = std::move(dst._link);
@@ -1959,7 +1960,7 @@ private:
             // Memory allocation above could allocate active buffer during segment compaction.
             close_buf_active();
         }
-        assert((uintptr_t)new_active->at(0) % buf_align == 0);
+        SCYLLA_ASSERT((uintptr_t)new_active->at(0) % buf_align == 0);
         segment_descriptor& desc = segment_pool().descriptor(new_active);
         desc._buf_pointers = std::move(ptrs);
         desc.set_kind(segment_kind::bufs);
@@ -2004,17 +2005,17 @@ public:
         while (!_segment_descs.empty()) {
             auto& desc = _segment_descs.one_of_largest();
             _segment_descs.pop_one_of_largest();
-            assert(desc.is_empty());
+            SCYLLA_ASSERT(desc.is_empty());
             free_segment(desc);
         }
         _closed_occupancy = {};
         if (_active) {
-            assert(segment_pool().descriptor(_active).is_empty());
+            SCYLLA_ASSERT(segment_pool().descriptor(_active).is_empty());
             free_segment(_active);
             _active = nullptr;
         }
         if (_buf_active) {
-            assert(segment_pool().descriptor(_buf_active).is_empty());
+            SCYLLA_ASSERT(segment_pool().descriptor(_buf_active).is_empty());
             free_segment(_buf_active);
             _buf_active = nullptr;
         }
@@ -2131,7 +2132,7 @@ private:
     void on_non_lsa_free(void* obj) noexcept {
         auto allocated_size = malloc_usable_size(obj);
         auto cookie = (non_lsa_object_cookie*)((char*)obj + allocated_size) - 1;
-        assert(cookie->value == non_lsa_object_cookie().value);
+        SCYLLA_ASSERT(cookie->value == non_lsa_object_cookie().value);
         _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
         if (_listener) {
             _evictable_space -= allocated_size;
@@ -2390,7 +2391,7 @@ public:
 
     void unreserve(uintptr_t n_segments) noexcept override {
         auto& pool = segment_pool();
-        assert(pool.current_emergency_reserve_goal() >= n_segments);
+        SCYLLA_ASSERT(pool.current_emergency_reserve_goal() >= n_segments);
         size_t new_goal = pool.current_emergency_reserve_goal() - n_segments;
         pool.set_current_emergency_reserve_goal(new_goal);
     }

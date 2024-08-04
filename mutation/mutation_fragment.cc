@@ -11,6 +11,7 @@
 #include "mutation_fragment.hh"
 #include "mutation_fragment_v2.hh"
 #include "clustering_interval_set.hh"
+#include "utils/assert.hh"
 #include "utils/hashing.hh"
 #include "utils/xx_hasher.hh"
 
@@ -172,13 +173,13 @@ struct get_key_visitor {
 
 const clustering_key_prefix& mutation_fragment::key() const
 {
-    assert(has_key());
+    SCYLLA_ASSERT(has_key());
     return visit(get_key_visitor());
 }
 
 void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
 {
-    assert(mergeable_with(mf));
+    SCYLLA_ASSERT(mergeable_with(mf));
     switch (_kind) {
     case mutation_fragment::kind::partition_start:
         _data->_partition_start.partition_tombstone().apply(mf._data->_partition_start.partition_tombstone());
@@ -257,13 +258,13 @@ auto fmt::formatter<mutation_fragment::printer>::format(const mutation_fragment:
 
 const clustering_key_prefix& mutation_fragment_v2::key() const
 {
-    assert(has_key());
+    SCYLLA_ASSERT(has_key());
     return visit(get_key_visitor());
 }
 
 void mutation_fragment_v2::apply(const schema& s, mutation_fragment_v2&& mf)
 {
-    assert(mergeable_with(mf));
+    SCYLLA_ASSERT(mergeable_with(mf));
     switch (_kind) {
     case mutation_fragment_v2::kind::partition_start:
         _data->_partition_start.partition_tombstone().apply(mf._data->_partition_start.partition_tombstone());

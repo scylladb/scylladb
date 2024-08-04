@@ -10,6 +10,7 @@
 #include <fmt/std.h>
 #include "log.hh"
 #include "replica/database_fwd.hh"
+#include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
 #include <seastar/core/future-util.hh>
@@ -388,7 +389,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
     , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer()))
 {
-    assert(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
+    SCYLLA_ASSERT(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 
     local_schema_registry().init(*this); // TODO: we're never unbound.
     setup_metrics();
@@ -828,7 +829,7 @@ static bool is_system_table(const schema& s) {
 }
 
 void database::init_schema_commitlog() {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     db::commitlog::config c;
     c.sched_group = _dbcfg.schema_commitlog_scheduling_group;
@@ -2587,15 +2588,15 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     db::replay_position rp = co_await cf.discard_sstables(truncated_at);
     // TODO: indexes.
     // Note: since discard_sstables was changed to only count tables owned by this shard,
-    // we can get zero rp back. Changed assert, and ensure we save at least low_mark.
-    // #6995 - the assert below was broken in c2c6c71 and remained so for many years. 
+    // we can get zero rp back. Changed SCYLLA_ASSERT, and ensure we save at least low_mark.
+    // #6995 - the SCYLLA_ASSERT below was broken in c2c6c71 and remained so for many years. 
     // We nowadays do not flush tables with sstables but autosnapshot=false. This means
     // the low_mark assertion does not hold, because we maybe/probably never got around to 
     // creating the sstables that would create them.
     // If truncated_at is earlier than the time low_mark was taken
     // then the replay_position returned by discard_sstables may be
     // smaller than low_mark.
-    assert(!st.did_flush || rp == db::replay_position() || (truncated_at <= st.low_mark_at ? rp <= st.low_mark : st.low_mark <= rp));
+    SCYLLA_ASSERT(!st.did_flush || rp == db::replay_position() || (truncated_at <= st.low_mark_at ? rp <= st.low_mark : st.low_mark <= rp));
     if (rp == db::replay_position()) {
         rp = st.low_mark;
     }

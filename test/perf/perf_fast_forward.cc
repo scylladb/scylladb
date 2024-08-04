@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "utils/assert.hh"
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/join.hpp>
@@ -502,7 +503,7 @@ public:
 
         Json::Value stats_value;
       if (summary_result) {
-        assert(values.size() == 1);
+        SCYLLA_ASSERT(values.size() == 1);
         for (size_t i = 0; i < stats_names.size(); ++i) {
             write_test_values_impl(stats_value, stats_names, values.front());
         }
@@ -781,8 +782,8 @@ uint64_t consume_all_with_next_partition(mutation_reader& rd) {
 
 static void assert_partition_start(mutation_reader& rd) {
     auto mfopt = rd().get();
-    assert(mfopt);
-    assert(mfopt->is_partition_start());
+    SCYLLA_ASSERT(mfopt);
+    SCYLLA_ASSERT(mfopt->is_partition_start());
 }
 
 // A dataset with one large partition with many clustered fragments.
@@ -1194,8 +1195,8 @@ table_config read_config(cql_test_env& env, const sstring& name) {
 }
 
 static unsigned cardinality(int_range r) {
-    assert(r.start());
-    assert(r.end());
+    SCYLLA_ASSERT(r.start());
+    SCYLLA_ASSERT(r.end());
     return r.end()->value() - r.start()->value() + r.start()->is_inclusive() + r.end()->is_inclusive() - 1;
 }
 
@@ -1281,7 +1282,7 @@ public:
             results.resize(rs.size());
         }
         {
-            assert(rs.size() == results.size());
+            SCYLLA_ASSERT(rs.size() == results.size());
             for (auto j = 0u; j < rs.size(); j++) {
                 results[j].emplace_back(rs[j]);
             }
@@ -1387,7 +1388,7 @@ void test_large_partition_single_key_slice(app_template &app, replica::column_fa
       };
     });
 
-    assert(n_rows > 200); // assumed below
+    SCYLLA_ASSERT(n_rows > 200); // assumed below
 
     run_test_case(app, [&] { // adjacent, no overlap
         return test_result_vector {

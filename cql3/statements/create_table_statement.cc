@@ -9,6 +9,7 @@
  */
 
 
+#include "utils/assert.hh"
 #include <inttypes.h>
 #include <boost/regex.hpp>
 
@@ -128,7 +129,7 @@ void create_table_statement::apply_properties_to(schema_builder& builder, const 
 
 void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind) const
 {
-    assert(aliases.size() == types.size());
+    SCYLLA_ASSERT(aliases.size() == types.size());
     for (size_t i = 0; i < aliases.size(); i++) {
         if (!aliases[i].empty()) {
             builder.with_column(aliases[i], types[i], kind);
@@ -212,7 +213,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
                 for (auto&& inner: type->all_types()) {
                     if (inner->is_multi_cell()) {
                         // a nested non-frozen UDT should have already been rejected when defining the type
-                        assert(inner->is_collection());
+                        SCYLLA_ASSERT(inner->is_collection());
                         throw exceptions::invalid_request_exception("Non-frozen UDTs with nested non-frozen collections are not supported");
                     }
                 }

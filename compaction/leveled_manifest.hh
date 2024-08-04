@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "utils/assert.hh"
 #include "sstables/sstables.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include "interval.hh"
@@ -311,7 +312,7 @@ public:
 
     template <typename T>
     static std::vector<sstables::shared_sstable> overlapping(const schema& s, const std::vector<sstables::shared_sstable>& candidates, const T& others) {
-        assert(!candidates.empty());
+        SCYLLA_ASSERT(!candidates.empty());
         /*
          * Picking each sstable from others that overlap one of the sstable of candidates is not enough
          * because you could have the following situation:
@@ -350,7 +351,7 @@ public:
      */
     template <typename T>
     static std::vector<sstables::shared_sstable> overlapping(const schema& s, dht::token start, dht::token end, const T& sstables) {
-        assert(start <= end);
+        SCYLLA_ASSERT(start <= end);
 
         std::vector<sstables::shared_sstable> overlapped;
         auto range = ::wrapping_interval<dht::token>::make(start, end);
@@ -459,7 +460,7 @@ private:
      * for prior failure), will return an empty list.  Never returns null.
      */
     candidates_info get_candidates_for(int level, const std::vector<std::optional<dht::decorated_key>>& last_compacted_keys) {
-        assert(!get_level(level).empty());
+        SCYLLA_ASSERT(!get_level(level).empty());
 
         logger.debug("Choosing candidates for L{}", level);
 
@@ -517,7 +518,7 @@ public:
             new_level = 0;
         } else {
             new_level = (minimum_level == maximum_level && can_promote) ? maximum_level + 1 : maximum_level;
-            assert(new_level > 0);
+            SCYLLA_ASSERT(new_level > 0);
         }
         return new_level;
     }

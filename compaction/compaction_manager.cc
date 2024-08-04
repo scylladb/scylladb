@@ -22,6 +22,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include "sstables/exceptions.hh"
 #include "sstables/sstable_directory.hh"
+#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
 #include "db/system_keyspace.hh"
@@ -958,7 +959,7 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
 compaction_manager::~compaction_manager() {
     // Assert that compaction manager was explicitly stopped, if started.
     // Otherwise, fiber(s) will be alive after the object is stopped.
-    assert(_state == state::none || _state == state::stopped);
+    SCYLLA_ASSERT(_state == state::none || _state == state::stopped);
 }
 
 future<> compaction_manager::update_throughput(uint32_t value_mbs) {
@@ -998,7 +999,7 @@ void compaction_manager::register_metrics() {
 }
 
 void compaction_manager::enable() {
-    assert(_state == state::none || _state == state::disabled);
+    SCYLLA_ASSERT(_state == state::none || _state == state::disabled);
     _state = state::enabled;
     _compaction_submission_timer.arm_periodic(periodic_compaction_submission_interval());
     _waiting_reevalution = postponed_compactions_reevaluation();

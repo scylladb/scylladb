@@ -14,6 +14,7 @@
 #include <span>
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include "utils/assert.hh"
 #include "utils/serialization.hh"
 #include <seastar/util/backtrace.hh>
 
@@ -65,15 +66,15 @@ private:
         for (auto&& val : values) {
             using val_type = std::remove_cvref_t<decltype(val)>;
             if constexpr (FragmentedView<val_type>) {
-                assert(val.size_bytes() <= std::numeric_limits<size_type>::max());
+                SCYLLA_ASSERT(val.size_bytes() <= std::numeric_limits<size_type>::max());
                 write<size_type>(out, size_type(val.size_bytes()));
                 write_fragmented(out, val);
             } else if constexpr (std::same_as<val_type, managed_bytes>) {
-                assert(val.size() <= std::numeric_limits<size_type>::max());
+                SCYLLA_ASSERT(val.size() <= std::numeric_limits<size_type>::max());
                 write<size_type>(out, size_type(val.size()));
                 write_fragmented(out, managed_bytes_view(val));
             } else {
-                assert(val.size() <= std::numeric_limits<size_type>::max());
+                SCYLLA_ASSERT(val.size() <= std::numeric_limits<size_type>::max());
                 write<size_type>(out, size_type(val.size()));
                 write_fragmented(out, single_fragmented_view(val));
             }
@@ -135,7 +136,7 @@ public:
         partial.reserve(values.size());
         auto i = _types.begin();
         for (auto&& component : values) {
-            assert(i != _types.end());
+            SCYLLA_ASSERT(i != _types.end());
             partial.push_back((*i++)->decompose(component));
         }
         return serialize_value(partial);
@@ -256,7 +257,7 @@ public:
     }
     // Returns true iff given prefix has no missing components
     bool is_full(managed_bytes_view v) const {
-        assert(AllowPrefixes == allow_prefixes::yes);
+        SCYLLA_ASSERT(AllowPrefixes == allow_prefixes::yes);
         return std::distance(begin(v), end(v)) == (ssize_t)_types.size();
     }
     bool is_empty(managed_bytes_view v) const {

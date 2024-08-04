@@ -11,6 +11,7 @@
 
 #include <boost/range/algorithm/copy.hpp>
 
+#include "utils/assert.hh"
 #include "utils/reusable_buffer.hh"
 #include <seastar/core/manual_clock.hh>
 #include <seastar/testing/test_case.hh>
@@ -139,7 +140,7 @@ SEASTAR_TEST_CASE(test_decay) {
     // It isn't strictly required from the implementation to use
     // power-of-2 sizes, just sizes coarse enough to limit the number
     // of allocations.
-    // If the implementation is modified, this assert can be freely changed.
+    // If the implementation is modified, this SCYLLA_ASSERT can be freely changed.
     BOOST_REQUIRE_EQUAL(buffer.size(), std::bit_ceil(size_t(1'000'001)));
     co_await advance_clock(1500ms);
     get_buffer(1'000);
