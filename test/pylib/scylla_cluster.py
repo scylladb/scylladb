@@ -1348,7 +1348,7 @@ class ScyllaClusterManager:
                 @wraps(handler)
                 async def inner_wrapper(request):
                     if blockable and self.server_broken_event.is_set():
-                        raise Exception("ScyllaClusterManager BROKEN")
+                        raise Exception("ScyllaClusterManager BROKEN, Previous test broke ScyllaClusterManager server")
                     self.logger.info("[ScyllaClusterManager][%s] %s", asyncio.current_task().get_name(), request.url)
                     self.tasks_history[asyncio.current_task()] = request
                     return await handler(request)
@@ -1434,7 +1434,7 @@ class ScyllaClusterManager:
         cluster_str = await self._before_test(request.match_info['test_case_name'])
         return cluster_str
 
-    async def _after_test(self, _request) -> str:
+    async def _after_test(self, _request) -> dict[str, bool]:
         assert self.cluster is not None
         assert self.current_test_case_full_name
         self.logger.info(self.repr_tasks_history())
@@ -1449,12 +1449,12 @@ class ScyllaClusterManager:
                     self.logger.info("wait for task:%s, request:%s", task, request.path_qs)
                     await asyncio.wait_for(task, timeout=120)
         except asyncio.TimeoutError:
-            self.break_manager(f"error on waiting coro {task.get_name()}")
+            self.break_manager(f"error on waiting coro {task.get_name()}", self.current_test_case_full_name)
 
         # check on tasks leakage
         await asyncio.sleep(0.1)
         if self.tasks_history:
-            self.break_manager(f"tasks leakage found  {self.tasks_history}")
+            self.break_manager(f"tasks leakage found  {self.tasks_history}", self.current_test_case_full_name)
 
         success = _request.match_info["success"] == "True"
         self.logger.info("Test %s %s, cluster: %s", self.current_test_case_full_name,
@@ -1467,11 +1467,12 @@ class ScyllaClusterManager:
             self.current_test_case_full_name = ''
         self.is_after_test_ok = True
         cluster_str = str(self.cluster)
-        return cluster_str
 
-    def break_manager(self, reason):
+        return {"cluster_str":cluster_str, "server_broken":self.server_broken_event.is_set()}
+
+    def break_manager(self, reason, test):
         # make ScyllaClusterManager not operatable from client side
-        self.logger.error(" %s, BREAK ScyllaClusterManager", reason)
+        self.logger.error(" %s, test case {test} BROKE ScyllaClusterManager", reason)
         self.server_broken_event.set()
         self._mark_dirty(None)
 
