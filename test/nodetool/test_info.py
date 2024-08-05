@@ -100,7 +100,8 @@ def test_info(request, nodetool, display_all_tokens):
     expected_requests = [
         expected_request('GET', '/storage_service/gossiping', response=True),
         expected_request('GET', '/storage_service/hostid/local', response=host_id),
-        expected_request('GET', '/storage_service/rpc_server', response=False),
+        # scylla does not check if rpc_server is up, it always considers it down.
+        expected_request('GET', '/storage_service/rpc_server', response=False, multiple=expected_request.ANY),
         expected_request('GET', '/storage_service/native_transport', response=True),
         expected_request('GET', '/storage_service/load', response=load),
         expected_request('GET', '/storage_service/generation_number', response=generation_number),
