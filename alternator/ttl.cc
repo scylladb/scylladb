@@ -98,6 +98,12 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     }
     sstring attribute_name(v->GetString(), v->GetStringLength());
 
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::ALTER, auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "ALTER permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
+
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [&](std::map<sstring, sstring>& tags_map) {
         if (enabled) {
             if (tags_map.contains(TTL_TAG_KEY)) {

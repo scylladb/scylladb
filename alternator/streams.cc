@@ -818,10 +818,17 @@ future<executor::request_return_type> executor::get_records(client_state& client
     }
 
     if (!schema || !base || !is_alternator_keyspace(schema->ks_name())) {
-        throw api_error::resource_not_found(fmt::to_string(iter.table));
+        co_return api_error::resource_not_found(fmt::to_string(iter.table));
     }
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
+
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::SELECT,
+            auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "SELECT permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
 
     db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
     partition_key pk = iter.shard.id.to_partition_key(*schema);
@@ -887,7 +894,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
             query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(limit * mul));
 
-    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
+    co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), start_time = std::move(start_time), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (service::storage_proxy::coordinator_query_result qr) mutable {       
         cql3::selection::result_set_builder builder(*selection, gc_clock::now());
         query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));

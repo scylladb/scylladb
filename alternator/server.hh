@@ -42,6 +42,11 @@ class server {
     bool _enforce_authorization;
     utils::small_vector<std::reference_wrapper<seastar::httpd::http_server>, 2> _enabled_servers;
     gate _pending_requests;
+    // In some places we will need a CQL updateable_timeout_config object even
+    // though it isn't really relevant for Alternator which defines its own
+    // timeouts separately. We can create this object only once.
+    updateable_timeout_config _timeout_config;
+
     alternator_callbacks_map _callbacks;
 
     semaphore* _memory_limiter;

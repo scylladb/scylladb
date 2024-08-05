@@ -350,6 +350,7 @@ class ManagerClient():
                           property_file: Optional[dict[str, Any]] = None,
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
+                          driver_connect_opts: dict[str, Any] = {},
                           expected_error: Optional[str] = None) -> List[ServerInfo]:
         """Add new servers concurrently.
         This function can be called only if the cluster uses consistent topology changes, which support
@@ -382,7 +383,7 @@ class ManagerClient():
             if self.cql:
                 self._driver_update()
             elif start:
-                await self.driver_connect()
+                await self.driver_connect(**driver_connect_opts)
         return s_infos
 
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,

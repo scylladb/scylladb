@@ -17,8 +17,10 @@
 #include <seastar/util/short_streams.hh>
 #include "seastarx.hh"
 #include "error.hh"
+#include "service/client_state.hh"
 #include "service/qos/service_level_controller.hh"
 #include "utils/assert.hh"
+#include "timeout_config.hh"
 #include "utils/rjson.hh"
 #include "auth.hh"
 #include <cctype>
@@ -425,11 +427,11 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     }
     _pending_requests.enter();
     auto leave = defer([this] () noexcept { _pending_requests.leave(); });
-    //FIXME: Client state can provide more context, e.g. client's endpoint address
-    // We use unique_ptr because client_state cannot be moved or copied
-    executor::client_state client_state = username.empty()
-        ? service::client_state{service::client_state::internal_tag()}
-        : service::client_state{service::client_state::internal_tag(), _auth_service, _sl_controller, username};
+    executor::client_state client_state(service::client_state::external_tag(),
+        _auth_service, &_sl_controller, _timeout_config.current_values(), req->get_client_address());
+    if (!username.empty()) {
+        client_state.set_login(auth::authenticated_user(username));
+    }
     co_await client_state.maybe_update_per_service_level_params();
 
     tracing::trace_state_ptr trace_state = maybe_trace_query(client_state, username, op, content);
@@ -476,6 +478,7 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         , _enforce_authorization(false)
         , _enabled_servers{}
         , _pending_requests{}
+        , _timeout_config(_proxy.data_dictionary().get_config())
       , _callbacks{
         {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.create_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
