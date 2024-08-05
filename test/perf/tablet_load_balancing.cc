@@ -7,6 +7,7 @@
  */
 
 #include <fmt/ranges.h>
+#include <fmt/color.h>
 #include <bit>
 
 #include <seastar/core/distributed.hh>
@@ -183,6 +184,38 @@ struct cluster_balance {
     table_balance tables[nr_tables];
 };
 
+// Wrapper around a value with a formatter which colors it based on value thresholds.
+struct pretty_value {
+    double val;
+
+    const std::array<double, 5>& thresholds;
+
+    static constexpr std::array<fmt::terminal_color, 5> colors = {
+        fmt::terminal_color::bright_white,
+        fmt::terminal_color::bright_yellow,
+        fmt::terminal_color::yellow,
+        fmt::terminal_color::bright_red,
+        fmt::terminal_color::red,
+    };
+};
+
+template<>
+struct fmt::formatter<pretty_value> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const pretty_value& v, FormatContext& ctx) const {
+        auto i = std::upper_bound(v.thresholds.begin(), v.thresholds.end(), std::max(v.val, v.thresholds[0]));
+        auto col = v.colors[std::distance(v.thresholds.begin(), i) - 1];
+        return fmt::format_to(ctx.out(), fg(col), "{:.3f}", v.val);
+    }
+};
+
+struct overcommit_value : public pretty_value {
+    static constexpr std::array<double, 5> thresholds = {1.02, 1.1, 1.3, 1.7};
+    overcommit_value(double value) : pretty_value(value, thresholds) {}
+};
+
+template<> struct fmt::formatter<overcommit_value> : fmt::formatter<pretty_value> {};
+
 struct results {
     cluster_balance init;
     cluster_balance worst;
@@ -194,8 +227,10 @@ template<>
 struct fmt::formatter<table_balance> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const table_balance& b, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{shard={:.2f} (best={:.2f}), node={:.2f}}}",
-                              b.shard_overcommit, b.best_shard_overcommit, b.node_overcommit);
+        return fmt::format_to(ctx.out(), "{{shard={} (best={:.2f}), node={}}}",
+                              overcommit_value(b.shard_overcommit),
+                              b.best_shard_overcommit,
+                              overcommit_value(b.node_overcommit));
     }
 };
 
