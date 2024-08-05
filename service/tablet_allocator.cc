@@ -523,6 +523,7 @@ class load_balancer {
     const size_t max_read_streaming_load = 4;
 
     token_metadata_ptr _tm;
+    replica::database& _db;
     std::optional<locator::load_sketch> _load_sketch;
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     dc_name _dc;
@@ -532,6 +533,7 @@ class load_balancer {
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
     bool _use_table_aware_balancing = true;
+    bool _use_global_rebalancing = false;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -569,9 +571,15 @@ private:
     }
 
 public:
-    load_balancer(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, load_balancer_stats_manager& stats, uint64_t target_tablet_size, std::unordered_set<host_id> skiplist)
+    load_balancer(token_metadata_ptr tm,
+                  replica::database& db,
+                  locator::load_stats_ptr table_load_stats,
+                  load_balancer_stats_manager& stats,
+                  uint64_t target_tablet_size,
+                  std::unordered_set<host_id> skiplist)
         : _target_tablet_size(target_tablet_size)
         , _tm(std::move(tm))
+        , _db(db)
         , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
         , _skiplist(std::move(skiplist))
@@ -596,6 +604,10 @@ public:
 
     void set_use_table_aware_balancing(bool use_table_aware_balancing) {
         _use_table_aware_balancing = use_table_aware_balancing;
+    }
+
+    void set_use_global_rebalancing(bool enabled) {
+        _use_global_rebalancing = enabled;
     }
 
     const locator::table_load_stats* load_stats_for_table(table_id id) const {
@@ -1098,13 +1110,29 @@ public:
                                                node_load& src_info,
                                                node_load& dst_info,
                                                global_tablet_id tablet,
-                                               bool need_viable_targets)
+                                               bool need_viable_targets,
+                                               const std::unordered_set<host_id>* viable_targets_ = nullptr)
     {
         int max_rack_load;
         std::unordered_map<sstring, int> rack_load;
 
-        auto get_viable_targets = [&] () {
-            std::unordered_set<host_id> viable_targets;
+        if (viable_targets_) {
+            if (viable_targets_->contains(dst_info.id)) {
+                return std::nullopt;
+            }
+            lblogger.debug("{} is not a viable target for {} of {}", dst_info.id, src_info.id, tablet);
+            if (need_viable_targets) {
+                return skip_info{*viable_targets_};
+            }
+            return skip_info{};
+        }
+
+        std::unordered_set<host_id> viable_targets;
+
+        auto get_viable_targets = [&] () -> const std::unordered_set<host_id>& {
+            if (viable_targets_) {
+                return *viable_targets_;
+            }
 
             for (auto&& [id, node] : nodes) {
                 if (node.dc() != src_info.dc() || node.drained) {
@@ -1141,7 +1169,8 @@ public:
                 }
             }
 
-            return viable_targets;
+            viable_targets_ = &viable_targets;
+            return *viable_targets_;
         };
 
         if (dst_info.id == src_info.id) {
@@ -1149,7 +1178,7 @@ public:
         }
 
         if (dst_info.rack() != src_info.rack()) {
-            auto targets = get_viable_targets();
+            auto& targets = get_viable_targets();
             if (!targets.contains(dst_info.id)) {
                 auto new_rack_load = rack_load[dst_info.rack()] + 1;
                 lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
@@ -1709,6 +1738,210 @@ public:
         co_return std::move(plan);
     }
 
+    future<migration_plan> make_global_rebalancing_plan(dc_name dc, node_load_map& nodes) {
+        migration_plan plan;
+
+        mutable_token_metadata_ptr temp_tm = make_lw_shared<token_metadata>(co_await _tm->clone_async());
+        temp_tm->set_tablets(tablet_metadata());
+
+        // Need stable table order so that the next call to make_global_rebalancing_plan() converges
+        // to the same distribution.
+        std::set<table_id> tables;
+        for (auto&& [table, load] : _tablet_count_per_table) {
+            tables.insert(table);
+        }
+
+        for (auto table : tables) {
+            auto s = _db.find_schema(table);
+            auto& rs = _db.find_keyspace(s->ks_name()).get_replication_strategy();
+            auto& old_map = _tm->tablets().get_tablet_map(s->id());
+            auto tablet_count = old_map.tablet_count();
+
+            lblogger.trace("Allocating {} tablets for table {}", tablet_count, table);
+
+            auto map = co_await rs.maybe_as_tablet_aware()->allocate_tablets_for_new_table(s, temp_tm, 1, tablet_count);
+
+            // Invariant: new_load[r] > 0 for each r
+            absl::flat_hash_map<tablet_replica, size_t> new_load;
+            absl::flat_hash_map<host_id, size_t> new_load_by_host;
+
+            co_await map.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+                for (auto&& replica : ti.replicas) {
+                    if (nodes.contains(replica.host)) {
+                        new_load[replica]++;
+                        new_load_by_host[replica.host]++;
+                    }
+                }
+                return make_ready_future<>();
+            });
+
+            auto pick_new_load_replica_on = [&] (host_id host) -> future<tablet_replica> {
+                for (auto [replica, load] : new_load) {
+                    if (replica.host == host) {
+                        co_return replica;
+                    }
+                }
+                on_internal_error(lblogger, format("new_load and new_load_by_host inconsistent for {}", host));
+            };
+
+            if (lblogger.is_enabled(seastar::log_level::debug)) {
+                for (auto [replica, load] : new_load) {
+                    auto old_load = nodes[replica.host].shards[replica.shard].tablet_count_per_table[table];
+                    lblogger.debug("New load: {}: {} -> {}", replica, old_load, load);
+                }
+                for (auto [host, load] : new_load_by_host) {
+                    auto old_load = nodes[host].tablet_count_per_table[table];
+                    lblogger.debug("New load: {}: {} -> {}", host, old_load, load);
+                }
+            }
+
+            co_await old_map.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
+                auto trinfo = old_map.get_tablet_transition_info(tid);
+                bool migration_emitted = false;
+                for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
+                    if (!nodes.contains(replica.host)) {
+                        continue;
+                    }
+                    if (new_load.contains(replica)) {
+                        lblogger.trace("Replica {} of tablet {} already placed correctly.", replica, tid);
+                        if (--new_load[replica] == 0) {
+                            new_load.erase(replica);
+                        }
+                        if (--new_load_by_host[replica.host] == 0) {
+                            new_load_by_host.erase(replica.host);
+                        }
+                    } else if (!migration_emitted && !trinfo) {
+                        lblogger.trace("Replica {} of tablet {} misplaced.", replica, tid);
+
+                        auto tablet = global_tablet_id{table, tid};
+                        auto src = replica;
+                        std::optional<tablet_replica> dst;
+
+                        using loc = std::variant<std::unordered_set<host_id>, tablet_replica>;
+                        auto find_new_location = [&] (global_tablet_id tablet, tablet_replica src) -> future<loc> {
+                            if (new_load_by_host.contains(src.host)) {
+                                co_return loc{co_await pick_new_load_replica_on(src.host)};
+                            }
+
+                            _stats.for_dc(dc).candidates_evaluated++;
+                            // FIXME: Prefer same rack.
+                            // FIXME: Randomize destination.
+                            auto new_replica = new_load.begin()->first;
+                            lblogger.trace("Candidate dst {} for tablet {} replica {}", new_replica, tablet, src);
+                            // FIXME: Allow violating rack constraints temporarily?
+                            auto skip = check_constraints(nodes, old_map, nodes[src.host], nodes[new_replica.host],
+                                                          tablet, true);
+                            if (!skip) {
+                                co_return loc{new_replica};
+                            }
+                            std::unordered_set<host_id> viable_targets = std::move(skip->viable_targets);
+                            viable_targets.insert(src.host); // intra-node migration is allowed.
+                            for (auto t : viable_targets) {
+                                if (new_load_by_host.contains(t)) {
+                                    co_return loc{co_await pick_new_load_replica_on(t)};
+                                }
+                            }
+                            co_return loc{std::move(viable_targets)};
+                        };
+
+                        auto add_migration = [&] (global_tablet_id tablet, tablet_replica src, tablet_replica dst) -> bool {
+                            auto transition = src.host == dst.host ? tablet_transition_kind::intranode_migration
+                                                                    : tablet_transition_kind::migration;
+                            auto mig = tablet_migration_info{transition, tablet, src, dst};
+                            auto ti = old_map.get_tablet_info(tablet.tablet);
+                            auto str_info = get_migration_streaming_info(_tm->get_topology(), ti, mig);
+                            if (!can_accept_load(nodes, str_info)) {
+                                _stats.for_dc(dc).migrations_skipped++;
+                                lblogger.trace("Migration skipped due to load constraints: {}", mig);
+                                return false;
+                            }
+                            lblogger.trace("Adding migration: {}", mig);
+                            _stats.for_dc(dc).migrations_produced++;
+                            if (src.host == dst.host) {
+                                _stats.for_dc(dc).intranode_migrations_produced++;
+                            }
+                            plan.add(std::move(mig));
+                            apply_load(nodes, str_info);
+                            erase_candidate(nodes, tablet, ti);
+                            if (--new_load[dst] == 0) {
+                                new_load.erase(dst);
+                            }
+                            if (--new_load_by_host[dst.host] == 0) {
+                                new_load_by_host.erase(dst.host);
+                            }
+                            return true;
+                        };
+
+                        auto try_make_room_on = [&] (const std::unordered_set<host_id>& viable_targets)
+                                -> future<std::optional<tablet_replica>> {
+                            // Find an already processed tablet (so allocated correctly) with replica on viable_targets
+                            // which can be moved to some host in new_load, so that this replica can be moved to its
+                            // place.
+                            lblogger.debug("Looking for tablets on {}, new_load: {}", viable_targets, new_load);
+                            for (auto t : viable_targets) {
+                                if (!nodes.contains(t)) {
+                                    continue;
+                                }
+                                for (auto& s : nodes[t].shards) {
+                                    co_await coroutine::maybe_yield();
+                                    for (auto candidate : s.candidates[table]) {
+                                        auto cand_src = tablet_replica{t, s.id};
+                                        lblogger.trace("Candidate: {} on {}", candidate, cand_src);
+                                        if (candidate.tablet >= tid) {
+                                            // Candidate may be displaced too.
+                                            // Previous tablets are not displaced.
+                                            // Tablets with migrations, or migrating, are not in candidate lists.
+                                            continue;
+                                        }
+                                        auto cand_loc = co_await find_new_location(candidate, cand_src);
+                                        if (!std::holds_alternative<tablet_replica>(cand_loc)) {
+                                            continue; // No viable target for candidate.
+                                        }
+                                        auto cand_dst = std::get<tablet_replica>(cand_loc);
+                                        if (!add_migration(candidate, cand_src, cand_dst)) {
+                                            // Pretend it was moved in order to make progress.
+                                            // It will be probably moved in the next iteration.
+                                        }
+                                        new_load[cand_src]++;
+                                        new_load_by_host[cand_src.host]++;
+                                        co_return cand_src;
+                                    }
+                                }
+                            }
+                            co_return std::nullopt;
+                        };
+
+                        auto this_loc = co_await find_new_location(tablet, src);
+
+                        if (!std::holds_alternative<tablet_replica>(this_loc)) {
+                            auto viable_targets = std::get<0>(this_loc);
+                            viable_targets.insert(src.host); // intra-node migration is allowed.
+                            dst = co_await try_make_room_on(viable_targets);
+                        } else {
+                            dst = std::get<tablet_replica>(this_loc);
+                        }
+
+                        if (!dst) {
+                            lblogger.debug("No viable targets for tablet {} replica {}", tablet, src);
+                            if (nodes[src.host].drained) {
+                                throw std::runtime_error(format("Unable to find new replica for tablet {} on {} when draining {}",
+                                                                tablet, src, src.host));
+                            }
+                        } else {
+                            if (add_migration(tablet, src, *dst)) {
+                                migration_emitted = true;
+                            }
+                        }
+                    }
+                }
+            });
+
+            temp_tm->tablets().set_tablet_map(table, std::move(map));
+        }
+
+        co_return std::move(plan);
+    }
+
     future<migration_plan> make_plan(dc_name dc) {
         migration_plan plan;
 
@@ -1858,7 +2091,7 @@ public:
                           host, load.rack(), load.avg_load, load.tablet_count, load.shard_count, load.state());
         }
 
-        if (!min_load_node) {
+        if (!_use_global_rebalancing && !min_load_node) {
             lblogger.debug("No candidate nodes");
             _stats.for_dc(dc).stop_no_candidates++;
             co_return plan;
@@ -1913,7 +2146,9 @@ public:
             _tablet_count_per_table[table] = total_load;
         }
 
-        if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || max_load != min_load))) {
+        if (_tm->tablets().balancing_enabled() && _use_global_rebalancing) {
+            plan.merge(co_await make_global_rebalancing_plan(dc, nodes));
+        } else if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || max_load != min_load))) {
             host_id target = *min_load_node;
             lblogger.info("target node: {}, avg_load: {}, max: {}", target, min_load, max_load);
             plan.merge(co_await make_internode_plan(dc, nodes, nodes_to_drain, target));
@@ -1921,7 +2156,7 @@ public:
             _stats.for_dc(dc).stop_balance++;
         }
 
-        if (_tm->tablets().balancing_enabled()) {
+        if (_tm->tablets().balancing_enabled() && !_use_global_rebalancing) {
             plan.merge(co_await make_intranode_plan(nodes, nodes_to_drain));
         }
 
@@ -1938,6 +2173,7 @@ class tablet_allocator_impl : public tablet_allocator::impl
     load_balancer_stats_manager _load_balancer_stats;
     bool _stopped = false;
     bool _use_tablet_aware_balancing = true;
+    bool _use_global_rebalancing = false;
 public:
     tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
             : _config(std::move(cfg))
@@ -1964,13 +2200,19 @@ public:
     }
 
     future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
-        load_balancer lb(tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes(), std::move(skiplist));
+        load_balancer lb(tm, _db, std::move(table_load_stats), _load_balancer_stats,
+                         _db.get_config().target_tablet_size_in_bytes(), std::move(skiplist));
         lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
+        lb.set_use_global_rebalancing(_use_global_rebalancing);
         co_return co_await lb.make_plan();
     }
 
     void set_use_tablet_aware_balancing(bool use_tablet_aware_balancing) {
         _use_tablet_aware_balancing = use_tablet_aware_balancing;
+    }
+
+    void set_use_global_rebalancing(bool enabled) {
+        _use_global_rebalancing = enabled;
     }
 
     void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
@@ -2058,6 +2300,10 @@ future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata
 
 void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balancing) {
     impl().set_use_tablet_aware_balancing(use_tablet_aware_balancing);
+}
+
+void tablet_allocator::set_use_global_rebalancing(bool enabled) {
+    impl().set_use_global_rebalancing(enabled);
 }
 
 future<locator::tablet_map> tablet_allocator::split_tablets(locator::token_metadata_ptr tm, table_id table) {
