@@ -78,6 +78,6 @@ public:
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstring table_dir, sstable_state state);
 future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir);
 future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir);
-future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir);
+future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);
 
 } // namespace sstables

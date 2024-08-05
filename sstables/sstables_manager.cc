@@ -303,7 +303,7 @@ future<> sstables_manager::init_table_storage(const data_dictionary::storage_opt
 }
 
 future<> sstables_manager::init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir) {
-    return sstables::init_keyspace_storage(so, dir);
+    return sstables::init_keyspace_storage(*this, so, dir);
 }
 
 future<> sstables_manager::destroy_table_storage(const data_dictionary::storage_options& so, sstring dir) {

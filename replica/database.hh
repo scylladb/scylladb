@@ -1254,7 +1254,6 @@ using keyspace_metadata = data_dictionary::keyspace_metadata;
 class keyspace {
 public:
     struct config {
-        sstring datadir;
         bool enable_commitlog = true;
         bool enable_disk_reads = true;
         bool enable_disk_writes = true;
@@ -1331,10 +1330,6 @@ public:
 
     void set_incremental_backups(bool val) {
         _config.enable_incremental_backups = val;
-    }
-
-    const sstring& datadir() const {
-        return _config.datadir;
     }
 };
 
