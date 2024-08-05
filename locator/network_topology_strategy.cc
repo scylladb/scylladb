@@ -329,9 +329,14 @@ static unsigned calculate_initial_tablets_from_topology(const schema& s, const t
     return initial_tablets;
 }
 
-future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, unsigned initial_scale) const {
+future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s,
+                                                                             token_metadata_ptr tm,
+                                                                             unsigned initial_scale,
+                                                                             std::optional<size_t> table_tablet_count) const {
     auto tablet_count = get_initial_tablets();
-    if (tablet_count == 0) {
+    if (table_tablet_count) {
+        tablet_count = *table_tablet_count;
+    } else if (tablet_count == 0) {
         tablet_count = calculate_initial_tablets_from_topology(*s, tm->get_topology(), _dc_rep_factor) * initial_scale;
     }
     auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
