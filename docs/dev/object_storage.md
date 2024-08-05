@@ -20,7 +20,15 @@ endpoints:
     aws_session_token: optional AWS session token
 ```
 
-The last three items must be all present or all absent. When set the values are
+The `aws_...` options can be configured via environment variables, the variables
+names are
+
+* AWS_DEFAULT_REGION
+* AWS_ACCESS_KEY_ID
+* AWS_SECRET_ACCESS_KEY
+* AWS_SESSION_TOKEN
+
+Those parameters must be all present or all absent. When set the values are
 used by the S3 client to sign requests. If not set requests are sent unsigned
 which may not always accepted by the server.
 
