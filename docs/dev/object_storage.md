@@ -90,3 +90,23 @@ CREATE KEYSPACE ks
    'bucket' : 'bucket-for-testing'
   };
 ```
+
+# Copying sstables on S3 (backup)
+
+It's possible to upload sstables from data/ directory on S3 via API. This is good
+to do because in that case all the resources that are needed for that operation (like
+disk IO bandwidth and IOPS, CPU time, networking bandwidth) will be under Seastar's
+control and regular Scylla workload will not be randomly affected.
+
+The API endpoint name is `/storage_service/backup` and its Swagger description can be
+found [here](./api/api-doc/storage_service.json). Accepted parameters are
+
+* *keyspace*: the keyspace to copy sstables from
+* *snapshot*: the snapshot name to copy sstables from
+* *endpoint*: the key in the object storage configuration file
+* *bucket*: bucket name to put sstables' files in
+
+Currently only snapshot backup is possible, so first one needs to take [snapshot](docs/kb/snapshots.rst)
+
+All tables in a keyspace are uploaded, the destination object names will look like
+`s3://bucket/table-name-and-uuid/snapshot-name/...`
