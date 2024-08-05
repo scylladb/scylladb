@@ -35,6 +35,8 @@ public:
     // is not intended, user should sync the schema first.
     mutation to_mutation(schema_ptr) const;
 
+    partition_key key() const;
+
     table_id column_family_id() const;
 
     const bytes_ostream& representation() const { return _data; }

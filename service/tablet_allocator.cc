@@ -613,7 +613,7 @@ public:
         cluster_resize_load resize_load;
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
+            auto& tmap = *tmap_;
 
             const auto* table_stats = load_stats_for_table(table);
             if (!table_stats) {
@@ -1762,7 +1762,7 @@ public:
         // Compute tablet load on nodes.
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
+            auto& tmap = *tmap_;
 
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
@@ -1871,7 +1871,7 @@ public:
         _tablet_count_per_table.clear();
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
+            auto& tmap = *tmap_;
             uint64_t total_load = 0;
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);

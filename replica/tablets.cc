@@ -200,13 +200,128 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
         auto s = db.find_schema(id);
         muts.emplace_back(
-                co_await tablet_map_to_mutation(tablets, id, s->ks_name(), s->cf_name(), ts));
+                co_await tablet_map_to_mutation(*tablets, id, s->ks_name(), s->cf_name(), ts));
     }
     co_await db.apply(freeze(muts), db::no_timeout);
 }
 
-future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
-    tablet_metadata tm;
+static table_id to_tablet_metadata_key(const schema& s, const partition_key& key) {
+    const auto elements = key.explode(s);
+    return ::table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
+}
+
+static dht::token to_tablet_metadata_row_key(const schema& s, const clustering_key& key) {
+    const auto elements = key.explode(s);
+    return dht::token::from_int64(value_cast<int64_t>(long_type->deserialize_value(elements[0])));
+}
+
+static void do_update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hint, const schema& s, const mutation& m) {
+    const auto table_id = to_tablet_metadata_key(s, m.key());
+    auto it = hint.tables.try_emplace(table_id, locator::tablet_metadata_change_hint::table_hint{table_id, {}}).first;
+
+    const auto& mp = m.partition();
+    auto& tokens = it->second.tokens;
+
+    if (mp.partition_tombstone() || !mp.row_tombstones().empty() || !mp.static_row().empty()) {
+        // If there is a partition tombstone, range tombstone or static row,
+        // update the entire partition. Also clear any row hints that might be
+        // present to force a full read of the partition.
+        tokens.clear();
+        return;
+    }
+
+    for (const auto& row : mp.clustered_rows()) {
+        // TODO: we do not handle deletions yet, will revisit when tablet count
+        // reduction is worked out.
+        if (row.row().deleted_at()) {
+            tokens.clear();
+            return;
+        }
+        tokens.push_back(to_tablet_metadata_row_key(s, row.key()));
+    }
+}
+
+std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_hint(const std::vector<canonical_mutation>& mutations) {
+    tablet_logger.trace("tablet_metadata_change_hint({})", mutations.size());
+    auto s = db::system_keyspace::tablets();
+
+    std::optional<locator::tablet_metadata_change_hint> hint;
+
+    for (const auto& cm : mutations) {
+        tablet_logger.trace("tablet_metadata_change_hint() {} == {}", cm.column_family_id(), s->id());
+        if (cm.column_family_id() != s->id()) {
+            continue;
+        }
+        if (!hint) {
+            hint.emplace();
+            hint->tables.reserve(mutations.size());
+        }
+        do_update_tablet_metadata_change_hint(*hint, *s, cm.to_mutation(s));
+    }
+
+    return hint;
+}
+
+void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hint, const mutation& m) {
+    auto s = db::system_keyspace::tablets();
+    if (m.column_family_id() != s->id()) {
+        return;
+    }
+    do_update_tablet_metadata_change_hint(hint, *s, m);
+}
+
+namespace {
+
+tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const cql3::untyped_result_set_row& row) {
+    tablet_replica_set tablet_replicas;
+    if (row.has("replicas")) {
+        tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
+    }
+
+    tablet_replica_set new_tablet_replicas;
+    if (row.has("new_replicas")) {
+        new_tablet_replicas = deserialize_replica_set(row.get_view("new_replicas"));
+    }
+
+    if (row.has("stage")) {
+        auto stage = tablet_transition_stage_from_string(row.get_as<sstring>("stage"));
+        auto transition = tablet_transition_kind_from_string(row.get_as<sstring>("transition"));
+
+        std::unordered_set<tablet_replica> pending(new_tablet_replicas.begin(), new_tablet_replicas.end());
+        for (auto&& r : tablet_replicas) {
+            pending.erase(r);
+        }
+        std::optional<tablet_replica> pending_replica;
+        if (pending.size() > 1) {
+            throw std::runtime_error(format("Too many pending replicas for table {} tablet {}: {}",
+                                            table, tid, pending));
+        }
+        if (pending.size() != 0) {
+            pending_replica = *pending.begin();
+        }
+        service::session_id session_id;
+        if (row.has("session")) {
+            session_id = service::session_id(row.get_as<utils::UUID>("session"));
+        }
+        map.set_tablet_transition_info(tid, tablet_transition_info{stage, transition,
+                std::move(new_tablet_replicas), pending_replica, session_id});
+    }
+
+    map.set_tablet(tid, tablet_info{std::move(tablet_replicas)});
+
+    auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
+    auto current_last_token = map.get_last_token(tid);
+    if (current_last_token != persisted_last_token) {
+        tablet_logger.debug("current tablet_map: {}", map);
+        throw std::runtime_error(format("last_token mismatch between on-disk ({}) and in-memory ({}) tablet map for table {} tablet {}",
+                                        persisted_last_token, current_last_token, table, tid));
+    }
+
+    return *map.next_tablet(tid);
+}
+
+struct tablet_metadata_builder {
+    tablet_metadata& tm;
     struct active_tablet_map {
         table_id table;
         tablet_map map;
@@ -214,9 +329,7 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
     };
     std::optional<active_tablet_map> current;
 
-    tablet_logger.trace("Start reading tablet metadata");
-
-    auto process_row = [&] (const cql3::untyped_result_set_row& row) {
+    void process_row(const cql3::untyped_result_set_row& row) {
         auto table = table_id(row.get_as<utils::UUID>("table_id"));
 
         if (!current || current->table != table) {
@@ -237,69 +350,36 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             }
         }
 
-        tablet_replica_set tablet_replicas;
-        if (row.has("replicas")) {
-            tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
+        current->tid = process_one_row(current->table, current->map, current->tid, row);
+    }
+
+    void on_end_of_stream() {
+        if (current) {
+            tm.set_tablet_map(current->table, std::move(current->map));
         }
+    }
+};
 
-        tablet_replica_set new_tablet_replicas;
-        if (row.has("new_replicas")) {
-            new_tablet_replicas = deserialize_replica_set(row.get_view("new_replicas"));
-        }
+} // anonymous namespace
 
-        if (row.has("stage")) {
-            auto stage = tablet_transition_stage_from_string(row.get_as<sstring>("stage"));
-            auto transition = tablet_transition_kind_from_string(row.get_as<sstring>("transition"));
-
-            std::unordered_set<tablet_replica> pending(new_tablet_replicas.begin(), new_tablet_replicas.end());
-            for (auto&& r : tablet_replicas) {
-                pending.erase(r);
-            }
-            std::optional<tablet_replica> pending_replica;
-            if (pending.size() > 1) {
-                throw std::runtime_error(format("Too many pending replicas for table {} tablet {}: {}",
-                                                table, current->tid, pending));
-            }
-            if (pending.size() != 0) {
-                pending_replica = *pending.begin();
-            }
-            service::session_id session_id;
-            if (row.has("session")) {
-                session_id = service::session_id(row.get_as<utils::UUID>("session"));
-            }
-            current->map.set_tablet_transition_info(current->tid, tablet_transition_info{stage, transition,
-                    std::move(new_tablet_replicas), pending_replica, session_id});
-        }
-
-        current->map.set_tablet(current->tid, tablet_info{std::move(tablet_replicas)});
-
-        auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
-        auto current_last_token = current->map.get_last_token(current->tid);
-        if (current_last_token != persisted_last_token) {
-            tablet_logger.debug("current tablet_map: {}", current->map);
-            throw std::runtime_error(format("last_token mismatch between on-disk ({}) and in-memory ({}) tablet map for table {} tablet {}",
-                                            persisted_last_token, current_last_token, table, current->tid));
-        }
-
-        current->tid = *current->map.next_tablet(current->tid);
-    };
-
+future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
+    tablet_metadata tm;
+    tablet_metadata_builder builder{tm};
+    tablet_logger.trace("Start reading tablet metadata");
     try {
         co_await qp.query_internal("select * from system.tablets",
            [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
-               process_row(row);
+               builder.process_row(row);
                return make_ready_future<stop_iteration>(stop_iteration::no);
            });
     } catch (...) {
-        if (current) {
-            std::throw_with_nested(std::runtime_error(format("Failed to read tablet metadata for table {}", current->table)));
+        if (builder.current) {
+            std::throw_with_nested(std::runtime_error(format("Failed to read tablet metadata for table {}", builder.current->table)));
         } else {
             std::throw_with_nested(std::runtime_error("Failed to read tablet metadata"));
         }
     }
-    if (current) {
-        tm.set_tablet_map(current->table, std::move(current->map));
-    }
+    builder.on_end_of_stream();
     tablet_logger.trace("Read tablet metadata: {}", tm);
     co_return std::move(tm);
 }
@@ -337,6 +417,60 @@ future<std::unordered_set<locator::host_id>> read_required_hosts(cql3::query_pro
     }
 
     co_return std::move(hosts);
+}
+
+static future<>
+do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& tm, const tablet_metadata_change_hint::table_hint& hint) {
+    tablet_metadata_builder builder{tm};
+    co_await qp.query_internal(
+            "select * from system.tablets where table_id = ?",
+            db::consistency_level::ONE,
+            {data_value(hint.table_id.uuid())},
+            1000,
+            [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+                builder.process_row(row);
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            });
+    if (builder.current) {
+        tm.set_tablet_map(builder.current->table, std::move(builder.current->map));
+    } else {
+        tm.drop_tablet_map(hint.table_id);
+    }
+}
+
+static future<>
+do_update_tablet_metadata_rows(cql3::query_processor& qp, tablet_map& tmap, const tablet_metadata_change_hint::table_hint& hint) {
+    for (const auto token : hint.tokens) {
+        auto res = co_await qp.execute_internal(
+                "select * from system.tablets where table_id = ? and last_token = ?",
+                db::consistency_level::ONE,
+                {data_value(hint.table_id.uuid()), data_value(dht::token::to_int64(token))},
+                cql3::query_processor::cache_internal::yes);
+        const auto tid = tmap.get_tablet_id(token);
+        if (res->empty()) {
+            throw std::runtime_error("Failed to update tablet metadata: updated row is empty");
+        } else {
+            tmap.clear_tablet_transition_info(tid);
+            process_one_row(hint.table_id, tmap, tid, res->one());
+        }
+    }
+}
+
+future<> update_tablet_metadata(cql3::query_processor& qp, tablet_metadata& tm, const locator::tablet_metadata_change_hint& hint) {
+    try {
+        for (const auto& [_, table_hint] : hint.tables) {
+            if (table_hint.tokens.empty()) {
+                co_await do_update_tablet_metadata_partition(qp, tm, table_hint);
+            } else {
+                co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (tablet_map& tmap) -> future<> {
+                    co_await do_update_tablet_metadata_rows(qp, tmap, table_hint);
+                });
+            }
+        }
+    } catch (...) {
+        std::throw_with_nested(std::runtime_error("Failed to read tablet metadata"));
+    }
+    tablet_logger.trace("Updated tablet metadata: {}", tm);
 }
 
 future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<replica::database>& db) {
