@@ -330,7 +330,10 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         auto sst = sst_man.make_sstable(schema, dir_path.c_str(), local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
 
         try {
-            co_await sst->load(schema->get_sharder(), sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
+            co_await sst->load(schema->get_sharder(), sstables::sstable_open_config{
+                .load_first_and_last_position_metadata = false,
+                .clear_sharding_metadata = false,
+            });
         } catch (...) {
             // Print each individual error here since parallel_for_each
             // will propagate only one of them up the stack.
@@ -1056,6 +1059,11 @@ sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
     return sstring(ds.value.begin(), ds.value.end());
 }
 
+template <typename Integer>
+dht::token disk_string_to_token(const sstables::disk_string<Integer>& ds) {
+    return dht::token(dht::token::kind::key, bytes_view(ds));
+}
+
 void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map&) {
     if (sstables.empty()) {
@@ -1464,7 +1472,8 @@ public:
             _writer.Key("exclusive");
             _writer.Bool(e.left.exclusive);
             _writer.Key("token");
-            _writer.String(disk_string_to_string(e.left.token));
+            auto left_token = disk_string_to_token(e.left.token);
+            _writer.String(left_token.to_sstring());
             _writer.EndObject();
 
             _writer.Key("right");
@@ -1472,7 +1481,8 @@ public:
             _writer.Key("exclusive");
             _writer.Bool(e.right.exclusive);
             _writer.Key("token");
-            _writer.String(disk_string_to_string(e.right.token));
+            auto right_token = disk_string_to_token(e.right.token);
+            _writer.String(right_token.to_sstring());
             _writer.EndObject();
 
             _writer.EndObject();
