@@ -152,7 +152,7 @@ semaphore& raft_group0_client::operation_mutex() {
     return _operation_mutex;
 }
 
-future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as) {
+future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source& as) {
     if (this_shard_id() != 0) {
         // This should not happen since all places which construct `group0_guard` also check that they are on shard 0.
         // Note: `group0_guard::impl` is private to this module, making this easy to verify.
@@ -172,7 +172,7 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
         do {
             retry = false;
             try {
-                co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied, as);
+                co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied, &as);
             } catch (const raft::dropped_entry& e) {
                 logger.warn("add_entry: returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
                         e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
@@ -234,7 +234,7 @@ static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
     return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
 }
 
-future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* as) {
+future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& as) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "start_group0_operation: must run on shard 0");
     }
@@ -242,12 +242,12 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* 
     auto [upgrade_lock_holder, upgrade_state] = co_await get_group0_upgrade_state();
     switch (upgrade_state) {
         case group0_upgrade_state::use_post_raft_procedures: {
-            auto operation_holder = co_await get_units(_operation_mutex, 1);
-            co_await _raft_gr.group0().read_barrier(as);
+            auto operation_holder = co_await get_units(_operation_mutex, 1, as);
+            co_await _raft_gr.group0().read_barrier(&as);
 
             // Take `_group0_read_apply_mutex` *after* read barrier.
             // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
-            auto read_apply_holder = co_await hold_read_apply_mutex();
+            auto read_apply_holder = co_await hold_read_apply_mutex(as);
 
             auto observed_group0_state_id = co_await _sys_ks.get_last_group0_state_id();
             auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);

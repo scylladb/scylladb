@@ -954,7 +954,7 @@ class topology_coordinator {
      };
 
     future<group0_guard> start_operation() {
-        auto guard = co_await _group0.client().start_operation(&_as);
+        auto guard = co_await _group0.client().start_operation(_as);
 
         if (_term != _raft.get_current_term()) {
             throw term_changed_error{};
@@ -996,7 +996,7 @@ class topology_coordinator {
             slogger.trace("raft topology: do update {} reason {}", updates, reason);
             topology_change change{std::move(updates)};
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
-            co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard));
+            co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         } catch (group0_concurrent_modification&) {
             slogger.info("raft topology: race while changing state: {}. Retrying", reason);
             throw;
@@ -2642,7 +2642,7 @@ future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_se
         }
 
         slogger.info("raft topology: adding myself as the first node to the topology");
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
+        auto guard = co_await _group0->client().start_operation(_abort_source);
 
         auto insert_join_request_mutation = build_mutation_from_join_params(params, guard);
 
@@ -2656,7 +2656,7 @@ future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_se
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 "bootstrap: adding myself as the first node to the topology");
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _abort_source);
         } catch (group0_concurrent_modification&) {
             slogger.info("raft topology: bootstrap: concurrent operation is detected, retrying.");
         }
@@ -2703,7 +2703,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     while (true) {
         slogger.info("raft topology: refreshing topology to check if it's synchronized with local metadata");
 
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
+        auto guard = co_await _group0->client().start_operation(_abort_source);
 
         if (synchronized()) {
             break;
@@ -2738,7 +2738,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
                 std::move(change), guard, ::format("{}: update topology with local metadata", raft_server.id()));
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _abort_source);
         } catch (group0_concurrent_modification&) {
             slogger.info("raft topology: update topology with local metadata:"
                          " concurrent operation is detected, retrying.");
@@ -4496,7 +4496,7 @@ future<> storage_service::raft_decomission() {
     });
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
+        auto guard = co_await _group0->client().start_operation(_abort_source);
 
         auto it = _topology_state_machine._topology.find(raft_server.id());
         if (!it) {
@@ -4523,7 +4523,7 @@ future<> storage_service::raft_decomission() {
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("decomission: request decomission for {}", raft_server.id()));
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _abort_source);
         } catch (group0_concurrent_modification&) {
             slogger.info("raft topology: decomission: concurrent operation is detected, retrying.");
             continue;
@@ -4818,7 +4818,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
     auto id = raft::server_id{host_id.uuid()};
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
+        auto guard = co_await _group0->client().start_operation(_abort_source);
 
         auto it = _topology_state_machine._topology.find(id);
 
@@ -4858,7 +4858,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("removenode: request remove for {}", id));
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _abort_source);
         } catch (group0_concurrent_modification&) {
             slogger.info("raft topology: removenode: concurrent operation is detected, retrying.");
             continue;
@@ -5379,7 +5379,7 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
     auto& raft_server = _group0->group0_server();
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
+        auto guard = co_await _group0->client().start_operation(_abort_source);
 
         auto it = _topology_state_machine._topology.find(raft_server.id());
         if (!it) {
@@ -5405,7 +5405,7 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("rebuild: request rebuild for {} ({})", raft_server.id(), source_dc));
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _abort_source);
         } catch (group0_concurrent_modification&) {
             slogger.info("raft topology: rebuild: concurrent operation is detected, retrying.");
             continue;
@@ -5424,7 +5424,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
 
     while (true) {
         slogger.info("raft topology: request check_and_repair_cdc_streams, refreshing topology");
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
+        auto guard = co_await _group0->client().start_operation(_abort_source);
         auto curr_req = _topology_state_machine._topology.global_request;
         if (curr_req && *curr_req != global_topology_request::new_cdc_generation) {
             // FIXME: replace this with a queue
@@ -5450,7 +5450,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 ::format("request check+repair CDC generation from {}", _group0->group0_server().id()));
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _abort_source);
         } catch (group0_concurrent_modification&) {
             slogger.info("raft topology: request check+repair CDC: concurrent operation is detected, retrying.");
             continue;
@@ -6499,7 +6499,7 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
     }
 
     while (true) {
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
+        auto guard = co_await _group0->client().start_operation(_abort_source);
 
         if (const auto *p = _topology_state_machine._topology.find(params.host_id)) {
             const auto& rs = p->second;
@@ -6530,7 +6530,7 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 format("raft topology: placing join request for {}", params.host_id));
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _abort_source);
             break;
         } catch (group0_concurrent_modification&) {
             slogger.info("raft topology: join_node_request: concurrent operation is detected, retrying.");
