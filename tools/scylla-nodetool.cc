@@ -1249,6 +1249,9 @@ void rebuild_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     if (vm.count("source-dc")) {
         params["source_dc"] = vm["source-dc"].as<sstring>();
     }
+    if (vm.contains("force")) {
+        params["force"] = "true";
+    }
     client.post("/storage_service/rebuild", std::move(params));
 }
 
@@ -3278,7 +3281,9 @@ Finally, Scylla streams the data to the local node.
 
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/rebuild.html")),
-                { },
+                {
+                    typed_option<>("force", "Enforce the source_dc option, even if it unsafe to use for rebuild"),
+                },
                 {
                     typed_option<sstring>("source-dc", "DC from which to stream data (default: any DC)", 1),
                 },
