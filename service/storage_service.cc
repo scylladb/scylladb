@@ -1526,7 +1526,7 @@ future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
     };
     if (!is_drained()) {
         slogger.info("Waiting for tablet replicas from the replaced node to be rebuilt");
-        co_await _topology_state_machine.event.wait([&] {
+        co_await _topology_state_machine.event.when([&] {
             return is_drained();
         });
     }
@@ -4735,7 +4735,7 @@ future<> storage_service::wait_for_topology_not_busy() {
     auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
     while (_topology_state_machine._topology.is_busy()) {
         release_guard(std::move(guard));
-        co_await _topology_state_machine.event.wait();
+        co_await _topology_state_machine.event.when();
         guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
     }
 }
@@ -6565,7 +6565,7 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
             }
             rtlogger.debug("transit_tablet(): topology state machine is busy: {}", tstate);
             release_guard(std::move(guard));
-            co_await _topology_state_machine.event.wait();
+            co_await _topology_state_machine.event.when();
             guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         }
 
@@ -6596,7 +6596,7 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
     }
 
     // Wait for transition to finish.
-    co_await _topology_state_machine.event.wait([&] {
+    co_await _topology_state_machine.event.when([&] {
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
     });
@@ -6634,7 +6634,7 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
 
     while (_topology_state_machine._topology.is_busy()) {
         rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
-        co_await _topology_state_machine.event.wait();
+        co_await _topology_state_machine.event.when();
     }
 }
 
