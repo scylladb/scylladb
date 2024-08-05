@@ -1,4 +1,8 @@
-# Keeping sstables on S3
+# Introduction
+
+Scylla has the ability to communicate directly with S3-compatible storage. This
+ability can be used in several ways, and to enable those features one first needs
+to configure scylla with the endpoints
 
 ## Endpoints config file
 
@@ -23,6 +27,10 @@ which may not always accepted by the server.
 By default Scylla tries to read it from the `object_storage.yaml` file
 located in the same directory with the `scylla.yaml`. Optionally, the
 `--object-storage-config-file $path` option can be specified.
+
+# Keeping sstables on S3
+
+On of the ways to use object storage is to keep sstables directly on it as objects.
 
 ## Enabling the feature
 
