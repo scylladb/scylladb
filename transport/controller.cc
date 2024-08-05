@@ -155,24 +155,15 @@ future<> controller::start_listening_on_maintenance_socket(sharded<cql_server>& 
         throw std::runtime_error(format("Maintenance socket path is too long: {}. Change it to string shorter than {} chars.", socket, max_socket_length));
     }
 
-    struct stat statbuf;
-    auto stat_result = ::stat(socket.c_str(), &statbuf);
-    if (stat_result == 0) {
-        // Check if it is a unix domain socket, not a regular file or directory
-        if (!S_ISSOCK(statbuf.st_mode)) {
+    auto file_exists = co_await seastar::file_exists(socket.c_str());
+    if (file_exists) {
+        auto f_stat = co_await seastar::file_stat(socket.c_str());
+        if (!S_ISSOCK(f_stat.mode)) {
             throw std::runtime_error(format("Under maintenance socket path ({}) there is something else.", socket));
         }
-    } else if (errno != ENOENT) {
-        // Other error than "file does not exist"
-        throw std::runtime_error(format("Failed to stat {}: {}", socket, strerror(errno)));
-    }
-
-    // Remove the socket if it already exists, otherwise when the server
-    // tries to listen on it, it will hang on bind().
-    auto unlink_result = ::unlink(socket.c_str());
-    if (unlink_result < 0 && errno != ENOENT) {
-        // Other error than "file does not exist"
-        throw std::runtime_error(format("Failed to unlink {}: {}", socket, strerror(errno)));
+        // Remove the socket if it already exists, otherwise when the server
+        // tries to listen on it, it will hang on bind().
+        co_await seastar::remove_file(socket.c_str());
     }
 
     auto addr = socket_address { unix_domain_addr { socket } };
@@ -188,20 +179,12 @@ future<> controller::start_listening_on_maintenance_socket(sharded<cql_server>& 
 
     if (_config.maintenance_socket_group.is_set()) {
         auto group_name = _config.maintenance_socket_group();
-        struct group *grp;
-        grp = ::getgrnam(group_name.c_str());
-        if (!grp) {
+        struct seastar::group_details grp = co_await seastar::grp_detail(group_name.c_str());
+        if (!grp.group_gid) {
             throw std::runtime_error(format("Group id of {} not found. Make sure the group exists.", group_name));
         }
 
-        auto chown_result = ::chown(socket.c_str(), ::geteuid(), grp->gr_gid);
-        if (chown_result < 0) {
-            if (errno == EPERM) {
-                throw std::runtime_error(format("Failed to change group of {}: Permission denied. Make sure the user has the root privilege or is a member of the group {}.", socket, group_name));
-            } else {
-                throw std::runtime_error(format("Failed to chown {}: {} ()", socket, strerror(errno)));
-            }
-        }
+        co_await seastar::change_ownership_of_file(socket.c_str(), grp.group_gid);
     }
 
     logger.info("Starting listening for maintenance CQL clients on {} (unencrypted, non-shard-aware)"
