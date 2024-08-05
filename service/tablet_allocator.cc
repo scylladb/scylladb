@@ -159,7 +159,7 @@ struct migration_candidate {
 template<>
 struct fmt::formatter<service::migration_badness> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
-    auto format(const service::migration_badness& badness, FormatContext& ctx) {
+    auto format(const service::migration_badness& badness, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{{s: {:.4f}, n: {:.4f}}}", badness.shard_badness(), badness.node_badness());
     }
 };
@@ -167,7 +167,7 @@ struct fmt::formatter<service::migration_badness> : fmt::formatter<std::string_v
 template<>
 struct fmt::formatter<service::migration_candidate> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
-    auto format(const service::migration_candidate& candidate, FormatContext& ctx) {
+    auto format(const service::migration_candidate& candidate, FormatContext& ctx) const {
         fmt::format_to(ctx.out(), "{{tablet: {}, {} -> {}, badness: {}", candidate.tablet, candidate.src,
                        candidate.dst, candidate.badness);
         if (candidate.badness.is_bad()) {
