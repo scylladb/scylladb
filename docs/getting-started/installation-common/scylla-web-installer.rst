@@ -12,7 +12,7 @@ Prerequisites
 Ensure that your platform is supported by the ScyllaDB version you want to install. 
 See :doc:`OS Support by Platform and Version </getting-started/os-support/>`.
 
-Installing ScyllaDB with Web Installer
+Install ScyllaDB with Web Installer
 ---------------------------------------
 To install ScyllaDB with Web Installer, run:
 
@@ -40,22 +40,24 @@ options to install a different version or ScyllaDB Enterprise:
 You can run the command with the ``-h`` or ``--help`` flag to print information about the script.
 
 Examples
----------
+===========
 
-Installing ScyllaDB Open Source 4.6.1:
-
-.. code:: console
-
-    curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-version 4.6.1
-
-Installing the latest patch release for ScyllaDB Open Source 4.6:
+Installing ScyllaDB Open Source 6.0.1:
 
 .. code:: console
 
-    curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-version 4.6
+    curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-version 6.0.1
 
-Installing ScyllaDB Enterprise 2021.1:
+Installing the latest patch release for ScyllaDB Open Source 6.0:
 
 .. code:: console
 
-    curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-product scylla-enterprise --scylla-version 2021.1
+    curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-version 6.0
+
+Installing ScyllaDB Enterprise 2024.1:
+
+.. code:: console
+
+    curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-product scylla-enterprise --scylla-version 2024.1
+
+.. include:: /getting-started/_common/setup-after-install.rst
