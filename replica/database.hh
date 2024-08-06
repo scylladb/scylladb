@@ -350,6 +350,8 @@ struct table_stats {
     int64_t memtable_range_tombstone_reads = 0;
     int64_t memtable_row_tombstone_reads = 0;
     int64_t tablet_count = 0;
+    uint64_t rcu = 0;
+    uint64_t wcu = 0;
     mutation_application_stats memtable_app_stats;
     utils::timed_rate_moving_average_summary_and_histogram reads{256};
     utils::timed_rate_moving_average_summary_and_histogram writes{256};
