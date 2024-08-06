@@ -60,9 +60,8 @@ In summary, Raft makes schema changes safe, but it requires that a quorum of nod
 Verifying that the Raft upgrade procedure finished successfully
 ========================================================================
 
-You may need to perform the following procedure on upgrade if you explicitly
-disabled the Raft-based schema changes feature in the previous ScyllaDB
-version. Please consult the upgrade guide.
+You may need to perform the following procedure as part of
+the :ref:`manual recovery procedure <recovery-procedure>`.
 
 The Raft upgrade procedure requires **full cluster availability** to correctly setup the Raft algorithm; after the setup finishes, Raft can proceed with only a majority of nodes, but this initial setup is an exception.
 An unlucky event, such as a hardware failure, may cause one of your nodes to fail. If this happens before the Raft upgrade procedure finishes, the procedure will get stuck and your intervention will be required.
