@@ -5538,9 +5538,12 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 co_await with_scheduling_group(_db.local().get_streaming_scheduling_group(), coroutine::lambda([&] () -> future<> {
                     const auto& rs = _topology_state_machine._topology.find(raft_server.id())->second;
                     auto tstate = _topology_state_machine._topology.tstate;
-                    if (!rs.ring || rs.ring->tokens.empty() ||
-                        (tstate != topology::transition_state::write_both_read_old && rs.state != node_state::normal && rs.state != node_state::rebuilding)) {
-                        rtlogger.warn("got stream_ranges request while my tokens state is {} and node state is {}", tstate, rs.state);
+                    if (!rs.ring || rs.ring->tokens.empty()) {
+                        rtlogger.warn("got {} request but the node does not own any tokens and is in the {} state", cmd.cmd, rs.state);
+                        co_return;
+                    }
+                    if (tstate != topology::transition_state::write_both_read_old && rs.state != node_state::normal && rs.state != node_state::rebuilding) {
+                        rtlogger.warn("got {} request while the topology transition state is {} and node state is {}", cmd.cmd, tstate, rs.state);
                         co_return;
                     }
 
