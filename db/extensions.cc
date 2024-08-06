@@ -59,14 +59,8 @@ void db::extensions::add_extension_internal_keyspace(std::string ks) {
     _extension_internal_keyspaces.emplace(std::move(ks));
 }
 
-// TODO: remove once this is backmerged to ent once, and relevant code is updated.
-extern bool is_load_prio_keyspace(std::string_view name);
-
 bool db::extensions::is_extension_internal_keyspace(const std::string& ks) const {
     if (_extension_internal_keyspaces.count(ks)) {
-        return true;
-    }
-    if (::is_load_prio_keyspace(ks)) {
         return true;
     }
     return false;
