@@ -154,6 +154,7 @@ Install ScyllaDB
                sudo yum install scylla-5.2.3
 
 
+<<<<<<< HEAD
 Configure and Run ScyllaDB
 -------------------------------
 
@@ -207,6 +208,9 @@ Run cassandra-stress:
      
      cassandra-stress write -mode cql3 native 
 
+=======
+.. include:: /getting-started/_common/setup-after-install.rst
+>>>>>>> fff83aad62 (doc: add post-installation configuration to the Web Installer page)
 
 Next Steps
 ------------
