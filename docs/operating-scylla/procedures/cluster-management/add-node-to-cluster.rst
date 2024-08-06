@@ -2,8 +2,6 @@
 Adding a New Node Into an Existing ScyllaDB Cluster (Out Scale)
 =================================================================
 
-.. scylladb_include_flag:: upgrade-note-add-new-node.rst
-
 When you add a new node, other nodes in the cluster stream data to the new node. This operation is called bootstrapping and may
 be time-consuming, depending on the data size and network bandwidth. If using a :ref:`multi-availability-zone <faq-best-scenario-node-multi-availability-zone>`, make sure they are balanced.
 
@@ -100,7 +98,3 @@ Procedure
 
 #. If you are using ScyllaDB Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using ScyllaDB Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_, and Manager can access it.
 
-
-.. _add-new-node-upgrade-info:
-
-.. scylladb_include_flag:: upgrade-warning-add-new-node-or-dc.rst

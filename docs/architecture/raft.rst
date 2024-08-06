@@ -173,8 +173,6 @@ gossip-based topology.
 
 The feature is automatically enabled in new clusters.
 
-.. scylladb_include_flag:: consistent-topology-with-raft-upgrade-info.rst
-
 Verifying that Raft is Enabled
 ----------------------------------
 

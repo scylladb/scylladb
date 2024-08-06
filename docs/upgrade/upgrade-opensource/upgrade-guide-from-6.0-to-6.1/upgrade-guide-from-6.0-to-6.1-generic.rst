@@ -1,35 +1,35 @@
 .. |SCYLLA_NAME| replace:: ScyllaDB
 
-.. |SRC_VERSION| replace:: 5.4
-.. |NEW_VERSION| replace:: 6.0
+.. |SRC_VERSION| replace:: 6.0
+.. |NEW_VERSION| replace:: 6.1
 
 .. |DEBIAN_SRC_REPO| replace:: Debian
-.. _DEBIAN_SRC_REPO: https://www.scylladb.com/download/?platform=debian-10&version=scylla-5.4
+.. _DEBIAN_SRC_REPO: https://www.scylladb.com/download/?platform=debian-10&version=scylla-6.0
 
 .. |UBUNTU_SRC_REPO| replace:: Ubuntu
-.. _UBUNTU_SRC_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-5.4
+.. _UBUNTU_SRC_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-6.0
 
 .. |SCYLLA_DEB_SRC_REPO| replace:: ScyllaDB deb repo (|DEBIAN_SRC_REPO|_, |UBUNTU_SRC_REPO|_)
 
 .. |SCYLLA_RPM_SRC_REPO| replace:: ScyllaDB rpm repo
-.. _SCYLLA_RPM_SRC_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-5.4
+.. _SCYLLA_RPM_SRC_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-6.0
 
 .. |DEBIAN_NEW_REPO| replace:: Debian
-.. _DEBIAN_NEW_REPO: https://www.scylladb.com/download/?platform=debian-10&version=scylla-6.0
+.. _DEBIAN_NEW_REPO: https://www.scylladb.com/download/?platform=debian-10&version=scylla-6.1
 
 .. |UBUNTU_NEW_REPO| replace:: Ubuntu
-.. _UBUNTU_NEW_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-6.0
+.. _UBUNTU_NEW_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-6.1
 
 .. |SCYLLA_DEB_NEW_REPO| replace:: ScyllaDB deb repo (|DEBIAN_NEW_REPO|_, |UBUNTU_NEW_REPO|_)
 
 .. |SCYLLA_RPM_NEW_REPO| replace:: ScyllaDB rpm repo
-.. _SCYLLA_RPM_NEW_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-6.0
+.. _SCYLLA_RPM_NEW_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-6.1
 
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 5.4 to 6.0
-.. _SCYLLA_METRICS: ../metric-update-5.4-to-6.0
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 6.0 to 6.1
+.. _SCYLLA_METRICS: ../metric-update-6.0-to-6.1
 
 =============================================================================
 Upgrade |SCYLLA_NAME| from |SRC_VERSION| to |NEW_VERSION|
@@ -46,6 +46,20 @@ It also applies when using ScyllaDB official image on EC2, GCP, or Azure.
 
 Before You Upgrade ScyllaDB
 ==============================
+
+**Ensure Consistent Topology Changes Are Enabled**
+
+In ScyllaDB 6.1, the Raft-based *consistent topology changes* feature is mandatory.
+
+* If you enabled the feature after upgrading from 5.4 to 6.0 or created your
+  cluster with version 6.0, no action is required before upgrading to 6.1.
+* If you did not enable the feature after upgrading from 5.4 to 6.0, you must
+  enable the feature before upgrading to 6.1 by following
+  the `Enable Consistent Topology Updates <https://opensource.docs.scylladb.com/branch-6.0/upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology.html>`_
+  procedure.
+
+To verify if the *consistent topology changes* feature is enabled on your cluster,
+see :ref:`Verifying that Raft is Enabled - Consistent Topology Changes <verifying-consistent-topology-changes-enabled>`.
 
 **Upgrade Your Driver**
 
@@ -65,11 +79,6 @@ We recommend upgrading the Monitoring Stack to the latest version.
 
 See the ScyllaDB Release Notes for the latest updates. The Release Notes are published 
 at the `ScyllaDB Community Forum <https://forum.scylladb.com/>`_.
-
-.. note::
-   
-   In ScyllaDB 6.0, Raft-based consistent schema management for new and existing 
-   deployments is enabled by default and cannot be disabled.
 
 Upgrade Procedure
 =================
@@ -94,13 +103,6 @@ node before validating that the node you upgraded is up and running the new vers
 * Not to run administration functions, such as repairs, refresh, rebuild, or add 
   or remove nodes.
 * Not to apply schema changes.
-
-**After** the upgrade:
-
-* You may need to verify  that Raft has been successfully initiated in your cluster. 
-* You need to enable consistent topology updates. 
-
-See :ref:`After Upgrading Every Node <upgrade-5.4-6.0-after-upgrading-nodes>` for details.
 
 Upgrade Steps
 =============
@@ -236,61 +238,6 @@ Validate
 #. Check again after two minutes, to validate no new issues are introduced.
 
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
-
-.. _upgrade-5.4-6.0-after-upgrading-nodes:
-
-After Upgrading Every Node
-===============================
-
-After you have upgraded every node, perform the following procedures.
-
-#. Validate Raft setup. This step only applies if you manually disabled
-   the ``consistent_cluster_management`` option before upgrading to version 5.4.
-
-   In ScyllaDB 6.0, Raft-based consistent schema management for new and existing 
-   deployments is enabled by default and cannot be disabled.
-   You need to verify if Raft was successfully initiated in your cluster
-   **before** you proceed to the next step.
-   See :ref:`Validate Raft Setup <upgrade-5.4-6.0-validate-raft-setup>` for instructions.
-
-#. Enable the Raft-based consistent topology updates feature. See 
-   :doc:`Enable Consistent Topology Updates </upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology>`
-   for instructions.
-
-.. _upgrade-5.4-6.0-validate-raft-setup:
-
-Validate Raft Setup
--------------------------
-
-.. note::
-
-   Skip this step if you upgraded from 5.2 to 5.4 with default settings. This 
-   section only applies if you manually disabled the ``consistent_cluster_management`` 
-   option before upgrading from version 5.2. to 5.4.
-
-Enabling Raft causes the ScyllaDB cluster to start an internal Raft 
-initialization procedure as soon as every node is upgraded to the new version. 
-The goal of that procedure is to initialize data structures used by the Raft 
-algorithm to consistently manage cluster-wide metadata, such as table schemas.
-
-Assuming you performed the rolling upgrade procedure correctly (in particular, 
-ensuring that the schema is synchronized on every step), and if there are no 
-problems with cluster connectivity, that internal procedure should take a few 
-seconds to finish. However, the procedure requires full cluster availability.
-If one of the nodes fails before the procedure finishes (for example, due to 
-a hardware problem), the process may get stuck, which may prevent schema or 
-topology changes in your cluster.
-
-Therefore, following the rolling upgrade, you must verify that the internal 
-Raft initialization procedure has finished successfully by checking the logs 
-of every ScyllaDB node. If the process gets stuck, manual intervention is 
-required.
-
-Refer to the 
-:ref:`Verifying that the internal Raft upgrade procedure finished successfully <verify-raft-procedure>` 
-section for instructions on verifying that the procedure was successful and 
-proceeding if it gets stuck.
-
 
 Rollback Procedure
 ==================
