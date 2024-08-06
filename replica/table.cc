@@ -597,7 +597,7 @@ const storage_group_map& storage_group_manager::storage_groups() const {
 }
 
 future<> storage_group_manager::stop_storage_groups() noexcept {
-    return parallel_for_each(_storage_groups | boost::adaptors::map_values, std::mem_fn(&storage_group::stop));
+    return parallel_for_each(_storage_groups | boost::adaptors::map_values, [] (auto sg) { return sg->stop("table removal"); });
 }
 
 void storage_group_manager::remove_storage_group(size_t id) {
@@ -2179,14 +2179,14 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
 
 compaction_group::~compaction_group() = default;
 
-future<> compaction_group::stop() noexcept {
+future<> compaction_group::stop(sstring reason) noexcept {
     if (_async_gate.is_closed()) {
         co_return;
     }
     auto closed_gate_fut = _async_gate.close();
 
     auto flush_future = co_await seastar::coroutine::as_future(flush());
-    co_await _t._compaction_manager.remove(as_table_state());
+    co_await _t._compaction_manager.remove(as_table_state(), reason);
 
     if (flush_future.failed()) {
         co_await seastar::coroutine::return_exception_ptr(flush_future.get_exception());
@@ -2285,7 +2285,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
         }
         // Remove old main groups, they're unused, but they need to be deregistered properly
         auto cg_ptr = sg->main_compaction_group();
-        auto f = cg_ptr->stop();
+        auto f = cg_ptr->stop("tablet split");
         if (!f.available() || f.failed()) [[unlikely]] {
             stop_fut = stop_fut.then([f = std::move(f), cg_ptr = std::move(cg_ptr)] () mutable {
                 return std::move(f).handle_exception([cg_ptr = std::move(cg_ptr)] (std::exception_ptr ex) {
@@ -3619,7 +3619,7 @@ future<> table::clear_inactive_reads_for_tablet(database& db, storage_group& sg)
     }
 }
 
-future<> storage_group::stop() noexcept {
+future<> storage_group::stop(const sstring& reason) noexcept {
     if (_async_gate.is_closed()) {
         co_return;
     }
@@ -3629,14 +3629,14 @@ future<> storage_group::stop() noexcept {
     auto closed_gate_fut = _async_gate.close();
 
     // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
-    co_await coroutine::parallel_for_each(compaction_groups(), [] (const compaction_group_ptr& cg_ptr) {
-        return cg_ptr->stop();
+    co_await coroutine::parallel_for_each(compaction_groups(), [&reason] (const compaction_group_ptr& cg_ptr) {
+        return cg_ptr->stop(reason);
     });
     co_await std::move(closed_gate_fut);
 }
 
 future<> table::stop_compaction_groups(storage_group& sg) {
-    return sg.stop();
+    return sg.stop("tablet cleanup");
 }
 
 future<> table::flush_compaction_groups(storage_group& sg) {
