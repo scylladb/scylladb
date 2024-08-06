@@ -39,21 +39,8 @@ static const std::unordered_set<std::string_view> system_keyspaces = {
                 db::system_keyspace::NAME, db::schema_tables::NAME,
 };
 
-// Not super nice. Adding statefulness to the file. 
-static std::unordered_set<sstring> load_prio_keyspaces;
-static bool population_started = false;
-
-void replica::distributed_loader::mark_keyspace_as_load_prio(const sstring& ks) {
-    SCYLLA_ASSERT(!population_started);
-    load_prio_keyspaces.insert(ks);
-}
-
 bool is_system_keyspace(std::string_view name) {
     return system_keyspaces.contains(name);
-}
-
-bool is_load_prio_keyspace(std::string_view name) {
-    return load_prio_keyspaces.contains(sstring(name));
 }
 
 static const std::unordered_set<std::string_view> internal_keyspaces = {
@@ -486,8 +473,6 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
 }
 
 future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<locator::effective_replication_map_factory>& erm_factory, distributed<replica::database>& db) {
-    population_started = true;
-
     return seastar::async([&sys_ks, &erm_factory, &db] {
         sys_ks.invoke_on_all([&erm_factory, &db] (auto& sys_ks) {
             return sys_ks.make(erm_factory.local(), db.local());
