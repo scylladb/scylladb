@@ -3803,3 +3803,130 @@ SEASTAR_TEST_CASE(test_tracing_format) {
     BOOST_CHECK_EQUAL(formatted, "{key: pk{0103}, token: 42}");
     return make_ready_future();
  }
+
+void do_make_collection(collection_mutation_description& desc, std::pair<bytes, atomic_cell>&& cell) {
+    desc.cells.push_back(std::move(cell));
+};
+
+template <typename... Cell>
+void do_make_collection(collection_mutation_description& desc, std::pair<bytes, atomic_cell>&& cell, Cell&& ...cells) {
+    desc.cells.push_back(std::move(cell));
+    do_make_collection(desc, std::forward<Cell>(cells)...);
+};
+
+SEASTAR_TEST_CASE(test_compact_and_expire_cell_stats) {
+    const auto collection_type = map_type_impl::get_instance(int32_type, int32_type, true);
+
+    auto schema = schema_builder("test", "test_compact_and_expire_cell_stats")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("static_atomic", int32_type, column_kind::static_column)
+        .with_column("static_collection", collection_type, column_kind::static_column)
+        .with_column("regular_atomic", int32_type, column_kind::regular_column)
+        .with_column("regular_collection", collection_type, column_kind::regular_column)
+        .build();
+    auto& s = *schema;
+
+    api::timestamp_type live_ts = 10;
+    api::timestamp_type tomb_ts = 5;
+    api::timestamp_type dead_ts = 0;
+
+    const auto now = gc_clock::now();
+
+    const auto value = data_value(10).serialize_nonnull();
+    const auto value1 = data_value(11).serialize_nonnull();
+
+    struct row_content {
+        std::optional<atomic_cell> atomic_column;
+        std::optional<collection_mutation> collection_column;
+    };
+
+    const auto make_collection = [&] (tombstone tomb, auto&&... cells) {
+        collection_mutation_description desc;
+        desc.tomb = tomb;
+        do_make_collection(desc, std::forward<decltype(cells)>(cells)...);
+        return desc.serialize(*collection_type);
+    };
+
+    const auto check = [&] (row_content rc, row_tombstone rt, compact_and_expire_result expected_res, std::source_location sl = std::source_location::current()) {
+        testlog.info("check() @ {}:{}", sl.file_name(), sl.line());
+        const static std::unordered_map<column_kind, std::array<bytes, 2>> column_names = {
+            {column_kind::static_column, {"static_atomic", "static_collection"}},
+            {column_kind::regular_column, {"regular_atomic", "regular_collection"}},
+        };
+        for (const auto col_kind : {column_kind::static_column, column_kind::regular_column}) {
+            row r;
+            if (rc.atomic_column) {
+                const auto cdef = *s.get_column_definition(column_names.at(col_kind)[0]);
+                r.apply(cdef, atomic_cell_or_collection(atomic_cell(*int32_type, *rc.atomic_column)));
+            }
+            if (rc.collection_column) {
+                const auto cdef = *s.get_column_definition(column_names.at(col_kind)[1]);
+                r.apply(cdef, atomic_cell_or_collection(collection_mutation(*collection_type, *rc.collection_column)));
+            }
+            auto res = r.compact_and_expire(s, col_kind, rt, now, always_gc, now);
+            BOOST_REQUIRE_EQUAL(res, expected_res);
+        }
+    };
+
+    check(row_content{}, row_tombstone{}, {});
+
+    check(row_content{.atomic_column = atomic_cell::make_live(*int32_type, live_ts, value)}, row_tombstone{}, {.live_cells = 1});
+    check(row_content{.atomic_column = atomic_cell::make_live(*int32_type, live_ts, value)}, row_tombstone{tombstone(tomb_ts, now)}, {.live_cells = 1});
+
+    check(row_content{.atomic_column = atomic_cell::make_dead(dead_ts, now)}, row_tombstone{}, {.dead_cells = 1});
+    check(row_content{.atomic_column = atomic_cell::make_live(*int32_type, dead_ts, value)}, row_tombstone{tombstone(tomb_ts, now)}, {.dead_cells = 1});
+
+    check(row_content{
+                .collection_column = make_collection({}, std::pair(value, atomic_cell::make_live(*int32_type, live_ts, value)))
+            }, row_tombstone{}, {.live_cells = 1});
+
+    check(row_content{
+                .collection_column = make_collection({}, std::pair(value, atomic_cell::make_live(*int32_type, live_ts, value)),
+                         std::pair(value1, atomic_cell::make_live(*int32_type, live_ts, value1)))
+            }, row_tombstone{}, {.live_cells = 2});
+
+    check(row_content{
+                .atomic_column = atomic_cell::make_dead(dead_ts, now),
+                .collection_column = make_collection({}, std::pair(value, atomic_cell::make_live(*int32_type, live_ts, value)),
+                         std::pair(value1, atomic_cell::make_live(*int32_type, live_ts, value1)))
+            }, row_tombstone{}, {.live_cells = 2, .dead_cells = 1});
+
+    check(row_content{
+                .atomic_column = atomic_cell::make_live(*int32_type, live_ts, value),
+                .collection_column = make_collection({}, std::pair(value, atomic_cell::make_live(*int32_type, live_ts, value)),
+                         std::pair(value1, atomic_cell::make_live(*int32_type, live_ts, value1)))
+            }, row_tombstone{}, {.live_cells = 3});
+
+    check(row_content{
+                .atomic_column = atomic_cell::make_live(*int32_type, live_ts, value),
+                .collection_column = make_collection({}, std::pair(value, atomic_cell::make_dead(dead_ts, now)),
+                         std::pair(value1, atomic_cell::make_live(*int32_type, live_ts, value1)))
+            }, row_tombstone{}, {.live_cells = 2, .dead_cells = 1});
+
+    check(row_content{
+                .atomic_column = atomic_cell::make_live(*int32_type, live_ts, value),
+                .collection_column = make_collection(tombstone(tomb_ts, now), std::pair(value, atomic_cell::make_dead(dead_ts, now)),
+                         std::pair(value1, atomic_cell::make_live(*int32_type, live_ts, value1)))
+            }, row_tombstone{}, {.live_cells = 2, .dead_cells = 1, .collection_tombstones = 1});
+
+    check(row_content{
+                .atomic_column = atomic_cell::make_live(*int32_type, live_ts, value),
+                .collection_column = make_collection(tombstone(tomb_ts, now), std::pair(value, atomic_cell::make_live(*int32_type, dead_ts, value)),
+                         std::pair(value1, atomic_cell::make_live(*int32_type, live_ts, value1)))
+            }, row_tombstone{}, {.live_cells = 2, .dead_cells = 1, .collection_tombstones = 1});
+
+    check(row_content{
+                .atomic_column = atomic_cell::make_live(*int32_type, dead_ts, value),
+                .collection_column = make_collection({}, std::pair(value, atomic_cell::make_dead(dead_ts, now)),
+                         std::pair(value1, atomic_cell::make_live(*int32_type, live_ts, value1)))
+            }, row_tombstone(tombstone(tomb_ts, now)), {.live_cells = 1, .dead_cells = 2});
+
+    check(row_content{
+                .atomic_column = atomic_cell::make_live(*int32_type, dead_ts, value),
+                .collection_column = make_collection(tombstone(dead_ts, now), std::pair(value, atomic_cell::make_dead(dead_ts, now)),
+                         std::pair(value1, atomic_cell::make_live(*int32_type, live_ts, value1)))
+            }, row_tombstone(tombstone(tomb_ts, now)), {.live_cells = 1, .dead_cells = 2, .collection_tombstones = 1});
+
+    return make_ready_future();
+}
