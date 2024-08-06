@@ -1914,12 +1914,6 @@ future<std::unordered_map<locator::host_id, gms::loaded_endpoint_state>> system_
         auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
         if (row.has("tokens")) {
             st.tokens = decode_tokens(deserialize_set_column(*peers(), row, "tokens"));
-            if (st.tokens.empty()) {
-                slogger.error("load_endpoint_state: node {}/{} has tokens column present but tokens are empty", host_id, ep);
-                continue;
-            }
-        } else {
-            slogger.warn("Endpoint {} has no tokens in system.{}", ep, PEERS);
         }
         if (row.has("data_center") && row.has("rack")) {
             st.opt_dc_rack.emplace(locator::endpoint_dc_rack {
@@ -1945,16 +1939,17 @@ future<std::unordered_map<locator::host_id, gms::loaded_endpoint_state>> system_
 future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
     co_await peers_table_read_fixup();
 
-    const auto res = co_await execute_cql(format("SELECT peer, tokens FROM system.{}", PEERS));
+    const auto res = co_await execute_cql(format("SELECT peer, rpc_address FROM system.{}", PEERS));
     SCYLLA_ASSERT(res);
 
     std::vector<gms::inet_address> ret;
     for (const auto& row: *res) {
-        if (!row.has("tokens")) {
-            // Ignore rows that don't have tokens. Such rows may
-            // be introduced by code that persists parts of peer
-            // information (such as RAFT_ID) which may potentially
-            // race with deleting a peer (during node removal).
+        if (!row.has("rpc_address")) {
+            // In the Raft-based topology, we store the Host ID -> IP mapping
+            // of joining nodes in PEERS. We want to ignore such rows. To achieve
+            // it, we check the presence of rpc_address, but we could choose any
+            // column other than host_id and tokens (rows with no tokens can
+            // correspond to zero-token nodes).
             continue;
         }
         ret.emplace_back(gms::inet_address(row.get_as<net::inet_address>("peer")));
