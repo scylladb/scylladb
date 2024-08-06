@@ -1315,6 +1315,65 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
+    // Verifies that new table doesn't get tablets allocated on a node being decommissioned
+    // which may leave them on replicas absent in topology post decommission.
+    do_with_cql_env_thread([](auto& e) {
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+        inet_address ip3("192.168.0.3");
+        inet_address ip4("192.168.0.4");
+
+        auto host1 = host_id(next_uuid());
+        auto host2 = host_id(next_uuid());
+        auto host3 = host_id(next_uuid());
+        auto host4 = host_id(next_uuid());
+        locator::endpoint_dc_rack dcrack = { "datacenter1", "rack1" };
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
+            locator::topology::config {
+                .this_endpoint = ip1,
+                .local_dc_rack = dcrack
+            }
+        });
+
+        const unsigned shard_count = 1;
+
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            tm.update_host_id(host1, ip1);
+            tm.update_host_id(host2, ip2);
+            tm.update_host_id(host3, ip3);
+            tm.update_host_id(host4, ip4);
+            tm.update_topology(host1, dcrack, std::nullopt, shard_count);
+            tm.update_topology(host2, dcrack, std::nullopt, shard_count);
+            tm.update_topology(host3, dcrack, node::state::being_decommissioned, shard_count);
+            tm.update_topology(host4, dcrack, node::state::left, shard_count);
+            return make_ready_future<>();
+        }).get();
+
+        sstring ks_name = "test_ks";
+        sstring table_name = "table1";
+        e.execute_cql(format("create keyspace {} with replication = "
+                             "{{'class': 'NetworkTopologyStrategy', '{}': 1}} "
+                             "and tablets = {{'enabled': true, 'initial': 8}}", ks_name, dcrack.dc)).get();
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name)).get();
+        auto s = e.local_db().find_schema(ks_name, table_name);
+
+        auto* rs = e.local_db().find_keyspace(ks_name).get_replication_strategy().maybe_as_tablet_aware();
+        BOOST_REQUIRE(rs);
+        auto tmap = rs->allocate_tablets_for_new_table(s, stm.get(), 8).get();
+
+        tmap.for_each_tablet([&](auto tid, auto& tinfo) {
+            for (auto& replica : tinfo.replicas) {
+                BOOST_REQUIRE_NE(replica.host, host3);
+                BOOST_REQUIRE_NE(replica.host, host4);
+            }
+            return make_ready_future<>();
+        }).get();
+    }, tablet_cql_test_config()).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
     // Verifies that load balancer moves tablets out of the decommissioned node.
     // The scenario is such that replication constraints of tablets can be satisfied after decommission.
