@@ -265,18 +265,23 @@ void utils::config_file::add(const std::vector<cfg_ref> & cfgs) {
 void
 utils::config_file::add_options(bpo::options_description& options) {
     bpo::options_description deprecated_options("Deprecated options - ignored");
+    bpo::options_description transitional("Transitional options - use `--config yaml-snippet` of `--options-file yaml-file` instead");
 
     auto easy_init_std = options.add_options();
     auto easy_init_deprecated = deprecated_options.add_options();
+    auto easy_init_transitional = transitional.add_options();
 
     for (config_src& src : _cfgs) {
-        if (src.status() == value_status::Used) {
+        if (src.status() == value_status::UsedCLIPromoted) {
             src.add_command_line_option(easy_init_std);
+        } else if (src.status() == value_status::Used) {
+            src.add_command_line_option(easy_init_transitional);
         } else if (src.status() == value_status::Deprecated) {
             src.add_command_line_option(easy_init_deprecated);
         }
     }
 
+    options.add(transitional);
     options.add(deprecated_options);
 }
 
@@ -292,6 +297,8 @@ utils::config_file::print_help(std::ostream& os) {
             os << "(deprecated) ";
             break;
         case value_status::Used:
+            continue;
+        case value_status::UsedCLIPromoted:
             break;
         }
         fmt::print(os, "{} ({}):\n {}\n\n", src.name(), src.liveness(), src.desc());

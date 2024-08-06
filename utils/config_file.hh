@@ -66,9 +66,11 @@ public:
     typedef std::vector<sstring> string_list;
 
     enum class value_status {
-        Used, ///< a valid option which changes scylla's behavior. only the
-              ///< "Used" options are added to the command line options,
-              ///< and can be specified with command line.
+        UsedCLIPromoted, ///< a valid option which changes scylla's behavior. only the
+              ///< "UsedCLIPromoted" options are added to the command line options,
+              ///< and can be specified with command line (or as with "Used", below)
+        Used, ///< a valid option which changes scylla's behavior. Can
+              ///< be specified with --config or --options-file.
         Unused, ///< an option inherited or not yet implemented.
                 ///< We want to minimize their "visibility" from user. So
                 ///< despite that they are still accepted in the config file,
