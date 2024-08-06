@@ -25,6 +25,7 @@ Querying data from data is done using a ``SELECT`` statement:
            : | `function_name` '(' [ `selector` ( ',' `selector` )* ] ')'
            : | COUNT '(' '*' ')'
    where_clause: `relation` ( AND `relation` )*
+   group_by_clause: `column_name` (',' `column_name` )*
    relation: `column_name` `operator` `term`
            : '(' `column_name` ( ',' `column_name` )* ')' `operator` `tuple_literal`
            : TOKEN '(' `column_name` ( ',' `column_name` )* ')' `operator` `term`
