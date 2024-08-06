@@ -902,7 +902,7 @@ async def test_concurrent_tablet_migration_and_major(manager: ManagerClient, inj
 
     if injection_error == "major_compaction_wait":
         logger.info("Check that major was successfully aborted on migration")
-        await s1_log.wait_for(f"Compaction for test/test was stopped due to: table removal", from_mark=s1_mark)
+        await s1_log.wait_for("Compaction for test/test was stopped due to: tablet cleanup", from_mark=s1_mark)
 
     await check()
 

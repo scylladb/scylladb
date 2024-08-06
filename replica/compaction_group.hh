@@ -92,7 +92,7 @@ public:
 
     // Stops all activity in the group, synchronizes with in-flight writes, before
     // flushing memtable(s), so all data can be found in the SSTable set.
-    future<> stop() noexcept;
+    future<> stop(sstring reason) noexcept;
 
     bool empty() const noexcept;
 
@@ -239,7 +239,7 @@ public:
     // Returns true when all compacted sstables were already deleted.
     bool no_compacted_sstable_undeleted() const;
 
-    future<> stop() noexcept;
+    future<> stop(sstring reason = "table removal") noexcept;
 };
 
 using storage_group_ptr = lw_shared_ptr<storage_group>;

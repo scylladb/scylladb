@@ -2132,7 +2132,7 @@ void compaction_manager::add(table_state& t) {
     }
 }
 
-future<> compaction_manager::remove(table_state& t) noexcept {
+future<> compaction_manager::remove(table_state& t, sstring reason) noexcept {
     auto& c_state = get_compaction_state(&t);
     auto erase_state = defer([&t, &c_state, this] () noexcept {
        c_state.backlog_tracker->disable();
@@ -2148,7 +2148,7 @@ future<> compaction_manager::remove(table_state& t) noexcept {
     // and prevent new tasks from entering the gate.
     if (!c_state.gate.is_closed()) {
         auto close_gate = c_state.gate.close();
-        co_await stop_ongoing_compactions("table removal", &t);
+        co_await stop_ongoing_compactions(reason, &t);
         co_await std::move(close_gate);
     }
 
