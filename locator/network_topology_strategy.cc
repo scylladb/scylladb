@@ -430,6 +430,9 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
         auto& candidate = existing.empty() ?
                 new_racks.emplace_back(rack) : existing_racks.emplace_back(rack);
         for (const auto& node : nodes) {
+            if (!node->is_normal()) {
+                continue;
+            }
             const auto& host_id = node->host_id();
             if (!existing.contains(host_id)) {
                 candidate.nodes.emplace_back(host_id, load.get_load(host_id));
