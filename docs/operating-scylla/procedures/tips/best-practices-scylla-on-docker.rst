@@ -322,5 +322,30 @@ Searching for a setting in scylla.yaml
 .. code-block:: console
 
  docker exec -it some-scylla grep -H 'experimental' /etc/scylla/scylla.yaml
+ 
+aio-max-nr Value
+++++++++++++++++++++++++++++++++++++++++
+Before starting the cluster, make sure the `aio-max-nr <https://www.kernel.org/doc/Documentation/sysctl/fs.txt/>`_  value is high enough (typically 10485760 or higher). This parameter determines the maximum number of allowable Asynchronous non-blocking I/O (AIO) concurrent requests by the Linux Kernel, and it helps ScyllaDB perform in a heavy I/O workload environment.
+If you encounter the error:
+
+.. code-block:: console
+
+ FATAL: Exception during startup, aborting: std::runtime_error (Could not setup Async I/O: Resource temporarily unavailable. The most common cause is not enough request capacity in /proc/sys/fs/aio-max-nr. Try increasing that number or reducing the amount of logical CPUs available for your application)
+
+You might need to update the aio-max-nr value (in the host machine). To check the value:
+
+.. code-block:: console
+
+ cat /proc/sys/fs/aio-max-nr
+
+If it needs to be changed:
+
+.. code-block:: console
+
+ echo "fs.aio-max-nr = 1048576" >> /etc/sysctl.conf
+
+ sysctl -p /etc/sysctl.conf
+
+
 
 .. include:: /rst_include/apache-copyrights.rst
