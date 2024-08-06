@@ -1788,7 +1788,7 @@ bool lazy_row::compact_and_expire(
     if (!_row) {
         return false;
     }
-    return _row->compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, marker, collector);
+    return _row->compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, marker, collector).is_live();
 }
 
 bool lazy_row::compact_and_expire(
@@ -1802,7 +1802,7 @@ bool lazy_row::compact_and_expire(
     if (!_row) {
         return false;
     }
-    return _row->compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, collector);
+    return _row->compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, collector).is_live();
 }
 
 std::ostream& operator<<(std::ostream& os, const lazy_row::printer& p) {
@@ -1822,7 +1822,7 @@ bool deletable_row::compact_and_expire(const schema& s,
 
     apply(tomb);
     bool is_live = marker().compact_and_expire(deleted_at().tomb(), query_time, can_gc, gc_before);
-    is_live |= cells().compact_and_expire(s, column_kind::regular_column, deleted_at(), query_time, can_gc, gc_before, marker(), collector);
+    is_live |= cells().compact_and_expire(s, column_kind::regular_column, deleted_at(), query_time, can_gc, gc_before, marker(), collector).is_live();
 
     if (deleted_at().tomb() <= tomb || should_purge_row_tombstone(deleted_at())) {
         remove_tombstone();

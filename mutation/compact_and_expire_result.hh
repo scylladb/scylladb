@@ -20,10 +20,6 @@ struct compact_and_expire_result {
         return live_cells;
     }
 
-    operator bool () const noexcept {
-        return is_live();
-    }
-
     bool operator==(const compact_and_expire_result&) const = default;
 
     compact_and_expire_result& operator+=(const compact_and_expire_result& o) {
