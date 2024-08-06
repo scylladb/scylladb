@@ -906,6 +906,44 @@ async def test_concurrent_tablet_migration_and_major(manager: ManagerClient, inj
 
     await check()
 
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_concurrent_table_drop_and_major(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    injection_error = "major_compaction_wait"
+    cmdline = ['--logger-log-level', 'compaction_manager=debug',]
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    await manager.api.flush_keyspace(servers[0].ip_addr, "test")
+
+    s1_log = await manager.server_open_log(servers[0].server_id)
+    s1_mark = await s1_log.mark()
+
+    await manager.api.enable_injection(servers[0].ip_addr, injection_error, one_shot=True)
+    logger.info("Started major compaction")
+    compaction_task = asyncio.create_task(manager.api.keyspace_compaction(servers[0].ip_addr, "test"))
+    await s1_log.wait_for(f"{injection_error}: waiting", from_mark=s1_mark)
+
+    logger.info("Dropping table")
+    await cql.run_async("DROP TABLE test.test")
+
+    await manager.api.message_injection(servers[0].ip_addr, injection_error)
+    await s1_log.wait_for(f"{injection_error}: released", from_mark=s1_mark)
+    await compaction_task
+
+    if injection_error == "major_compaction_wait":
+        logger.info("Check that major was successfully aborted on migration")
+        await s1_log.wait_for("ongoing compactions for table test.test .* due to table removal", from_mark=s1_mark)
+
 async def assert_tablet_count_metric_value_for_shards(manager: ManagerClient, server: ServerInfo, expected_count_per_shard: list[int]):
     tablet_count_metric_name = "scylla_tablets_count"
     metrics = await manager.metrics.query(server.ip_addr)
