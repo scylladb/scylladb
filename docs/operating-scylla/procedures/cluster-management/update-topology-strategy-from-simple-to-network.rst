@@ -23,8 +23,6 @@ Alter the following:
 * Keyspace created by the user.
 * System: ``system_distributed``, ``system_traces``.
 
-.. scylladb_include_flag:: system-auth-alter-info.rst
-
 For example:
 
 Before

@@ -1,8 +1,6 @@
 Enable and Disable Authentication Without Downtime
 ==================================================
 
-.. scylladb_include_flag:: upgrade-note-runtime-authentication.rst
-
 Authentication is the process where login accounts and their passwords are verified, and the user is allowed access into the database. Authentication is done internally within ScyllaDB and is not done with a third party. Users and passwords are created with :doc:`roles </operating-scylla/security/authorization>` using a ``CREATE ROLE`` statement. This procedure enables Authentication on the ScyllaDB servers using a transit state, allowing clients to work with or without Authentication at the same time. In this state, you can update the clients (application using ScyllaDB/Apache Cassandra drivers) one at the time. Once all the clients are using Authentication, you can enforce Authentication on all ScyllaDB nodes as well. If you would rather perform a faster authentication procedure where all clients (application using ScyllaDB/Apache Cassandra drivers) will stop working until they are updated to work with Authentication, refer to :doc:`Enable Authentication </operating-scylla/security/runtime-authentication>`.
 
 
@@ -108,6 +106,3 @@ Procedure
 
 #. Verify that all the client applications are working correctly with authentication disabled.
 
-.. _runtime-authentication-upgrade-info:
-
-.. scylladb_include_flag:: upgrade-warning-runtime-authentication.rst

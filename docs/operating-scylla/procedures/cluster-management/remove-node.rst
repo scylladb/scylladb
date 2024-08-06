@@ -2,8 +2,6 @@
 Remove a Node from a ScyllaDB Cluster (Down Scale)
 ***************************************************
 
-.. scylladb_include_flag:: upgrade-note-remove-node.rst
-
 You can remove nodes from your cluster to reduce its size.
 
 -----------------------
@@ -82,10 +80,6 @@ the ``nodetool removenode`` operation will fail. To ensure successful operation 
 * In the case of node failures during the ``removenode`` operation, re-run repair before running
   ``nodetool removenode`` (not required when :doc:`Repair Based Node Operations (RBNO) <repair-based-node-operation>` for ``removenode`` 
   is enabled).
-
-.. _remove-node-upgrade-info:
-
-.. scylladb_include_flag:: upgrade-warning-remove-node.rst
 
 Additional Information
 ----------------------

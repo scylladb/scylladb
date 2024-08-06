@@ -1,8 +1,6 @@
 Adding a New Data Center Into an Existing ScyllaDB Cluster
 ***********************************************************
 
-.. scylladb_include_flag:: upgrade-note-add-new-dc.rst
-
 The following procedure specifies how to add a Data Center (DC) to a live ScyllaDB Cluster, in a single data center, :ref:`multi-availability zone <faq-best-scenario-node-multi-availability-zone>`, or multi-datacenter. Adding a DC out-scales the cluster and provides higher availability (HA).
 
 The procedure includes:
@@ -164,8 +162,6 @@ Add New DC
    * Keyspace created by the user (which needed to replicate to the new DC).
    * System: ``system_distributed``, ``system_traces``, for example, replicate the data to three nodes in the new DC.
 
-   .. scylladb_include_flag:: system-auth-alter-info.rst
-
    For example:
 
    Before
@@ -234,7 +230,3 @@ Additional Resources for Java Clients
 * `DCAwareRoundRobinPolicy.Builder <https://java-driver.docs.scylladb.com/scylla-3.10.2.x/api/com/datastax/driver/core/policies/DCAwareRoundRobinPolicy.Builder.html>`_
 * `DCAwareRoundRobinPolicy <https://java-driver.docs.scylladb.com/scylla-3.10.2.x/api/com/datastax/driver/core/policies/DCAwareRoundRobinPolicy.html>`_
 
-
-.. _add-dc-upgrade-info:
-
-.. scylladb_include_flag:: upgrade-warning-add-new-node-or-dc.rst
