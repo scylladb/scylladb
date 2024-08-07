@@ -443,6 +443,8 @@ static rjson::value generate_arn_for_index(const schema& schema, std::string_vie
 static rjson::value fill_table_description(schema_ptr schema, table_status tbl_status, service::storage_proxy const& proxy)
 {
     rjson::value table_description = rjson::empty_object();
+    auto tags_ptr = db::get_tags_of_table(schema);
+
     rjson::add(table_description, "TableName", rjson::from_string(schema->cf_name()));
     // FIXME: take the tables creation time, not the current time!
     size_t creation_date_seconds = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
@@ -459,12 +461,22 @@ static rjson::value fill_table_description(schema_ptr schema, table_status tbl_s
     // when the table was created. But, Spark jobs expect something to be returned
     // and PAY_PER_REQUEST seems closer to reality than PROVISIONED.
     rjson::add(table_description, "BillingModeSummary", rjson::empty_object());
-    rjson::add(table_description["BillingModeSummary"], "BillingMode", "PAY_PER_REQUEST");
+    if (tags_ptr && tags_ptr->contains("aws:provisioned_rcu")) {
+        rjson::add(table_description["BillingModeSummary"], "BillingMode", "PROVISIONED");
+    } else {
+        rjson::add(table_description["BillingModeSummary"], "BillingMode", "PAY_PER_REQUEST");
+    }
+
     rjson::add(table_description["BillingModeSummary"], "LastUpdateToPayPerRequestDateTime", rjson::value(creation_date_seconds));
     // In PAY_PER_REQUEST billing mode, provisioned capacity should return 0
     rjson::add(table_description, "ProvisionedThroughput", rjson::empty_object());
-    rjson::add(table_description["ProvisionedThroughput"], "ReadCapacityUnits", 0);
-    rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", 0);
+    if (tags_ptr && tags_ptr->contains("aws:provisioned_rcu")) {
+        rjson::add(table_description["ProvisionedThroughput"], "ReadCapacityUnits", std::stoi(tags_ptr->at("aws:provisioned_rcu")));
+        rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", std::stoi(tags_ptr->at("aws:provisioned_wcu")));
+    } else {
+        rjson::add(table_description["ProvisionedThroughput"], "ReadCapacityUnits", 0);
+        rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", 0);
+    }
     rjson::add(table_description["ProvisionedThroughput"], "NumberOfDecreasesToday", 0);
 
    
@@ -883,7 +895,13 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
 
-static void verify_billing_mode(const rjson::value& request) {
+struct billing_mode_type {
+    bool provisioned = false;
+    int64_t rcu;
+    int64_t wcu;
+};
+
+static billing_mode_type verify_billing_mode(const rjson::value& request) {
         // Alternator does not yet support billing or throughput limitations, but
     // let's verify that BillingMode is at least legal.
     std::string billing_mode = get_string_attribute(request, "BillingMode", "PROVISIONED");
@@ -895,9 +913,12 @@ static void verify_billing_mode(const rjson::value& request) {
         if (!rjson::find(request, "ProvisionedThroughput")) {
             throw api_error::validation("When BillingMode=PROVISIONED, ProvisionedThroughput must be specified.");
         }
+        const rjson::value& throughput = request["ProvisionedThroughput"];
+        return billing_mode_type{true, throughput["ReadCapacityUnits"].GetInt(), throughput["WriteCapacityUnits"].GetInt()};
     } else {
         throw api_error::validation("Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED.");
     }
+    return billing_mode_type();
 }
 
 // Validate that a AttributeDefinitions parameter in CreateTable is valid, and
@@ -959,7 +980,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     }
     builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
 
-    verify_billing_mode(request);
+    billing_mode_type bm = verify_billing_mode(request);
 
     schema_ptr partial_schema = builder.build();
 
@@ -1119,6 +1140,10 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     std::map<sstring, sstring> tags_map;
     if (tags && tags->IsArray()) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
+    }
+    if (bm.provisioned) {
+        tags_map["aws:provisioned_rcu"] = std::to_string(bm.rcu);
+        tags_map["aws:provisioned_wcu"] = std::to_string(bm.wcu);
     }
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
