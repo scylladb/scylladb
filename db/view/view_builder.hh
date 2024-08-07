@@ -176,6 +176,8 @@ class view_builder final : public service::migration_listener::only_view_notific
         std::unordered_set<table_id> built_views;
     };
 
+    future<> start_in_background(service::migration_manager&, utils::cross_shard_barrier b);
+
 public:
     // The view builder processes the base table in steps of batch_size rows.
     // However, if the individual rows are large, there is no real need to

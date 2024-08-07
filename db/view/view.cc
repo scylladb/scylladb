@@ -2005,8 +2005,8 @@ void view_builder::setup_metrics() {
     });
 }
 
-future<> view_builder::start(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
-    _started = do_with(view_builder_init_state{}, [this, &mm, barrier = std::move(barrier)] (view_builder_init_state& vbi) {
+future<> view_builder::start_in_background(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
+    return do_with(view_builder_init_state{}, [this, &mm, barrier = std::move(barrier)] (view_builder_init_state& vbi) {
         return seastar::async([this, &mm, &vbi, barrier = std::move(barrier)] mutable {
             auto fail = defer([&barrier] mutable { barrier.abort(); });
             // Guard the whole startup routine with a semaphore,
@@ -2053,6 +2053,10 @@ future<> view_builder::start(service::migration_manager& mm, utils::cross_shard_
             vlogger.log(ll, "start aborted: {}", ex);
         }
     });
+}
+
+future<> view_builder::start(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
+    _started = start_in_background(mm, std::move(barrier));
     return make_ready_future<>();
 }
 
