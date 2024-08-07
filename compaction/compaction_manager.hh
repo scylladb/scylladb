@@ -347,6 +347,11 @@ public:
     // or user aborted splitting using stop API.
     future<compaction_stats_opt> perform_split_compaction(compaction::table_state& t, sstables::compaction_type_options::split opt, std::optional<tasks::task_info> info = std::nullopt);
 
+    // Splits a single SSTable by segregating all its data according to the classifier.
+    // If SSTable doesn't need split, the same input SSTable is returned as output.
+    // If SSTable needs split, then output SSTables are returned and the input SSTable is deleted.
+    future<std::vector<sstables::shared_sstable>> maybe_split_sstable(sstables::shared_sstable sst, table_state& t, sstables::compaction_type_options::split opt);
+
     // Run a custom job for a given table, defined by a function
     // it completes when future returned by job is ready or returns immediately
     // if manager was asked to stop.
