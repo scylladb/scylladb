@@ -41,6 +41,10 @@ feature_config::feature_config() {
 }
 
 feature_service::feature_service(feature_config cfg) : _config(cfg) {
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    initialize_suppressed_features_set();
+#endif
+
     if (is_test_only_feature_deprecated()) {
         // Assume it's enabled
         test_only_feature.enable();
@@ -99,6 +103,14 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
 future<> feature_service::stop() {
     return make_ready_future<>();
 }
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+void feature_service::initialize_suppressed_features_set() {
+    if (const auto features_list = utils::get_local_injector().inject_parameter<std::string_view>("suppress_features"); features_list) {
+        boost::split(_suppressed_features, *features_list, boost::is_any_of(";"));
+    }
+}
+#endif
 
 void feature_service::register_feature(feature& f) {
     auto i = _registered_features.emplace(f.name(), f);
@@ -159,6 +171,13 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
     for (const sstring& s : _config._disabled_features) {
         features.erase(s);
     }
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    for (auto& sf: _suppressed_features) {
+        features.erase(sf);
+    }
+#endif
+
     return features;
 }
 
