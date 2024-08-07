@@ -1673,7 +1673,22 @@ get_view_natural_endpoint(
         return {};
     }
     auto replica = view_endpoints[base_it - base_endpoints.begin()];
-    return view_topology.get_node(replica).endpoint();
+
+    // https://github.com/scylladb/scylladb/issues/19439
+    // With tablets, a node being replaced might transition to "left" state
+    // but still be kept as a replica. In such case, the IP of the replaced
+    // node will be lost and `endpoint()` will return an empty IP here.
+    // As of writing this, storage proxy was not migrated to host IDs yet
+    // (#6403) and hints are not prepared to handle nodes that are left
+    // but are still replicas. Therefore, there is no other sensible option
+    // right now but to give up attempt to send the update or write a hint
+    // to the paired, permanently down replica.
+    const auto ep = view_topology.get_node(replica).endpoint();
+    if (ep != gms::inet_address{}) {
+        return ep;
+    } else {
+        return std::nullopt;
+    }
 }
 
 static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator::effective_replication_map_ptr ermp,
