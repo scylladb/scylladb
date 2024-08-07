@@ -1316,6 +1316,7 @@ scylla_tests_generic_dependencies = [
     'test/lib/log.cc',
     'test/lib/test_utils.cc',
     'test/lib/tmpdir.cc',
+    'test/lib/tablets.cc',
     'test/lib/sstable_run_based_compaction_strategy_for_tests.cc',
 ]
 
@@ -1357,6 +1358,7 @@ scylla_perfs = ['test/perf/perf_alternator.cc',
                 'test/lib/key_utils.cc',
                 'test/lib/random_schema.cc',
                 'test/lib/data_model.cc',
+                'test/lib/tablets.cc',
                 'seastar/tests/perf/linux_perf_event.cc']
 
 deps = {
