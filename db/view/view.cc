@@ -2005,9 +2005,10 @@ void view_builder::setup_metrics() {
     });
 }
 
-future<> view_builder::start(service::migration_manager& mm) {
-    _started = do_with(view_builder_init_state{}, [this, &mm] (view_builder_init_state& vbi) {
-        return seastar::async([this, &mm, &vbi] {
+future<> view_builder::start(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
+    _started = do_with(view_builder_init_state{}, [this, &mm, barrier = std::move(barrier)] (view_builder_init_state& vbi) {
+        return seastar::async([this, &mm, &vbi, barrier = std::move(barrier)] mutable {
+            auto fail = defer([&barrier] mutable { barrier.abort(); });
             // Guard the whole startup routine with a semaphore,
             // so that it's not intercepted by `on_drop_view`, `on_create_view`
             // or `on_update_view` events.
@@ -2018,7 +2019,6 @@ future<> view_builder::start(service::migration_manager& mm) {
             auto built = _sys_ks.load_built_views().get();
             auto in_progress = _sys_ks.load_view_build_progress().get();
             setup_shard_build_step(vbi, std::move(built), std::move(in_progress));
-        }).then_wrapped([this] (future<>&& f) {
             // All shards need to arrive at the same decisions on whether or not to
             // restart a view build at some common token (reshard), and which token
             // to restart at. So we need to wait until all shards have read the view
@@ -2026,28 +2026,8 @@ future<> view_builder::start(service::migration_manager& mm) {
             // If we don't synchronize here, a fast shard may make a decision, start
             // building and finish a build step - before the slowest shard even read
             // the view build information.
-            std::exception_ptr eptr;
-            if (f.failed()) {
-                eptr = f.get_exception();
-            }
-
-            return container().invoke_on(0, [eptr = std::move(eptr)] (view_builder& builder) {
-                // The &builder is alive, because it can only be destroyed in
-                // sharded<view_builder>::stop(), which, in turn, waits for all
-                // view_builder::stop()-s to finish, and each stop() waits for
-                // the shard's current future (called _started) to resolve.
-                if (!eptr) {
-                    if (++builder._shards_finished_read == smp::count) {
-                        builder._shards_finished_read_promise.set_value();
-                    }
-                } else {
-                    if (builder._shards_finished_read < smp::count) {
-                        builder._shards_finished_read = smp::count;
-                        builder._shards_finished_read_promise.set_exception(std::move(eptr));
-                    }
-                }
-                return builder._shards_finished_read_promise.get_shared_future();
-            });
+            fail.cancel();
+            barrier.arrive_and_wait().get();
         }).then([this, &vbi] {
             return calculate_shard_build_step(vbi);
         }).then([this] {
@@ -2066,6 +2046,8 @@ future<> view_builder::start(service::migration_manager& mm) {
             } catch (const seastar::sleep_aborted& e) {
                 ll = log_level::debug;
             } catch (const seastar::abort_requested_exception& e) {
+                ll = log_level::debug;
+            } catch (const utils::barrier_aborted_exception& e) {
                 ll = log_level::debug;
             }
             vlogger.log(ll, "start aborted: {}", ex);

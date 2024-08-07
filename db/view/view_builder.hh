@@ -11,6 +11,7 @@
 #include "query-request.hh"
 #include "service/migration_listener.hh"
 #include "utils/serialized_action.hh"
+#include "utils/cross-shard-barrier.hh"
 #include "replica/database.hh"
 
 #include <seastar/core/abort_source.hh>
@@ -164,10 +165,6 @@ class view_builder final : public service::migration_listener::only_view_notific
     future<> _started = make_ready_future<>();
     // Used to coordinate between shards the conclusion of the build process for a particular view.
     std::unordered_set<table_id> _built_views;
-    // Counter and promise (both on shard 0 only!) allowing to wait for all
-    // shards to have read the view build statuses
-    unsigned _shards_finished_read = 0;
-    seastar::shared_promise<> _shards_finished_read_promise;
     // Used for testing.
     std::unordered_map<std::pair<sstring, sstring>, seastar::shared_promise<>, utils::tuple_hash> _build_notifiers;
     stats _stats;
@@ -198,7 +195,7 @@ public:
      * Requires that all views have been loaded from the system tables and are accessible
      * through the database, and that the commitlog has been replayed.
      */
-    future<> start(service::migration_manager&);
+    future<> start(service::migration_manager&, utils::cross_shard_barrier b = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}));
 
     /**
      * Drains view building in order to prepare it for shutdown.
