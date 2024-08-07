@@ -2008,17 +2008,16 @@ void view_builder::setup_metrics() {
 future<> view_builder::start_in_background(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
     try {
         view_builder_init_state vbi;
-        co_await seastar::async([this, &mm, &vbi, barrier = std::move(barrier)] mutable {
             auto fail = defer([&barrier] mutable { barrier.abort(); });
             // Guard the whole startup routine with a semaphore,
             // so that it's not intercepted by `on_drop_view`, `on_create_view`
             // or `on_update_view` events.
-            auto units = get_units(_sem, 1).get();
+            auto units = co_await get_units(_sem, 1);
             // Wait for schema agreement even if we're a seed node.
-            mm.wait_for_schema_agreement(_db, db::timeout_clock::time_point::max(), &_as).get();
+            co_await mm.wait_for_schema_agreement(_db, db::timeout_clock::time_point::max(), &_as);
 
-            auto built = _sys_ks.load_built_views().get();
-            auto in_progress = _sys_ks.load_view_build_progress().get();
+            auto built = co_await _sys_ks.load_built_views();
+            auto in_progress = co_await _sys_ks.load_view_build_progress();
             setup_shard_build_step(vbi, std::move(built), std::move(in_progress));
             // All shards need to arrive at the same decisions on whether or not to
             // restart a view build at some common token (reshard), and which token
@@ -2028,8 +2027,9 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
             // building and finish a build step - before the slowest shard even read
             // the view build information.
             fail.cancel();
-            barrier.arrive_and_wait().get();
-        });
+            co_await barrier.arrive_and_wait();
+            units.return_all();
+
             co_await calculate_shard_build_step(vbi);
             _mnotifier.register_listener(this);
             _current_step = _base_to_build_step.begin();
