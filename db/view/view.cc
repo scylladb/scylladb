@@ -2006,8 +2006,9 @@ void view_builder::setup_metrics() {
 }
 
 future<> view_builder::start_in_background(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
-    return do_with(view_builder_init_state{}, [this, &mm, barrier = std::move(barrier)] (view_builder_init_state& vbi) {
-        return seastar::async([this, &mm, &vbi, barrier = std::move(barrier)] mutable {
+    try {
+        view_builder_init_state vbi;
+        co_await seastar::async([this, &mm, &vbi, barrier = std::move(barrier)] mutable {
             auto fail = defer([&barrier] mutable { barrier.abort(); });
             // Guard the whole startup routine with a semaphore,
             // so that it's not intercepted by `on_drop_view`, `on_create_view`
@@ -2028,18 +2029,14 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
             // the view build information.
             fail.cancel();
             barrier.arrive_and_wait().get();
-        }).then([this, &vbi] {
-            return calculate_shard_build_step(vbi);
-        }).then([this] {
+        });
+            co_await calculate_shard_build_step(vbi);
             _mnotifier.register_listener(this);
             _current_step = _base_to_build_step.begin();
             // Waited on indirectly in stop().
             (void)_build_step.trigger();
-            return make_ready_future<>();
-        });
-    }).then_wrapped([] (future<> f) {
-        if (f.failed()) {
-            auto ex = f.get_exception();
+    } catch (...) {
+            auto ex = std::current_exception();
             auto ll = log_level::error;
             try {
                 std::rethrow_exception(ex);
@@ -2051,8 +2048,7 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
                 ll = log_level::debug;
             }
             vlogger.log(ll, "start aborted: {}", ex);
-        }
-    });
+    }
 }
 
 future<> view_builder::start(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
