@@ -1245,6 +1245,7 @@ alternator = [
        'alternator/expressions.cc',
        Antlr3Grammar('alternator/expressions.g'),
        'alternator/conditions.cc',
+       'alternator/consumed_capacity.cc',
        'alternator/auth.cc',
        'alternator/streams.cc',
        'alternator/ttl.cc',

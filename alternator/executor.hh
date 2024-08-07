@@ -22,6 +22,7 @@
 #include "stats.hh"
 #include "utils/rjson.hh"
 #include "utils/updateable_value.hh"
+#include "alternator/consumed_capacity.hh"
 
 namespace db {
     class system_distributed_keyspace;
@@ -67,7 +68,7 @@ public:
  * (very) large objects as there are overhead issues with this
  * as well, but for massive lists of return objects this can
  * help avoid large allocations/many re-allocs
- */ 
+ */
 json::json_return_type make_streamed(rjson::value&&);
 
 struct json_string : public json::jsonable {
@@ -224,7 +225,7 @@ private:
     friend class rmw_operation;
 
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr);
-    
+
 public:
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&);
 
@@ -232,7 +233,8 @@ public:
         const query::partition_slice&,
         const cql3::selection::selection&,
         const query::result&,
-        const std::optional<attrs_to_get>&);
+        const std::optional<attrs_to_get>&,
+        consumed_capacity_counter&);
 
     static future<std::vector<rjson::value>> describe_multi_item(schema_ptr schema,
         const query::partition_slice&& slice,
