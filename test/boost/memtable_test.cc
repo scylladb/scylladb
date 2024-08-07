@@ -7,6 +7,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <boost/test/framework.hpp>
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "utils/assert.hh"
@@ -1174,7 +1175,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
     });
 }
 
-static future<> exceptions_in_flush_helper(std::unique_ptr<sstables::file_io_extension> mep, bool& should_fail, const bool& did_fail) {
+static future<> exceptions_in_flush_helper(std::unique_ptr<sstables::file_io_extension> mep, bool& should_fail, const bool& did_fail, bool expect_isolate) {
     auto ext = std::make_shared<db::extensions>();
     auto cfg = seastar::make_shared<db::config>(ext);
 
@@ -1208,32 +1209,37 @@ static future<> exceptions_in_flush_helper(std::unique_ptr<sstables::file_io_ext
         testlog.debug("Reset fail trigger");
 
         should_fail = false;
-        bool isolated = false;
-        // can't use eventually_true here, because neither we nor the invoke on shard 0 is in seastar
-        // thread.
-        for (int i = 0; i < 10; ++i) {
-            isolated = co_await env.get_storage_service().invoke_on(0, [&](service::storage_service& ss) {
-                return ss.is_isolated(); 
-            });
-            if (isolated) {
-                break;
+
+        if (expect_isolate) {
+            bool isolated = false;
+            // can't use eventually_true here, because neither we nor the invoke on shard 0 is in seastar
+            // thread.
+            for (int i = 0; i < 10; ++i) {
+                isolated = co_await env.get_storage_service().invoke_on(0, [&](service::storage_service& ss) {
+                    return ss.is_isolated(); 
+                });
+                if (isolated) {
+                    break;
+                }
+                // isolation is not syncnronous;
+                co_await sleep(2s);
             }
-            // isolation is not syncnronous;
-            co_await sleep(2s);
+
+            BOOST_REQUIRE(isolated);
         }
 
-        BOOST_REQUIRE(isolated);
         testlog.debug("Trying to stop");
 
         co_await std::move(f);
     }, cfg);
 }
 
-SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_write) {
+static future<> exceptions_in_flush_on_sstable_write_helper(std::function<void()> throw_func, bool expect_isolate = true) {
     class myext : public sstables::file_io_extension {
     public:
         bool should_fail = false;
         bool did_fail = false;
+        std::function<void()> throw_func;
 
         future<file> wrap_file(sstable& t, component_type type, file f, open_flags flags) override {
             if (should_fail) {
@@ -1249,7 +1255,7 @@ SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_write) {
                         if (_myext.should_fail) {
                             _myext.did_fail = true;
                             testlog.debug("Throwing exception");
-                            throw std::system_error(EACCES, std::system_category());
+                            _myext.throw_func();
                         }
                     }
                     future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
@@ -1316,10 +1322,36 @@ SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_write) {
     };
     auto mep = std::make_unique<myext>();
     auto& me = *mep;
-    co_await exceptions_in_flush_helper(std::move(mep), me.should_fail, me.did_fail);
+    me.throw_func = std::move(throw_func);
+    co_await exceptions_in_flush_helper(std::move(mep), me.should_fail, me.did_fail, expect_isolate);
 }
 
-SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_open) {
+SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_write) {
+    co_await exceptions_in_flush_on_sstable_write_helper(
+        [] { throw std::system_error(EACCES, std::system_category()); }
+    );
+}
+
+SEASTAR_TEST_CASE(test_ext_permission_exceptions_in_flush_on_sstable_write) {
+    co_await exceptions_in_flush_on_sstable_write_helper(
+        [] { throw db::extension_storage_permission_error(get_name()); }
+    );
+}
+
+SEASTAR_TEST_CASE(test_ext_resource_exceptions_in_flush_on_sstable_write) {
+    co_await exceptions_in_flush_on_sstable_write_helper(
+        [] { throw db::extension_storage_resource_unavailable(get_name()); }
+        , false // equal no ENOENT
+    );
+}
+
+SEASTAR_TEST_CASE(test_ext_config_exceptions_in_flush_on_sstable_write) {
+    co_await exceptions_in_flush_on_sstable_write_helper(
+        [] { throw db::extension_storage_misconfigured(get_name()); }
+    );
+}
+
+static future<> exceptions_in_flush_on_sstable_open_helper(std::function<void()> throw_func, bool expect_isolate = true) {
     auto ext = std::make_shared<db::extensions>();
     auto cfg = seastar::make_shared<db::config>(ext);
 
@@ -1327,17 +1359,44 @@ SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_open) {
     public:
         bool should_fail = false;
         bool did_fail = false;
+        std::function<void()> throw_func;
 
         future<file> wrap_file(sstable& t, component_type type, file f, open_flags flags) override {
             if (should_fail) {
                 did_fail = true;
                 testlog.debug("Throwing exception");
-                throw std::system_error(EACCES, std::system_category());
+                throw_func();
             }
             co_return f;
         }
     };
     auto mep = std::make_unique<myext>();
     auto& me = *mep;
-    co_await exceptions_in_flush_helper(std::move(mep), me.should_fail, me.did_fail);
+    me.throw_func = std::move(throw_func);;
+    co_await exceptions_in_flush_helper(std::move(mep), me.should_fail, me.did_fail, expect_isolate);
+}
+
+SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_open) {
+    co_await exceptions_in_flush_on_sstable_open_helper(
+        [] { throw std::system_error(EACCES, std::system_category()); }
+    );
+}
+
+SEASTAR_TEST_CASE(test_ext_permission_exceptions_in_flush_on_sstable_open) {
+    co_await exceptions_in_flush_on_sstable_open_helper(
+        [] { throw db::extension_storage_permission_error(get_name()); }
+    );
+}
+
+SEASTAR_TEST_CASE(test_ext_resource_exceptions_in_flush_on_sstable_open) {
+    co_await exceptions_in_flush_on_sstable_open_helper(
+        [] { throw db::extension_storage_resource_unavailable(get_name()); }
+        , false // equal no ENOENT
+    );
+}
+
+SEASTAR_TEST_CASE(test_ext_config_exceptions_in_flush_on_sstable_open) {
+    co_await exceptions_in_flush_on_sstable_open_helper(
+        [] { throw db::extension_storage_misconfigured(get_name()); }
+    );
 }

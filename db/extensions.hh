@@ -15,6 +15,7 @@
 #include <variant>
 #include <vector>
 #include <unordered_set>
+#include <exception>
 
 #include <seastar/core/sstring.hh>
 
@@ -120,4 +121,35 @@ private:
     std::map<sstring, commitlog_file_extension_ptr> _commitlog_file_extensions;
     std::unordered_set<std::string> _extension_internal_keyspaces;
 };
+
+class extension_storage_exception : public std::exception {
+private:
+    std::string _message;
+public:
+    extension_storage_exception(std::string message) noexcept
+        : _message(std::move(message))
+    {}
+    extension_storage_exception(extension_storage_exception&&) = default;
+    extension_storage_exception(const extension_storage_exception&) = default;
+
+    const char* what() const noexcept override {
+        return _message.c_str();
+    }
+};
+
+class extension_storage_resource_unavailable : public extension_storage_exception {
+public:
+    using extension_storage_exception::extension_storage_exception;
+};
+
+class extension_storage_permission_error : public extension_storage_exception {
+public:
+    using extension_storage_exception::extension_storage_exception;
+};
+
+class extension_storage_misconfigured : public extension_storage_exception {
+public:
+    using extension_storage_exception::extension_storage_exception;
+};
+
 }
