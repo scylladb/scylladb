@@ -2008,46 +2008,46 @@ void view_builder::setup_metrics() {
 future<> view_builder::start_in_background(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
     try {
         view_builder_init_state vbi;
-            auto fail = defer([&barrier] mutable { barrier.abort(); });
-            // Guard the whole startup routine with a semaphore,
-            // so that it's not intercepted by `on_drop_view`, `on_create_view`
-            // or `on_update_view` events.
-            auto units = co_await get_units(_sem, 1);
-            // Wait for schema agreement even if we're a seed node.
-            co_await mm.wait_for_schema_agreement(_db, db::timeout_clock::time_point::max(), &_as);
+        auto fail = defer([&barrier] mutable { barrier.abort(); });
+        // Guard the whole startup routine with a semaphore,
+        // so that it's not intercepted by `on_drop_view`, `on_create_view`
+        // or `on_update_view` events.
+        auto units = co_await get_units(_sem, 1);
+        // Wait for schema agreement even if we're a seed node.
+        co_await mm.wait_for_schema_agreement(_db, db::timeout_clock::time_point::max(), &_as);
 
-            auto built = co_await _sys_ks.load_built_views();
-            auto in_progress = co_await _sys_ks.load_view_build_progress();
-            setup_shard_build_step(vbi, std::move(built), std::move(in_progress));
-            // All shards need to arrive at the same decisions on whether or not to
-            // restart a view build at some common token (reshard), and which token
-            // to restart at. So we need to wait until all shards have read the view
-            // build statuses before they can all proceed to make the (same) decision.
-            // If we don't synchronize here, a fast shard may make a decision, start
-            // building and finish a build step - before the slowest shard even read
-            // the view build information.
-            fail.cancel();
-            co_await barrier.arrive_and_wait();
-            units.return_all();
+        auto built = co_await _sys_ks.load_built_views();
+        auto in_progress = co_await _sys_ks.load_view_build_progress();
+        setup_shard_build_step(vbi, std::move(built), std::move(in_progress));
+        // All shards need to arrive at the same decisions on whether or not to
+        // restart a view build at some common token (reshard), and which token
+        // to restart at. So we need to wait until all shards have read the view
+        // build statuses before they can all proceed to make the (same) decision.
+        // If we don't synchronize here, a fast shard may make a decision, start
+        // building and finish a build step - before the slowest shard even read
+        // the view build information.
+        fail.cancel();
+        co_await barrier.arrive_and_wait();
+        units.return_all();
 
-            co_await calculate_shard_build_step(vbi);
-            _mnotifier.register_listener(this);
-            _current_step = _base_to_build_step.begin();
-            // Waited on indirectly in stop().
-            (void)_build_step.trigger();
+        co_await calculate_shard_build_step(vbi);
+        _mnotifier.register_listener(this);
+        _current_step = _base_to_build_step.begin();
+        // Waited on indirectly in stop().
+        (void)_build_step.trigger();
     } catch (...) {
-            auto ex = std::current_exception();
-            auto ll = log_level::error;
-            try {
-                std::rethrow_exception(ex);
-            } catch (const seastar::sleep_aborted& e) {
-                ll = log_level::debug;
-            } catch (const seastar::abort_requested_exception& e) {
-                ll = log_level::debug;
-            } catch (const utils::barrier_aborted_exception& e) {
-                ll = log_level::debug;
-            }
-            vlogger.log(ll, "start aborted: {}", ex);
+        auto ex = std::current_exception();
+        auto ll = log_level::error;
+        try {
+            std::rethrow_exception(ex);
+        } catch (const seastar::sleep_aborted& e) {
+            ll = log_level::debug;
+        } catch (const seastar::abort_requested_exception& e) {
+            ll = log_level::debug;
+        } catch (const utils::barrier_aborted_exception& e) {
+            ll = log_level::debug;
+        }
+        vlogger.log(ll, "start aborted: {}", ex);
     }
 }
 
