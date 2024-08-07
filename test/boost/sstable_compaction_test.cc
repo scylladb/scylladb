@@ -5334,6 +5334,28 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
             BOOST_REQUIRE_EQUAL(classify_fn(sst->get_first_decorated_key().token()), classify_fn(sst->get_last_decorated_key().token()));
             BOOST_REQUIRE_EQUAL(window_for(sst->get_stats_metadata().min_timestamp), window_for(sst->get_stats_metadata().max_timestamp));
         }
-        BOOST_REQUIRE(ret.new_sstables.size() == 4); // 2 token groups * 2 windows.
+        const size_t expected_output_size = 4; // 2 token groups * 2 windows.
+        BOOST_REQUIRE(ret.new_sstables.size() == expected_output_size);
+
+        auto& cm = t->get_compaction_manager();
+        auto split_opt = compaction_type_options::split{classify_fn};
+        auto new_ssts = cm.maybe_split_sstable(input, t.as_table_state(), split_opt).get();
+        BOOST_REQUIRE(new_ssts.size() == expected_output_size);
+        for (auto& sst : new_ssts) {
+            // split sstables don't require further split.
+            auto ssts = cm.maybe_split_sstable(sst, t.as_table_state(), split_opt).get();
+            BOOST_REQUIRE(ssts.size() == 1);
+            BOOST_REQUIRE(ssts.front() == sst);
+        }
+        // test exception propagation
+        auto throwing_classifier = [&] (dht::token t) -> mutation_writer::token_group_id {
+            // skip first and last token, to not trigger exception when checking if sstable needs split.
+            if (t != input->get_first_decorated_key().token() && t != input->get_last_decorated_key().token()) {
+                throw std::runtime_error("exception");
+            }
+            return classify_fn(t);
+        };
+        BOOST_REQUIRE_THROW(cm.maybe_split_sstable(input, t.as_table_state(), compaction_type_options::split{throwing_classifier}).get(),
+                            std::runtime_error);
     });
 }

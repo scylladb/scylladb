@@ -1531,11 +1531,16 @@ protected:
         co_return stats;
     }
 
-    virtual sstables::compaction_descriptor make_descriptor(const sstables::shared_sstable& sst) const {
+    static sstables::compaction_descriptor
+    make_descriptor(const sstables::shared_sstable& sst, const sstables::compaction_type_options& opt, owned_ranges_ptr owned_ranges = {}) {
         auto sstable_level = sst->get_sstable_level();
         auto run_identifier = sst->run_identifier();
         return sstables::compaction_descriptor({ sst },
-            sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options, _owned_ranges_ptr);
+            sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, opt, owned_ranges);
+    }
+
+    virtual sstables::compaction_descriptor make_descriptor(const sstables::shared_sstable& sst) const {
+        return make_descriptor(sst, _options, _owned_ranges_ptr);
     }
 
     virtual future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) {
@@ -1589,15 +1594,24 @@ public:
             , _opt(options.as<sstables::compaction_type_options::split>())
     {
     }
+
+    static bool sstable_needs_split(const sstables::shared_sstable& sst, const sstables::compaction_type_options::split& opt) {
+        return opt.classifier(sst->get_first_decorated_key().token()) != opt.classifier(sst->get_last_decorated_key().token());
+    }
+
+    static sstables::compaction_descriptor
+    make_descriptor(const sstables::shared_sstable& sst, const sstables::compaction_type_options::split& split_opt) {
+        auto opt = sstables::compaction_type_options::make_split(split_opt.classifier);
+        return rewrite_sstables_compaction_task_executor::make_descriptor(sst, std::move(opt));
+    }
 private:
     bool sstable_needs_split(const sstables::shared_sstable& sst) const {
-        return _opt.classifier(sst->get_first_decorated_key().token()) != _opt.classifier(sst->get_last_decorated_key().token());
+        return sstable_needs_split(sst, _opt);
     }
+
 protected:
     sstables::compaction_descriptor make_descriptor(const sstables::shared_sstable& sst) const override {
-        auto desc = rewrite_sstables_compaction_task_executor::make_descriptor(sst);
-        desc.options = sstables::compaction_type_options::make_split(_opt.classifier);
-        return desc;
+        return make_descriptor(sst, _opt);
     }
 
     future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) override {
@@ -2032,6 +2046,30 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
     auto options = sstables::compaction_type_options::make_split(std::move(opt.classifier));
 
     return perform_task_on_all_files<split_compaction_task_executor>(info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_sstables));
+}
+
+future<std::vector<sstables::shared_sstable>>
+compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, table_state& t, sstables::compaction_type_options::split opt) {
+    if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
+        co_return std::vector<sstables::shared_sstable>{sst};
+    }
+    std::vector<sstables::shared_sstable> ret;
+
+    co_await run_custom_job(t, sstables::compaction_type::Split, "Split SSTable",
+                            [&] (sstables::compaction_data& info, sstables::compaction_progress_monitor& monitor) -> future<> {
+        sstables::compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
+        desc.creator = [&t] (shard_id _) {
+            return t.make_sstable();
+        };
+        desc.replacer = [&] (sstables::compaction_completion_desc d) {
+            std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));
+        };
+
+        co_await sstables::compact_sstables(std::move(desc), info, t, monitor);
+        co_await sst->unlink();
+    }, tasks::task_info{}, throw_if_stopping::yes);
+
+    co_return ret;
 }
 
 // Submit a table to be scrubbed and wait for its termination.
