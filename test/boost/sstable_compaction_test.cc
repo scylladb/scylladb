@@ -2262,6 +2262,33 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         BOOST_REQUIRE_NE(errors, 0);
         BOOST_REQUIRE_EQUAL(errors, count);
     }
+
+    BOOST_TEST_MESSAGE("malformed_sstable_exception");
+    {
+        frags.emplace_back(make_partition_start(0));
+        frags.emplace_back(make_clustering_row(0));
+        frags.emplace_back(make_partition_end());
+
+        uint64_t count = 0;
+        auto sst = make_sst(std::move(frags));
+
+        // Corrupt the data to cause an invalid checksum.
+        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+        const auto wbuf_align = f.memory_dma_alignment();
+        const auto wbuf_len = f.disk_write_dma_alignment();
+        auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
+        std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
+        f.dma_write(0, wbuf.get(), wbuf_len).get();
+        f.close().get();
+
+        auto valid = sstables::validate_checksums(sst, permit).get();
+        BOOST_REQUIRE_EQUAL(valid, false);
+
+
+        const auto errors = sst->validate(permit, abort, error_handler{count}).get();
+        BOOST_REQUIRE_NE(errors, 0);
+        BOOST_REQUIRE_EQUAL(errors, count);
+    }
   });
 }
 
