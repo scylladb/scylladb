@@ -238,3 +238,71 @@ async def test_view_build_status_migration_to_v2(request, manager: ManagerClient
 
     result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
     assert len(result) == 6
+
+# Start with view_build_status v1 mode, and create entries such that
+# some of them correspond to removed nodes or non-existent views.
+# Then migrate to v2 table and verify that only valid entries belonging to known nodes
+# and views are migrated to the new table.
+@pytest.mark.asyncio
+async def test_view_build_status_migration_to_v2_with_cleanup(request, manager: ManagerClient):
+    # First, force the first node to start in legacy mode
+    cfg = {'force_gossip_topology_changes': True}
+
+    servers = [await manager.server_add(config=cfg)]
+    # Enable raft-based node operations for subsequent nodes - they should fall back to
+    # using gossiper-based node operations
+    del cfg['force_gossip_topology_changes']
+
+    # We start with total 4 nodes and we will remove one of them before the migration.
+    servers += [await manager.server_add(config=cfg) for _ in range(3)]
+
+    logging.info("Waiting until driver connects to every server")
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    logging.info("Checking the upgrade state on all nodes")
+    for host in hosts:
+        status = await manager.api.raft_topology_upgrade_status(host.address)
+        assert status == "not_upgraded"
+
+    # Create a view. This will insert 4 entries to the view build status table, one for each node.
+    ks_name = await create_keyspace(cql)
+    await create_table(cql)
+    await create_mv(cql, "vt1")
+
+    await wait_for_view(cql, "vt1", 4)
+
+    result = await cql.run_async("SELECT * FROM system_distributed.view_build_status")
+    assert len(result) == 4
+
+    # Insert a row that doesn't correspond to an existing view, but does correspond to a known host.
+    # This row should get cleaned during migration.
+    await cql.run_async(f"INSERT INTO system_distributed.view_build_status(keyspace_name, view_name, host_id, status) \
+                          VALUES ('ks', 'view_doesnt_exist', {result[0].host_id}, 'SUCCESS')")
+
+    # Remove the last node. the entry for this node in the view build status remains and it
+    # corresponds now to an unknown node. The migration should remove it.
+    logging.info("Removing last node")
+    await manager.server_stop_gracefully(servers[-1].server_id)
+    await manager.remove_node(servers[0].server_id, servers[-1].server_id)
+
+    servers = servers[:-1]
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    logging.info("Triggering upgrade to raft topology")
+    await manager.api.upgrade_to_raft_topology(hosts[0].address)
+
+    logging.info("Waiting until upgrade finishes")
+    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+
+    logging.info("Checking migrated data in system")
+
+    # Wait for migration and upgrade to view build status v2.
+    await asyncio.gather(*(wait_for(lambda: view_builder_is_v2(cql, host=h), time.time() + 60) for h in hosts))
+    await wait_for_view_v2(cql, ks_name, "vt1", 3)
+
+    # Verify that after migration we kept only the entries for the known nodes and views.
+    async def rows_migrated():
+        result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
+        return (len(result) == 3) or None
+
+    await wait_for(rows_migrated, time.time() + 60)

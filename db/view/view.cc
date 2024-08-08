@@ -2587,6 +2587,23 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
     // Insert all valid rows into the new table.
     // Note the tables have the same schema.
     for (const auto& row: *rows) {
+        // Skip adding the row if it doesn't belong to a known node.
+        // In the v1 table we may have left over rows that belong to nodes that were removed
+        // and we didn't clean them, so do that now.
+        auto host_id = row.get_as<utils::UUID>("host_id");
+        if (!tmptr->get_endpoint_for_host_id_if_known(locator::host_id(host_id))) {
+            vlogger.warn("Dropping a row from view_build_status: host {} does not exist", host_id);
+            continue;
+        }
+
+        // Skip adding left over rows that don't belong to known views.
+        auto ks_name = row.get_as<sstring>("keyspace_name");
+        auto view_name = row.get_as<sstring>("view_name");
+        if (!sys_ks.local_db().has_schema(ks_name, view_name)) {
+            vlogger.warn("Dropping a row from view_build_status: view {}.{} does not exist", ks_name, view_name);
+            continue;
+        }
+
         std::vector<data_value_or_unset> values;
         for (const auto& col: schema->all_columns()) {
             if (row.has(col.name_as_text())) {
