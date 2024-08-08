@@ -62,7 +62,7 @@ The following options are available for all compaction strategies.
 =====
 
 ``tombstone_compaction_interval`` (default: 86400s (1 day))
-   An SSTable that is suitable for single SSTable compaction, according to tombstone_threshold will not be compacted if it is newer than tombstone_compaction_interval. 
+  *tombstone_compaction_interval* is lower-bound for when a new tombstone compaction can start. If an SSTable was compacted at a time *X*, the earliest time it will be considered for tombstone compaction again is *X + tombstone_compaction_interval*. This does not guarantee that sstables will be considered for compaction immediately after tombstone_compaction_interval time has elapsed after the last compaction.
 
 =====
 
