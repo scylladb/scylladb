@@ -93,12 +93,15 @@ truncate_statement::execute(query_processor& qp, service::query_state& state, co
     if (qp.db().find_schema(keyspace(), column_family())->is_view()) {
         throw exceptions::invalid_request_exception("Cannot TRUNCATE materialized view directly; must truncate base table instead");
     }
-    auto timeout_in_ms = std::chrono::duration_cast<std::chrono::milliseconds>(get_timeout(state.get_client_state(), options));
-    return qp.proxy().truncate_blocking(keyspace(), column_family(), timeout_in_ms).handle_exception([](auto ep) {
-        throw exceptions::truncate_exception(ep);
-    }).then([] {
-        return ::shared_ptr<cql_transport::messages::result_message>{};
-    });
+
+    try {
+        auto timeout_in_ms = std::chrono::duration_cast<std::chrono::milliseconds>(get_timeout(state.get_client_state(), options));
+        co_await qp.proxy().truncate_blocking(keyspace(), column_family(), timeout_in_ms);
+    } catch (...) {
+        throw exceptions::truncate_exception(std::current_exception());
+    }
+
+    co_return ::shared_ptr<cql_transport::messages::result_message>{};
 }
 
 db::timeout_clock::duration truncate_statement::get_timeout(const service::client_state& state, const query_options& options) const {
