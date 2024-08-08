@@ -103,6 +103,7 @@
 #include "service/topology_mutation.hh"
 #include "service/topology_coordinator.hh"
 #include "cql3/query_processor.hh"
+#include <csignal>
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -1640,6 +1641,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     co_await replicate_to_all_cores(std::move(tmptr));
     tmlock.reset();
 
+    utils::get_local_injector().inject("stop_after_saving_tokens",
+        [] { std::raise(SIGSTOP); });
+
     auto broadcast_rpc_address = get_token_metadata_ptr()->get_topology().my_cql_address();
     // Ensure we know our own actual Schema UUID in preparation for updates
     co_await db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service);
@@ -1682,6 +1686,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(new_generation, app_states, advertise);
+
+    utils::get_local_injector().inject("stop_after_starting_gossiping",
+        [] { std::raise(SIGSTOP); });
 
     if (!raft_topology_change_enabled() && should_bootstrap()) {
         // Wait for NORMAL state handlers to finish for existing nodes now, so that connection dropping
@@ -1848,6 +1855,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // let it know that the bootstrap is completed as well
         co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
         set_mode(mode::NORMAL);
+
+        utils::get_local_injector().inject("stop_after_setting_mode_to_normal",
+            [] { std::raise(SIGSTOP); });
 
         if (get_token_metadata().sorted_tokens().empty()) {
             auto err = ::format("join_token_ring: Sorted token in token_metadata is empty");
@@ -2023,6 +2033,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     co_await set_gossip_tokens(_gossiper, bootstrap_tokens, cdc_gen_id);
 
     set_mode(mode::NORMAL);
+
+    utils::get_local_injector().inject("stop_after_setting_mode_to_normal",
+        [] { std::raise(SIGSTOP); });
 
     if (get_token_metadata().sorted_tokens().empty()) {
         auto err = ::format("join_token_ring: Sorted token in token_metadata is empty");
@@ -5487,6 +5500,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     utils::get_local_injector().inject("stream_ranges_fail",
                                            [] { throw std::runtime_error("stream_range failed due to error injection"); });
 
+                    utils::get_local_injector().inject("stop_before_streaming",
+                        [] { std::raise(SIGSTOP); });
+
                     switch(rs.state) {
                     case node_state::bootstrapping:
                     case node_state::replacing: {
@@ -5516,6 +5532,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 co_await task->done();
                             }
                             // Bootstrap did not complete yet, but streaming did
+                            utils::get_local_injector().inject("stop_after_streaming",
+                                [] { std::raise(SIGSTOP); });
                         } else {
                             auto task = co_await get_task_manager_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
                                     parent_info.id, streaming::stream_reason::replace, _bootstrap_result, coroutine::lambda([this, &rs, &raft_server] () -> future<> {

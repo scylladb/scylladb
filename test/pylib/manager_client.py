@@ -18,7 +18,7 @@ import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, Host
-from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
+from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerState
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession, \
     ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore # pylint: disable=no-name-in-module
@@ -180,15 +180,18 @@ class ManagerClient():
         """Get number of configured replicas for the cluster (replication factor)"""
         return await self.client.get_json("/cluster/replicas")
 
-    async def running_servers(self) -> list[ServerInfo]:
-        """Get List of server info (id and IP address) of running servers"""
+    async def running_servers(self, *server_ids: int) -> list[ServerInfo]:
+        """Get List of server info (id and IP address) of running servers.
+
+        If `server_ids` provided then return ServerInfo for running servers with such ids.
+        """
         try:
             server_info_list = await self.client.get_json("/cluster/running-servers")
         except RuntimeError as exc:
             raise Exception("Failed to get list of running servers") from exc
         assert isinstance(server_info_list, list), "running_servers got unknown data type"
         return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]))
-                for info in server_info_list]
+                for info in server_info_list if not server_ids or int(info[0]) in server_ids]
 
     async def all_servers(self) -> list[ServerInfo]:
         """Get List of server info (id and IP address) of all servers"""
@@ -283,13 +286,15 @@ class ManagerClient():
         """Get the total size of all sstable files for the given table"""
         return await self.client.get_json(f"/cluster/server/{server_id}/sstables_disk_usage", params={"keyspace": keyspace, "table": table})
 
-    def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig],
+    def _create_server_add_data(self,
+                                replace_cfg: Optional[ReplaceConfig],
                                 cmdline: Optional[List[str]],
                                 config: Optional[dict[str, Any]],
                                 property_file: Optional[dict[str, Any]],
                                 start: bool,
                                 seeds: Optional[List[IPAddress]],
-                                expected_error: Optional[str]) -> dict[str, Any]:
+                                expected_error: Optional[str],
+                                expected_server_state: Optional[ServerState]) -> dict[str, Any]:
         data: dict[str, Any] = {'start': start}
         if replace_cfg:
             data['replace_cfg'] = replace_cfg._asdict()
@@ -303,19 +308,32 @@ class ManagerClient():
             data['seeds'] = seeds
         if expected_error:
             data['expected_error'] = expected_error
+        if expected_server_state:
+            data['expected_server_state'] = expected_server_state.name
         return data
 
-    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None,
+    async def server_add(self,
+                         replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
                          property_file: Optional[dict[str, Any]] = None,
                          start: bool = True,
                          expected_error: Optional[str] = None,
                          seeds: Optional[List[IPAddress]] = None,
-                         timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> ServerInfo:
+                         timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT,
+                         expected_server_state: Optional[ServerState] = None) -> ServerInfo:
         """Add a new server"""
         try:
-            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, seeds, expected_error)
+            data = self._create_server_add_data(
+                replace_cfg,
+                cmdline,
+                config,
+                property_file,
+                start,
+                seeds,
+                expected_error,
+                expected_server_state,
+            )
 
             # If we replace, we should wait until other nodes see the node being
             # replaced as dead because the replace operation can be rejected if
@@ -358,7 +376,7 @@ class ManagerClient():
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
 
         try:
-            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error)
+            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error, None)
             data['servers_num'] = servers_num
             server_infos = await self.client.put_json("/cluster/addservers", data, response_type="json",
                                                       timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)
@@ -469,6 +487,18 @@ class ManagerClient():
             return True if any(entry for entry in host_id_map if entry['value'] == expect_host_id) else None
 
         return await wait_for(host_is_known, deadline or (time() + 30))
+
+    async def wait_for_scylla_process_status(self,
+                                             server_id: ServerNum,
+                                             expected_statuses: list[str],
+                                             deadline: Optional[float] = None) -> str:
+        """Wait for Scylla's process status for server_id will be as expected, with timeout."""
+        async def process_status_is_as_expected() -> str | None:
+            current_status = await self.client.get_json(f"/cluster/server/{server_id}/process_status")
+            if current_status in expected_statuses:
+                return current_status
+
+        return await wait_for(process_status_is_as_expected, deadline or (time() + 30))
 
     async def get_host_ip(self, server_id: ServerNum) -> IPAddress:
         """Get host IP Address"""

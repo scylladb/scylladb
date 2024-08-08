@@ -13,6 +13,7 @@ import functools
 import operator
 import time
 import re
+from contextlib import suppress
 
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
@@ -366,11 +367,18 @@ async def get_coordinator_host(manager: ManagerClient) -> ServerInfo:
     """Get coordinator ServerInfo"""
 
     coordinator_host_id = (await get_coordinator_host_ids(manager))[0]
-    server_id_maps = {await manager.get_host_id(srv.server_id):srv for srv in await manager.running_servers()}
-    coordinator_host = server_id_maps.get(coordinator_host_id, None)
-    assert coordinator_host, \
-        f"Node with host id {coordinator_host_id} was not found in cluster host ids {list(server_id_maps.keys())}"
-    return coordinator_host
+    for s_info in await manager.running_servers():
+        with suppress(Exception):
+            if await manager.get_host_id(s_info.server_id) == coordinator_host_id:
+                return s_info
+    raise AssertionError(f"There is no host with id={coordinator_host_id} in the cluster")
+
+
+async def get_non_coordinator_host(manager: ManagerClient) -> ServerInfo | None:
+    """Get first non-coordinator ServerInfo."""
+
+    coordinator_id = (await get_coordinator_host(manager=manager)).server_id
+    return next((s_info for s_info in await manager.running_servers() if s_info.server_id != coordinator_id), None)
 
 
 def get_uuid_from_str(string: str) -> str:
