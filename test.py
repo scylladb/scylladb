@@ -45,6 +45,14 @@ from test.pylib import coverage_utils
 import humanfriendly
 import treelib
 
+allure_installed = False
+try:
+    import allure
+except ImportError:
+    logging.warning('Could not import allure, skipping allure report')
+else:
+    allure_installed = True
+
 launch_time = time.monotonic()
 
 output_is_a_tty = sys.stdout.isatty()
@@ -615,6 +623,7 @@ class Test:
         self.shortname = shortname
         self.mode = suite.mode
         self.suite = suite
+        self.allure_dir = pathlib.Path(suite.options.tmpdir) / self.mode / 'allure'
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}.{}".format(self.suite.name, self.shortname, self.id)
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
@@ -813,6 +822,8 @@ class CQLApprovalTest(Test):
             "--run_id={}".format(self.id),
             "--mode={}".format(self.mode),
         ]
+        if allure_installed:
+            self.args.append(f"--alluredir={self.allure_dir}")
 
     async def run(self, options: argparse.Namespace) -> Test:
         self.success = False
@@ -926,6 +937,8 @@ class RunTest(Test):
             "-o",
             "junit_suite_name={}".format(self.suite.name)
         ]
+        if allure_installed:
+            self.args.append(f"--alluredir={self.allure_dir}")
         RunTest._reset(self)
 
     def _reset(self):
@@ -966,8 +979,10 @@ class PythonTest(Test):
             "--junit-xml={}".format(self.xmlout),
             "-rs",
             "--run_id={}".format(self.id),
-            "--mode={}".format(self.mode)
+            "--mode={}".format(self.mode),
         ]
+        if allure_installed:
+            self.args.append(f"--alluredir={self.allure_dir}")
         if options.markers:
             self.args.append(f"-m={options.markers}")
 
@@ -1051,9 +1066,7 @@ class TopologyTest(PythonTest):
 
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
         async with get_cluster_manager(self.mode + '/' + self.uname, self.suite.clusters, test_path) as manager:
-            self.args.insert(0, "--run_id={}".format(self.id))
             self.args.insert(0, "--tmpdir={}".format(options.tmpdir))
-            self.args.insert(0, "--mode={}".format(self.mode))
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
             if options.artifacts_dir_url:
                 self.args.insert(0, "--artifacts_dir_url={}".format(options.artifacts_dir_url))
@@ -1096,8 +1109,10 @@ class ToolTest(Test):
             "junit_family=xunit2",
             "--junit-xml={}".format(self.xmlout),
             "--mode={}".format(self.mode),
-            "--run_id={}".format(self.id)
+            "--run_id={}".format(self.id),
         ]
+        if allure_installed:
+            self.args.append(f"--alluredir={self.allure_dir}")
         if options.markers:
             self.args.append(f"-m={options.markers}")
 
@@ -1430,6 +1445,7 @@ def parse_cmd_line() -> argparse.Namespace:
         prepare_dir(os.path.join(args.tmpdir, mode, "xml"), "*.xml")
         shutil.rmtree(os.path.join(args.tmpdir, mode, "failed_test"), ignore_errors=True)
         prepare_dir(os.path.join(args.tmpdir, mode, "failed_test"), "*")
+        prepare_dir(os.path.join(args.tmpdir, mode, "allure"), "*.xml")
 
     # Get the list of tests configured by configure.py
     try:
