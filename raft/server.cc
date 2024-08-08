@@ -1353,10 +1353,7 @@ future<> server_impl::applier_fiber() {
                 // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
                 auto last_snap_idx = _fsm->log_last_snapshot_idx();
 
-                // Error injection to be set with one_shot
-                utils::get_local_injector().inject("raft_server_snapshot_reduce_threshold",
-                    [this] { _config.snapshot_threshold = 3; _config.snapshot_trailing = 1; });
-
+                // Use error injection to override the snapshot thresholds.
                 co_await override_snapshot_thresholds();
 
                 bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
