@@ -3339,9 +3339,7 @@ repair_service::insert_repair_meta(
             reason,
             compaction_time] (schema_ptr s) {
         auto& db = get_db();
-        auto& cf = db.local().find_column_family(s->id());
-        return db.local().obtain_reader_permit(cf, "repair-meta", db::no_timeout, {}).then([s = std::move(s),
-                &cf,
+        return db.local().obtain_reader_permit(db.local().find_column_family(s->id()), "repair-meta", db::no_timeout, {}).then([s = std::move(s),
                 this,
                 from,
                 repair_meta_id,
@@ -3354,7 +3352,7 @@ repair_service::insert_repair_meta(
                 compaction_time] (reader_permit permit) mutable {
         node_repair_meta_id id{from, repair_meta_id};
         auto rm = seastar::make_shared<repair_meta>(*this,
-                cf,
+                get_db().local().find_column_family(s->id()),
                 s,
                 std::move(permit),
                 range,
