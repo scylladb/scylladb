@@ -335,6 +335,8 @@ private:
     }
     future<> do_on_leader_with_retries(seastar::abort_source* as, AsyncAction&& action);
 
+    future<> override_snapshot_thresholds();
+
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
 
@@ -1355,6 +1357,8 @@ future<> server_impl::applier_fiber() {
                utils::get_local_injector().inject("raft_server_snapshot_reduce_threshold",
                    [this] { _config.snapshot_threshold = 3; _config.snapshot_trailing = 1; });
 
+               co_await override_snapshot_thresholds();
+
                bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
 
                if (force_snapshot || (_applied_idx > last_snap_idx &&
@@ -1888,4 +1892,27 @@ std::ostream& operator<<(std::ostream& os, const server_impl& s) {
     return os;
 }
 
+future<> server_impl::override_snapshot_thresholds() {
+    return utils::get_local_injector().inject("raft_server_set_snapshot_thresholds", [this](auto& handler) -> future<> {
+        const auto set_parameter = [&handler](auto& target, const std::string_view name) -> void {
+            const auto from = handler.get(name);
+            if (from) {
+                try {
+                    target = boost::lexical_cast<std::remove_reference_t<decltype(target)>>(*from);
+                    logger.info("Applied _config.{}={}", name, *from);
+                } catch (const boost::bad_lexical_cast& e) {
+                    on_internal_error(
+                        logger, fmt::format("Could not apply a snapshot threshold param: {}, value: {}, error: {}",
+                                            name, *from, e.what()));
+                }
+            }
+        };
+
+        set_parameter(_config.snapshot_threshold, "snapshot_threshold");
+        set_parameter(_config.snapshot_threshold_log_size, "snapshot_threshold_log_size");
+        set_parameter(_config.snapshot_trailing, "snapshot_trailing");
+        set_parameter(_config.snapshot_trailing_size, "snapshot_trailing_size");
+        return make_ready_future<>();
+    });
+}
 } // end of namespace raft
