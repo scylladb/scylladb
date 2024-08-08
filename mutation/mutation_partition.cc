@@ -1702,7 +1702,7 @@ static bool dead_marker_shadows_row(const schema& s, column_kind kind, const row
             && kind == column_kind::regular_column; // not applicable to static rows
 }
 
-bool row::compact_and_expire(
+compact_and_expire_result row::compact_and_expire(
         const schema& s,
         column_kind kind,
         row_tombstone tomb,
@@ -1715,7 +1715,7 @@ bool row::compact_and_expire(
     if (dead_marker_shadows_row(s, kind, marker)) {
         tomb.apply(shadowable_tombstone(api::max_timestamp, gc_clock::time_point::max()), row_marker());
     }
-    bool any_live = false;
+    compact_and_expire_result res{};
     remove_if([&] (column_id id, atomic_cell_or_collection& c) {
         bool erase = false;
         const column_definition& def = s.column_at(kind, id);
@@ -1727,8 +1727,10 @@ bool row::compact_and_expire(
 
             if (cell.is_covered_by(tomb.regular(), def.is_counter())) {
                 erase = true;
+                res.dead_cells++;
             } else if (cell.is_covered_by(tomb.shadowable().tomb(), def.is_counter())) {
                 erase = true;
+                res.dead_cells++;
             } else if (cell.has_expired(query_time)) {
                 erase = can_erase_cell();
                 if (!erase) {
@@ -1736,18 +1738,20 @@ bool row::compact_and_expire(
                 } else if (collector) {
                     collector->collect(id, atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
                 }
+                res.dead_cells++;
             } else if (!cell.is_live()) {
                 erase = can_erase_cell();
                 if (erase && collector) {
                     collector->collect(id, atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
                 }
+                res.dead_cells++;
             } else {
-                any_live = true;
+                res.live_cells++;
             }
         } else {
             c.as_collection_mutation().with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
                 auto m = m_view.materialize(*def.type);
-                any_live |= m.compact_and_expire(id, tomb, query_time, can_gc, gc_before, collector);
+                res += m.compact_and_expire(id, tomb, query_time, can_gc, gc_before, collector);
                 if (m.cells.empty() && m.tomb <= tomb.tomb()) {
                     erase = true;
                 } else {
@@ -1757,10 +1761,10 @@ bool row::compact_and_expire(
         }
         return erase;
     });
-    return any_live;
+    return res;
 }
 
-bool row::compact_and_expire(
+compact_and_expire_result row::compact_and_expire(
         const schema& s,
         column_kind kind,
         row_tombstone tomb,
@@ -1784,7 +1788,7 @@ bool lazy_row::compact_and_expire(
     if (!_row) {
         return false;
     }
-    return _row->compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, marker, collector);
+    return _row->compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, marker, collector).is_live();
 }
 
 bool lazy_row::compact_and_expire(
@@ -1798,7 +1802,7 @@ bool lazy_row::compact_and_expire(
     if (!_row) {
         return false;
     }
-    return _row->compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, collector);
+    return _row->compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, collector).is_live();
 }
 
 std::ostream& operator<<(std::ostream& os, const lazy_row::printer& p) {
@@ -1818,7 +1822,7 @@ bool deletable_row::compact_and_expire(const schema& s,
 
     apply(tomb);
     bool is_live = marker().compact_and_expire(deleted_at().tomb(), query_time, can_gc, gc_before);
-    is_live |= cells().compact_and_expire(s, column_kind::regular_column, deleted_at(), query_time, can_gc, gc_before, marker(), collector);
+    is_live |= cells().compact_and_expire(s, column_kind::regular_column, deleted_at(), query_time, can_gc, gc_before, marker(), collector).is_live();
 
     if (deleted_at().tomb() <= tomb || should_purge_row_tombstone(deleted_at())) {
         remove_tombstone();

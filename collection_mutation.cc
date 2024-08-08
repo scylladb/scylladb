@@ -167,10 +167,13 @@ collection_mutation_view_description::materialize(const abstract_type& type) con
     return m;
 }
 
-bool collection_mutation_description::compact_and_expire(column_id id, row_tombstone base_tomb, gc_clock::time_point query_time,
+compact_and_expire_result collection_mutation_description::compact_and_expire(column_id id, row_tombstone base_tomb, gc_clock::time_point query_time,
     can_gc_fn& can_gc, gc_clock::time_point gc_before, compaction_garbage_collector* collector)
 {
-    bool any_live = false;
+    compact_and_expire_result res{};
+    if (tomb) {
+        res.collection_tombstones++;
+    }
     auto t = tomb;
     tombstone purged_tomb;
     if (tomb <= base_tomb.regular()) {
@@ -189,6 +192,7 @@ bool collection_mutation_description::compact_and_expire(column_id id, row_tombs
         };
 
         if (cell.is_covered_by(t, false) || cell.is_covered_by(base_tomb.shadowable().tomb(), false)) {
+            res.dead_cells++;
             continue;
         }
         if (cell.has_expired(query_time)) {
@@ -199,22 +203,24 @@ bool collection_mutation_description::compact_and_expire(column_id id, row_tombs
                 losers.emplace_back(std::pair(
                         std::move(name_and_cell.first), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time())));
             }
+            res.dead_cells++;
         } else if (!cell.is_live()) {
             if (cannot_erase_cell()) {
                 survivors.emplace_back(std::move(name_and_cell));
             } else if (collector) {
                 losers.emplace_back(std::move(name_and_cell));
             }
+            res.dead_cells++;
         } else {
-            any_live |= true;
             survivors.emplace_back(std::move(name_and_cell));
+            res.live_cells++;
         }
     }
     if (collector) {
         collector->collect(id, collection_mutation_description{purged_tomb, std::move(losers)});
     }
     cells = std::move(survivors);
-    return any_live;
+    return res;
 }
 
 template <typename Iterator>

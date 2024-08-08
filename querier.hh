@@ -145,7 +145,13 @@ public:
 ///     page. It should be dropped instead and a new one should be created
 ///     instead.
 class querier : public querier_base {
+    static thread_local logger::rate_limit row_tombstone_warn_rate_limit;
+    static thread_local logger::rate_limit cell_tombstone_warn_rate_limit;
+
     lw_shared_ptr<compact_for_query_state_v2> _compaction_state;
+
+private:
+    void maybe_log_tombstone_warning(std::string_view what, uint64_t live, uint64_t dead, logger::rate_limit& rl);
 
 public:
     querier(const mutation_source& ms,
@@ -173,7 +179,7 @@ public:
         return ::query::consume_page(std::get<mutation_reader>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
                 partition_limit, query_time).then_wrapped([this, trace_ptr = std::move(trace_ptr)] (auto&& fut) {
             const auto& cstats = _compaction_state->stats();
-            tracing::trace(trace_ptr, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
+            tracing::trace(trace_ptr, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead), {} range tombstone(s) and {} cell(s) ({} live, {} dead)",
                     cstats.partitions,
                     cstats.static_rows.total(),
                     cstats.static_rows.live,
@@ -181,18 +187,16 @@ public:
                     cstats.clustering_rows.total(),
                     cstats.clustering_rows.live,
                     cstats.clustering_rows.dead,
-                    cstats.range_tombstones);
-            auto dead = cstats.static_rows.dead + cstats.clustering_rows.dead + cstats.range_tombstones;
-            if (_qr_config.tombstone_warn_threshold > 0 && dead >= _qr_config.tombstone_warn_threshold) {
-                auto live = cstats.static_rows.live + cstats.clustering_rows.live;
-                if (_range->is_singular()) {
-                    qrlogger.warn("Read {} live rows and {} tombstones for {}.{} partition key \"{}\" {} (see tombstone_warn_threshold)",
-                                  live, dead, _schema->ks_name(), _schema->cf_name(), _range->start()->value().key()->with_schema(*_schema), (*_range));
-                } else {
-                    qrlogger.warn("Read {} live rows and {} tombstones for {}.{} <partition-range-scan> {} (see tombstone_warn_threshold)",
-                                  live, dead, _schema->ks_name(), _schema->cf_name(), (*_range));
-                }
-            }
+                    cstats.range_tombstones,
+                    cstats.live_cells() + cstats.dead_cells(),
+                    cstats.live_cells(),
+                    cstats.dead_cells());
+            maybe_log_tombstone_warning(
+                    "rows",
+                    cstats.static_rows.live + cstats.clustering_rows.live,
+                    cstats.static_rows.dead + cstats.clustering_rows.dead + cstats.range_tombstones,
+                    row_tombstone_warn_rate_limit);
+            maybe_log_tombstone_warning("cells", cstats.live_cells(), cstats.dead_cells(), cell_tombstone_warn_rate_limit);
             return std::move(fut);
         });
     }
