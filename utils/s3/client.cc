@@ -887,6 +887,14 @@ class client::do_upload_file {
     // we use 64K buffer size.
     static constexpr size_t _transmit_size = 64_KiB;
 
+    static file_input_stream_options input_stream_options() {
+        // optimized for throughput
+        return {
+            .buffer_size = 128_KiB,
+            .read_ahead = 4,
+        };
+    }
+
     future<> create_multipart_upload() {
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html
         auto req = http::request::make("POST", _client->_host, _object_name);
@@ -964,7 +972,7 @@ class client::do_upload_file {
         req.query_parameters.emplace("uploadId", _upload_id);
         s3l.trace("PUT part {}, {} bytes (upload id {})", part_number, part_size, _upload_id);
         req.write_body("bin", part_size, [f=std::move(f), mem_units=std::move(mem_units), offset, part_size] (output_stream<char>&& out_) mutable {
-            auto input = make_file_input_stream(std::move(f), offset, part_size);
+            auto input = make_file_input_stream(std::move(f), offset, part_size, input_stream_options());
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size);
         });
@@ -1034,7 +1042,7 @@ class client::do_upload_file {
             req._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
         }
         req.write_body("bin", len, [f = std::move(f)] (output_stream<char>&& out_) mutable {
-            auto input = make_file_input_stream(std::move(f));
+            auto input = make_file_input_stream(std::move(f), input_stream_options());
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size);
         });
