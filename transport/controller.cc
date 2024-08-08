@@ -330,18 +330,23 @@ future<> controller::do_stop_server() {
 }
 
 future<> controller::subscribe_server(sharded<cql_server>& server) {
-    return server.invoke_on_all([this] (cql_server& server) {
+    return server.invoke_on_all([this] (cql_server& server) -> future<> {
         _mnotifier.local().register_listener(server.get_migration_listener());
         _lifecycle_notifier.local().register_subscriber(server.get_lifecycle_listener());
-        return make_ready_future<>();
+        if (!_used_by_maintenance_socket) {
+            _sl_controller.local().register_subscriber(server.get_qos_configuration_listener());
+        }
+        co_return;
     });
 }
 
 future<> controller::unsubscribe_server(sharded<cql_server>& server) {
-    return server.invoke_on_all([this] (cql_server& server) {
-        return _mnotifier.local().unregister_listener(server.get_migration_listener()).then([this, &server]{
-            return _lifecycle_notifier.local().unregister_subscriber(server.get_lifecycle_listener());
-        });
+    return server.invoke_on_all([this] (cql_server& server) -> future<> {
+        co_await _mnotifier.local().unregister_listener(server.get_migration_listener());
+        co_await _lifecycle_notifier.local().unregister_subscriber(server.get_lifecycle_listener());
+        if (!_used_by_maintenance_socket) {
+            co_await _sl_controller.local().unregister_subscriber(server.get_qos_configuration_listener());
+        }
     });
 }
 
@@ -351,6 +356,21 @@ future<> controller::set_cql_ready(bool ready) {
 
 future<utils::chunked_vector<client_data>> controller::get_client_data() {
     return _server ? _server->local().get_client_data() : protocol_server::get_client_data();
+}
+
+future<std::vector<connection_service_level_params>> controller::get_connections_service_level_params() {
+    if (!_server) {
+        co_return std::vector<connection_service_level_params>();
+    }
+
+    auto sl_params_vectors = co_await _server->map([] (cql_server& server) {
+        return server.get_connections_service_level_params();
+    });    
+    std::vector<connection_service_level_params> sl_params;
+    for (auto& vec: sl_params_vectors) {
+        sl_params.insert(sl_params.end(), std::make_move_iterator(vec.begin()), std::make_move_iterator(vec.end()));
+    }
+    co_return sl_params;
 }
 
 } // namespace cql_transport

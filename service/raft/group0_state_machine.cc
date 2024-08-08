@@ -144,8 +144,12 @@ group0_state_machine::modules_to_reload group0_state_machine::get_modules_to_rel
     modules_to_reload modules;
 
     for (auto& mut: mutations) {
-        if (mut.column_family_id() == db::system_keyspace::service_levels_v2()->id()) {
+        auto id = mut.column_family_id();
+
+        if (id == db::system_keyspace::service_levels_v2()->id()) {
             modules.service_levels_cache = true;
+        } else if (id == db::system_keyspace::role_members()->id() || id == db::system_keyspace::role_attributes()->id()) {
+            modules.service_levels_effective_cache = true;
         }
     }
 
@@ -153,8 +157,8 @@ group0_state_machine::modules_to_reload group0_state_machine::get_modules_to_rel
 }
 
 future<> group0_state_machine::reload_modules(modules_to_reload modules) {
-    if (modules.service_levels_cache) {
-        co_await _ss.update_service_levels_cache();
+    if (modules.service_levels_cache || modules.service_levels_effective_cache) { // this also updates SL effective cache
+        co_await _ss.update_service_levels_cache(qos::update_both_cache_levels(modules.service_levels_cache));
     }
 }
 

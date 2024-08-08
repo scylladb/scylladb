@@ -14,6 +14,7 @@
 #include <seastar/core/print.hh>
 #include <map>
 #include <stdexcept>
+#include <string_view>
 #include <variant>
 #include <seastar/core/lowres_clock.hh>
 
@@ -68,7 +69,7 @@ struct service_level_options {
     };
     std::optional<slo_effective_names> effective_names = std::nullopt;
 
-    void init_effective_names(sstring& service_level_name);
+    void init_effective_names(std::string_view service_level_name);
 };
 
 std::ostream& operator<<(std::ostream& os, const service_level_options::workload_type&);

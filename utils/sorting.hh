@@ -17,6 +17,14 @@
 
 namespace utils {
 
+template <typename Container, typename T>
+concept VerticiesContainer = requires(const Container& c) {
+    c.begin();
+    c.end();
+    c.size();
+    std::same_as<typename Container::value_type, T>;
+};
+
 /**
  * Topological sort a DAG using Kahn's algorithm.
  *
@@ -26,8 +34,9 @@ namespace utils {
         If there is an edge k->v, then vertex k will be before vertex v.
  * @throws std::runtime_error when a graph has any cycle.
  */
-template<typename T, typename Compare = std::less<T>>
-seastar::future<std::vector<T>> topological_sort(const std::vector<T>& vertices, const std::multimap<T, T, Compare>& adjacency_map) {
+template<typename T, typename Compare = std::less<T>, typename Container>
+requires VerticiesContainer<Container, T>
+seastar::future<std::vector<T>> topological_sort(const Container& vertices, const std::multimap<T, T, Compare>& adjacency_map) {
     std::map<T, size_t, Compare> ref_count_map; // Contains counters how many edges point (reference) to a vertex
     std::vector<T> sorted;
     sorted.reserve(vertices.size());

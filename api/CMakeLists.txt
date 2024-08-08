@@ -7,6 +7,7 @@ set(swagger_files
   api-doc/commitlog.json
   api-doc/compaction_manager.json
   api-doc/config.json
+  api-doc/cql_server_test.json
   api-doc/endpoint_snitch_info.json
   api-doc/error_injection.json
   api-doc/failure_detector.json
@@ -46,6 +47,7 @@ target_sources(api
     commitlog.cc
     compaction_manager.cc
     config.cc
+    cql_server_test.cc
     endpoint_snitch.cc
     error_injection.cc
     authorization_cache.cc

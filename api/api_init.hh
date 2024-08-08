@@ -132,5 +132,7 @@ future<> set_server_raft(http_context&, sharded<service::raft_group_registry>&);
 future<> unset_server_raft(http_context&);
 future<> set_load_meter(http_context& ctx, service::load_meter& lm);
 future<> unset_load_meter(http_context& ctx);
+future<> set_server_cql_server_test(http_context& ctx, cql_transport::controller& ctl);
+future<> unset_server_cql_server_test(http_context& ctx);
 
 }

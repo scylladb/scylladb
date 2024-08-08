@@ -239,9 +239,7 @@ future<> service::client_state::ensure_exists(const auth::resource& r) const {
 
 future<> service::client_state::maybe_update_per_service_level_params() {
     if (_sl_controller && _user && _user->name) {
-        auto& role_manager = _auth_service->underlying_role_manager();
-        auto role_set = co_await role_manager.query_granted(_user->name.value(), auth::recursive_role_query::yes);
-        auto slo_opt = co_await _sl_controller->find_service_level(role_set);
+        auto slo_opt = co_await _sl_controller->find_effective_service_level(_user->name.value());
         if (!slo_opt) {
             co_return;
         }

@@ -11,6 +11,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/result_set.hh"
 #include "cql3/untyped_result_set.hh"
+#include <string_view>
 
 namespace qos {
 
@@ -118,10 +119,10 @@ std::optional<service_level_options::workload_type> service_level_options::parse
     return std::nullopt;
 }
 
-void service_level_options::init_effective_names(sstring& service_level_name) {
+void service_level_options::init_effective_names(std::string_view service_level_name) {
     effective_names = service_level_options::slo_effective_names {
-        .timeout = service_level_name,
-        .workload = service_level_name
+        .timeout = sstring(service_level_name),
+        .workload = sstring(service_level_name)
     };
 }
 

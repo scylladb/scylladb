@@ -51,6 +51,8 @@ public:
 
     virtual future<role_set> query_granted(std::string_view grantee_name, recursive_role_query) override;
 
+    virtual future<role_to_directly_granted_map> query_all_directly_granted() override;
+
     virtual future<role_set> query_all() override;
 
     virtual future<bool> exists(std::string_view role_name) override;

@@ -19,6 +19,10 @@
 #include "db/system_keyspace.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/timer.hh>
+#include "seastar/core/future.hh"
+#include "seastar/core/semaphore.hh"
+#include "seastar/core/shard_id.hh"
+#include "seastar/coroutine/maybe_yield.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service_level_controller.hh"
@@ -26,6 +30,7 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_service.hh"
 #include "service/topology_state_machine.hh"
+#include "utils/sorting.hh"
 
 namespace qos {
 static logging::logger sl_logger("service_level_controller");
@@ -140,13 +145,10 @@ void service_level_controller::abort_group0_operations() {
     }
 }
 
-future<> service_level_controller::update_service_levels_from_distributed_data() {
+future<> service_level_controller::update_service_levels_cache() {
+    SCYLLA_ASSERT(this_shard_id() == global_controller);
 
     if (!_sl_data_accessor) {
-        return make_ready_future();
-    }
-
-    if (this_shard_id() != global_controller) {
         return make_ready_future();
     }
 
@@ -222,6 +224,73 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
     });
 }
 
+future<> service_level_controller::update_effective_service_levels_cache() {
+    SCYLLA_ASSERT(this_shard_id() == global_controller);
+    
+    if (!_auth_service.local_is_initialized()) {
+        // Because cache update is triggered in `topology_state_load()`, auth service
+        // might be not initialized yet.
+        co_return;
+    }
+    auto units = co_await get_units(_global_controller_db->notifications_serializer, 1);
+
+    auto& role_manager = _auth_service.local().underlying_role_manager();
+    const auto all_roles = co_await role_manager.query_all();
+    const auto hierarchy = co_await role_manager.query_all_directly_granted();
+    // includes only roles with attached service level
+    const auto attributes = co_await role_manager.query_attribute_for_all("service_level");
+
+    std::map<sstring, service_level_options> effective_sl_map;
+
+    auto sorted = co_await utils::topological_sort(all_roles, hierarchy);
+    // Roles are sorted from the top of the hierarchy to the bottom. 
+    /// `GRANT role1 TO role2` means role2 is higher in the hierarchy than role1, so role2 will be before
+    // role1 in `sorted` vector.
+    // That's why if we iterate over the vector in reversed order, we will visit the roles from the bottom
+    // and we can use already calculated effective service levels for all of the subroles.
+    for (auto& role: sorted | boost::adaptors::reversed) {
+        std::optional<service_level_options> sl_options;
+
+        if (auto sl_name_it = attributes.find(role); sl_name_it != attributes.end()) {
+            auto sl = _service_levels_db.at(sl_name_it->second);
+            sl_options = sl.slo;
+            sl_options->init_effective_names(sl_name_it->second);
+        }
+
+        auto [it, it_end] = hierarchy.equal_range(role);
+        while (it != it_end) {
+            auto& subrole = it->second;
+            if (auto sub_sl_it = effective_sl_map.find(subrole); sub_sl_it != effective_sl_map.end()) {
+                if (sl_options) {
+                    sl_options = sl_options->merge_with(sub_sl_it->second);
+                } else {
+                    sl_options = sub_sl_it->second;
+                }
+            }
+
+            ++it;
+        }
+
+        if (sl_options) {
+            effective_sl_map.insert({role, *sl_options});
+        }
+        co_await coroutine::maybe_yield();
+    }
+
+    co_await container().invoke_on_all([effective_sl_map] (service_level_controller& sl_controller) -> future<> {
+        sl_controller._effective_service_levels_db = std::move(effective_sl_map);
+        co_await sl_controller.notify_effective_service_levels_cache_reloaded();
+    });
+}
+
+future<> service_level_controller::update_cache(update_both_cache_levels update_both_cache_levels) {
+    SCYLLA_ASSERT(this_shard_id() == global_controller);
+    if (update_both_cache_levels) {
+        co_await update_service_levels_cache();
+    }
+    co_await update_effective_service_levels_cache();
+}
+
 void service_level_controller::stop_legacy_update_from_distributed_data() {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
 
@@ -231,40 +300,46 @@ void service_level_controller::stop_legacy_update_from_distributed_data() {
     _global_controller_db->dist_data_update_aborter.request_abort();
 }
 
-future<std::optional<service_level_options>> service_level_controller::find_service_level(auth::role_set roles, include_effective_names include_names) {
-    auto& role_manager = _auth_service.local().underlying_role_manager();
+future<std::optional<service_level_options>> service_level_controller::find_effective_service_level(const sstring& role_name) {
+    if (_sl_data_accessor->is_v2()) {
+        auto effective_sl_it = _effective_service_levels_db.find(role_name);
+        co_return effective_sl_it != _effective_service_levels_db.end() 
+            ? std::optional<service_level_options>(effective_sl_it->second)
+            : std::nullopt;
+    } else {
+        auto& role_manager = _auth_service.local().underlying_role_manager();
+        auto roles = co_await role_manager.query_granted(role_name, auth::recursive_role_query::yes);
 
-    // converts a list of roles into the chosen service level.
-    return ::map_reduce(roles.begin(), roles.end(), [&role_manager, include_names, this] (const sstring& role) {
-        return role_manager.get_attribute(role, "service_level").then_wrapped([include_names, this, role] (future<std::optional<sstring>> sl_name_fut) -> std::optional<service_level_options> {
-            try {
-                std::optional<sstring> sl_name = sl_name_fut.get();
-                if (!sl_name) {
-                    return std::nullopt;
-                }
-                auto sl_it = _service_levels_db.find(*sl_name);
-                if ( sl_it == _service_levels_db.end()) {
-                    return std::nullopt;
-                }
+        // converts a list of roles into the chosen service level.
+        co_return co_await ::map_reduce(roles.begin(), roles.end(), [&role_manager, this] (const sstring& role) {
+            return role_manager.get_attribute(role, "service_level").then_wrapped([this, role] (future<std::optional<sstring>> sl_name_fut) -> std::optional<service_level_options> {
+                try {
+                    std::optional<sstring> sl_name = sl_name_fut.get();
+                    if (!sl_name) {
+                        return std::nullopt;
+                    }
+                    auto sl_it = _service_levels_db.find(*sl_name);
+                    if ( sl_it == _service_levels_db.end()) {
+                        return std::nullopt;
+                    }
 
-                if (include_names == include_effective_names::yes) {
                     sl_it->second.slo.init_effective_names(*sl_name);
+                    return sl_it->second.slo;
+                } catch (...) { // when we fail, we act as if the attribute does not exist so the node
+                            // will not be brought down.
+                    return std::nullopt;
                 }
-                return sl_it->second.slo;
-            } catch (...) { // when we fail, we act as if the attribute does not exist so the node
-                           // will not be brought down.
-                return std::nullopt;
+            });
+        }, std::optional<service_level_options>{}, [] (std::optional<service_level_options> first, std::optional<service_level_options> second) -> std::optional<service_level_options> {
+            if (!second) {
+                return first;
+            } else if (!first) {
+                return second;
+            } else {
+                return first->merge_with(*second);
             }
         });
-    }, std::optional<service_level_options>{}, [] (std::optional<service_level_options> first, std::optional<service_level_options> second) -> std::optional<service_level_options> {
-        if (!second) {
-            return first;
-        } else if (!first) {
-            return second;
-        } else {
-            return first->merge_with(*second);
-        }
-    });
+    }
 }
 
 future<>  service_level_controller::notify_service_level_added(sstring name, service_level sl_data) {
@@ -317,6 +392,12 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
     co_return;
 }
 
+future<> service_level_controller::notify_effective_service_levels_cache_reloaded() {
+    co_await _subscribers.for_each([] (qos_configuration_change_subscriber* subscriber) -> future<> {
+        return subscriber->on_effective_service_levels_cache_reloaded();
+    });
+}
+
 void service_level_controller::maybe_start_legacy_update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f, service::storage_service& storage_service, service::raft_group0_client& group0_client) {
     if (this_shard_id() != global_controller) {
         throw std::runtime_error(format("Service level updates from distributed data can only be activated on shard {}", global_controller));
@@ -341,7 +422,7 @@ void service_level_controller::maybe_start_legacy_update_from_distributed_data(s
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
 
-                    return update_service_levels_from_distributed_data().then_wrapped([this] (future<>&& f){
+                    return update_service_levels_cache().then_wrapped([this] (future<>&& f){
                         try {
                             f.get();
                             _last_successful_config_update = seastar::lowres_clock::now();
