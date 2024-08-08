@@ -48,6 +48,7 @@
 #include "db/tags/extension.hh"
 #include "dht/sharder.hh"
 #include "gms/inet_address.hh"
+#include "gms/feature_service.hh"
 #include "keys.hh"
 #include "locator/network_topology_strategy.hh"
 #include "mutation/mutation.hh"
@@ -2550,6 +2551,35 @@ future<> view_builder::do_build_step() {
     }).handle_exception([] (std::exception_ptr ex) {
         vlogger.warn("Unexcepted error executing build step: {}. Ignored.", ex);
     });
+}
+
+future<> view_builder::generate_mutations_on_node_left(replica::database& db, db::system_keyspace& sys_ks, api::timestamp_type timestamp, locator::host_id host_id, std::vector<canonical_mutation>& muts) {
+    // When a node is removed, we delete all its rows from the view_build_status table together with
+    // the topology update operation.
+
+    if (!db.features().view_build_status_on_group0) {
+        // We didn't upgrade to the v2 table yet. nothing to delete, and other nodes
+        // may not know about the v2 table.
+        co_return;
+    }
+
+    auto& qp = sys_ks.query_processor();
+
+    const sstring query_string = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
+            db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
+
+    muts.reserve(muts.size() + db.get_views().size());
+
+    // We expect the table to have a row for each existing view, so generate delete mutations for all views.
+    for (auto& view : db.get_views()) {
+        auto vb_muts = co_await qp.get_mutations_internal(
+                query_string,
+                view_builder_query_state(),
+                timestamp,
+                {view->ks_name(), view->cf_name(), host_id.uuid()});
+        SCYLLA_ASSERT(vb_muts.size() == 1);
+        muts.push_back(canonical_mutation(std::move(vb_muts[0])));
+    }
 }
 
 future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard) {

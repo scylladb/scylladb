@@ -239,6 +239,36 @@ async def test_view_build_status_migration_to_v2(request, manager: ManagerClient
     result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
     assert len(result) == 6
 
+# Test that when removing a node from the cluster, we clean its rows from
+# the view build status table.
+@pytest.mark.asyncio
+async def test_view_build_status_cleanup_on_remove_node(manager: ManagerClient):
+    node_count = 4
+    servers = await manager.servers_add(node_count)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    await create_keyspace(cql)
+    await create_table(cql)
+    await create_mv(cql, "vt1")
+    await create_mv(cql, "vt2")
+
+    await wait_for_view(cql, "vt1", node_count)
+    await wait_for_view(cql, "vt2", node_count)
+
+    result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
+    assert len(result) == node_count * 2
+
+    await manager.server_stop_gracefully(servers[-1].server_id)
+    await manager.remove_node(servers[0].server_id, servers[-1].server_id)
+
+    # The 2 rows belonging to the node that was removed, one for each view, should
+    # be deleted from the table.
+    async def node_rows_removed():
+        result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
+        return (len(result) == (node_count - 1) * 2) or None
+
+    await wait_for(node_rows_removed, time.time() + 60)
+
 # Start with view_build_status v1 mode, and create entries such that
 # some of them correspond to removed nodes or non-existent views.
 # Then migrate to v2 table and verify that only valid entries belonging to known nodes

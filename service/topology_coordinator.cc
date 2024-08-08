@@ -1946,6 +1946,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         builder.del_transition_state();
                         cleanup_ignored_nodes_on_left(builder, node.id);
                         muts.push_back(rtbuilder.build());
+                        co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
                     }
                     builder.set_version(_topo_sm._topology.version + 1)
                            .with_node(node.id)
@@ -1960,12 +1961,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     auto replaced_node_id = parse_replaced_node(node.req_param);
                     node = retake_node(co_await remove_from_group0(std::move(node.guard), replaced_node_id), node.id);
 
+                    std::vector<canonical_mutation> muts;
+
                     topology_mutation_builder builder1(node.guard.write_timestamp());
                     // Move new node to 'normal'
                     builder1.del_transition_state()
                             .set_version(_topo_sm._topology.version + 1)
                             .with_node(node.id)
                             .set("node_state", node_state::normal);
+                    muts.push_back(builder1.build());
 
                     // Move old node to 'left'
                     topology_mutation_builder builder2(node.guard.write_timestamp());
@@ -1973,7 +1977,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     builder2.with_node(replaced_node_id)
                             .del("tokens")
                             .set("node_state", node_state::left);
-                    co_await update_topology_state(take_guard(std::move(node)), {builder1.build(), builder2.build(), rtbuilder.build()},
+                    muts.push_back(builder2.build());
+
+                    muts.push_back(rtbuilder.build());
+                    co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(replaced_node_id.uuid()), muts);
+                    co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                   "replace: read fence completed");
                     }
                     break;
@@ -2062,15 +2070,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // because we'll ban it as soon as we tell it to shut down.
                 node = retake_node(co_await remove_from_group0(std::move(node.guard), node.id), node.id);
 
+                std::vector<canonical_mutation> muts;
+
                 topology_mutation_builder builder(node.guard.write_timestamp());
                 cleanup_ignored_nodes_on_left(builder, node.id);
                 builder.del_transition_state()
                        .with_node(node.id)
                        .set("node_state", node_state::left);
+                muts.push_back(builder.build());
+                co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
                 auto str = node.rs->state == node_state::decommissioning
                         ? ::format("finished decommissioning node {}", node.id)
                         : ::format("finished rollback of {} after {} failure", node.id, node.rs->state);
-                co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
+                co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
             }
                 break;
             case topology::transition_state::rollback_to_normal: {
