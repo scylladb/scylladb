@@ -180,15 +180,18 @@ class ManagerClient():
         """Get number of configured replicas for the cluster (replication factor)"""
         return await self.client.get_json("/cluster/replicas")
 
-    async def running_servers(self) -> list[ServerInfo]:
-        """Get List of server info (id and IP address) of running servers"""
+    async def running_servers(self, *server_ids: int) -> list[ServerInfo]:
+        """Get List of server info (id and IP address) of running servers.
+
+        If `server_ids` provided then return ServerInfo for running servers with such ids.
+        """
         try:
             server_info_list = await self.client.get_json("/cluster/running-servers")
         except RuntimeError as exc:
             raise Exception("Failed to get list of running servers") from exc
         assert isinstance(server_info_list, list), "running_servers got unknown data type"
         return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]))
-                for info in server_info_list]
+                for info in server_info_list if not server_ids or int(info[0]) in server_ids]
 
     async def all_servers(self) -> list[ServerInfo]:
         """Get List of server info (id and IP address) of all servers"""
