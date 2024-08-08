@@ -156,6 +156,7 @@ class ManagerClient():
         cluster_str = await _client.put_json(f"/cluster/after-test/{success}",
                                                  response_type = "json")
         logger.info("Cluster after test %s: %s", test_case_name, cluster_str)
+        return cluster_str
 
     async def gather_related_logs(self, failed_test_path_dir: Path, logs: Dict[str, Path]) -> None:
         for server in await self.all_servers():
