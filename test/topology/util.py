@@ -448,3 +448,13 @@ async def new_materialized_view(cql, table, select, pk, where, extra=""):
         yield mv
     finally:
         await cql.run_async(f"DROP MATERIALIZED VIEW {mv}")
+
+
+async def get_raft_log_size(cql, host) -> int:
+    query = "select count(\"index\") from system.raft"
+    return (await cql.run_async(query, host=host))[0][0]
+
+
+async def get_raft_snap_id(cql, host) -> str:
+    query = "select snapshot_id from system.raft limit 1"
+    return (await cql.run_async(query, host=host))[0].snapshot_id
