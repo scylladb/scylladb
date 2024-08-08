@@ -16,6 +16,7 @@
 #include "log.hh"
 #include "raft/raft.hh"
 #include "gms/inet_address.hh"
+#include "gms/feature_service.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_state_machine.hh"
 
@@ -72,7 +73,8 @@ future<> run_topology_coordinator(
         raft_topology_cmd_handler_type raft_topology_cmd_handler,
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
-        endpoint_lifecycle_notifier& lifecycle_notifier);
+        endpoint_lifecycle_notifier& lifecycle_notifier,
+        gms::feature_service& feature_service);
 
 }
 

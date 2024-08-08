@@ -687,6 +687,16 @@ future<> storage_service::topology_state_load() {
     });
     co_await update_service_levels_cache(qos::update_both_cache_levels::yes);
 
+    // the view_builder is migrated to v2 in view_builder::migrate_to_v2.
+    // it writes a v2 version mutation as topology_change, then we get here
+    // to update the service to start using the v2 table.
+    auto view_builder_version = co_await _sys_ks.local().get_view_builder_version();
+    if (view_builder_version == db::system_keyspace::view_builder_version_t::v2) {
+        co_await _view_builder.invoke_on_all([] (db::view::view_builder& vb) {
+            vb.upgrade_to_v2();
+        });
+    }
+
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
         return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.enabled_features));
     });
@@ -1129,7 +1139,8 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
                     get_ring_delay(),
-                    _lifecycle_notifier);
+                    _lifecycle_notifier,
+                    _feature_service);
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
@@ -1312,6 +1323,9 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
         
         insert_join_request_mutations.emplace_back(
                 co_await _sys_ks.local().make_auth_version_mutation(guard.write_timestamp(), db::system_keyspace::auth_version_t::v2));
+
+        insert_join_request_mutations.emplace_back(
+                co_await _sys_ks.local().make_view_builder_version_mutation(guard.write_timestamp(), db::system_keyspace::view_builder_version_t::v2));
 
         topology_change change{std::move(insert_join_request_mutations)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
@@ -6736,6 +6750,11 @@ void storage_service::init_messaging_service() {
             auto auth_version_mut = co_await ss._sys_ks.local().get_auth_version_mutation();
             if (auth_version_mut) {
                 mutations.emplace_back(*auth_version_mut);
+            }
+
+            auto view_builder_version_mut = co_await ss._sys_ks.local().get_view_builder_version_mutation();
+            if (view_builder_version_mut) {
+                mutations.emplace_back(*view_builder_version_mut);
             }
 
             co_return raft_snapshot{
