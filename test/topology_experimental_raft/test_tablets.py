@@ -442,6 +442,76 @@ async def test_tablet_repair(manager: ManagerClient):
     for r in rows:
         assert r.c == repair_cycles - 1
 
+# Reproducer for race between split and repair: https://github.com/scylladb/scylladb/issues/19378
+# Verifies repair will not complete with sstables that still require split, causing split
+# execution to fail.
+@pytest.mark.repair
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_concurrent_tablet_repair_and_split(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'raft_topology=debug',
+        '--target-tablet-size-in-bytes', '1024',
+    ]
+    servers = await manager.servers_add(3, cmdline=cmdline, config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    })
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 2} AND tablets = {'initial': 32};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    logger.info("Populating table")
+
+    keys = range(5000) # Enough keys to trigger repair digest mismatch with a high chance.
+    stmt = cql.prepare("INSERT INTO test.test (pk, c) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+
+    await inject_error_on(manager, "tablet_load_stats_refresh_before_rebalancing", servers)
+
+    s0_log = await manager.server_open_log(servers[0].server_id)
+    s0_mark = await s0_log.mark()
+
+    await asyncio.gather(*[cql.run_async(stmt, [k, -1]) for k in keys])
+
+    # split decision is sstable size based, so data must be flushed first
+    for server in servers:
+        await manager.api.flush_keyspace(server.ip_addr, "test")
+
+    await manager.api.enable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone", False)
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Waiting for split prepare...")
+    await s0_log.wait_for('Setting split ready sequence number to', from_mark=s0_mark)
+    s0_mark = await s0_log.mark()
+    logger.info("Waited for split prepare")
+
+    # Balancer is re-enabled later for split execution
+    await asyncio.create_task(manager.api.disable_tablet_balancing(servers[0].ip_addr))
+
+    # Write concurrently with repair to increase the chance of repair having some discrepancy to resolve and send writes.
+    inserts_future = asyncio.gather(*[cql.run_async(stmt, [k, 1]) for k in keys])
+
+    await repair_on_node(manager, servers[0], servers)
+
+    await inserts_future
+
+    logger.info("Waiting for split execute...")
+    await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+    await s0_log.wait_for('Detected tablet split for table', from_mark=s0_mark)
+    await inject_error_one_shot_on(manager, "tablet_split_finalization_postpone", servers)
+    logger.info("Waited for split execute...")
+
+    key_count = len(keys)
+    stmt = cql.prepare("SELECT * FROM test.test;")
+    stmt.consistency_level = ConsistencyLevel.ALL
+    rows = await cql.run_async(stmt)
+    assert len(rows) == key_count
 
 @pytest.mark.repair
 @pytest.mark.asyncio
