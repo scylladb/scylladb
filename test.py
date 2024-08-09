@@ -1430,6 +1430,7 @@ def parse_cmd_line() -> argparse.Namespace:
         prepare_dir(os.path.join(args.tmpdir, mode, "xml"), "*.xml")
         shutil.rmtree(os.path.join(args.tmpdir, mode, "failed_test"), ignore_errors=True)
         prepare_dir(os.path.join(args.tmpdir, mode, "failed_test"), "*")
+        prepare_dir(os.path.join(args.tmpdir, mode, "allure"), "*.xml")
 
     # Get the list of tests configured by configure.py
     try:
@@ -1668,7 +1669,7 @@ def summarize_boost_tests(tests):
     return test
 
 
-def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> None:
+def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> str:
     # collects all boost tests sorted by their full names
     boost_tests = itertools.chain.from_iterable(suite.boost_tests()
                                                 for suite in TestSuite.suites.values())
@@ -1695,7 +1696,65 @@ def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> None:
             test = ET.SubElement(suite, 'TestSuite', name=test_name)
         test.append(test_case)
     et = ET.ElementTree(xml)
-    et.write(f'{tmpdir}/{mode}/xml/boost.xunit.xml', encoding='unicode')
+    xunit_file = f'{tmpdir}/{mode}/xml/boost.xunit.xml'
+    et.write(xunit_file, encoding='unicode')
+    return xunit_file
+
+
+def boost_to_junit(boost_xml, junit_xml):
+    boost_root = ET.parse(boost_xml).getroot()
+    junit_root = ET.Element('testsuites')
+
+    # report produced {write_consolidated_boost_junit_xml} have the next structure suite_boost -> [suite1, suite2, ...]
+    # so we are excluding the upper suite with name boost
+    test_suites = boost_root.find('TestSuite').findall('TestSuite')
+
+    def parse_tag_output(test_case_element: ET.Element, tag_output: str) -> str:
+        text_template = '''
+            [{level}] - {level_message}
+            [FILE] - {file_name}
+            [LINE] - {line_number}
+            '''
+        text = ''
+        tag_outputs = test_case_element.findall(tag_output)
+        if tag_outputs:
+            for tag_output in tag_outputs:
+                text += text_template.format(level='Info', level_message=tag_output.text,
+                                             file_name=tag_output.get('file'), line_number=tag_output.get('line'))
+        return text
+
+    for test_suite in test_suites:
+        suite_time = 0.0
+        suite_test_total = 0
+        suite_test_fails_number = 0
+
+        junit_test_suite = ET.SubElement(junit_root, 'testsuite')
+        junit_test_suite.attrib['name'] = test_suite.attrib['name']
+
+        test_cases = test_suite.findall('TestCase')
+        for test_case in test_cases:
+            # convert the testing time: boost uses microseconds and Junit uses seconds
+            test_case_time = int(test_case.find('TestingTime').text) / 1_000_000
+            suite_time += test_case_time
+            suite_test_total += 1
+
+            junit_test_case = ET.SubElement(junit_test_suite, 'testcase')
+            junit_test_case.set('name', test_case.get('name'))
+            junit_test_case.set('time', str(test_case_time))
+            junit_test_case.set('file', test_case.get('file'))
+            junit_test_case.set('line', test_case.get('line'))
+
+            system_out = ET.SubElement(junit_test_case, 'system-out')
+            system_out.text = ''
+            for tag in ['Info', 'Message', 'Exception']:
+                output = parse_tag_output(test_case, tag)
+                if output:
+                    system_out.text += output
+
+        junit_test_suite.set('tests', str(suite_test_total))
+        junit_test_suite.set('time', str(suite_time))
+        junit_test_suite.set('failures', str(suite_test_fails_number))
+    ET.ElementTree(junit_root).write(junit_xml, encoding='UTF-8')
 
 
 def open_log(tmpdir: str, log_file_name: str, log_level: str) -> None:
@@ -1740,8 +1799,10 @@ async def main() -> int:
     print_summary(failed_tests, options)
 
     for mode in options.modes:
+        junit_file = f"{options.tmpdir}/{mode}/allure/boost.junit.xml"
         write_junit_report(options.tmpdir, mode)
-        write_consolidated_boost_junit_xml(options.tmpdir, mode)
+        xunit_file = write_consolidated_boost_junit_xml(options.tmpdir, mode)
+        boost_to_junit(xunit_file, junit_file)
 
     if 'coverage' in options.modes:
         coverage.generate_coverage_report(path_to("coverage", "tests"))
