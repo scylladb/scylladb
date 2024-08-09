@@ -1126,6 +1126,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         auto params = req_params({
             std::pair("name", mandatory::yes),
             std::pair("flush_memtables", mandatory::no),
+            std::pair("force_purge_tombstones", mandatory::no),
             std::pair("split_output", mandatory::no),
         });
         params.process(*req);
@@ -1134,7 +1135,8 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         }
         auto [ks, cf] = parse_fully_qualified_cf_name(*params.get("name"));
         auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        apilog.info("column_family/force_major_compaction: name={} flush={}", req->get_path_param("name"), flush);
+        auto force_purge_tombstones = params.get_as<bool>("force_purge_tombstones").value_or(false);
+        apilog.info("column_family/force_major_compaction: name={} flush={} force_purge_tombstones={}", req->get_path_param("name"), flush, force_purge_tombstones);
 
         auto keyspace = validate_keyspace(ctx, ks);
         std::vector<table_info> table_infos = {table_info{
@@ -1147,7 +1149,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         if (!flush) {
             fmopt = flush_mode::skip;
         }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), ctx.db, std::move(table_infos), fmopt);
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), ctx.db, std::move(table_infos), fmopt, force_purge_tombstones);
         co_await task->done();
         co_return json_void();
     });

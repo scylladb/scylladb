@@ -330,25 +330,31 @@ tasks::is_abortable compaction_task_impl::is_abortable() const noexcept {
     return tasks::is_abortable{!_parent_id};
 }
 
-static future<bool> maybe_flush_all_tables(sharded<replica::database>& db) {
-    auto interval = db.local().get_config().compaction_flush_all_tables_before_major_seconds();
-    if (interval) {
-        auto when = db_clock::now() - interval * 1s;
-        if (co_await replica::database::get_all_tables_flushed_at(db) <= when) {
-            co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
-                co_await db.flush_all_tables();
-            });
-            co_return true;
+static future<bool> maybe_flush_all_tables(sharded<replica::database>& db, flush_mode flush_mode, bool force_purge_tombstones) {
+    // flush all tables either if
+    // (a) force_purge_tombstone == true (or)
+    // (b) flush_mode == flush_mode::all_tables and compaction_flush_all_tables_before_major_seconds has elapsed since last all tables flush
+    if (!force_purge_tombstones) {
+        if (flush_mode != flush_mode::all_tables) {
+            co_return false;
+        }
+        auto interval = db.local().get_config().compaction_flush_all_tables_before_major_seconds();
+        if (interval) {
+            auto when = db_clock::now() - interval * 1s;
+            if (co_await replica::database::get_all_tables_flushed_at(db) > when) {
+                co_return false;
+            }
         }
     }
-    co_return false;
+
+    co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
+        co_await db.flush_all_tables();
+    });
+    co_return true;
 }
 
 future<> global_major_compaction_task_impl::run() {
-    bool flushed_all_tables = false;
-    if (_flush_mode == flush_mode::all_tables) {
-        flushed_all_tables = co_await maybe_flush_all_tables(_db);
-    }
+    bool flushed_all_tables = co_await maybe_flush_all_tables(_db, _flush_mode, _force_purge_tombstones);
 
     std::unordered_map<sstring, std::vector<table_info>> tables_by_keyspace;
     auto tables_meta = _db.local().get_tables_metadata().get_column_families_copy();
@@ -364,7 +370,7 @@ future<> global_major_compaction_task_impl::run() {
     flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
     for (auto& [ks, table_infos] : tables_by_keyspace) {
         auto task = co_await _module->make_and_start_task<major_keyspace_compaction_task_impl>(parent_info, ks, parent_info.id, _db, table_infos, fm,
-                &cv, &current_task);
+                _force_purge_tombstones, &cv, &current_task);
         keyspace_tasks.emplace_back(std::move(task), ks, std::move(table_infos));
     }
     co_await run_keyspace_tasks(_db.local(), keyspace_tasks, cv, current_task, false);
@@ -378,16 +384,13 @@ future<> major_keyspace_compaction_task_impl::run() {
         co_await wait_for_your_turn(*_cv, *_current_task, _status.id);
     }
 
-    bool flushed_all_tables = false;
-    if (_flush_mode == flush_mode::all_tables) {
-        flushed_all_tables = co_await maybe_flush_all_tables(_db);
-    }
+    bool flushed_all_tables = co_await maybe_flush_all_tables(_db, _flush_mode, _force_purge_tombstones);
 
     flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, fm);
+        auto task = co_await module.make_and_start_task<shard_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, fm, _force_purge_tombstones);
         co_await task->done();
     });
 }
@@ -398,7 +401,7 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
     tasks::task_info parent_info{_status.id, _status.shard};
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _local_tables) {
-        table_tasks.emplace_back(co_await _module->make_and_start_task<table_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _flush_mode), ti);
+        table_tasks.emplace_back(co_await _module->make_and_start_task<table_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _flush_mode, _force_purge_tombstones), ti);
     }
 
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
@@ -408,8 +411,8 @@ future<> table_major_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     tasks::task_info info{_status.id, _status.shard};
     replica::table::do_flush do_flush(_flush_mode != flush_mode::skip);
-    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info, do_flush] (replica::table& t) {
-        return t.compact_all_sstables(info, do_flush);
+    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info, do_flush, force_purge_tombstones = _force_purge_tombstones] (replica::table& t) {
+        return t.compact_all_sstables(info, do_flush, force_purge_tombstones);
     });
 }
 

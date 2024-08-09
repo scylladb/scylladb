@@ -171,6 +171,9 @@ struct compaction_descriptor {
     // Denotes if this compaction task is comprised solely of completely expired SSTables
     sstables::has_only_fully_expired has_only_fully_expired = has_only_fully_expired::no;
 
+    // If enabled, gc will check only the compacting sstables to collect tombstones
+    bool gc_check_only_compacting_sstables = false;
+
     compaction_descriptor() = default;
 
     static constexpr int default_level = 0;

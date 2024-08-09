@@ -1834,15 +1834,15 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
 }
 
 future<>
-table::compact_all_sstables(std::optional<tasks::task_info> info, do_flush do_flush) {
+table::compact_all_sstables(std::optional<tasks::task_info> info, do_flush do_flush, bool force_purge_tombstones) {
     if (do_flush) {
         co_await flush();
     }
     // Forces off-strategy before major, so sstables previously sitting on maintenance set will be included
     // in the compaction's input set, to provide same semantics as before maintenance set came into existence.
     co_await perform_offstrategy_compaction(info);
-    co_await parallel_foreach_compaction_group([this, info] (compaction_group& cg) {
-        return _compaction_manager.perform_major_compaction(cg.as_table_state(), info);
+    co_await parallel_foreach_compaction_group([this, info, force_purge_tombstones] (compaction_group& cg) {
+        return _compaction_manager.perform_major_compaction(cg.as_table_state(), info, force_purge_tombstones);
     });
 }
 

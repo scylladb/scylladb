@@ -339,7 +339,7 @@ public:
     future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts, std::optional<tasks::task_info> info = std::nullopt);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(compaction::table_state& t, std::optional<tasks::task_info> info = std::nullopt);
+    future<> perform_major_compaction(compaction::table_state& t, std::optional<tasks::task_info> info = std::nullopt, bool force_purge_tombstones = false);
 
     // Splits a compaction group by segregating all its sstable according to the classifier[1].
     // [1]: See sstables::compaction_type_options::splitting::classifier.
