@@ -43,8 +43,8 @@ Hinted handoff is enabled and managed by these settings in :code:`scylla.yaml`:
 
 Storing of the hint can also fail. Enabling hinted handoff therefore does not eliminate the need for repair; a user must recurrently :doc:`run a full repair </operating-scylla/procedures/maintenance/repair/>` to ensure data consistency across the cluster nodes.
 
-Sync point HTTP API
-^^^^^^^^^^^^^^^^^^^
+:doc:`Sync point HTTP API </reference/api-reference>`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ScyllaDB provides you with a means to wait until hints for given nodes have been replayed. It is realized by creating a so-called sync point that corresponds to the hints that have accumulated up to the time of its creation. It always covers both regular hints and updates for materialized views. You can create and await sync points by sending HTTP requests to :code:`http://{API_ADDRESS}:{API_PORT}/hinted_handoff/sync_point/`, where :code:`{API_ADDRESS}` corresponds to the API IP address of the coordinator node which hints are supposed to be sent from.
 
