@@ -82,7 +82,7 @@ def test_task_manager_not_abortable(rest_api):
             print(f"created test task {task0}")
 
             resp = rest_api.send("POST", f"task_manager/abort_task/{task0}")
-            assert resp.status_code == requests.codes.internal_server_error, "Aborted unabortable task"
+            assert resp.status_code == requests.codes.forbidden, "Aborted unabortable task"
 
 def wait_and_check_status(rest_api, id, sequence_number, keyspace, table):
     status = wait_for_task(rest_api, id)

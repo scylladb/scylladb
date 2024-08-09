@@ -115,7 +115,7 @@
                "parameters":[
                   {
                      "name":"task_id",
-                     "description":"The uuid of a task to abort",
+                     "description":"The uuid of a task to abort; if the task is not abortable, 403 status code is returned",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
