@@ -154,8 +154,7 @@ public:
 protected:
     using get_limit_result = bo::result<uint64_t, exceptions::invalid_request_exception>;
     get_limit_result get_limit(const query_options& options, const std::optional<expr::expression>& limit) const;
-    static uint64_t get_inner_loop_limit(const select_statement::get_limit_result& limit, const query_options& options,
-       const expr::unset_bind_variable_guard& unset_guard, bool is_aggregate);
+    static uint64_t get_inner_loop_limit(const select_statement::get_limit_result& limit, bool is_aggregate, uint64_t default_value = query::max_rows);
 
     bool needs_post_query_ordering() const;
     virtual void update_stats_rows_read(int64_t rows_read) const {

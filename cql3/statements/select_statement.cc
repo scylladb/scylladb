@@ -285,7 +285,7 @@ select_statement::make_partition_slice(const query_options& options) const
     }
 
     const uint64_t per_partition_limit = get_inner_loop_limit(get_limit(options, _per_partition_limit),
-        options, _per_partition_limit_unset_guard, _selection->is_aggregate(), query::partition_max_rows);
+        _selection->is_aggregate(), query::partition_max_rows);
     return query::partition_slice(std::move(bounds),
         std::move(static_columns), std::move(regular_columns), _opts, nullptr, per_partition_limit);
 }
@@ -313,10 +313,9 @@ select_statement::get_limit_result select_statement::get_limit(
     }
 }
 
-uint64_t select_statement::get_inner_loop_limit(const select_statement::get_limit_result& limit, const query_options& options,
-    const expr::unset_bind_variable_guard& unset_guard, bool is_aggregate, uint64_t default_value)
+uint64_t select_statement::get_inner_loop_limit(const select_statement::get_limit_result& limit, bool is_aggregate, uint64_t default_value)
 {
-    if (!limit.has_value() || unset_guard.is_unset(options) || is_aggregate) {
+    if (!limit.has_value() || is_aggregate) {
         return default_value;
     }
     return limit.value();
@@ -371,7 +370,7 @@ select_statement::do_execute(query_processor& qp,
     validate_for_read(cl);
 
     const auto parsed_limit = get_limit(options, _limit);
-    const uint64_t inner_loop_limit = get_inner_loop_limit(parsed_limit, options, _limit_unset_guard, _selection->is_aggregate());
+    const uint64_t inner_loop_limit = get_inner_loop_limit(parsed_limit, _selection->is_aggregate());
     auto now = gc_clock::now();
 
     _stats.filtered_reads += _restrictions_need_filtering;
@@ -604,7 +603,7 @@ indexed_table_select_statement::prepare_command_for_base_query(query_processor& 
             std::move(slice),
             qp.proxy().get_max_result_size(slice),
             query::tombstone_limit(qp.proxy().get_tombstone_limit()),
-            query::row_limit(get_inner_loop_limit(get_limit(options, _limit), options, _limit_unset_guard, _selection->is_aggregate())),
+            query::row_limit(get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate())),
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
@@ -1386,7 +1385,7 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
     using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
-    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), options, _limit_unset_guard, _selection->is_aggregate());
+    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
     return read_posting_list(qp, options, limit, state, now, timeout, false).then(utils::result_wrap(
             [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
@@ -1436,7 +1435,7 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
     using value_type = std::tuple<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
-    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), options, _limit_unset_guard, _selection->is_aggregate());
+    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
     return read_posting_list(qp, options, limit, state, now, timeout, true).then(utils::result_wrap(
             [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
 
@@ -1724,7 +1723,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
 
     auto cl = options.get_consistency();
 
-    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), options, _limit_unset_guard, _selection->is_aggregate());
+    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
     auto now = gc_clock::now();
 
     _stats.filtered_reads += _restrictions_need_filtering;
