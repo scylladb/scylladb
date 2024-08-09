@@ -1332,7 +1332,14 @@ scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_gener
 
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc', 'utils/exceptions.cc']
 
-scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/scylla-nodetool.cc', 'tools/schema_loader.cc', 'tools/utils.cc', 'tools/lua_sstable_consumer.cc']
+scylla_tools = ['tools/read_mutation.cc',
+                'tools/scylla-types.cc',
+                'tools/scylla-sstable.cc',
+                'tools/scylla-nodetool.cc',
+                'tools/schema_loader.cc',
+                'tools/load_system_tablets.cc',
+                'tools/utils.cc',
+                'tools/lua_sstable_consumer.cc']
 scylla_perfs = ['test/perf/perf_alternator.cc',
                 'test/perf/perf_fast_forward.cc',
                 'test/perf/perf_row_cache_update.cc',
@@ -1483,7 +1490,7 @@ deps['test/boost/exceptions_optimized_test'] = ['test/boost/exceptions_optimized
 deps['test/boost/exceptions_fallback_test'] = ['test/boost/exceptions_fallback_test.cc', 'utils/exceptions.cc']
 
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
-deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc']
+deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc', 'tools/read_mutation.cc']
 deps['test/boost/rust_test'] += ['rust/inc/src/lib.rs']
 
 deps['test/boost/group0_cmd_merge_test'] += ['test/lib/expr_test_utils.cc']
