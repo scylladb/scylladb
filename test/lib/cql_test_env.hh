@@ -181,6 +181,8 @@ public:
 
     virtual sharded<service::storage_service>& get_storage_service() = 0;
 
+    virtual sharded<tasks::task_manager>& get_task_manager() = 0;
+
     data_dictionary::database data_dictionary();
 };
 

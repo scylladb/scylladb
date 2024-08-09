@@ -394,6 +394,10 @@ public:
         return _ss;
     }
 
+    virtual sharded<tasks::task_manager>& get_task_manager() override {
+        return _task_manager;
+    }
+
     virtual future<> refresh_client_state() override {
         return _core_local.invoke_on_all([] (core_local_state& state) {
             return state.client_state.maybe_update_per_service_level_params();

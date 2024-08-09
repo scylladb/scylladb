@@ -34,6 +34,7 @@ target_sources(db
     view/row_locking.cc
     sstables-format-selector.cc
     snapshot-ctl.cc
+    snapshot/backup_task.cc
     rate_limiter.cc
     per_partition_rate_limit_options.cc)
 target_include_directories(db

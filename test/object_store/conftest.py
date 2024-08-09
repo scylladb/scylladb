@@ -34,6 +34,15 @@ def pytest_addoption(parser):
                         help='password for authentication')
 
 
+def format_tuples(tuples=None, **kwargs):
+    '''format a dict to structured values (tuples) in CQL'''
+    if tuples is None:
+        tuples = {}
+    tuples.update(kwargs)
+    body = ', '.join(f"'{key}': '{value}'" for key, value in tuples.items())
+    return f'{{ {body} }}'
+
+
 class S3_Server:
     def __init__(self, tempdir: str, address: str, port: int, acc_key: str, secret_key: str, region: str, bucket_name):
         self.tempdir = tempdir

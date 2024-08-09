@@ -15,9 +15,26 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db/snapshot-ctl.hh"
+#include "db/snapshot/backup_task.hh"
 #include "replica/database.hh"
+#include "sstables/sstables_manager.hh"
+
+logging::logger snap_log("snapshots");
 
 namespace db {
+
+snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm)
+    : _db(db)
+    , _task_manager_module(make_shared<snapshot::task_manager_module>(tm))
+    , _storage_manager(sstm)
+{
+    tm.register_module("snapshot", _task_manager_module);
+}
+
+future<> snapshot_ctl::stop() {
+    co_await _ops.close();
+    co_await _task_manager_module->stop();
+}
 
 future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter) {
     auto& ks = _db.local().find_keyspace(ks_name);
@@ -40,15 +57,6 @@ std::invoke_result_t<Func> snapshot_ctl::run_snapshot_modify_operation(Func&& f)
     return with_gate(_ops, [f = std::move(f), this] () {
         return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
             return with_lock(snap._lock.for_write(), std::move(f));
-        });
-    });
-}
-
-template <typename Func>
-std::invoke_result_t<Func> snapshot_ctl::run_snapshot_list_operation(Func&& f) {
-    return with_gate(_ops, [f = std::move(f), this] () {
-        return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
-            return with_lock(snap._lock.for_read(), std::move(f));
         });
     });
 }
@@ -124,6 +132,13 @@ future<int64_t> snapshot_ctl::true_snapshots_size() {
         }
         co_return total;
     }));
+}
+
+future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring bucket, sstring keyspace, sstring snapshot_name) {
+    auto cln = _storage_manager.get_endpoint_client(endpoint);
+    snap_log.info("Backup sstables from {}({}) to {}", keyspace, snapshot_name, endpoint);
+    auto task = co_await _task_manager_module->make_and_start_task<::db::snapshot::backup_task_impl>({}, *this, std::move(cln), std::move(bucket), keyspace, snapshot_name);
+    co_return task->id();
 }
 
 future<int64_t> snapshot_ctl::true_snapshots_size(sstring ks, sstring cf) {
