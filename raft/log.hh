@@ -134,8 +134,10 @@ public:
     // This call will update the log to point to the new snapshot
     // and will truncate the log prefix so that the number of
     // remaining applied entries is <= max_trailing_entries and their total size is <= max_trailing_bytes.
-    // Return value specifies the size in bytes of the dropped log entries.
-    size_t apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entries, size_t max_trailing_bytes);
+    // Return: the value that specifies the size in bytes of the dropped log entries and the first index
+    //         in the log after tranction
+    std::tuple<size_t, index_t> apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entries,
+        size_t max_trailing_bytes);
 
     // 3.5
     // Raft maintains the following properties, which
