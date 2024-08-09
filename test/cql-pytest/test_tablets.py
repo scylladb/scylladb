@@ -13,6 +13,7 @@
 #############################################################################
 
 import pytest
+from contextlib import nullcontext as does_not_raise
 from util import new_test_keyspace, new_test_table, unique_name, index_table_name
 from cassandra.protocol import ConfigurationException, InvalidRequest
 
@@ -45,6 +46,18 @@ def test_create_loop_with_tablets(cql, test_keyspace_128_tablets):
     for i in range(100):
         cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int)")
         cql.execute("DROP TABLE " + table)
+
+@pytest.mark.parametrize(
+    "strategy_name, expectation",
+    [('SimpleStrategy', pytest.raises(InvalidRequest, match="\"SimpleStrategy\" is not supported with tablets")),
+     ('NetworkTopologyStrategy', does_not_raise()),
+     ('EverywhereStrategy', pytest.raises(InvalidRequest, match="\"EverywhereStrategy\" is not supported with tablets")),
+     ('LocalStrategy', pytest.raises(InvalidRequest, match="\"LocalStrategy\" is not supported with tablets"))])
+def test_create_tablets_keyspace_with_different_strategies(strategy_name, expectation, cql, skip_without_tablets):
+    with expectation:
+        ksdef = f"WITH REPLICATION = {{'class': '{strategy_name}', 'replication_factor': 1}} AND TABLETS = {{'enabled': true}}"
+        with new_test_keyspace(cql, ksdef) as keyspace:
+            pass
 
 
 # Converting vnodes-based keyspace to tablets-based in not implemented yet
