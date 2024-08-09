@@ -276,9 +276,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
         tm.update_host_id(host1, ip1);
         tm.update_host_id(host2, ip2);
         tm.update_host_id(host3, ip3);
-        tm.update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, node1_shard_count);
-        tm.update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, node2_shard_count);
-        tm.update_topology(host3, locator::endpoint_dc_rack::default_location, std::nullopt, node3_shard_count);
+        tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, node1_shard_count);
+        tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, node2_shard_count);
+        tm.update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::normal, node3_shard_count);
         return make_ready_future<>();
     }).get();
 

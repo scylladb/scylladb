@@ -414,7 +414,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // as it might be accepting or coordinating requests.
                 bool include_decommissioning_node = n.second.state == node_state::decommissioning
                         && (cmd.cmd == raft_topology_cmd::command::barrier || cmd.cmd == raft_topology_cmd::command::barrier_and_drain);
-                return !exclude_nodes.contains(n.first) && (n.second.state == node_state::normal || include_decommissioning_node);
+                // Zero-token nodes have no ranges to stream.
+                bool ignore_in_streaming = n.second.ring.tokens.empty() && cmd.cmd == raft_topology_cmd::command::stream_ranges;
+                return !exclude_nodes.contains(n.first) && !ignore_in_streaming
+                        && (n.second.state == node_state::normal || include_decommissioning_node);
             })
             | boost::adaptors::map_keys;
         if (drop_and_retake) {
@@ -1585,11 +1588,27 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 switch (node.rs->state) {
                     case node_state::bootstrapping: {
-                        SCYLLA_ASSERT(!node.rs->ring);
+                        SCYLLA_ASSERT(node.rs->ring.tokens.empty());
                         auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
                         auto tokens_string = std::get<join_param>(node.req_param.value()).tokens_string;
-                        // A node have just been accepted and does not have tokens assigned yet
-                        // Need to assign random tokens to the node
+
+                        auto guard = take_guard(std::move(node));
+                        topology_mutation_builder builder(guard.write_timestamp());
+
+                        // A node has just been accepted. If it is a zero-token node, we can
+                        // instantly move its state to normal. Otherwise, we need to assign
+                        // random tokens and prepare a new CDC generation.
+                        if (num_tokens == 0 && tokens_string.empty()) {
+                            topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
+                            builder.del_transition_state()
+                                   .with_node(node.id)
+                                   .set("node_state", node_state::normal);
+                            rtbuilder.done();
+                            auto reason = ::format("bootstrap: joined a zero-token node {}", node.id);
+                            co_await update_topology_state(std::move(guard), {builder.build(), rtbuilder.build()}, reason);
+                            break;
+                        }
+
                         auto tmptr = get_token_metadata_ptr();
                         std::unordered_set<token> bootstrap_tokens;
                         try {
@@ -1598,10 +1617,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             _rollback = fmt::format("Failed to assign tokens: {}", std::current_exception());
                         }
 
-                        auto [gen_uuid, guard, mutation] = co_await prepare_and_broadcast_cdc_generation_data(
-                                tmptr, take_guard(std::move(node)), bootstrapping_info{bootstrap_tokens, *node.rs});
-
-                        topology_mutation_builder builder(guard.write_timestamp());
+                        auto [gen_uuid, guard_, mutation] = co_await prepare_and_broadcast_cdc_generation_data(
+                                tmptr, std::move(guard), bootstrapping_info{bootstrap_tokens, *node.rs});
 
                         // Write the new CDC generation data through raft.
                         builder.set_transition_state(topology::transition_state::commit_cdc_generation)
@@ -1610,11 +1627,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                .set("tokens", bootstrap_tokens);
                         auto reason = ::format(
                             "bootstrap: insert tokens and CDC generation data (UUID: {})", gen_uuid);
-                        co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
+                        co_await update_topology_state(std::move(guard_), {std::move(mutation), builder.build()}, reason);
                     }
                         break;
                     case node_state::replacing: {
-                        SCYLLA_ASSERT(!node.rs->ring);
+                        SCYLLA_ASSERT(node.rs->ring.tokens.empty());
                         // Make sure all nodes are no longer trying to write to a node being replaced. This is important if the new node have the same IP, so that old write will not
                         // go to the new node by mistake
                         try {
@@ -1634,14 +1651,35 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
                         auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
                         SCYLLA_ASSERT(it != _topo_sm._topology.normal_nodes.end());
-                        SCYLLA_ASSERT(it->second.ring && it->second.state == node_state::normal);
+                        SCYLLA_ASSERT(it->second.state == node_state::normal);
 
                         topology_mutation_builder builder(node.guard.write_timestamp());
+
+                        // If a zero-token node is replacing another zero-token node,
+                        // we can instantly move the new node's state to normal.
+                        if (it->second.ring.tokens.empty()) {
+                            node = retake_node(co_await remove_from_group0(std::move(node.guard), replaced_id), node.id);
+
+                            topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
+                            builder.del_transition_state()
+                                   .with_node(node.id)
+                                   .set("node_state", node_state::normal);
+
+                            // Move the old node to the left state.
+                            topology_mutation_builder builder2(node.guard.write_timestamp());
+                            cleanup_ignored_nodes_on_left(builder2, replaced_id);
+                            builder2.with_node(replaced_id)
+                                    .set("node_state", node_state::left);
+                            rtbuilder.done();
+                            co_await update_topology_state(take_guard(std::move(node)), {builder.build(), builder2.build(), rtbuilder.build()},
+                                    fmt::format("replace: replaced node {} with the new zero-token node {}", replaced_id, node.id));
+                            break;
+                        }
 
                         builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
-                               .set("tokens", it->second.ring->tokens);
+                               .set("tokens", it->second.ring.tokens);
                         co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
                                 "replace: transition to tablet_draining and take ownership of the replaced node's tokens");
                     }
@@ -1802,16 +1840,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         co_await _group0.make_nonvoter(replaced_node_id, _as);
                     }
                 }
+
                 utils::get_local_injector().inject("crash_coordinator_before_stream", [] { abort(); });
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
                 auto state = node.rs->state;
                 try {
-                    if (node.rs->state == node_state::removing) {
-                        // tell all nodes to stream data of the removed node to new range owners
-                        node = co_await exec_global_command(std::move(node), cmd);
-                    } else {
-                        // Tell joining/leaving/replacing node to stream its ranges
-                        node = co_await exec_direct_command(std::move(node), cmd);
+                    // No need to stream data when the node is zero-token.
+                    if (!node.rs->ring.tokens.empty()) {
+                        if (node.rs->state == node_state::removing) {
+                            // tell all nodes to stream data of the removed node to new range owners
+                            node = co_await exec_global_command(std::move(node), cmd);
+                        } else {
+                            // Tell joining/leaving/replacing node to stream its ranges
+                            node = co_await exec_direct_command(std::move(node), cmd);
+                        }
                     }
                 } catch (term_changed_error&) {
                     throw;
@@ -2156,7 +2198,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 rtbuilder.set("start_time", db_clock::now());
                 switch (node.request.value()) {
                     case topology_request::join: {
-                        SCYLLA_ASSERT(!node.rs->ring);
+                        SCYLLA_ASSERT(node.rs->ring.tokens.empty());
                         // Write chosen tokens through raft.
                         builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
@@ -2167,7 +2209,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         break;
                         }
                     case topology_request::leave:
-                        SCYLLA_ASSERT(node.rs->ring);
                         // start decommission and put tokens of decommissioning nodes into write_both_read_old state
                         // meaning that reads will go to the replica being decommissioned
                         // but writes will go to new owner as well
@@ -2180,8 +2221,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                                        "start decommission");
                         break;
                     case topology_request::remove: {
-                        SCYLLA_ASSERT(node.rs->ring);
-
                         builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
@@ -2192,8 +2231,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         break;
                         }
                     case topology_request::replace: {
-                        SCYLLA_ASSERT(!node.rs->ring);
-
                         builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
                                .set("node_state", node_state::replacing)
@@ -2478,18 +2515,20 @@ future<bool> topology_coordinator::maybe_start_tablet_split_finalization(group0_
 
 future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
     auto tm = get_token_metadata_ptr();
-    auto& topology = tm->get_topology();
 
     locator::load_stats stats;
     static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
     std::unordered_map<table_id, size_t> total_replicas;
 
-    for (auto& [dc, nodes] : topology.get_datacenter_nodes()) {
+    for (auto& [dc, endpoints] : tm->get_datacenter_token_owners()) {
         locator::load_stats dc_stats;
-        rtlogger.info("raft topology: Refreshing table load stats for DC {} that has {} endpoints", dc, nodes.size());
-        co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
-            auto dst = node->host_id();
+        rtlogger.info("raft topology: Refreshing table load stats for DC {} that has {} endpoints", dc, endpoints.size());
+        co_await coroutine::parallel_for_each(endpoints, [&] (const auto& endpoint) -> future<> {
+            auto dst = tm->get_host_id_if_known(endpoint);
+            if (!dst) {
+                co_return;
+            }
 
             _as.check();
 
@@ -2507,9 +2546,9 @@ future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
             auto sub = _as.subscribe(request_abort);
 
             auto node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
-                                                                                             netw::msg_addr(id2ip(dst)),
+                                                                                             netw::msg_addr(id2ip(*dst)),
                                                                                              as,
-                                                                                             raft::server_id(dst.uuid()));
+                                                                                             raft::server_id(dst->uuid()));
 
             dc_stats += node_stats;
         });
@@ -2609,7 +2648,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     auto sl_version = co_await _sys_ks.get_service_levels_version();
     if (!sl_version || *sl_version < 2) {
         rtlogger.info("migrating service levels data");
-        co_await qos::service_level_controller::migrate_to_v2(tmptr->get_all_endpoints().size(), _sys_ks, _sys_ks.query_processor(), _group0.client(), _as);
+        co_await qos::service_level_controller::migrate_to_v2(tmptr->get_normal_token_owners().size(), _sys_ks, _sys_ks.query_processor(), _group0.client(), _as);
     }
 
     auto auth_version = co_await _sys_ks.get_auth_version();
@@ -2655,27 +2694,25 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     std::set<sstring> enabled_features;
 
     // Build per-node state
-    for (const auto& host_id: tmptr->get_all_endpoints()) {
-        const auto ep = tmptr->get_endpoint_for_host_id_if_known(host_id);
-        if (!ep) {
-            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node with ID {}, as its IP is not known", host_id));
-        }
-        const auto eptr = _gossiper.get_endpoint_state_ptr(*ep);
+    for (const auto* node: tmptr->get_topology().get_nodes()) {
+        const auto& host_id = node->host_id();
+        const auto& ep = node->endpoint();
+        const auto eptr = _gossiper.get_endpoint_state_ptr(ep);
         if (!eptr) {
-            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{} as gossip contains no data for it", host_id, *ep));
+            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{} as gossip contains no data for it", host_id, ep));
         }
 
         const auto& epmap = eptr->get_application_state_map();
 
-        const auto datacenter = get_application_state(host_id, *ep, epmap, gms::application_state::DC);
-        const auto rack = get_application_state(host_id, *ep, epmap, gms::application_state::RACK);
+        const auto datacenter = get_application_state(host_id, ep, epmap, gms::application_state::DC);
+        const auto rack = get_application_state(host_id, ep, epmap, gms::application_state::RACK);
         const auto tokens_v = tmptr->get_tokens(host_id);
         const std::unordered_set<dht::token> tokens(tokens_v.begin(), tokens_v.end());
-        const auto release_version = get_application_state(host_id, *ep, epmap, gms::application_state::RELEASE_VERSION);
+        const auto release_version = get_application_state(host_id, ep, epmap, gms::application_state::RELEASE_VERSION);
         const auto num_tokens = tokens.size();
-        const auto shard_count = get_application_state(host_id, *ep, epmap, gms::application_state::SHARD_COUNT);
-        const auto ignore_msb = get_application_state(host_id, *ep, epmap, gms::application_state::IGNORE_MSB_BITS);
-        const auto supported_features_s = get_application_state(host_id, *ep, epmap, gms::application_state::SUPPORTED_FEATURES);
+        const auto shard_count = get_application_state(host_id, ep, epmap, gms::application_state::SHARD_COUNT);
+        const auto ignore_msb = get_application_state(host_id, ep, epmap, gms::application_state::IGNORE_MSB_BITS);
+        const auto supported_features_s = get_application_state(host_id, ep, epmap, gms::application_state::SUPPORTED_FEATURES);
         const auto supported_features = gms::feature_service::to_feature_set(supported_features_s);
 
         if (enabled_features.empty()) {

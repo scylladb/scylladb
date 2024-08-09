@@ -183,10 +183,9 @@ std::vector<sstring> check_against_restricted_replication_strategies(
             rs_fail_list.emplace_back(locator::replication_strategy_type::simple);
         } else if (simple_strategy_restriction == db::tri_mode_restriction_t::mode::WARN) {
             rs_warn_list.emplace_back(locator::replication_strategy_type::simple);
-        } else if (auto &topology = qp.proxy().get_token_metadata_ptr()->get_topology();
-                topology.get_datacenter_endpoints().size() > 1) {
+        } else if (qp.proxy().get_token_metadata_ptr()->get_datacenter_token_owners().size() > 1) {
             // Scylla was configured to allow SimpleStrategy, but let's warn
-            // if it's used on a cluster which *already* has multiple DCs:
+            // if it's used on a cluster which *already* has multiple DCs with token owners:
             warnings.emplace_back("Using SimpleStrategy in a multi-datacenter environment is not recommended.");
         }
     }

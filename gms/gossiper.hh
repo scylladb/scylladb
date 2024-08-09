@@ -316,6 +316,11 @@ public:
      */
     std::set<inet_address> get_unreachable_token_owners() const;
 
+    /**
+     * @return a list of unreachable nodes
+     */
+    std::set<inet_address> get_unreachable_nodes() const;
+
     int64_t get_endpoint_downtime(inet_address ep) const noexcept;
 
     /**

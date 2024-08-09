@@ -477,7 +477,7 @@ const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_addr
     return add_node(id,
                     opt_ep.value_or(inet_address{}),
                     opt_dr.value_or(endpoint_dc_rack::default_location),
-                    opt_st.value_or(node::state::normal),
+                    opt_st.value_or(node::state::none),
                     shard_count.value_or(0));
 }
 
@@ -563,6 +563,26 @@ void topology::for_each_node(std::function<void(const node*)> func) const {
             func(np.get());
         }
     }
+}
+
+std::unordered_set<const node*> topology::get_nodes() const {
+    std::unordered_set<const node*> nodes;
+    for (const auto& np : _nodes) {
+        if (np && !np->left()) {
+            nodes.insert(np.get());
+        }
+    }
+    return nodes;
+}
+
+std::unordered_set<gms::inet_address> topology::get_all_ips() const {
+    std::unordered_set<gms::inet_address> ips;
+    for (const auto& np : _nodes) {
+        if (np && !np->left()) {
+            ips.insert(np->endpoint());
+        }
+    }
+    return ips;
 }
 
 } // namespace locator

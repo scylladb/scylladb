@@ -75,9 +75,6 @@ std::unordered_set<dht::token> endpoint_state::get_tokens() const {
     std::unordered_set<dht::token> ret;
     if (auto app_state = get_application_state_ptr(application_state::TOKENS)) {
         ret = versioned_value::tokens_from_string(app_state->value());
-        if (ret.empty()) {
-            on_internal_error_noexcept(logger, format("Node {} has empty tokens state", get_host_id()));
-        }
     }
     return ret;
 }

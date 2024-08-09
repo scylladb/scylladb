@@ -310,13 +310,20 @@ public:
 
     token get_predecessor(token t) const;
 
-    const std::unordered_set<host_id>& get_all_endpoints() const;
+    const std::unordered_set<host_id>& get_normal_token_owners() const;
 
-    std::unordered_set<gms::inet_address> get_all_ips() const;
+    std::unordered_set<gms::inet_address> get_normal_token_owners_ips() const;
+
+    void for_each_token_owner(std::function<void(const node*)> func) const;
 
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;
+
+    std::unordered_map<sstring, std::unordered_set<inet_address>> get_datacenter_token_owners() const;
+
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>
+    get_datacenter_racks_token_owners() const;
 
     // Updates the read_new flag, switching read requests from
     // the old endpoints to the new ones during topology changes:

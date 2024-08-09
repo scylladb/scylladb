@@ -241,7 +241,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         auto add_host_to_topology = [&] (token_metadata& tm, int i) {
             tm.update_host_id(hosts[i], ips[i]);
-            tm.update_topology(hosts[i], rack1, std::nullopt, shard_count);
+            tm.update_topology(hosts[i], rack1, node::state::normal, shard_count);
         };
 
         for (int i = 0; i < n_hosts; ++i) {

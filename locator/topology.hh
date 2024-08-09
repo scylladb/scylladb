@@ -137,6 +137,10 @@ public:
         }
     }
 
+    bool is_member() const noexcept {
+        return is_normal() || is_leaving();
+    }
+
     bool left() const noexcept {
         return _state == state::left;
     }
@@ -343,6 +347,10 @@ public:
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
     void for_each_node(std::function<void(const node*)> func) const;
+
+    std::unordered_set<const node*> get_nodes() const;
+
+    std::unordered_set<gms::inet_address> get_all_ips() const;
 
     host_id my_host_id() const noexcept {
         return _cfg.this_host_id;

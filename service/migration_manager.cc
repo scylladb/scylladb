@@ -1178,7 +1178,8 @@ future<> migration_manager::on_change(gms::inet_address endpoint, const gms::app
             return make_ready_future();
         }
         const auto host_id = _gossiper.get_host_id(endpoint);
-        if (_storage_proxy.get_token_metadata_ptr()->is_normal_token_owner(host_id)) {
+        const auto* node = _storage_proxy.get_token_metadata_ptr()->get_topology().find_node(host_id);
+        if (node && node->is_member()) {
             schedule_schema_pull(endpoint, *ep_state);
         }
         return make_ready_future<>();

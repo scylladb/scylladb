@@ -60,8 +60,8 @@ SEASTAR_THREAD_TEST_CASE(test_pending_and_read_endpoints_for_everywhere_strategy
     auto token_metadata = create_token_metadata(e1_id);
     token_metadata->update_host_id(e1_id, e1);
     token_metadata->update_host_id(e2_id, e2);
-    token_metadata->update_topology(e1_id, get_dc_rack(e1_id));
-    token_metadata->update_topology(e2_id, get_dc_rack(e2_id));
+    token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
+    token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_normal_tokens({t1}, e1_id).get();
     token_metadata->add_bootstrap_token(t2, e2_id);
     token_metadata->set_read_new(token_metadata::read_new_t::yes);
@@ -84,8 +84,8 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_second_node) {
     auto token_metadata = create_token_metadata(e1_id);
     token_metadata->update_host_id(e1_id, e1);
     token_metadata->update_host_id(e2_id, e2);
-    token_metadata->update_topology(e1_id, get_dc_rack(e1_id));
-    token_metadata->update_topology(e2_id, get_dc_rack(e2_id));
+    token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
+    token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_normal_tokens({t1}, e1_id).get();
     token_metadata->add_bootstrap_token(t2, e2_id);
 
@@ -118,9 +118,9 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_with_replicas) {
     token_metadata->update_host_id(e1_id, e1);
     token_metadata->update_host_id(e2_id, e2);
     token_metadata->update_host_id(e3_id, e3);
-    token_metadata->update_topology(e1_id, get_dc_rack(e1_id));
-    token_metadata->update_topology(e2_id, get_dc_rack(e2_id));
-    token_metadata->update_topology(e3_id, get_dc_rack(e3_id));
+    token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
+    token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
+    token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
     token_metadata->update_normal_tokens({t1, t1000}, e2_id).get();
     token_metadata->update_normal_tokens({t10}, e3_id).get();
     token_metadata->add_bootstrap_token(t100, e1_id);
@@ -154,9 +154,9 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_leave_with_replicas) {
     token_metadata->update_host_id(e1_id, e1);
     token_metadata->update_host_id(e2_id, e2);
     token_metadata->update_host_id(e3_id, e3);
-    token_metadata->update_topology(e1_id, get_dc_rack(e1_id));
-    token_metadata->update_topology(e2_id, get_dc_rack(e2_id));
-    token_metadata->update_topology(e3_id, get_dc_rack(e3_id));
+    token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
+    token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
+    token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
     token_metadata->update_normal_tokens({t1, t1000}, e2_id).get();
     token_metadata->update_normal_tokens({t10}, e3_id).get();
     token_metadata->update_normal_tokens({t100}, e1_id).get();
@@ -194,10 +194,10 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_replace_with_replicas) {
     token_metadata->update_host_id(e2_id, e2);
     token_metadata->update_host_id(e3_id, e3);
     token_metadata->update_host_id(e4_id, e4);
-    token_metadata->update_topology(e1_id, get_dc_rack(e1_id));
-    token_metadata->update_topology(e2_id, get_dc_rack(e2_id));
-    token_metadata->update_topology(e3_id, get_dc_rack(e3_id));
-    token_metadata->update_topology(e4_id, get_dc_rack(e4_id));
+    token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
+    token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
+    token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
+    token_metadata->update_topology(e4_id, get_dc_rack(e4_id), node::state::normal);
     token_metadata->update_normal_tokens({t1000}, e1_id).get();
     token_metadata->update_normal_tokens({t1, t100}, e2_id).get();
     token_metadata->update_normal_tokens({t10}, e3_id).get();
@@ -236,9 +236,9 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
     token_metadata->update_host_id(e1_id, e1);
     token_metadata->update_host_id(e2_id, e2);
     token_metadata->update_host_id(e3_id, e3);
-    token_metadata->update_topology(e1_id, get_dc_rack(e1_id));
-    token_metadata->update_topology(e2_id, get_dc_rack(e2_id));
-    token_metadata->update_topology(e3_id, get_dc_rack(e3_id));
+    token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
+    token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
+    token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
     token_metadata->update_normal_tokens({t1, t1000}, e2_id).get();
     token_metadata->update_normal_tokens({t10}, e3_id).get();
     token_metadata->add_bootstrap_token(t100, e1_id);

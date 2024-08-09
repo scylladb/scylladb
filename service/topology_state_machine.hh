@@ -84,7 +84,7 @@ struct replica_state {
     seastar::sstring datacenter;
     seastar::sstring rack;
     seastar::sstring release_version;
-    std::optional<ring_slice> ring; // if engaged contain the set of tokens the node owns together with their state
+    ring_slice ring; // contains the set of tokens the node owns together with their state
     size_t shard_count;
     uint8_t ignore_msb;
     std::set<sstring> supported_features;

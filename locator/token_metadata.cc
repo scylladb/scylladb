@@ -246,17 +246,25 @@ public:
 
     token get_predecessor(token t) const;
 
-    // Returns nodes that are officially part of the ring. It does not include
-    // node that is still joining the cluster, e.g., a node that is still
+    // Returns nodes that are officially part of the ring. It does not include:
+    // - nodes that are still joining the cluster, e.g., a node that is still
     // streaming data before it finishes the bootstrap process and turns into
-    // NORMAL status.
-    const std::unordered_set<host_id>& get_all_endpoints() const noexcept {
+    // NORMAL status,
+    // - zero-token nodes (the ones with join_ring=false).
+    const std::unordered_set<host_id>& get_normal_token_owners() const noexcept {
         return _normal_token_owners;
     }
+
+    void for_each_token_owner(std::function<void(const node*)> func) const;
 
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;
+
+    std::unordered_map<sstring, std::unordered_set<inet_address>> get_datacenter_token_owners() const;
+
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>
+    get_datacenter_racks_token_owners() const;
 private:
     future<> update_normal_token_owners();
 public:
@@ -557,8 +565,8 @@ std::unordered_map<inet_address, host_id> token_metadata_impl::get_endpoint_to_h
     std::unordered_map<inet_address, host_id> map;
     map.reserve(nodes.size());
     for (const auto& [endpoint, node] : nodes) {
-        // Restrict to token-owners
-        if (!(node->is_normal() || node->is_leaving())) {
+        // Restrict to members
+        if (!node->is_member()) {
             continue;
         }
         if (const auto& host_id = node->host_id()) {
@@ -781,6 +789,44 @@ future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rac
 
 size_t token_metadata_impl::count_normal_token_owners() const {
     return _normal_token_owners.size();
+}
+
+void token_metadata_impl::for_each_token_owner(std::function<void(const node*)> func) const {
+    auto nodes = _topology.get_nodes();
+    for (const auto* np : nodes) {
+        if (is_normal_token_owner(np->host_id())) {
+            func(np);
+        }
+    }
+}
+
+std::unordered_map<sstring, std::unordered_set<inet_address>> token_metadata_impl::get_datacenter_token_owners() const {
+    std::unordered_map<sstring, std::unordered_set<inet_address>> datacenter_token_owners;
+    for (const auto& [dc, ips] : _topology.get_datacenter_endpoints()) {
+        std::unordered_set<inet_address> token_owners;
+        std::copy_if(ips.begin(), ips.end(), std::inserter(token_owners, token_owners.begin()), [this] (const auto& ip) {
+            return is_normal_token_owner(get_host_id_if_known(ip).value_or(host_id{}));
+        });
+        datacenter_token_owners[dc] = std::move(token_owners);
+    }
+    return datacenter_token_owners;
+}
+
+std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>
+token_metadata_impl::get_datacenter_racks_token_owners() const {
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>> dc_racks_token_owners;
+    for (const auto& [dc, racks] : _topology.get_datacenter_racks()) {
+        std::unordered_map<sstring, std::unordered_set<inet_address>> racks_token_owners;
+        for (const auto& [rack, ips] : racks) {
+            std::unordered_set<inet_address> token_owners;
+            std::copy_if(ips.begin(), ips.end(), std::inserter(token_owners, token_owners.begin()), [this] (const auto& ip) {
+                return is_normal_token_owner(get_host_id_if_known(ip).value_or(host_id{}));
+            });
+            racks_token_owners[rack] = std::move(token_owners);
+        }
+        dc_racks_token_owners[dc] = std::move(racks_token_owners);
+    }
+    return dc_racks_token_owners;
 }
 
 future<> token_metadata_impl::update_normal_token_owners() {
@@ -1094,12 +1140,12 @@ token_metadata::get_predecessor(token t) const {
 }
 
 const std::unordered_set<host_id>&
-token_metadata::get_all_endpoints() const {
-    return _impl->get_all_endpoints();
+token_metadata::get_normal_token_owners() const {
+    return _impl->get_normal_token_owners();
 }
 
-std::unordered_set<gms::inet_address> token_metadata::get_all_ips() const {
-    const auto& host_ids = _impl->get_all_endpoints();
+std::unordered_set<gms::inet_address> token_metadata::get_normal_token_owners_ips() const {
+    const auto& host_ids = _impl->get_normal_token_owners();
     std::unordered_set<gms::inet_address> result;
     result.reserve(host_ids.size());
     for (const auto& id: host_ids) {
@@ -1108,9 +1154,22 @@ std::unordered_set<gms::inet_address> token_metadata::get_all_ips() const {
     return result;
 }
 
+void token_metadata::for_each_token_owner(std::function<void(const node*)> func) const {
+    return _impl->for_each_token_owner(func);
+}
+
 size_t
 token_metadata::count_normal_token_owners() const {
     return _impl->count_normal_token_owners();
+}
+
+std::unordered_map<sstring, std::unordered_set<inet_address>> token_metadata::get_datacenter_token_owners() const {
+    return _impl->get_datacenter_token_owners();
+}
+
+std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>
+token_metadata::get_datacenter_racks_token_owners() const {
+    return _impl->get_datacenter_racks_token_owners();
 }
 
 void

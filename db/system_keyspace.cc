@@ -1914,12 +1914,6 @@ future<std::unordered_map<locator::host_id, gms::loaded_endpoint_state>> system_
         auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
         if (row.has("tokens")) {
             st.tokens = decode_tokens(deserialize_set_column(*peers(), row, "tokens"));
-            if (st.tokens.empty()) {
-                slogger.error("load_endpoint_state: node {}/{} has tokens column present but tokens are empty", host_id, ep);
-                continue;
-            }
-        } else {
-            slogger.warn("Endpoint {} has no tokens in system.{}", ep, PEERS);
         }
         if (row.has("data_center") && row.has("rack")) {
             st.opt_dc_rack.emplace(locator::endpoint_dc_rack {
@@ -1945,16 +1939,17 @@ future<std::unordered_map<locator::host_id, gms::loaded_endpoint_state>> system_
 future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
     co_await peers_table_read_fixup();
 
-    const auto res = co_await execute_cql(format("SELECT peer, tokens FROM system.{}", PEERS));
+    const auto res = co_await execute_cql(format("SELECT peer, rpc_address FROM system.{}", PEERS));
     SCYLLA_ASSERT(res);
 
     std::vector<gms::inet_address> ret;
     for (const auto& row: *res) {
-        if (!row.has("tokens")) {
-            // Ignore rows that don't have tokens. Such rows may
-            // be introduced by code that persists parts of peer
-            // information (such as RAFT_ID) which may potentially
-            // race with deleting a peer (during node removal).
+        if (!row.has("rpc_address")) {
+            // In the Raft-based topology, we store the Host ID -> IP mapping
+            // of joining nodes in PEERS. We want to ignore such rows. To achieve
+            // it, we check the presence of rpc_address, but we could choose any
+            // column other than host_id and tokens (rows with no tokens can
+            // correspond to zero-token nodes).
             continue;
         }
         ret.emplace_back(gms::inet_address(row.get_as<net::inet_address>("peer")));
@@ -2099,7 +2094,7 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
 
 future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& tokens) {
     if (tokens.empty()) {
-        throw std::invalid_argument("remove_endpoint should be used instead");
+        co_return;
     }
 
     sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);
@@ -2887,23 +2882,6 @@ static std::set<sstring> decode_features(const set_type_impl::native_type& featu
     return fset;
 }
 
-static bool must_have_tokens(service::node_state nst) {
-    switch (nst) {
-    case service::node_state::none: return false;
-    // Bootstrapping and replacing nodes don't have tokens at first,
-    // they are inserted only at some point during bootstrap/replace
-    case service::node_state::bootstrapping: return false;
-    case service::node_state::replacing: return false;
-    // A decommissioning node doesn't have tokens at the end, they are
-    // removed during transition to the left_token_ring state.
-    case service::node_state::decommissioning: return false;
-    case service::node_state::removing: return true;
-    case service::node_state::rebuilding: return true;
-    case service::node_state::normal: return true;
-    case service::node_state::left: return false;
-    }
-}
-
 future<service::topology> system_keyspace::load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts) {
     auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
@@ -2935,22 +2913,9 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
 
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
 
-        std::optional<service::ring_slice> ring_slice;
+        service::ring_slice ring_slice;
         if (row.has("tokens")) {
-            auto tokens = decode_tokens(deserialize_set_column(*topology(), row, "tokens"));
-
-            if (tokens.empty()) {
-                on_fatal_internal_error(slogger, format(
-                    "load_topology_state: node {} has tokens column present but tokens are empty",
-                    host_id));
-            }
-
-            ring_slice = service::ring_slice {
-                .tokens = std::move(tokens),
-            };
-        } else if (must_have_tokens(nstate)) {
-            on_fatal_internal_error(slogger, format(
-                        "load_topology_state: node {} in {} state but missing ring slice", host_id, nstate));
+            ring_slice.tokens = decode_tokens(deserialize_set_column(*topology(), row, "tokens"));
         }
 
         std::optional<raft::server_id> replaced_id;
