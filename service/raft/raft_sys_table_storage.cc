@@ -183,17 +183,7 @@ future<> raft_sys_table_storage::store_snapshot_descriptor(const raft::snapshot_
                     cql3::query_processor::cache_internal::yes);
         }
 
-        if (preserve_log_entries > snap.idx.value()) {
-            static const auto store_latest_id_cql = format("INSERT INTO system.{} (group_id, snapshot_id) VALUES (?, ?)",
-                db::system_keyspace::RAFT);
-            co_await _qp.execute_internal(
-                store_latest_id_cql,
-                {_group_id.id, snap.id.id},
-                cql3::query_processor::cache_internal::yes
-            );
-        } else {
-            co_await update_snapshot_and_truncate_log_tail(snap, preserve_log_entries);
-        }
+        co_await update_snapshot_and_truncate_log_tail(snap, preserve_log_entries);
     });
 }
 
