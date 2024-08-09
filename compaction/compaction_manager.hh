@@ -394,7 +394,7 @@ public:
 
     // Remove a table from the compaction manager.
     // Cancel requests on table and wait for possible ongoing compactions.
-    future<> remove(compaction::table_state& t) noexcept;
+    future<> remove(compaction::table_state& t, const sstring& reason = "table removal") noexcept;
 
     const stats& get_stats() const {
         return _stats;
