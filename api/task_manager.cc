@@ -155,6 +155,8 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
             co_await task.abort();
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
+        } catch (tasks::task_not_abortable& e) {
+            throw httpd::base_exception{e.what(), http::reply::status_type::forbidden};
         }
         co_return json_void();
     });

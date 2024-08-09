@@ -209,14 +209,18 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
 future<> task_handler::abort() {
     co_await task_manager::invoke_on_task(_tm.container(), _id, [id = _id] (task_manager::task_variant task_v) -> future<> {
         return std::visit(overloaded_functor{
-            [] (task_manager::task_ptr task) -> future<> {
+            [id] (task_manager::task_ptr task) -> future<> {
                 if (!task->is_abortable()) {
-                    co_await coroutine::return_exception(std::runtime_error("Requested task cannot be aborted"));
+                    co_await coroutine::return_exception(task_not_abortable(id));
                 }
                 task->abort();
             },
             [id] (task_manager::virtual_task_ptr task) -> future<> {
-                return task->abort(id);
+                auto id_ = id;
+                if (!co_await task->is_abortable()) {
+                    co_await coroutine::return_exception(task_not_abortable(id_));
+                }
+                co_await task->abort(id_);
             }
         }, task_v);
     });
