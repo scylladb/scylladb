@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <functional>
 #include <set>
+#include <unordered_set>
 #include "seastarx.hh"
 #include "db/schema_features.hh"
 #include "gms/feature.hh"
@@ -63,10 +64,14 @@ class feature_service final : public peering_sharded_service<feature_service> {
     void unregister_feature(feature& f);
     friend class feature;
     std::unordered_map<sstring, std::reference_wrapper<feature>> _registered_features;
+    std::unordered_set<sstring> _suppressed_features;
 
     feature_config _config;
 
     future<> enable_features_on_startup(db::system_keyspace&);
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    void initialize_suppressed_features_set();
+#endif
 public:
     explicit feature_service(feature_config cfg);
     ~feature_service() = default;
