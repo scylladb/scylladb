@@ -8,7 +8,7 @@ from functools import partial
 from typing import Optional
 from test.pylib.internal_types import IPAddress, ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error_one_shot
+from test.pylib.rest_client import InjectionHandler, inject_error_one_shot
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
 from test.topology_tasks.task_manager_client import TaskManagerClient
@@ -157,22 +157,28 @@ async def check_remove_node_tasks_tree(manager: ManagerClient, tm: TaskManagerCl
 
     return servers, previous_vts + [virtual_task.id]
 
+async def poll_for_task(tm: TaskManagerClient, module_name: str, server: ServerInfo, expected_kind: str, expected_type: str):
+    async def _get_streaming_tasks(server: ServerInfo) -> list[TaskStats]:
+        return [stats for stats in await tm.list_tasks(server.ip_addr, module_name) if stats.kind == expected_kind and stats.type == expected_type]
+
+    async def _has_streaming_tasks(server: ServerInfo):
+        if len(await _get_streaming_tasks(server)) > 0:
+            return True
+
+    await wait_for(partial(_has_streaming_tasks, server), time.time() + 100.)  # Wait until streaming task is created.
+
+    streaming_tasks = await _get_streaming_tasks(server)
+    assert len(streaming_tasks) == 1
+
+    return streaming_tasks[0]
+
+
 async def check_decommission_tasks_tree(manager: ManagerClient, tm: TaskManagerClient,module_name: str, servers: list[ServerInfo],
                           previous_vts: list[TaskID]) -> tuple[list[ServerInfo], list[TaskID]]:
     async def _check_virtual_task(decommissioned_server: ServerInfo, handler):
-        async def _get_streaming_tasks(server: ServerInfo) -> list[TaskStats]:
-            return [stats for stats in await tm.list_tasks(server.ip_addr, module_name) if stats.kind == "node" and stats.type == "decommission: streaming"]
-
-        async def _has_streaming_tasks(server: ServerInfo):
-            if len(await _get_streaming_tasks(server)) > 0:
-                return True
-
         logger.info("Checking top level decommission node task")
-        await wait_for(partial(_has_streaming_tasks, decommissioned_server), time.time() + 100.)  # Wait until streaming task is created.
 
-        streaming_tasks = await _get_streaming_tasks(decommissioned_server)
-        assert len(streaming_tasks) == 1
-        child_id = streaming_tasks[0].task_id
+        await poll_for_task(tm, module_name, decommissioned_server, "node", "decommission: streaming")
 
         virtual_tasks = await get_new_virtual_tasks_statuses(tm, module_name, servers, previous_vts, 1)
         virtual_task = virtual_tasks[0]
@@ -221,3 +227,34 @@ async def test_node_ops_tasks_ttl(manager: ManagerClient):
     [await tm.set_task_ttl(server.ip_addr, 3) for server in servers]
     time.sleep(3)
     await get_new_virtual_tasks_statuses(tm, module_name, servers, [], expected_task_num=0)
+
+@pytest.mark.asyncio
+async def test_node_ops_task_wait(manager: ManagerClient):
+    """Test node ops virtual task's wait."""
+    async def _decommission(manager: ManagerClient, server: ServerInfo):
+        await manager.decommission_node(server.server_id)
+
+    async def _wait_for_task(tm: TaskManagerClient, module_name: str, server: ServerInfo, handler: InjectionHandler):
+        task = await poll_for_task(tm, module_name, servers[1], "cluster", "leave")
+        assert task.state == "running"
+
+        await handler.message()
+
+        status = await tm.wait_for_task(server.ip_addr, task.task_id)
+        assert status.state == "done"
+
+    module_name = "node_ops"
+    tm = TaskManagerClient(manager.api)
+
+    servers = [await manager.server_add() for _ in range(2)]
+    injection = "streaming_task_impl_decommission_run"
+    handler = await inject_error_one_shot(manager.api, servers[0].ip_addr, injection)
+
+    decommission_task = asyncio.create_task(
+        _decommission(manager, servers[0]))
+
+    waiting_task = asyncio.create_task(
+        _wait_for_task(tm, module_name, servers[1], handler))
+
+    await decommission_task
+    await waiting_task

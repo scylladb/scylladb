@@ -63,6 +63,7 @@ def check_child_parent_relationship(rest_api, status_tree, parent, allow_no_chil
 
     for child in get_children(status_tree, parent["id"]):
         child_id = child["id"]
+        assert child["kind"] == "node", "Child task isn't marked as local"
         assert parent["sequence_number"] == child["sequence_number"], f"Child task with id {child_id} did not inherit parent's sequence number"
         assert child["parent_id"] == parent["id"], f"Parent id of task with id {child_id} is not set"
         check_child_parent_relationship(rest_api, status_tree, child, True)
