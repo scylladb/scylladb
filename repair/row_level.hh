@@ -229,7 +229,8 @@ public:
             table_schema_version schema_version,
             streaming::stream_reason reason,
             gc_clock::time_point compaction_time,
-            abort_source& as);
+            abort_source& as,
+            bool mixed_shard_optimization);
 
     future<>
     remove_repair_meta(const gms::inet_address& from,
