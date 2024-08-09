@@ -36,6 +36,7 @@ from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
+from test.pylib.resource_gather import setup_cgroup, run_resource_watcher, get_resource_gather
 from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
@@ -1222,6 +1223,9 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             if options.cpus:
                 path = 'taskset'
                 args = ['-c', options.cpus, test.path, *test.args]
+            resource_gather = get_resource_gather(options.gather_metrics, test, options.tmpdir)
+            resource_gather.make_cgroup()
+
             process = await asyncio.create_subprocess_exec(
                 path, *args,
                 stderr=log,
@@ -1237,17 +1241,25 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                          ),
                 preexec_fn=os.setsid,
             )
+            resource_gather.put_process_to_cgroup(process.pid)
+
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             test.time_end = time.time()
+
+            metrics = resource_gather.get_test_metrics()
+
             if process.returncode not in test.valid_exit_codes:
                 report_error('Test exited with code {code}\n'.format(code=process.returncode))
+                resource_gather.write_metrics_to_db(metrics)
                 return False
             try:
                 test.check_log(not options.save_log_on_success)
             except Exception as e:
                 print("")
                 print(test.name + ": " + palette.crit("failed to parse XML output: {}".format(e)))
+                resource_gather.write_metrics_to_db(metrics)
                 return False
+            resource_gather.write_metrics_to_db(metrics, True)
             return True
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
             test.is_cancelled = True
@@ -1305,6 +1317,7 @@ def parse_cmd_line() -> argparse.Namespace:
         help="""Path to temporary test data and log files. The data is
         further segregated per build mode. Default: ./testlog.""",
     )
+    parser.add_argument("--gather_metrics", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--mode', choices=all_modes.keys(), action="append", dest="modes",
                         help="Run only tests for given build mode(s)")
     parser.add_argument('--repeat', action="store", default="1", type=int,
@@ -1715,7 +1728,7 @@ async def main() -> int:
     options = parse_cmd_line()
 
     open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
-
+    setup_cgroup(options.gather_metrics)
     await find_tests(options)
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
@@ -1723,11 +1736,16 @@ async def main() -> int:
         return 0
 
     signaled = asyncio.Event()
+    stop_event = asyncio.Event()
+    resource_watcher = run_resource_watcher(options.gather_metrics, signaled, stop_event, options.tmpdir)
 
     setup_signal_handlers(asyncio.get_running_loop(), signaled)
 
     try:
         await run_all_tests(signaled, options)
+        stop_event.set()
+        async with asyncio.timeout(5):
+            await resource_watcher
     except Exception as e:
         print(palette.fail(e))
         raise
