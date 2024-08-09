@@ -1808,7 +1808,7 @@ void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const ta
         }).get();
 
         std::cout << "compacting...\n";
-        cf.compact_all_sstables().get();
+        cf.compact_all_sstables(tasks::task_info{}).get();
     }
 }
 

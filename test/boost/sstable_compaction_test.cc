@@ -2124,7 +2124,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test) {
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+        table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(sst->is_quarantined());
         BOOST_REQUIRE(in_strategy_sstables(ts).empty());
@@ -2146,7 +2146,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable) {
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+        table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(!sst->is_quarantined());
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
@@ -2282,7 +2282,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
         // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
         sstables::compaction_type_options::scrub opts = {};
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-        BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts).get(), sstables::compaction_aborted_exception);
+        BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get(), sstables::compaction_aborted_exception);
 
         BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
         BOOST_REQUIRE(in_strategy_sstables(ts).front() == sst);
@@ -2328,7 +2328,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
         // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
         sstables::compaction_type_options::scrub opts = {};
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
-        table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+        table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
         BOOST_REQUIRE(in_strategy_sstables(ts).front() != sst);
@@ -2369,7 +2369,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
         // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
         sstables::compaction_type_options::scrub opts = {};
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
-        table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+        table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
         testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
         BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
@@ -2411,7 +2411,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
             // We expect the scrub with mode=scrub::mode::validate to quarantine the sstable.
             sstables::compaction_type_options::scrub opts = {};
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
-            table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+            table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
             BOOST_REQUIRE(in_strategy_sstables(ts).empty());
             BOOST_REQUIRE(sst->is_quarantined());
@@ -2422,7 +2422,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
             // We expect the scrub with mode=scrub::mode::segregate to fix all out-of-order data.
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
             opts.quarantine_operation_mode = qmode;
-            table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+            table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
             switch (qmode) {
             case sstables::compaction_type_options::scrub::quarantine_mode::include:
@@ -2925,7 +2925,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         // register partial sstable run
         run_compaction_task(env, partial_sstable_run_identifier, cf.as_table_state(), [&cf] (sstables::compaction_data&) {
-            return cf->compact_all_sstables();
+            return cf->compact_all_sstables(tasks::task_info{});
         }).get();
 
         // make sure partial sstable run has none of its fragments compacted.
@@ -3713,7 +3713,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
                 auto sst = make_sstable_containing(sst_gen, {mut});
                 cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
             }
-            BOOST_REQUIRE(cf->perform_offstrategy_compaction().get());
+            BOOST_REQUIRE(cf->perform_offstrategy_compaction(tasks::task_info{}).get());
         }
     });
 }
@@ -4389,7 +4389,7 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
         }();
         cf->apply(deletion_mut);
 
-        cf->compact_all_sstables().get();
+        cf->compact_all_sstables(tasks::task_info{}).get();
         assert_table_sstable_count(cf, 1);
         auto new_sst = *(cf->get_sstables()->begin());
         BOOST_REQUIRE(new_sst->generation() != sst->generation());
@@ -5056,7 +5056,7 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
 
 SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
     return run_incremental_compaction_test(sstables::offstrategy::no, [] (table_for_tests& t, owned_ranges_ptr owned_ranges) -> future<> {
-        return t->perform_cleanup_compaction(std::move(owned_ranges));
+        return t->perform_cleanup_compaction(std::move(owned_ranges), tasks::task_info{});
     });
 }
 
@@ -5146,7 +5146,7 @@ SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
             }
             ssts = {}; // releases references
             auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
-            t->perform_cleanup_compaction(std::move(owned_ranges_ptr)).get();
+            t->perform_cleanup_compaction(std::move(owned_ranges_ptr), tasks::task_info{}).get();
             BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_table_state_with_static_sharding()).empty());
             testlog.info("Cleanup has finished");
         }

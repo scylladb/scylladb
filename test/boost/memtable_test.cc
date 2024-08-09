@@ -1027,7 +1027,7 @@ SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
 
         // Trigger compaction. If all goes well, compaction should check if a relevant row is in the memtable
         // and should not purge the tombstone.
-        t.compact_all_sstables().get();
+        t.compact_all_sstables(tasks::task_info{}).get();
 
         // If we get additional row (1, 2, 4), that means the tombstone was purged and data was resurrected
         assert_that(env.execute_cql(format("SELECT * FROM {}.{};", ks_name, table_name)).get())
