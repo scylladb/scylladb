@@ -141,6 +141,10 @@ public:
         return _state == state::left;
     }
 
+    bool is_none() const noexcept {
+        return _state == state::none;
+    }
+
     shard_id get_shard_count() const noexcept { return _shard_count; }
 
     static std::string to_string(state);
@@ -342,6 +346,7 @@ public:
      */
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
+    // Executes a function for each node in a state other than "none" and "left".
     void for_each_node(std::function<void(const node*)> func) const;
 
     host_id my_host_id() const noexcept {

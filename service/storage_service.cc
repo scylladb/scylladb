@@ -1568,7 +1568,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             for (const auto& [host_id, st] : ri->ignore_nodes) {
                 tmptr->update_host_id(host_id, st.endpoint);
                 if (st.opt_dc_rack) {
-                    tmptr->update_topology(host_id, st.opt_dc_rack);
+                    tmptr->update_topology(host_id, st.opt_dc_rack, locator::node::state::normal);
                 }
                 if (!st.tokens.empty()) {
                     co_await tmptr->update_normal_tokens(st.tokens, host_id);
