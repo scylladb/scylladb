@@ -235,7 +235,7 @@ public:
         }
 
         template <typename T = std::string_view>
-        std::optional<T> get(std::string_view key) {
+        std::optional<T> get(std::string_view key) const {
             if (!_shared_data) {
                 on_internal_error(errinj_logger, "injection_shared_data is not initialized");
             }
