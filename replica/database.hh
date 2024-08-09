@@ -1389,11 +1389,14 @@ public:
         rwlock _cf_lock;
         std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
         ks_cf_to_uuid_t _ks_cf_to_uuid;
+    private:
+        void add_table_helper(database& db, keyspace& ks, table& cf, schema_ptr s);
+        void remove_table_helper(database& db, keyspace& ks, table& cf, schema_ptr s);
     public:
         size_t size() const noexcept;
 
-        future<> add_table(schema_ptr schema);
-        future<> remove_table(schema_ptr schema) noexcept;
+        future<> add_table(database& db, keyspace& ks, table& cf, schema_ptr s);
+        future<> remove_table(database& db, table& cf) noexcept;
         table& get_table(table_id id) const;
         table_id get_table_id(const std::pair<std::string_view, std::string_view>& kscf) const;
         lw_shared_ptr<table> get_table_if_exists(table_id id) const;
