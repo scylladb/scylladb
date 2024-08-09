@@ -1078,10 +1078,10 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
     }
 
     if (batch.snp) {
-        auto& [snp, is_local, max_trailing_entries] = *batch.snp;
+        const auto& [snp, is_local, preserve_log_entries] = *batch.snp;
         logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
         // Persist the snapshot
-        co_await _persistence->store_snapshot_descriptor(snp, max_trailing_entries);
+        co_await _persistence->store_snapshot_descriptor(snp, preserve_log_entries);
         _snapshot_desc_idx = snp.idx;
         _snapshot_desc_idx_changed.broadcast();
         _stats.store_snapshot++;
