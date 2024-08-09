@@ -76,6 +76,14 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
     } catch (const std::runtime_error& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
+
+    const auto& tablets_opts = _attrs->get_map(ks_prop_defs::KW_TABLETS);
+    if (tablets_opts.has_value() && _attrs->get_replication_strategy_class() != "NetworkTopologyStrategy") {
+        throw exceptions::invalid_request_exception(format("\"{}\" is not supported with tablets, "
+                                                           "only NetworkTopologyStrategy is supported with tablets",
+                                                           _attrs->get_replication_strategy_class().value()));
+    }
+
 #if 0
     // The strategy is validated through KSMetaData.validate() in announceNewKeyspace below.
     // However, for backward compatibility with thrift, this doesn't validate unexpected options yet,
