@@ -71,7 +71,7 @@ Briefly:
         gets statuses of the task and all its descendants in BFS
         order, unregisters the task;
 - `/task_manager/ttl` -
-        sets new ttl, returns old value.
+        gets or sets new ttl.
 
 # Virtual tasks
 
