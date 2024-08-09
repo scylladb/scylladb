@@ -250,9 +250,22 @@ def test_item_latency(test_table_s, metrics):
         test_table_s.delete_item(Key={'p': p})
         test_table_s.update_item(Key={'p': p})
 
-# Test latency metrics for GetRecords. Other Streams-related operations -
-# ListStreams, DescribeStream, and GetShardIterator, have an operation
-# count (tested above) but do NOT currently have a latency histogram.
+# Test latency metrics for Query and Scan:
+def test_scan_latency(test_table_s, metrics):
+    with check_sets_latency(metrics, ['Query', 'Scan']):
+        test_table_s.scan(Limit=1)
+        test_table_s.query(Limit=1, KeyConditionExpression='p=:p',
+            ExpressionAttributeValues={':p': 'dog'})
+
+# Test latency metrics for BatchWriteItem and BatchGetItem:
+def test_batch_latency(test_table_s, metrics):
+    with check_sets_latency(metrics, ['BatchWriteItem', 'BatchGetItem']):
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
+
+# Test latency metrics for GetRecords, ListStreams, DescribeStream, and GetShardIterator.
 def test_streams_latency(dynamodb, dynamodbstreams, metrics):
     # Whereas the *count* metric for various operations also counts failed
     # operations so we could write this test without a real stream, the
@@ -283,10 +296,11 @@ def test_streams_latency(dynamodb, dynamodbstreams, metrics):
                     break
             time.sleep(1)
         assert stream_enabled
-        desc = dynamodbstreams.describe_stream(StreamArn=arn)
-        shard_id = desc['StreamDescription']['Shards'][0]['ShardId'];
-        it = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
-        with check_sets_latency(metrics, ['GetRecords']):
+        with check_sets_latency(metrics, ['ListStreams', 'DescribeStream', 'GetShardIterator', 'GetRecords']):
+            streams = dynamodbstreams.list_streams()
+            desc = dynamodbstreams.describe_stream(StreamArn=arn)
+            shard_id = desc['StreamDescription']['Shards'][0]['ShardId'];
+            it = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
             dynamodbstreams.get_records(ShardIterator=it)
 
 ###### Test for other metrics, not counting specific DynamoDB API operations:

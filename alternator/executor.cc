@@ -2080,6 +2080,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
 
 future<executor::request_return_type> executor::batch_write_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.batch_write_item++;
+    auto start_time = std::chrono::steady_clock::now();
     rjson::value& request_items = request["RequestItems"];
 
     std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders;
@@ -2122,12 +2123,14 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         }
     }
 
-    return do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([] () {
+    return do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([this, start_time] () {
         // FIXME: Issue #5650: If we failed writing some of the updates,
         // need to return a list of these failed updates in UnprocessedItems
         // rather than fail the whole write (issue #5650).
         rjson::value ret = rjson::empty_object();
         rjson::add(ret, "UnprocessedItems", rjson::empty_object());
+
+        _stats.api_operations.batch_write_item_latency.mark(std::chrono::steady_clock::now() - start_time);
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
     });
 }
@@ -3330,6 +3333,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // work in the following loops. So we should limit the batch size, and/or
     // the response size, as DynamoDB does.
     _stats.api_operations.batch_get_item++;
+    auto start_time = std::chrono::steady_clock::now();
     rjson::value& request_items = request["RequestItems"];
 
     // We need to validate all the parameters before starting any asynchronous
@@ -3470,6 +3474,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     if (!some_succeeded && eptr) {
         co_await coroutine::return_exception_ptr(std::move(eptr));
     }
+    _stats.api_operations.batch_get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     if (is_big(response)) {
         co_return make_streamed(std::move(response));
     } else {
@@ -3875,6 +3880,7 @@ static dht::partition_range get_range_for_segment(int segment, int total_segment
 
 future<executor::request_return_type> executor::scan(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.scan++;
+    auto start_time = std::chrono::steady_clock::now();
     elogger.trace("Scanning {}", request);
 
     auto [schema, table_type] = get_table_or_view(_proxy, request);
@@ -3945,7 +3951,9 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Scan");
 
     return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filter), query::partition_slice::option_set(), client_state, _stats.cql_stats, trace_state, std::move(permit));
+            std::move(filter), query::partition_slice::option_set(), client_state, _stats.cql_stats, trace_state, std::move(permit)).finally([start_time, this] {
+        _stats.api_operations.scan_latency.mark(std::chrono::steady_clock::now() - start_time);;
+    });
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, const rjson::value& comp_definition, const rjson::value& attrs) {
@@ -4352,6 +4360,7 @@ calculate_bounds_condition_expression(schema_ptr schema,
 
 future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.query++;
+    auto start_time = std::chrono::steady_clock::now();
     elogger.trace("Querying {}", request);
 
     auto [schema, table_type] = get_table_or_view(_proxy, request);
@@ -4425,7 +4434,9 @@ future<executor::request_return_type> executor::query(client_state& client_state
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
     return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filter), opts, client_state, _stats.cql_stats, std::move(trace_state), std::move(permit));
+            std::move(filter), opts, client_state, _stats.cql_stats, std::move(trace_state), std::move(permit)).finally([start_time, this] {
+        _stats.api_operations.query_latency.mark(std::chrono::steady_clock::now() - start_time);;
+    });
 }
 
 future<executor::request_return_type> executor::list_tables(client_state& client_state, service_permit permit, rjson::value request) {
