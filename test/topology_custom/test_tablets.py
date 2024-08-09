@@ -166,6 +166,28 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
         assert len(fragments[k]) == rf_to, f"Found mutations for {k} key on {fragments[k]} hosts, but expected only {rf_to} of them"
 
 
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="Issue #18786")
+async def test_tablet_mutation_fragments_sanity(manager: ManagerClient):
+    cfg = {'enable_user_defined_functions': False,
+           'enable_tablets': True }
+    servers = await manager.servers_add(3, config=cfg)
+
+    cql = manager.get_cql()
+
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    logger.info("Populating table")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in range(4)])
+
+    for s in servers:
+        host_id = await manager.get_host_id(s.server_id)
+        host = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 30)
+        for k in range(4):
+            await cql.run_async(f"SELECT partition_region FROM MUTATION_FRAGMENTS(test.test) WHERE pk={k}", host=host[0])
+
+
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
 # Check that an existing cached read, will be cleaned up when the tablet it reads
 # from is migrated away.
