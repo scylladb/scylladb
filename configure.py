@@ -1677,6 +1677,9 @@ def real_relpath(path, start):
 
 def configure_seastar(build_dir, mode, mode_config):
     seastar_build_dir = os.path.join(build_dir, mode, 'seastar')
+    if os.path.exists(os.path.join(seastar_build_dir, 'build.ninja')):
+        # the build system has been already generated, and it can take care of itself
+        return
 
     seastar_cxx_ld_flags = mode_config['cxx_ld_flags']
     # We want to "undo" coverage for seastar if we have it enabled.
@@ -1734,6 +1737,11 @@ def configure_seastar(build_dir, mode, mode_config):
 
 
 def configure_abseil(build_dir, mode, mode_config):
+    abseil_build_dir = os.path.join(build_dir, mode, 'abseil')
+    if os.path.exists(os.path.join(abseil_build_dir, 'build.ninja')):
+        # the build system has been already generated, and it can take care of itself
+        return
+
     abseil_cflags = mode_config['lib_cflags']
     cxx_flags = mode_config['cxxflags']
     if '-DSANITIZE' in cxx_flags:
@@ -1759,7 +1767,6 @@ def configure_abseil(build_dir, mode, mode_config):
         '-DABSL_PROPAGATE_CXX_STD=ON',
     ]
 
-    abseil_build_dir = os.path.join(build_dir, mode, 'abseil')
     abseil_cmd = ['cmake', '-G', 'Ninja', real_relpath('abseil', abseil_build_dir)] + abseil_cmake_args
 
     os.makedirs(abseil_build_dir, exist_ok=True)
