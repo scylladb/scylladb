@@ -232,7 +232,8 @@ public:
     void init_messaging_service();
     future<> uninit_messaging_service();
 
-    future<> load_tablet_metadata();
+    // If a hint is provided, only the changed parts of the tablet metadata will be (re)loaded.
+    future<> load_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
     void start_tablet_split_monitor();
 private:
     using acquire_merge_lock = bool_class<class acquire_merge_lock_tag>;
@@ -514,7 +515,7 @@ public:
     virtual void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
     virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
-    virtual void on_update_tablet_metadata() override;
+    virtual void on_update_tablet_metadata(const locator::tablet_metadata_change_hint&) override;
 
     virtual void on_drop_keyspace(const sstring& ks_name) override { keyspace_changed(ks_name).get(); }
     virtual void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {}
@@ -874,11 +875,15 @@ private:
     void set_topology_change_kind(topology_change_kind kind);
 
 public:
+    struct state_change_hint {
+        std::optional<locator::tablet_metadata_change_hint> tablets_hint;
+    };
+
     // This is called on all nodes for each new command received through raft
     // raft_group0_client::_read_apply_mutex must be held
     // Precondition: the topology mutations were already written to disk; the function only transitions the in-memory state machine.
     // Public for `reload_raft_topology_state` REST API.
-    future<> topology_transition();
+    future<> topology_transition(state_change_hint hint = {});
 
 
     // Service levels cache consists of two levels: service levels cache and effective service levels cache
@@ -948,7 +953,7 @@ private:
     future<> notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify);
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
-    future<> topology_state_load();
+    future<> topology_state_load(state_change_hint hint = {});
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_snapshot snp);

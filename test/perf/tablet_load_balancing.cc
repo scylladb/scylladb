@@ -62,7 +62,7 @@ static
 size_t get_tablet_count(const tablet_metadata& tm) {
     size_t count = 0;
     for (auto& [table, tmap] : tm.all_tables()) {
-        count += std::accumulate(tmap.tablets().begin(), tmap.tablets().end(), size_t(0),
+        count += std::accumulate(tmap->tablets().begin(), tmap->tablets().end(), size_t(0),
                                  [] (size_t accumulator, const locator::tablet_info& info) {
                                      return accumulator + info.replicas.size();
                                  });
@@ -73,9 +73,10 @@ size_t get_tablet_count(const tablet_metadata& tm) {
 static
 void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
-        tablet_map& tmap = tm.tablets().get_tablet_map(table_id);
-        resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
-        tmap.set_resize_decision(resize_decision);
+        tm.tablets().mutate_tablet_map(table_id, [&resize_decision] (tablet_map& tmap) {
+            resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
+            tmap.set_resize_decision(resize_decision);
+        });
     }
     for (auto table_id : plan.resize_plan().finalize_resize) {
         auto& old_tmap = tm.tablets().get_tablet_map(table_id);
@@ -89,10 +90,11 @@ void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
 static
 void apply_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
-        auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
-        tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
-        tmap.set_tablet(mig.tablet.tablet, tinfo);
+        tm.tablets().mutate_tablet_map(mig.tablet.table, [&mig] (tablet_map& tmap) {
+            auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
+            tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
+            tmap.set_tablet(mig.tablet.tablet, tinfo);
+        });
     }
     apply_resize_plan(tm, plan);
 }

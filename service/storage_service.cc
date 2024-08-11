@@ -647,7 +647,7 @@ future<> storage_service::notify_nodes_after_sync(nodes_to_notify_after_sync&& n
     }
 }
 
-future<> storage_service::topology_state_load() {
+future<> storage_service::topology_state_load(state_change_hint hint) {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
     SCYLLA_ASSERT(!running); // The function is not re-entrant
@@ -737,8 +737,17 @@ future<> storage_service::topology_state_load() {
         auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::nullopt, std::move(prev_normal));
 
         if (_db.local().get_config().enable_tablets()) {
-            tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
-            tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+            std::optional<locator::tablet_metadata> tablets;
+            if (hint.tablets_hint) {
+                // We want to update the tablet metadata incrementally, so copy it
+                // from the current token metadata and update only the changed parts.
+                tablets = co_await get_token_metadata().tablets().copy();
+                co_await replica::update_tablet_metadata(_qp, *tablets, *hint.tablets_hint);
+            } else {
+                tablets = co_await replica::read_tablet_metadata(_qp);
+            }
+            tablets->set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+            tmptr->set_tablets(std::move(*tablets));
         }
 
         co_await replicate_to_all_cores(std::move(tmptr));
@@ -817,9 +826,9 @@ future<> storage_service::topology_state_load() {
     slogger.debug("topology_state_load: excluded nodes: {}", _topology_state_machine._topology.get_excluded_nodes());
 }
 
-future<> storage_service::topology_transition() {
+future<> storage_service::topology_transition(state_change_hint hint) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    co_await topology_state_load(); // reload new state
+    co_await topology_state_load(std::move(hint)); // reload new state
 
     _topology_state_machine.event.broadcast();
 }
@@ -3016,7 +3025,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
         }
 
         for (auto&& [table_id, tmap]: tmptr->tablets().all_tables()) {
-            for (auto&& [tid, trinfo]: tmap.transitions()) {
+            for (auto&& [tid, trinfo]: tmap->transitions()) {
                 if (trinfo.session_id) {
                     auto id = session_id(trinfo.session_id);
                     open_sessions.insert(id);
@@ -5236,22 +5245,25 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     return update_topology_change_info(reason, acquire_merge_lock::no);
 }
 
-void storage_service::on_update_tablet_metadata() {
+void storage_service::on_update_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
     if (this_shard_id() != 0) {
         // replicate_to_all_cores() takes care of other shards.
         return;
     }
-    // FIXME: Avoid reading whole tablet metadata on partial changes.
-    load_tablet_metadata().get();
+    load_tablet_metadata(hint).get();
     _topology_state_machine.event.broadcast(); // wake up load balancer.
 }
 
-future<> storage_service::load_tablet_metadata() {
+future<> storage_service::load_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
     if (!_db.local().get_config().enable_tablets()) {
         return make_ready_future<>();
     }
-    return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) -> future<> {
-        tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
+    return mutate_token_metadata([this, &hint] (mutable_token_metadata_ptr tmptr) -> future<> {
+        if (hint) {
+            co_await replica::update_tablet_metadata(_qp, tmptr->tablets(), hint);
+        } else {
+            tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
+        }
         tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
     }, acquire_merge_lock::no);
 }

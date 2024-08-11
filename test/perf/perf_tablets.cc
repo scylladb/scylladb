@@ -16,6 +16,7 @@
 #include <seastar/core/reactor.hh>
 
 #include "locator/tablets.hh"
+#include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "db/config.hh"
@@ -58,6 +59,7 @@ static future<> test_basic_operations(app_template& app) {
         tablet_metadata tm;
 
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
 
         int nr_tables = app.configuration()["tables"].as<int>();
         int tablets_per_table = app.configuration()["tablets-per-table"].as<int>();
@@ -98,7 +100,7 @@ static future<> test_basic_operations(app_template& app) {
 
         tablet_metadata tm2;
         auto time_to_copy = duration_in_seconds([&] {
-            tm2 = tm;
+            tm2 = tm.copy().get();
         });
 
         testlog.info("Copied in {:.6f} [ms]", time_to_copy.count() * 1000);
@@ -144,6 +146,49 @@ static future<> test_basic_operations(app_template& app) {
 
         auto&& tablets_table = e.local_db().find_column_family(db::system_keyspace::tablets());
         testlog.info("Disk space used by system.tablets: {:.6f} [MiB]", double(tablets_table.get_stats().live_disk_space_used) / MiB);
+
+        locator::tablet_metadata_change_hint hint;
+
+        // Migrate one tablet to h2
+        {
+            const auto last_table_id = ids.back();
+            const auto& tmap = tm.get_tablet_map(last_table_id);
+
+            auto ts = utils::UUID_gen::micros_timestamp(e.get_system_keyspace().local().get_last_group0_state_id().get()) + 1;
+
+            const auto tb = tmap.first_tablet();
+            replica::tablet_mutation_builder builder(ts++, last_table_id);
+            const auto token = tmap.get_last_token(tb);
+
+            builder.set_new_replicas(token,
+                tablet_replica_set {
+                    tablet_replica {h2, 0},
+                }
+            );
+            builder.set_stage(token, tablet_transition_stage::streaming);
+            builder.set_transition(token, tablet_transition_kind::migration);
+
+            std::vector<mutation> muts;
+            muts.push_back(builder.build());
+            e.local_db().apply(freeze(muts), db::no_timeout).get();
+            replica::update_tablet_metadata_change_hint(hint, muts.front());
+        }
+
+        using clk = std::chrono::high_resolution_clock;
+
+        const auto start_full_reload = clk::now();
+        const auto tm_full_reload = read_tablet_metadata(e.local_qp()).get();
+        const auto end_full_reload = clk::now();
+        const auto full_reload_duration = std::chrono::duration<double, std::milli>(end_full_reload - start_full_reload);
+
+        const auto start_partial_reload = clk::now();
+        update_tablet_metadata(e.local_qp(), tm, hint).get();
+        const auto end_partial_reload = clk::now();
+        const auto partial_reload_duration = std::chrono::duration<double, std::milli>(end_partial_reload - start_partial_reload);
+
+        assert(tm == tm_full_reload);
+
+        testlog.info("Tablet metadata reload:\nfull    {:>8.2f}ms\npartial {:>8.2f}ms", full_reload_duration.count(), partial_reload_duration.count());
     }, tablet_cql_test_config());
 }
 
@@ -154,7 +199,7 @@ int scylla_tablets_main(int argc, char** argv) {
     app_template app;
     app.add_options()
             ("tables", bpo::value<int>()->default_value(100), "Number of tables to create.")
-            ("tablets-per-table", bpo::value<int>()->default_value(10000), "Number of tablets per table.")
+            ("tablets-per-table", bpo::value<int>()->default_value(2048), "Number of tablets per table.")
             ("rf", bpo::value<int>()->default_value(3), "Number of replicas per tablet.")
             ("verbose", "Enables standard logging")
             ;
