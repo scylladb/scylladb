@@ -641,7 +641,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     ext->add_schema_extension<db::per_partition_rate_limit_extension>(db::per_partition_rate_limit_extension::NAME);
 
     auto cfg = make_lw_shared<db::config>(ext);
-    auto init = app.get_options_description().add_options();
+    auto main_options_cop = app.get_options_description();
+    auto& main_options = app.get_options_description();
+    auto help_visible_options = boost::program_options::options_description("Scylla options");
+    auto init = help_visible_options.add_options();
 
     init("version", bpo::bool_switch(), "print version number and exit");
     init("build-id", bpo::bool_switch(), "print build-id and exit");
@@ -655,7 +658,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     init("help-config", bpo::bool_switch(), "print yaml configuration options and exit");
 
     configurable::append_all(*cfg, init);
-    cfg->add_options(app.get_options_description());
+    cfg->add_options(main_options, help_visible_options);
+
+    app.set_app_visible_options_for_help(&help_visible_options);
 
     // If --version is requested, print it out and exit immediately to avoid
     // Seastar-specific warnings that may occur when running the app

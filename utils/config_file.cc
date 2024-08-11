@@ -263,11 +263,13 @@ void utils::config_file::add(const std::vector<cfg_ref> & cfgs) {
 }
 
 void
-utils::config_file::add_options(bpo::options_description& options) {
+utils::config_file::add_options(
+        boost::program_options::options_description& all_options,
+        boost::program_options::options_description& help_visible_options) {
     bpo::options_description deprecated_options("Deprecated options - ignored");
     bpo::options_description transitional("Transitional options - use `--config yaml-snippet` of `--options-file yaml-file` instead");
 
-    auto easy_init_std = options.add_options();
+    auto easy_init_std = help_visible_options.add_options();
     auto easy_init_deprecated = deprecated_options.add_options();
     auto easy_init_transitional = transitional.add_options();
 
@@ -281,8 +283,9 @@ utils::config_file::add_options(bpo::options_description& options) {
         }
     }
 
-    options.add(transitional);
-    options.add(deprecated_options);
+    all_options.add(help_visible_options);
+    all_options.add(transitional);
+    all_options.add(deprecated_options);
 }
 
 void
