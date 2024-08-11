@@ -156,7 +156,7 @@ SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
                 return sstable_needs_split(sst) ? sst->bytes_on_disk() : size_t(0);
             }), int64_t(0));
 
-            auto ret = cm.perform_split_compaction(*compaction_group, sstables::compaction_type_options::split{classifier}).get();
+            auto ret = cm.perform_split_compaction(*compaction_group, sstables::compaction_type_options::split{classifier}, tasks::task_info{}).get();
             BOOST_REQUIRE_EQUAL(ret->start_size, expected_compaction_size);
 
             BOOST_REQUIRE(compaction_group->main_sstable_set().size() == expected_output);
