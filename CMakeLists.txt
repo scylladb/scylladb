@@ -196,6 +196,8 @@ include(check_headers)
 check_headers(check-headers scylla-main
   GLOB ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
 
+add_custom_target(compiler-training)
+
 add_subdirectory(api)
 add_subdirectory(alternator)
 add_subdirectory(db)
@@ -279,5 +281,10 @@ target_link_libraries(scylla PRIVATE
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${scylla_gen_build_dir}")
+
+add_custom_target(maybe-scylla
+  DEPENDS $<$<CONFIG:Dev>:$<TARGET_FILE:scylla>>)
+add_dependencies(compiler-training
+  maybe-scylla)
 
 add_subdirectory(dist)
