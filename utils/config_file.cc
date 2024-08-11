@@ -374,7 +374,7 @@ void utils::config_file::read_from_yaml(const char* yaml, config_source source, 
 
 utils::config_file::configs utils::config_file::set_values() const {
     return boost::copy_range<configs>(_cfgs | boost::adaptors::filtered([] (const config_src& cfg) {
-        return cfg.status() > value_status::Used || cfg.source() > config_source::None;
+        return cfg.source() > config_source::None;
     }));
 }
 
