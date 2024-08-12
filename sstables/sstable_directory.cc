@@ -266,9 +266,13 @@ future<> sstable_directory::filesystem_components_lister::prepare(sstable_direct
     // as there could be a race with scylla-manager that might
     // delete snapshots concurrently
     co_await utils::directories::verify_owner_and_mode(_directory, utils::directories::recursive::no);
-    co_await lister::scan_dir(_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [] (fs::path dir, directory_entry de) -> future<> {
-        if (de.name != sstables::snapshots_dir) {
-            co_await utils::directories::verify_owner_and_mode(dir / de.name, utils::directories::recursive::yes);
+
+    directory_lister lister(_directory, lister::dir_entry_types::of<directory_entry_type::directory>());
+    co_await with_closeable(std::move(lister), [this] (directory_lister& lister) -> future<> {
+        while (auto de = co_await lister.get()) {
+            if (de->name != sstables::snapshots_dir) {
+                co_await utils::directories::verify_owner_and_mode(_directory / de->name, utils::directories::recursive::yes);
+            }
         }
     });
 
