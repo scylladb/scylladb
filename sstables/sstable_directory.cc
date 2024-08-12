@@ -314,8 +314,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
             abstract_lister::make<directory_lister>(_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter) :
             abstract_lister::make<s3::client::bucket_lister>(_client, _bucket, _directory.native() + "/", &manifest_json_filter);
 
-    std::exception_ptr ex;
-    try {
+    co_await with_closeable(std::move(lister), coroutine::lambda([this, &directory] (abstract_lister& lister) -> future<> {
         while (true) {
             auto de = co_await lister.get();
             if (!de) {
@@ -325,14 +324,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
             auto comps = sstables::parse_path(component_path, directory._schema->ks_name(), directory._schema->cf_name());
             handle(std::move(comps), component_path);
         }
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    co_await lister.close();
-    if (ex) {
-        dirlog.debug("Could not process sstable directory {}: {}", _directory, ex);
-        co_await coroutine::return_exception_ptr(std::move(ex));
-    }
+    }));
 
     // Always okay to delete files with a temporary TOC. We want to do it before we process
     // the generations seen: it's okay to reuse those generations since the files will have
