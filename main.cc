@@ -717,6 +717,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         for (auto& this_cfg: cfg->set_values()) {
             if (this_cfg.get().status() == utils::config_file::value_status::Deprecated) {
                 startlog.warn("{} option ignored (deprecated)", this_cfg.get().name());
+            } else if (this_cfg.get().status() == utils::config_file::value_status::Used && this_cfg.get().source() == utils::config_file::config_source::CommandLine) {
+                startlog.info("{} option should be set via --config or --options-file; direct command-line changes are deprecated", this_cfg.get().name());
             }
         }
 
