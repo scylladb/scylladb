@@ -389,50 +389,6 @@ public:
     }
 };
 
-std::unordered_map<schema_ptr, std::string> get_schema_table_directories(std::filesystem::path scylla_data_path) {
-    const std::vector<schema_ptr> schemas{
-            db::schema_tables::types(),
-            db::schema_tables::tables(),
-            db::schema_tables::views(),
-            db::schema_tables::columns(),
-            db::schema_tables::view_virtual_columns(),
-            db::schema_tables::computed_columns(),
-            db::schema_tables::indexes(),
-            db::schema_tables::dropped_columns(),
-            db::schema_tables::scylla_tables()};
-
-    std::unordered_map<schema_ptr, std::string> schema_table_table_dir;
-
-    auto schema_tables_path = scylla_data_path / db::schema_tables::NAME;
-    auto schema_tables_dir = open_directory(schema_tables_path.native()).get();
-
-    schema_tables_dir.list_directory([&] (directory_entry de) -> future<> {
-        auto dash_pos = de.name.find_last_of('-');
-        auto table_name = de.name.substr(0, dash_pos);
-
-        auto it = boost::find_if(schemas, [&] (const schema_ptr& s) {
-            return s->cf_name() == table_name;
-        });
-
-        if (it != schemas.end()) {
-            if (!de.type) {
-                throw std::runtime_error(fmt::format("failed loading schema tables from {}: keyspace directory entry {} has unrecognized type", scylla_data_path.native(), de.name));
-            } else if (*de.type != directory_entry_type::directory) {
-                throw std::runtime_error(fmt::format("failed loading schema tables from {}: keyspace directory entry {} has unrecognized type {}", scylla_data_path.native(), de.name, static_cast<int>(*de.type)));
-            }
-            auto s = *it;
-            schema_table_table_dir[s] = de.name;
-        }
-        return make_ready_future<>();
-    }).done().get();
-
-    if (schema_table_table_dir.size() != schemas.size()) {
-        throw std::runtime_error(fmt::format("failed loading schema tables from {}: couldn't find table directory for all require schema tables", scylla_data_path.native()));
-    }
-
-    return schema_table_table_dir;
-}
-
 schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table) {
     reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, __FUNCTION__, reader_concurrency_semaphore::register_metrics::no);
     auto stop_semaphore = deferred_stop(rcs_sem);
@@ -441,7 +397,6 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     sst_man.start(std::ref(dbcfg)).get();
     auto stop_sst_man_service = deferred_stop(sst_man);
 
-    auto schema_table_table_dir = get_schema_table_directories(scylla_data_path);
     auto schema_tables_path = scylla_data_path / db::schema_tables::NAME;
 
     auto empty = [] (const mutation_opt& mopt) {
@@ -452,7 +407,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
         return read_mutation_from_table_offline(
                 sst_man,
                 rcs_sem.make_tracking_only_permit(s, "schema_mutation", db::no_timeout, {}),
-                schema_tables_path / schema_table_table_dir[s],
+                get_table_directory(scylla_data_path, s->keypace_name(), s->cf_name()).get(),
                 keyspace,
                 schema_factory,
                 data_value(keyspace),
@@ -473,10 +428,11 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
 
     data_dictionary::user_types_metadata utm;
 
+    auto types_schema = db::schema_tables::types();
     auto types_mut = read_mutation_from_table_offline(
             sst_man,
             rcs_sem.make_tracking_only_permit(db::schema_tables::types(), "types_mutation", db::no_timeout, {}),
-            schema_tables_path / schema_table_table_dir[db::schema_tables::types()],
+            get_table_directory(scylla_data_path, types_schema->keypace_name(), types_schema->cf_name()).get(),
             keyspace,
             db::schema_tables::types,
             data_value(keyspace),

@@ -23,6 +23,10 @@
 #include "types/types.hh"
 #include "reader_permit.hh"
 
+future<std::filesystem::path> get_table_directory(std::filesystem::path scylla_data_path,
+                                                  std::string_view keyspace_name,
+                                                  std::string_view table_name);
+
 struct sstable_manager_service {
     db::nop_large_data_handler large_data_handler;
     gms::feature_service feature_service;

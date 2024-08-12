@@ -13,6 +13,47 @@
 #include <algorithm>
 #include <seastar/util/closeable.hh>
 
+future<std::filesystem::path> get_table_directory(std::filesystem::path scylla_data_path,
+                                                  std::string_view keyspace_name,
+                                                  std::string_view table_name) {
+    auto system_tables_path = scylla_data_path / keyspace_name;
+    auto system_tables_dir = co_await open_directory(system_tables_path.native());
+    sstring found;
+    // locate a directory named like
+    //   "$scylla_data_path/system/tablets-fd4f7a4696bd3e7391bf99eb77e82a5c"
+    auto h = system_tables_dir.list_directory([&] (directory_entry de) -> future<> {
+        if (!found.empty()) {
+            return make_ready_future();
+        }
+
+        auto dash_pos = de.name.find_last_of('-');
+        if (dash_pos == de.name.npos) {
+            // unlikely. but this should not be fatal
+            return make_ready_future();
+        }
+        if (de.name.substr(0, dash_pos) != table_name) {
+            return make_ready_future();
+        }
+        if (!de.type) {
+            throw std::runtime_error(fmt::format("failed to find directory: {}/{}: unrecognized type",
+                                                 scylla_data_path, de.name));
+        }
+        if (*de.type != directory_entry_type::directory) {
+            throw std::runtime_error(fmt::format("failed to find directory: {}/{}: not a directory",
+                                                 scylla_data_path, de.name));
+        }
+        found = de.name;
+        return make_ready_future();
+    });
+    co_await h.done();
+
+    if (found.empty()) {
+        throw std::runtime_error(fmt::format("failed to find directory for {}.{} under {}",
+                                             keyspace_name, table_name, scylla_data_path));
+    }
+    co_return system_tables_path / found.c_str();
+}
+
 mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& sst_man,
                                               reader_permit permit,
                                               std::filesystem::path table_path,
