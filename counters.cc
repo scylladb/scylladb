@@ -10,8 +10,11 @@
 #include "counters.hh"
 #include "mutation/mutation.hh"
 #include "combine.hh"
+#include "log.hh"
 
 #include <boost/range/algorithm/sort.hpp>
+
+logging::logger cell_locker_log("cell_locker");
 
 auto fmt::formatter<counter_shard_view>::format(const counter_shard_view& csv,
                                                 fmt::format_context& ctx) const -> decltype(ctx.out()) {
