@@ -18,8 +18,10 @@
 
 #include "locator/tablets.hh"
 #include "service/tablet_allocator.hh"
+#include "service/raft/raft_address_map.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
+#include "service/topology_mutation.hh"
 #include "locator/load_sketch.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
@@ -39,24 +41,22 @@ using namespace service;
 
 static seastar::abort_source aborted;
 
-static const sstring dc = "dc1";
+static const sstring dc = "datacenter1";
 
 static
 cql_test_config tablet_cql_test_config() {
     cql_test_config c;
+    c.db_config->enable_tablets(true);
+    c.initial_tablets = 1;
     return c;
 }
 
 static
-future<table_id> add_table(cql_test_env& e) {
-    auto id = table_id(utils::UUID_gen::get_time_UUID());
-    co_await e.create_table([id] (std::string_view ks_name) {
-        return *schema_builder(ks_name, id.to_sstring(), id)
-                .with_column("p1", utf8_type, column_kind::partition_key)
-                .with_column("r1", int32_type)
-                .build();
-    });
-    co_return id;
+future<table_id> add_table(cql_test_env& e, sstring ks_name) {
+    static int id = 1;
+    auto table_name = fmt::format("table{}", id++);
+    co_await e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name));
+    co_return e.local_db().find_schema(ks_name, table_name)->id();
 }
 
 static
@@ -276,30 +276,63 @@ future<results> test_load_balancing_with_many_tables(params p, bool table_aware)
             testlog.info("Added new node: {} ({})", hosts.back(), ips.back());
         };
 
-        auto add_host_to_topology = [&] (token_metadata& tm, int i) {
-            tm.update_host_id(hosts[i], ips[i]);
-            tm.update_topology(hosts[i], rack1, std::nullopt, shard_count);
-        };
-
         for (int i = 0; i < n_hosts; ++i) {
             add_host();
         }
 
         semaphore sem(1);
         auto stm = shared_token_metadata([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
-                locator::topology::config {
-                        .this_endpoint = ips[0],
-                        .this_host_id = hosts[0],
-                        .local_dc_rack = rack1
-                }
+            locator::topology::config {
+                .this_endpoint = ips[0],
+                .this_host_id = hosts[0],
+                .local_dc_rack = rack1
+            }
         });
 
-        auto bootstrap = [&] {
+        auto add_host_to_topology = [&] (int i) {
+            auto host_id = hosts[i];
+            auto ip = ips[i];
+
             stm.mutate_token_metadata([&] (token_metadata& tm) {
-                add_host();
-                add_host_to_topology(tm, hosts.size() - 1);
+                tm.update_host_id(host_id, ip);
+                tm.update_topology(host_id, rack1, std::nullopt, shard_count);
                 return make_ready_future<>();
             }).get();
+
+            e.get_raft_address_map().local().add_or_update_entry(raft::server_id(host_id.uuid()), ip);
+
+            // Need to create nodes in the database's topology because the load balancer
+            // invokes table's replication strategy. Normally, load balancer accepts arbitrary
+            // token_metadata_pr, so we can manufacture topology without going through group0.
+            // But we need it to create keyspaces with proper replication strategy,
+            // with the correct replication factor, which will fail if we don't have enough nodes
+            // at the time of schema change.
+            auto& client = e.get_raft_group0_client();
+            auto guard = client.start_operation(aborted).get();
+            service::topology_mutation_builder builder(guard.write_timestamp());
+            std::unordered_set<dht::token> tokens;
+            tokens.insert(dht::token(0));
+            builder.with_node(raft::server_id(host_id.uuid()))
+                    .set("datacenter", rack1.dc)
+                    .set("rack", rack1.rack)
+                    .set("node_state", node_state::normal)
+                    .set("shard_count", (uint32_t)shard_count)
+                    .set("cleanup_status", cleanup_status::clean)
+                    .set("release_version", version::release())
+                    .set("num_tokens", (uint32_t)1)
+                    .set("tokens_string", "0")
+                    .set("tokens", tokens)
+                    .set("supported_features", std::set<sstring>())
+                    .set("request_id", utils::UUID())
+                    .set("ignore_msb", (uint32_t)0)                    ;
+            topology_change change({builder.build()});
+            group0_command g0_cmd = client.prepare_command(std::move(change), guard, "adding node to topology");
+            client.add_entry(std::move(g0_cmd), std::move(guard), aborted).get();
+        };
+
+        auto bootstrap = [&] {
+            add_host();
+            add_host_to_topology(hosts.size() - 1);
             global_res.stats += rebalance_tablets(e.get_tablet_allocator().local(), stm);
         };
 
@@ -324,12 +357,9 @@ future<results> test_load_balancing_with_many_tables(params p, bool table_aware)
             ips.erase(ips.begin() + i);
         };
 
-        stm.mutate_token_metadata([&] (token_metadata& tm) {
-            for (int i = 0; i < n_hosts; ++i) {
-                add_host_to_topology(tm, i);
-            }
-            return make_ready_future<>();
-        }).get();
+        for (int i = 0; i < n_hosts; ++i) {
+            add_host_to_topology(i);
+        }
 
         auto allocate = [&] (schema_ptr s, int rf, std::optional<int> initial_tablets) {
             replication_strategy_config_options opts;
@@ -341,11 +371,21 @@ future<results> test_load_balancing_with_many_tables(params p, bool table_aware)
             }).get();
         };
 
-        auto id1 = add_table(e).get();
-        auto id2 = add_table(e).get();
-        schema_ptr s1 = e.local_db().find_schema(id1);
-        schema_ptr s2 = e.local_db().find_schema(id2);
+        sstring ks_name1 = "test_ks1";
+        e.execute_cql(format("create keyspace {} with replication = "
+                             "{{'class': 'NetworkTopologyStrategy', '{}': {}}} "
+                             "and tablets = {{'enabled': true}}", ks_name1, rack1.dc, p.rf1)).get();
+        testlog.info("top {}", e.local_db().get_shared_token_metadata().get()->get_topology().get_datacenter_endpoints());
+        auto id1 = add_table(e, ks_name1).get();
+        auto s1 = e.local_db().find_schema(id1);
         allocate(s1, p.rf1, p.tablets1);
+
+        sstring ks_name2 = "test_ks2";
+        e.execute_cql(format("create keyspace {} with replication = "
+                             "{{'class': 'NetworkTopologyStrategy', '{}': {}}} "
+                             "and tablets = {{'enabled': true}}", ks_name2, rack1.dc, p.rf2)).get();
+        auto id2 = add_table(e, ks_name2).get();
+        auto s2 = e.local_db().find_schema(id2);
         allocate(s2, p.rf2, p.tablets2);
 
         auto check_balance = [&] () -> cluster_balance {

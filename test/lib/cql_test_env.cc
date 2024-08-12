@@ -366,6 +366,10 @@ public:
         return *_group0_client;
     }
 
+    virtual sharded<service::raft_address_map>& get_raft_address_map() override {
+        return _raft_address_map;
+    }
+
     virtual sharded<service::raft_group_registry>& get_raft_group_registry() override {
         return _group0_registry;
     }

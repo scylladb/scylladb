@@ -167,6 +167,8 @@ public:
 
     virtual service::raft_group0_client& get_raft_group0_client() = 0;
 
+    virtual sharded<service::raft_address_map>& get_raft_address_map() = 0;
+
     virtual sharded<service::raft_group_registry>& get_raft_group_registry() = 0;
 
     virtual sharded<db::system_keyspace>& get_system_keyspace() = 0;
