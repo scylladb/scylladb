@@ -646,18 +646,20 @@ future<> sstable_directory::filesystem_components_lister::garbage_collect(storag
 }
 
 future<> sstable_directory::filesystem_components_lister::cleanup_column_family_temp_sst_dirs() {
-    std::vector<future<>> futures;
-
-    co_await lister::scan_dir(_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [&] (fs::path sstdir, directory_entry de) {
+    directory_lister lister(_directory, lister::dir_entry_types::of<directory_entry_type::directory>());
+    auto futures = co_await with_closeable(std::move(lister), [this] (directory_lister& lister) -> future<std::vector<future<>>> {
+      std::vector<future<>> futures;
+      while (auto de = co_await lister.get()) {
         // push futures that remove files/directories into an array of futures,
-        // so that the supplied callback will not block scan_dir() from
+        // so that the supplied callback will not block lister from
         // reading the next entry in the directory.
-        fs::path dirpath = sstdir / de.name;
+        fs::path dirpath = _directory / de->name;
         if (dirpath.extension().string() == tempdir_extension) {
             sstlog.info("Found temporary sstable directory: {}, removing", dirpath);
             futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
         }
-        return make_ready_future<>();
+      }
+      co_return futures;
     });
 
     co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
