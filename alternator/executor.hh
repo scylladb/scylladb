@@ -224,6 +224,9 @@ private:
     friend class rmw_operation;
 
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr);
+
+    template<typename rmw_op>
+    future<request_return_type> execute_rmw_operation(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     
 public:
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&);

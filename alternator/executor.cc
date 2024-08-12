@@ -1839,6 +1839,9 @@ static void verify_all_are_used(const rjson::value* field,
     }
 }
 
+template<typename rmw_op>
+class rmw_op_traits;
+
 class put_item_operation : public rmw_operation {
 private:
     put_or_delete_item _mutation_builder;
@@ -1899,19 +1902,21 @@ public:
     virtual ~put_item_operation() = default;
 };
 
-future<executor::request_return_type> executor::put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
-    _stats.api_operations.put_item++;
+template<typename rmw_op>
+future<executor::request_return_type> executor::execute_rmw_operation(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+    auto& api_op_stat = rmw_op_traits<rmw_op>::api_stat(_stats);
+    api_op_stat++;
     auto start_time = std::chrono::steady_clock::now();
-    elogger.trace("put_item {}", request);
+    elogger.trace("{} {}", rmw_op_traits<rmw_op>::name, request);
 
-    auto op = make_shared<put_item_operation>(_proxy, std::move(request));
+    auto op = make_shared<rmw_op>(_proxy, std::move(request));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
 
     co_await verify_permission(client_state, op->schema(), auth::permission::MODIFY);
 
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
-        _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
+        api_op_stat--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(*shard, _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
@@ -1922,13 +1927,32 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
                 // to another shard - once it is solved, this place can use a similar solution. Instead of passing
                 // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
                 // so that it's destructed only after all background operations are finished as well.
-                return e.put_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request));
+                return rmw_op_traits<rmw_op>::execute_op(e, client_state, std::move(trace_state), empty_service_permit(), std::move(request));
             });
         });
     }
     co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
-        _stats.api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+        rmw_op_traits<rmw_op>::api_latency(_stats).mark(std::chrono::steady_clock::now() - start_time);
     });
+}
+
+template<>
+class rmw_op_traits<put_item_operation> {
+public:
+    static constexpr std::string_view name{"put_item"};
+    static future<executor::request_return_type> execute_op(executor& e, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+        return e.put_item(client_state, std::move(trace_state), std::move(permit), std::move(request));
+    }
+    static uint64_t& api_stat(stats& stats) {
+        return stats.api_operations.put_item;
+    }
+    static utils::timed_rate_moving_average_summary_and_histogram& api_latency(stats& stats) {
+        return stats.api_operations.put_item_latency;
+    }
+};
+
+future<executor::request_return_type> executor::put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+    return execute_rmw_operation<put_item_operation>(client_state, std::move(trace_state), std::move(permit), std::move(request));
 }
 
 class delete_item_operation : public rmw_operation {
@@ -1991,36 +2015,23 @@ public:
     virtual ~delete_item_operation() = default;
 };
 
-future<executor::request_return_type> executor::delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
-    _stats.api_operations.delete_item++;
-    auto start_time = std::chrono::steady_clock::now();
-    elogger.trace("delete_item {}", request);
-
-    auto op = make_shared<delete_item_operation>(_proxy, std::move(request));
-    tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
-    const bool needs_read_before_write = op->needs_read_before_write();
-
-    co_await verify_permission(client_state, op->schema(), auth::permission::MODIFY);
-
-    if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
-        _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
-        _stats.shard_bounce_for_lwt++;
-        co_return co_await container().invoke_on(*shard, _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
-                (executor& e) mutable {
-            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
-                                     (service::client_state& client_state) mutable {
-                //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
-                // to another shard - once it is solved, this place can use a similar solution. Instead of passing
-                // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
-                // so that it's destructed only after all background operations are finished as well.
-                return e.delete_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request));
-            });
-        });
+template<>
+class rmw_op_traits<delete_item_operation> {
+public:
+    static constexpr std::string_view name{"delete_item"};
+    static future<executor::request_return_type> execute_op(executor& e, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+        return e.delete_item(client_state, std::move(trace_state), std::move(permit), std::move(request));
     }
-    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
-        _stats.api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-    });
+    static uint64_t& api_stat(stats& stats) {
+        return stats.api_operations.delete_item;
+    }
+    static utils::timed_rate_moving_average_summary_and_histogram& api_latency(stats& stats) {
+        return stats.api_operations.delete_item_latency;
+    }
+};
+
+future<executor::request_return_type> executor::delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+    return execute_rmw_operation<delete_item_operation>(client_state, std::move(trace_state), std::move(permit), std::move(request));
 }
 
 static schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, const rjson::value::ConstMemberIterator& batch_request) {
@@ -3266,36 +3277,23 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     return m;
 }
 
-future<executor::request_return_type> executor::update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
-    _stats.api_operations.update_item++;
-    auto start_time = std::chrono::steady_clock::now();
-    elogger.trace("update_item {}", request);
-
-    auto op = make_shared<update_item_operation>(_proxy, std::move(request));
-    tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
-    const bool needs_read_before_write = op->needs_read_before_write();
-
-    co_await verify_permission(client_state, op->schema(), auth::permission::MODIFY);
-
-    if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
-        _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
-        _stats.shard_bounce_for_lwt++;
-        co_return co_await container().invoke_on(*shard, _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
-                (executor& e) mutable {
-            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
-                                     (service::client_state& client_state) mutable {
-                //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
-                // to another shard - once it is solved, this place can use a similar solution. Instead of passing
-                // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
-                // so that it's destructed only after all background operations are finished as well.
-                return e.update_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request));
-            });
-        });
+template<>
+class rmw_op_traits<update_item_operation> {
+public:
+    static constexpr std::string_view name{"update_item"};
+    static future<executor::request_return_type> execute_op(executor& e, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+        return e.update_item(client_state, std::move(trace_state), std::move(permit), std::move(request));
     }
-    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
-        _stats.api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-    });
+    static uint64_t& api_stat(stats& stats) {
+        return stats.api_operations.update_item;
+    }
+    static utils::timed_rate_moving_average_summary_and_histogram& api_latency(stats& stats) {
+        return stats.api_operations.update_item_latency;
+    }
+};
+
+future<executor::request_return_type> executor::update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+    return execute_rmw_operation<update_item_operation>(client_state, std::move(trace_state), std::move(permit), std::move(request));
 }
 
 // Check according to the request's "ConsistentRead" field, which consistency
