@@ -256,7 +256,7 @@ struct fmt::formatter<params> : fmt::formatter<string_view> {
     }
 };
 
-future<results> test_load_balancing_with_many_tables(params p, bool table_aware) {
+future<results> test_load_balancing_with_many_tables(params p, bool table_aware = true, bool global_rebalancing = false) {
     auto cfg = tablet_cql_test_config();
     results global_res;
     co_await do_with_cql_env_thread([&] (auto& e) {
@@ -447,6 +447,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool table_aware)
         testlog.debug("tablet metadata: {}", stm.get()->tablets());
 
         e.get_tablet_allocator().local().set_use_table_aware_balancing(table_aware);
+        e.get_tablet_allocator().local().set_use_global_rebalancing(global_rebalancing);
 
         check_balance();
 
@@ -473,10 +474,10 @@ future<> run_simulation(const params& p, bool check_table_unaware, const sstring
     testlog.info("[run {}] tablet count / shard: {:.3f}", name, double(total_tablet_count) / (p.nodes * p.shards));
 
     auto check_results = [&] (const results& res, const sstring& tag) {
-        testlog.info("[run {}] Overcommit {:<5} : init : {}", name, tag, res.init);
-        testlog.info("[run {}] Overcommit {:<5} : worst: {}", name, tag, res.worst);
-        testlog.info("[run {}] Overcommit {:<5} : last : {}", name, tag, res.last);
-        testlog.info("[run {}] Overcommit {:<5} : time : {:.3f} [s], max={:.3f} [s], count={}", name, tag,
+        testlog.info("[run {}] Overcommit {:<7} : init : {}", name, tag, res.init);
+        testlog.info("[run {}] Overcommit {:<7} : worst: {}", name, tag, res.worst);
+        testlog.info("[run {}] Overcommit {:<7} : last : {}", name, tag, res.last);
+        testlog.info("[run {}] Overcommit {:<7} : time : {:.3f} [s], max={:.3f} [s], count={}", name, tag,
                      res.stats.elapsed_time.count(), res.stats.max_rebalance_time.count(), res.stats.rebalance_count);
 
         if (res.stats.elapsed_time > seconds_double(1)) {
@@ -491,12 +492,17 @@ future<> run_simulation(const params& p, bool check_table_unaware, const sstring
         }
     };
 
-    auto res = co_await test_load_balancing_with_many_tables(p, true);
-    check_results(res, "");
+    auto res = co_await test_load_balancing_with_many_tables(p, true, true);
+    check_results(res, "(glob)");
+
+    {
+        auto old_res = co_await test_load_balancing_with_many_tables(p, true, false);
+        check_results(old_res, "(dflt)");
+    }
 
     if (check_table_unaware) {
-        auto old_res = co_await test_load_balancing_with_many_tables(p, false);
-        check_results(old_res, "(old)");
+        auto old_res = co_await test_load_balancing_with_many_tables(p, false, false);
+        check_results(old_res, "(unawr)");
 
         for (int i = 0; i < nr_tables; ++i) {
             if (res.worst.tables[i].shard_overcommit > old_res.worst.tables[i].shard_overcommit) {
