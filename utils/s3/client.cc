@@ -134,7 +134,7 @@ void client::authorize(http::request& req) {
     }
     unsigned query_nr = query_parameters.size();
     for (const auto& q : query_parameters) {
-        query_string += format("{}={}{}", q.first, q.second, query_nr == 1 ? "" : "&");
+        query_string += format("{}={}{}", http::internal::url_encode(q.first), http::internal::url_encode(q.second), query_nr == 1 ? "" : "&");
         query_nr--;
     }
     auto sig = utils::aws::get_signature(
