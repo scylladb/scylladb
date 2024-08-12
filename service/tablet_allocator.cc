@@ -268,6 +268,8 @@ class load_balancer {
     using load_type = double;
 
     struct shard_load {
+        shard_id id;
+
         size_t tablet_count = 0;
 
         absl::flat_hash_map<table_id, size_t> tablet_count_per_table;
@@ -1734,6 +1736,9 @@ public:
             load.node = node;
             load.shard_count = node->get_shard_count();
             load.shards.resize(load.shard_count);
+            for (shard_id id = 0; id < load.shard_count; id++) {
+                load.shards[id].id = id;
+            }
             if (!load.shard_count) {
                 throw std::runtime_error(format("Shard count of {} not found in topology", host));
             }
