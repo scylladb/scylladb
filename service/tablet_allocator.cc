@@ -1144,6 +1144,10 @@ public:
             return viable_targets;
         };
 
+        if (dst_info.id == src_info.id) {
+            return std::nullopt;
+        }
+
         if (dst_info.rack() != src_info.rack()) {
             auto targets = get_viable_targets();
             if (!targets.contains(dst_info.id)) {
