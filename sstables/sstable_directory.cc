@@ -315,11 +315,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
             abstract_lister::make<s3::client::bucket_lister>(_client, _bucket, _directory.native() + "/", &manifest_json_filter);
 
     co_await with_closeable(std::move(lister), coroutine::lambda([this, &directory] (abstract_lister& lister) -> future<> {
-        while (true) {
-            auto de = co_await lister.get();
-            if (!de) {
-                break;
-            }
+        while (auto de = co_await lister.get()) {
             auto component_path = _directory / de->name;
             auto comps = sstables::parse_path(component_path, directory._schema->ks_name(), directory._schema->cf_name());
             handle(std::move(comps), component_path);
