@@ -672,13 +672,14 @@ future<> sstable_directory::filesystem_components_lister::handle_sstables_pendin
         co_return;
     }
 
-    std::vector<future<>> futures;
-
-    co_await lister::scan_dir(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [this, &futures] (fs::path dir, directory_entry de) {
+    directory_lister lister(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
+    auto futures = co_await with_closeable(std::move(lister), coroutine::lambda([this, &pending_delete_dir] (directory_lister& lister) -> future<std::vector<future<>>> {
+      std::vector<future<>> futures;
+      while (auto de = co_await lister.get()) {
         // push nested futures that remove files/directories into an array of futures,
-        // so that the supplied callback will not block scan_dir() from
+        // so that the supplied callback will not block lister from
         // reading the next entry in the directory.
-        fs::path file_path = dir / de.name;
+        fs::path file_path = pending_delete_dir / de->name;
         if (file_path.extension() == ".tmp") {
             sstlog.info("Found temporary pending_delete log file: {}, deleting", file_path);
             futures.push_back(remove_file(file_path.string()));
@@ -689,8 +690,9 @@ future<> sstable_directory::filesystem_components_lister::handle_sstables_pendin
         } else {
             sstlog.debug("Found unknown file in pending_delete directory: {}, ignoring", file_path);
         }
-        return make_ready_future<>();
-    });
+      }
+      co_return futures;
+    }));
 
     co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
