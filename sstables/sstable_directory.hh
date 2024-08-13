@@ -187,11 +187,6 @@ private:
     // Returns filename for a SSTable from its entry_descriptor.
     sstring sstable_filename(const sstables::entry_descriptor& desc) const;
 
-    // Compute owner of shards for a particular SSTable.
-    future<std::vector<shard_id>> get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const;
-    // Retrieves sstables::foreign_sstable_open_info for a particular SSTable.
-    future<foreign_sstable_open_info> get_open_info_for_this_sstable(const sstables::entry_descriptor& desc) const;
-
     sstable_directory(sstables_manager& manager,
           schema_ptr schema,
           std::variant<std::unique_ptr<dht::sharder>, const dht::sharder*> sharder,
