@@ -234,6 +234,18 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
 }
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
+distributed_loader::get_sstables_from_object_store(distributed<replica::database>& db, sstring ks, sstring cf, sstring endpoint, sstring bucket, sstring prefix, sstables::sstable_open_config cfg) {
+    return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, prefix] (auto& global_table, auto& directory) {
+        return directory.start(global_table.as_sharded_parameter(),
+            sharded_parameter([bucket, endpoint] {
+                data_dictionary::storage_options opts;
+                opts.value = data_dictionary::storage_options::s3{bucket, endpoint};
+                return make_lw_shared<const data_dictionary::storage_options>(std::move(opts));
+            }), prefix, &error_handler_gen_for_upload_dir);
+    });
+}
+
+future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
 distributed_loader::get_sstables_from(distributed<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg,
         noncopyable_function<future<>(global_table_ptr&, sharded<sstables::sstable_directory>&)> start_dir) {
     return seastar::async([&db, ks = std::move(ks), cf = std::move(cf), start_dir = std::move(start_dir), cfg] {

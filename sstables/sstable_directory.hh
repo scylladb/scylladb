@@ -195,6 +195,10 @@ public:
     sstable_directory(replica::table& table,
             sstable_state state,
             io_error_handler_gen error_handler_gen);
+    sstable_directory(replica::table& table,
+            lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
+            sstring table_dir,
+            io_error_handler_gen error_handler_gen);
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
             const dht::sharder& sharder,

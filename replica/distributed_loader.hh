@@ -88,6 +88,8 @@ public:
     // The table UUID is returned too.
     static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
             get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg);
+    static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
+            get_sstables_from_object_store(distributed<replica::database>& db, sstring ks, sstring cf, sstring endpoint, sstring bucket, sstring prefix, sstables::sstable_open_config cfg);
     static future<> process_upload_dir(distributed<replica::database>& db, sharded<db::view::view_builder>& vb, sstring ks_name, sstring cf_name);
 };
 
