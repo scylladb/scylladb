@@ -226,15 +226,22 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
 distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg) {
-    return seastar::async([&db, ks = std::move(ks), cf = std::move(cf), cfg] {
+    return get_sstables_from(db, ks, cf, cfg, [] (auto& global_table, auto& directory) {
+        return directory.start(global_table.as_sharded_parameter(),
+            sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
+        );
+    });
+}
+
+future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
+distributed_loader::get_sstables_from(distributed<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg,
+        noncopyable_function<future<>(global_table_ptr&, sharded<sstables::sstable_directory>&)> start_dir) {
+    return seastar::async([&db, ks = std::move(ks), cf = std::move(cf), start_dir = std::move(start_dir), cfg] {
         auto global_table = get_table_on_all_shards(db, ks, cf).get();
-        sharded<sstables::sstable_directory> directory;
         auto table_id = global_table->schema()->id();
 
-        directory.start(global_table.as_sharded_parameter(),
-            sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
-        ).get();
-
+        sharded<sstables::sstable_directory> directory;
+        start_dir(global_table, directory).get();
         auto stop = deferred_stop(directory);
 
         std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards(smp::count);
