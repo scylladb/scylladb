@@ -148,7 +148,7 @@ void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) cons
         auto ep = g_digest.get_endpoint();
         auto ep_state = this->get_endpoint_state_ptr(ep);
         version_type version = ep_state ? this->get_max_endpoint_state_version(*ep_state) : version_type();
-        int32_t diff_version = ::abs(version - g_digest.get_max_version());
+        int32_t diff_version = ::abs((version - g_digest.get_max_version()).value());
         diff_digests.emplace_back(gossip_digest(ep, g_digest.get_generation(), version_type(diff_version)));
     }
 
