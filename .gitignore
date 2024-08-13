@@ -3,6 +3,7 @@
 .settings
 build
 build.ninja
+cmake-build-*
 build.ninja.new
 cscope.*
 /debian/
@@ -13,6 +14,7 @@ dist/ami/scylla_deploy.sh
 Cql.tokens
 .kdev4
 *.kdev4
+.idea
 CMakeLists.txt.user
 .cache
 .tox
