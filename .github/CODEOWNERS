@@ -1,5 +1,5 @@
 # AUTH
-auth/* @elcallio @vladzcloudius
+auth/* @nuivall @ptrsmrn @KrzaQ
 
 # CACHE
 row_cache* @tgrabiec
@@ -25,15 +25,15 @@ compaction/* @raphaelsc
 transport/*
 
 # CQL QUERY LANGUAGE
-cql3/* @tgrabiec
+cql3/* @tgrabiec @nuivall @ptrsmrn @KrzaQ
 
 # COUNTERS
-counters*
-tests/counter_test*
+counters* @nuivall @ptrsmrn @KrzaQ
+tests/counter_test* @nuivall @ptrsmrn @KrzaQ
 
 # DOCS
 docs/* @annastuchlik @tzach
-docs/alternator @annastuchlik @tzach @nyh @nuivall
+docs/alternator @annastuchlik @tzach @nyh @nuivall @ptrsmrn @KrzaQ
 
 # GOSSIP
 gms/* @tgrabiec @asias
@@ -74,8 +74,8 @@ streaming/* @tgrabiec @asias
 service/storage_service.* @tgrabiec @asias
 
 # ALTERNATOR
-alternator/* @nuivall
-test/alternator/* @nuivall
+alternator/* @nyh @nuivall @ptrsmrn @KrzaQ
+test/alternator/* @nyh @nuivall @ptrsmrn @KrzaQ
 
 # HINTED HANDOFF
 db/hints/* @piodul @vladzcloudius @eliransin
