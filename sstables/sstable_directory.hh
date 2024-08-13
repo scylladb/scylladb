@@ -177,20 +177,8 @@ private:
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg = {}) const;
-    future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, process_flags flags) const;
 
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
-
-    // Sort the sstable according to owner
-    future<> sort_sstable(sstables::entry_descriptor desc, process_flags flags);
-
-    // Returns filename for a SSTable from its entry_descriptor.
-    sstring sstable_filename(const sstables::entry_descriptor& desc) const;
-
-    // Compute owner of shards for a particular SSTable.
-    future<std::vector<shard_id>> get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const;
-    // Retrieves sstables::foreign_sstable_open_info for a particular SSTable.
-    future<foreign_sstable_open_info> get_open_info_for_this_sstable(const sstables::entry_descriptor& desc) const;
 
     sstable_directory(sstables_manager& manager,
           schema_ptr schema,
