@@ -192,8 +192,9 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
     if (flags.sort_sstables_according_to_owner) {
         co_await sort_sstable(std::move(desc), flags);
     } else {
+        auto sst = co_await load_sstable(std::move(desc), flags);
         dirlog.debug("Added {} to unsorted sstables list", sstable_filename(desc));
-        _unsorted_sstables.push_back(co_await load_sstable(std::move(desc), flags));
+        _unsorted_sstables.push_back(std::move(sst));
     }
 }
 
