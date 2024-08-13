@@ -211,18 +211,19 @@ future<foreign_sstable_open_info> sstable_directory::get_open_info_for_this_ssta
 
 future<>
 sstable_directory::sort_sstable(sstables::entry_descriptor desc, process_flags flags) {
-    auto shards = co_await get_shards_for_this_sstable(desc, flags);
+    auto sst = co_await load_sstable(desc, flags);
+    auto shards = sst->get_shards_for_this_sstable();
     if (shards.size() == 1) {
         if (shards[0] == this_shard_id()) {
             dirlog.trace("{} identified as a local unshared SSTable", sstable_filename(desc));
-            _unshared_local_sstables.push_back(co_await load_sstable(std::move(desc), flags));
+            _unshared_local_sstables.push_back(std::move(sst));
         } else {
             dirlog.trace("{} identified as a remote unshared SSTable, shard={}", sstable_filename(desc), shards[0]);
             _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
         }
     } else {
         dirlog.trace("{} identified as a shared SSTable, shards={}", sstable_filename(desc), shards);
-        _shared_sstable_info.push_back(co_await get_open_info_for_this_sstable(desc));
+        _shared_sstable_info.push_back(co_await sst->get_open_info());
     }
 }
 
