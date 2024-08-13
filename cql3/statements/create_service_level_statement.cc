@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "exceptions/exceptions.hh"
 #include "seastarx.hh"
 #include "cql3/statements/create_service_level_statement.hh"
 #include "service/qos/service_level_controller.hh"
@@ -38,6 +39,10 @@ create_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &,
         std::optional<service::group0_guard> guard) const {
+    if (_service_level.starts_with('$')) {
+        throw exceptions::invalid_request_exception("Names starting with '$' are reserved for internal tenants. Use a different name.");
+    }
+
     qos::service_level_options slo = _slo.replace_defaults(qos::service_level_options{});
     return state.get_service_level_controller().add_distributed_service_level(_service_level, slo, _if_not_exists, std::move(guard)).then([] {
         using void_result_msg = cql_transport::messages::result_message::void_message;
