@@ -933,7 +933,7 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
         SCYLLA_ASSERT(entry_idx >= first_idx);
 
         waiters.erase(it);
-        if (status.term == entries[entry_idx - first_idx]->term) {
+        if (status.term == entries[(entry_idx - first_idx).value()]->term) {
             status.done.set_value();
         } else {
             // The terms do not match which means that between the
@@ -1321,7 +1321,7 @@ future<> server_impl::applier_fiber() {
 
                 index_t last_idx = batch.back()->idx;
                 term_t last_term = batch.back()->term;
-                SCYLLA_ASSERT(last_idx == _applied_idx + batch.size());
+                SCYLLA_ASSERT(last_idx == _applied_idx + index_t{batch.size()});
 
                 boost::range::copy(
                        batch |
@@ -1358,7 +1358,7 @@ future<> server_impl::applier_fiber() {
                bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
 
                if (force_snapshot || (_applied_idx > last_snap_idx &&
-                   (_applied_idx - last_snap_idx >= _config.snapshot_threshold ||
+                   ((_applied_idx - last_snap_idx).value() >= _config.snapshot_threshold ||
                    _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)))
                {
                    snapshot_descriptor snp;
@@ -1776,19 +1776,19 @@ void server_impl::register_metrics() {
                        sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
         sm::make_gauge("log_memory_usage", [this] { return _fsm->log_memory_usage(); },
                        sm::description("memory usage of in-memory part of the log in bytes"), {server_id_label(_id)}),
-        sm::make_gauge("log_last_index", [this] { return _fsm->log_last_idx(); },
+        sm::make_gauge("log_last_index", [this] { return _fsm->log_last_idx().value(); },
                        sm::description("term of the last log entry"), {server_id_label(_id)}),
-        sm::make_gauge("log_last_term", [this] { return _fsm->log_last_term(); },
+        sm::make_gauge("log_last_term", [this] { return _fsm->log_last_term().value(); },
                        sm::description("index of the last log entry"), {server_id_label(_id)}),
-        sm::make_gauge("snapshot_last_index", [this] { return _fsm->log_last_snapshot_idx(); },
+        sm::make_gauge("snapshot_last_index", [this] { return _fsm->log_last_snapshot_idx().value(); },
                        sm::description("term of the snapshot"), {server_id_label(_id)}),
-        sm::make_gauge("snapshot_last_term", [this] { return _fsm->log_term_for(_fsm->log_last_snapshot_idx()).value(); },
+        sm::make_gauge("snapshot_last_term", [this] { return _fsm->log_term_for(_fsm->log_last_snapshot_idx()).value().value(); },
                        sm::description("index of the snapshot"), {server_id_label(_id)}),
         sm::make_gauge("state", [this] { return _fsm->state_to_metric(); },
                        sm::description("current state: 0 - follower, 1 - candidate, 2 - leader"), {server_id_label(_id)}),
-        sm::make_gauge("commit_index", [this] { return _fsm->commit_idx(); },
+        sm::make_gauge("commit_index", [this] { return _fsm->commit_idx().value(); },
                        sm::description("commit index"), {server_id_label(_id)}),
-        sm::make_gauge("apply_index",  _applied_idx,
+        sm::make_gauge("apply_index", [this] { return _applied_idx.value(); },
                        sm::description("applied index"), {server_id_label(_id)}),
     });
 }
