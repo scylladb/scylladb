@@ -450,10 +450,17 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
 sstables_loader::sstables_loader(sharded<replica::database>& db,
         netw::messaging_service& messaging,
         sharded<db::view::view_builder>& vb,
+        tasks::task_manager& tm,
         seastar::scheduling_group sg)
     : _db(db)
     , _messaging(messaging)
     , _view_builder(vb)
+    , _task_manager_module(make_shared<task_manager_module>(tm))
     , _sched_group(std::move(sg))
 {
+    tm.register_module("sstables_loader", _task_manager_module);
+}
+
+future<> sstables_loader::stop() {
+    co_await _task_manager_module->stop();
 }

@@ -11,6 +11,7 @@
 #include <seastar/core/sharded.hh>
 #include "schema/schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
+#include "tasks/task_manager.hh"
 
 using namespace seastar;
 
@@ -30,9 +31,17 @@ class view_builder;
 // Gets sstables from the upload directory and makes them available in the
 // system. Built on top of the distributed_loader functionality.
 class sstables_loader : public seastar::peering_sharded_service<sstables_loader> {
+public:
+    class task_manager_module : public tasks::task_manager::module {
+        public:
+            task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "sstables_loader") {}
+    };
+
+private:
     sharded<replica::database>& _db;
     netw::messaging_service& _messaging;
     sharded<db::view::view_builder>& _view_builder;
+    shared_ptr<task_manager_module> _task_manager_module;
     seastar::scheduling_group _sched_group;
 
     // Note that this is obviously only valid for the current shard. Users of
@@ -51,7 +60,10 @@ public:
     sstables_loader(sharded<replica::database>& db,
             netw::messaging_service& messaging,
             sharded<db::view::view_builder>& vb,
+            tasks::task_manager& tm,
             seastar::scheduling_group sg);
+
+    future<> stop();
 
     /**
      * Load new SSTables not currently tracked by the system
