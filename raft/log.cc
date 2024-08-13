@@ -11,11 +11,11 @@
 namespace raft {
 
 log_entry_ptr& log::get_entry(index_t i) {
-    return _log[i - _first_idx];
+    return _log[(i - _first_idx).value()];
 }
 
 const log_entry_ptr& log::get_entry(index_t i) const {
-    return _log[i - _first_idx];
+    return _log[(i - _first_idx).value()];
 }
 
 size_t log::range_memory_usage(log_entries::iterator first, log_entries::iterator last) const {
@@ -64,7 +64,7 @@ index_t log::next_idx() const {
 
 void log::truncate_uncommitted(index_t idx) {
     SCYLLA_ASSERT(idx >= _first_idx);
-    auto it = _log.begin() + (idx - _first_idx);
+    auto it = _log.begin() + (idx - _first_idx).value();
     const auto released_memory = range_memory_usage(it, _log.end());
     _log.erase(it, _log.end());
     _log.shrink_to_fit();
@@ -106,7 +106,7 @@ void log::stable_to(index_t idx) {
 }
 
 std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
-    if (idx == 0) {
+    if (idx == index_t{0}) {
         // Special case of empty log on leader,
         // TLA+ line 324.
         return std::make_pair(true, term_t(0));
@@ -125,12 +125,12 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
     } else {
         auto i = idx - _first_idx;
 
-        if (i >= _log.size()) {
+        if (i.value() >= _log.size()) {
             // We have a gap between the follower and the leader.
             return std::make_pair(false, term_t(0));
         }
 
-        my_term =  _log[i]->term;
+        my_term =  _log[i.value()]->term;
     }
 
     return my_term == term ? std::make_pair(true, term_t(0)) : std::make_pair(false, my_term);
@@ -138,7 +138,7 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
 
 std::optional<term_t> log::term_for(index_t idx) const {
     if (!_log.empty() && idx >= _first_idx) {
-        return _log[idx - _first_idx]->term;
+        return _log[(idx - _first_idx).value()]->term;
     }
     if (idx == _snapshot.idx) {
         return _snapshot.term;
@@ -147,7 +147,7 @@ std::optional<term_t> log::term_for(index_t idx) const {
 }
 
 const configuration& log::get_configuration() const {
-    return _last_conf_idx ? std::get<configuration>(_log[_last_conf_idx - _first_idx]->data) : _snapshot.config;
+    return _last_conf_idx ? std::get<configuration>(_log[(_last_conf_idx - _first_idx).value()]->data) : _snapshot.config;
 }
 
 const configuration& log::last_conf_for(index_t idx) const {
@@ -243,7 +243,7 @@ size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entrie
         _log.shrink_to_fit();
         _first_idx = idx + index_t{1};
     } else {
-        auto entries_to_remove = _log.size() - (last_idx() - idx);
+        auto entries_to_remove = _log.size() - (last_idx() - idx).value();
         size_t trailing_bytes = 0;
         for (size_t i = 0; i < max_trailing_entries && entries_to_remove > 0; ++i) {
             trailing_bytes += memory_usage_of(*_log[entries_to_remove - 1], _max_command_size);
