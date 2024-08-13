@@ -216,10 +216,6 @@ sstable_directory::sort_sstable(sstables::entry_descriptor desc, process_flags f
     }
 }
 
-sstring sstable_directory::sstable_filename(const sstables::entry_descriptor& desc) const {
-    return sstable::filename(make_path(_table_dir, _state).native(), _schema->ks_name(), _schema->cf_name(), desc.version, desc.generation, desc.format, component_type::Data);
-}
-
 generation_type
 sstable_directory::highest_generation_seen() const {
     return _max_generation_seen;
