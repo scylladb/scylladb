@@ -274,7 +274,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
 
-    directory_lister lister(_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter);
+    auto lister = abstract_lister::make<directory_lister>(_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter);
     std::exception_ptr ex;
     try {
         while (true) {
