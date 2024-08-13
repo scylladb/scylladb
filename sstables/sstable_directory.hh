@@ -181,9 +181,6 @@ private:
 
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
-    // Sort the sstable according to owner
-    future<> sort_sstable(sstables::entry_descriptor desc, process_flags flags);
-
     sstable_directory(sstables_manager& manager,
           schema_ptr schema,
           std::variant<std::unique_ptr<dht::sharder>, const dht::sharder*> sharder,

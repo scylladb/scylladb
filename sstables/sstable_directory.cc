@@ -189,18 +189,14 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
         _max_version_seen = desc.version;
     }
 
-    if (flags.sort_sstables_according_to_owner) {
-        co_await sort_sstable(std::move(desc), flags);
-    } else {
-        auto sst = co_await load_sstable(std::move(desc), flags);
+    auto sst = co_await load_sstable(desc, flags);
+
+    if (!flags.sort_sstables_according_to_owner) {
         dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
         _unsorted_sstables.push_back(std::move(sst));
+        co_return;
     }
-}
 
-future<>
-sstable_directory::sort_sstable(sstables::entry_descriptor desc, process_flags flags) {
-    auto sst = co_await load_sstable(desc, flags);
     auto shards = sst->get_shards_for_this_sstable();
     if (shards.size() == 1) {
         if (shards[0] == this_shard_id()) {
