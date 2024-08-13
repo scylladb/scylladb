@@ -19,6 +19,8 @@ namespace replica {
 class database;
 }
 
+namespace sstables { class storage_manager; }
+
 namespace netw { class messaging_service; }
 namespace db {
 namespace view {
@@ -42,6 +44,7 @@ private:
     netw::messaging_service& _messaging;
     sharded<db::view::view_builder>& _view_builder;
     shared_ptr<task_manager_module> _task_manager_module;
+    sstables::storage_manager& _storage_manager;
     seastar::scheduling_group _sched_group;
 
     // Note that this is obviously only valid for the current shard. Users of
@@ -61,6 +64,7 @@ public:
             netw::messaging_service& messaging,
             sharded<db::view::view_builder>& vb,
             tasks::task_manager& tm,
+            sstables::storage_manager& sstm,
             seastar::scheduling_group sg);
 
     future<> stop();

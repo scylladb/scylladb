@@ -451,11 +451,13 @@ sstables_loader::sstables_loader(sharded<replica::database>& db,
         netw::messaging_service& messaging,
         sharded<db::view::view_builder>& vb,
         tasks::task_manager& tm,
+        sstables::storage_manager& sstm,
         seastar::scheduling_group sg)
     : _db(db)
     , _messaging(messaging)
     , _view_builder(vb)
     , _task_manager_module(make_shared<task_manager_module>(tm))
+    , _storage_manager(sstm)
     , _sched_group(std::move(sg))
 {
     tm.register_module("sstables_loader", _task_manager_module);
