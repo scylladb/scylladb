@@ -7,9 +7,9 @@ row_cache* @tgrabiec
 test/boost/mvcc* @tgrabiec
 
 # CDC
-cdc/* @kbr- @elcallio @piodul @jul-stas
-test/cql/cdc_* @kbr- @elcallio @piodul @jul-stas
-test/boost/cdc_* @kbr- @elcallio @piodul @jul-stas
+cdc/* @kbr- @elcallio @piodul
+test/cql/cdc_* @kbr- @elcallio @piodul
+test/boost/cdc_* @kbr- @elcallio @piodul
 
 # COMMITLOG / BATCHLOG
 db/commitlog/* @elcallio @eliransin
@@ -28,12 +28,12 @@ transport/*
 cql3/* @tgrabiec
 
 # COUNTERS
-counters* @jul-stas
-tests/counter_test* @jul-stas
+counters*
+tests/counter_test*
 
 # DOCS
 docs/* @annastuchlik @tzach
-docs/alternator @annastuchlik @tzach @nyh @havaker @nuivall
+docs/alternator @annastuchlik @tzach @nyh @nuivall
 
 # GOSSIP
 gms/* @tgrabiec @asias
@@ -74,8 +74,8 @@ streaming/* @tgrabiec @asias
 service/storage_service.* @tgrabiec @asias
 
 # ALTERNATOR
-alternator/* @havaker @nuivall
-test/alternator/* @havaker @nuivall
+alternator/* @nuivall
+test/alternator/* @nuivall
 
 # HINTED HANDOFF
 db/hints/* @piodul @vladzcloudius @eliransin
