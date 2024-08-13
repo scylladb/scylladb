@@ -81,7 +81,6 @@ sstable_directory::sstable_directory(replica::table& table,
 sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
         const dht::sharder& sharder,
-        lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
         sstring table_dir,
         sstable_state state,
         io_error_handler_gen error_handler_gen)
@@ -89,7 +88,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
         manager,
         std::move(schema),
         &sharder,
-        std::move(storage_opts),
+        make_lw_shared<data_dictionary::storage_options>(), // local
         std::move(table_dir),
         state,
         std::move(error_handler_gen)
