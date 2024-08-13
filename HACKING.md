@@ -19,13 +19,13 @@ $ git submodule update --init --recursive
 ### Dependencies
 
 Scylla is fairly fussy about its build environment, requiring a very recent
-version of the C++20 compiler and numerous tools and libraries to build.
+version of the C++23 compiler and numerous tools and libraries to build.
 
 Run `./install-dependencies.sh` (as root) to use your Linux distributions's
 package manager to install the appropriate packages on your build machine.
 However, this will only work on very recent distributions. For example,
 currently Fedora users must upgrade to Fedora 32 otherwise the C++ compiler
-will be too old, and not support the new C++20 standard that Scylla uses.
+will be too old, and not support the new C++23 standard that Scylla uses.
 
 Alternatively, to avoid having to upgrade your build machine or install
 various packages on it, we provide another option - the **frozen toolchain**.

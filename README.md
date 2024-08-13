@@ -15,7 +15,7 @@ For more information, please see the [ScyllaDB web site].
 ## Build Prerequisites
 
 Scylla is fairly fussy about its build environment, requiring very recent
-versions of the C++20 compiler and of many libraries to build. The document
+versions of the C++23 compiler and of many libraries to build. The document
 [HACKING.md](HACKING.md) includes detailed information on building and
 developing Scylla, but to get Scylla building quickly on (almost) any build
 machine, Scylla offers a [frozen toolchain](tools/toolchain/README.md),
@@ -84,11 +84,11 @@ Documentation can be found [here](docs/dev/README.md).
 Seastar documentation can be found [here](http://docs.seastar.io/master/index.html).
 User documentation can be found [here](https://docs.scylladb.com/).
 
-## Training 
+## Training
 
-Training material and online courses can be found at [Scylla University](https://university.scylladb.com/). 
-The courses are free, self-paced and include hands-on examples. They cover a variety of topics including Scylla data modeling, 
-administration, architecture, basic NoSQL concepts, using drivers for application development, Scylla setup, failover, compactions, 
+Training material and online courses can be found at [Scylla University](https://university.scylladb.com/).
+The courses are free, self-paced and include hands-on examples. They cover a variety of topics including Scylla data modeling,
+administration, architecture, basic NoSQL concepts, using drivers for application development, Scylla setup, failover, compactions,
 multi-datacenters and how Scylla integrates with third-party applications.
 
 ## Contributing to Scylla
