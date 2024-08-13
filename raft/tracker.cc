@@ -38,7 +38,7 @@ bool follower_progress::is_stray_reject(const append_reply::rejected& rejected) 
         // In PROBE state we send a single append request `req` with `req.prev_log_idx == next_idx - 1`.
         // When the follower generates a rejected response `r`, it sets `r.non_matching_idx = req.prev_log_idx`.
         // Thus the reject either satisfies `rejected.non_matching_idx == next_idx - 1` or is stray.
-        if (rejected.non_matching_idx != index_t(next_idx - 1)) {
+        if (rejected.non_matching_idx != next_idx - index_t(1)) {
             return true;
         }
         break;
