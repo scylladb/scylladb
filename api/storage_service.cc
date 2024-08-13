@@ -490,10 +490,27 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
+
+    ss::start_restore.set(r, [&sst_loader] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto endpoint = req->get_query_param("endpoint");
+        auto keyspace = req->get_query_param("keyspace");
+        auto table = req->get_query_param("table");
+        auto bucket = req->get_query_param("bucket");
+        auto snapshot_name = req->get_query_param("snapshot");
+        if (table.empty()) {
+            // TODO: If missing, should restore all tables
+            throw httpd::bad_param_exception("The table name must be specified");
+        }
+
+        auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, endpoint, bucket, snapshot_name);
+        co_return json::json_return_type(fmt::to_string(task_id));
+    });
+
 }
 
 void unset_sstables_loader(http_context& ctx, routes& r) {
     ss::load_new_ss_tables.unset(r);
+    ss::start_restore.unset(r);
 }
 
 void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb) {

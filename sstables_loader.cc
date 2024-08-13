@@ -14,6 +14,7 @@
 #include "sstables_loader.hh"
 #include "replica/distributed_loader.hh"
 #include "replica/database.hh"
+#include "sstables/sstables_manager.hh"
 #include "sstables/sstables.hh"
 #include "gms/inet_address.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
@@ -447,6 +448,54 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     co_return;
 }
 
+class sstables_loader::download_task_impl : public tasks::task_manager::task::impl {
+    sharded<sstables_loader>& _loader;
+    sstring _endpoint;
+    sstring _bucket;
+    sstring _ks;
+    sstring _cf;
+    sstring _snapshot_name;
+
+protected:
+    virtual future<> run() override;
+
+public:
+    download_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader,
+            sstring endpoint, sstring bucket,
+            sstring ks, sstring cf, sstring snapshot) noexcept
+        : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
+        , _loader(loader)
+        , _endpoint(std::move(endpoint))
+        , _bucket(std::move(bucket))
+        , _ks(std::move(ks))
+        , _cf(std::move(cf))
+        , _snapshot_name(std::move(snapshot))
+    {}
+
+    virtual std::string type() const override {
+        return "download_sstables";
+    }
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::no;
+    }
+};
+
+future<> sstables_loader::download_task_impl::run() {
+    // Load-and-stream reads the entire content from SSTables, therefore it can afford to discard the bloom filter
+    // that might otherwise consume a significant amount of memory.
+    sstables::sstable_open_config cfg {
+        .load_bloom_filter = false,
+    };
+    auto prefix = format("{}/{}", _cf, _snapshot_name);
+    llog.debug("Loading sstables from {}({}/{})", _endpoint, _bucket, prefix);
+    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _endpoint, _bucket, prefix, cfg);
+    llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, prefix);
+    co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
+        co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), false);
+    });
+}
+
 sstables_loader::sstables_loader(sharded<replica::database>& db,
         netw::messaging_service& messaging,
         sharded<db::view::view_builder>& vb,
@@ -465,4 +514,14 @@ sstables_loader::sstables_loader(sharded<replica::database>& db,
 
 future<> sstables_loader::stop() {
     co_await _task_manager_module->stop();
+}
+
+future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, sstring cf_name,
+            sstring endpoint, sstring bucket, sstring snapshot) {
+    if (!_storage_manager.is_known_endpoint(endpoint)) {
+        throw std::invalid_argument(format("endpoint {} not found", endpoint));
+    }
+    llog.info("Restore sstables from {}({}) to {}", endpoint, snapshot, ks_name);
+    auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name), std::move(snapshot));
+    co_return task->id();
 }

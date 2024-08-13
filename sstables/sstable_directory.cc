@@ -70,7 +70,7 @@ sstable_directory::make_components_lister() {
         [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
             if (_state == sstable_state::upload) {
                 // Sstables in this state are not tracked in registry, so the only way to
-                // collect and process then is by listing the bucket
+                // collect and process them is by listing the bucket
                 return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(_table_dir), _manager, os);
             }
             return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), _table_dir);
@@ -88,6 +88,21 @@ sstable_directory::sstable_directory(replica::table& table,
         table.get_storage_options_ptr(),
         table.dir(),
         std::move(state),
+        std::move(error_handler_gen)
+    )
+{}
+
+sstable_directory::sstable_directory(replica::table& table,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
+        sstring table_dir,
+        io_error_handler_gen error_handler_gen)
+    : sstable_directory(
+        table.get_sstables_manager(),
+        table.schema(),
+        std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()),
+        std::move(storage_opts),
+        table_dir,
+        sstable_state::upload,
         std::move(error_handler_gen)
     )
 {}
