@@ -446,3 +446,14 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     _loading_new_sstables = false;
     co_return;
 }
+
+sstables_loader::sstables_loader(sharded<replica::database>& db,
+        netw::messaging_service& messaging,
+        sharded<db::view::view_builder>& vb,
+        seastar::scheduling_group sg)
+    : _db(db)
+    , _messaging(messaging)
+    , _view_builder(vb)
+    , _sched_group(std::move(sg))
+{
+}
