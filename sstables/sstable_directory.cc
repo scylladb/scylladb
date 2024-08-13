@@ -193,7 +193,7 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
         co_await sort_sstable(std::move(desc), flags);
     } else {
         auto sst = co_await load_sstable(std::move(desc), flags);
-        dirlog.debug("Added {} to unsorted sstables list", sstable_filename(desc));
+        dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
         _unsorted_sstables.push_back(std::move(sst));
     }
 }
@@ -204,14 +204,14 @@ sstable_directory::sort_sstable(sstables::entry_descriptor desc, process_flags f
     auto shards = sst->get_shards_for_this_sstable();
     if (shards.size() == 1) {
         if (shards[0] == this_shard_id()) {
-            dirlog.trace("{} identified as a local unshared SSTable", sstable_filename(desc));
+            dirlog.trace("{} identified as a local unshared SSTable", sst->get_filename());
             _unshared_local_sstables.push_back(std::move(sst));
         } else {
-            dirlog.trace("{} identified as a remote unshared SSTable, shard={}", sstable_filename(desc), shards[0]);
+            dirlog.trace("{} identified as a remote unshared SSTable, shard={}", sst->get_filename(), shards[0]);
             _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
         }
     } else {
-        dirlog.trace("{} identified as a shared SSTable, shards={}", sstable_filename(desc), shards);
+        dirlog.trace("{} identified as a shared SSTable, shards={}", sst->get_filename(), shards);
         _shared_sstable_info.push_back(co_await sst->get_open_info());
     }
 }
