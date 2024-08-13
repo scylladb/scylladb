@@ -2415,7 +2415,7 @@ future<> system_keyspace::get_repair_history(::table_id table_id, repair_history
     });
 }
 
-future<int> system_keyspace::increment_and_get_generation() {
+future<gms::generation_type> system_keyspace::increment_and_get_generation() {
     auto req = format("SELECT gossip_generation FROM system.{} WHERE key='{}'", LOCAL, LOCAL);
     auto rs = co_await _qp.execute_internal(req, cql3::query_processor::cache_internal::yes);
     gms::generation_type generation;
