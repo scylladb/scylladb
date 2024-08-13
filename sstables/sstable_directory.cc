@@ -173,23 +173,19 @@ future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry
     co_return sst;
 }
 
-future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc, process_flags flags) const {
-    auto sst = co_await load_sstable(std::move(desc), flags.sstable_open_config);
-    validate(sst, flags);
-    if (flags.need_mutate_level) {
-        dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
-        co_await sst->mutate_sstable_level(0);
-    }
-    co_return sst;
-}
-
 future<>
 sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_flags flags) {
     if (desc.version > _max_version_seen) {
         _max_version_seen = desc.version;
     }
 
-    auto sst = co_await load_sstable(desc, flags);
+    auto sst = co_await load_sstable(desc, flags.sstable_open_config);
+    validate(sst, flags);
+
+    if (flags.need_mutate_level) {
+        dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
+        co_await sst->mutate_sstable_level(0);
+    }
 
     if (!flags.sort_sstables_according_to_owner) {
         dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());

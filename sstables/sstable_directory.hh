@@ -177,7 +177,6 @@ private:
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg = {}) const;
-    future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, process_flags flags) const;
 
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
