@@ -2339,7 +2339,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         if (*existing == get_broadcast_address()) {
             slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
             do_remove_node(endpoint);
-        } else if (_gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
+        } else if (std::is_gt(_gossiper.compare_endpoint_startup(endpoint, *existing))) {
             // The new IP has greater generation than the existing one.
             // Here we remap the host_id to the new IP. The 'owned_tokens' calculation logic below
             // won't detect any changes - the branch 'endpoint == current_owner' will be taken.
@@ -2436,7 +2436,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
             slogger.info("handle_state_normal: endpoint={} == current_owner={} token {}", endpoint, current_owner, t);
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
             owned_tokens.insert(t);
-        } else if (_gossiper.compare_endpoint_startup(endpoint, current_owner) > 0) {
+        } else if (std::is_gt(_gossiper.compare_endpoint_startup(endpoint, current_owner))) {
             slogger.debug("handle_state_normal: endpoint={} > current_owner={}, token {}", endpoint, current_owner, t);
             owned_tokens.insert(t);
             slogger.info("handle_state_normal: remove endpoint={} token={}", current_owner, t);
