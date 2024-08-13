@@ -175,6 +175,10 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
             // firstly delete all that there is to be deleted and only then adding new
             // service levels.
             while (current_it != _service_levels_db.end() && new_state_it != service_levels.end()) {
+                if (current_it->first.starts_with('$')) {
+                    sl_logger.warn("Service level names starting with '$' are reserved for internal tenants. Rename service level \"{}\" to drop '$' prefix.", current_it->first.c_str());
+                }
+
                 if (current_it->first == new_state_it->first) {
                     //the service level exists on both the cureent and new state.
                     if (current_it->second.slo != new_state_it->second) {
