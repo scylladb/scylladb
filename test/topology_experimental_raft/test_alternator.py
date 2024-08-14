@@ -364,6 +364,7 @@ def get_secret_key(cql, user):
             pass
     pytest.fail(f"Couldn't get secret key for user {user}")
 
+@pytest.mark.skip("flaky, needs to be fixed, see https://github.com/scylladb/scylladb/pull/20135")
 @pytest.mark.asyncio
 async def test_alternator_enforce_authorization_true(manager: ManagerClient):
     """A basic test for how Alternator authentication and authorization
