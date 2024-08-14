@@ -85,10 +85,9 @@ distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& di
 }
 
 future<>
-distributed_loader::lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name) {
-    return dir.invoke_on_all([&db, ks_name, cf_name] (sstables::sstable_directory& d) {
-        auto& table = db.local().find_column_family(ks_name, cf_name);
-        d.store_phaser(table.write_in_progress());
+distributed_loader::lock_table(global_table_ptr& table, sharded<sstables::sstable_directory>& dir) {
+    return dir.invoke_on_all([&table] (sstables::sstable_directory& d) {
+        d.store_phaser(table->write_in_progress());
         return make_ready_future<>();
     });
 }
@@ -175,7 +174,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
 
         auto stop_directory = deferred_stop(directory);
 
-        lock_table(directory, db, ks, cf).get();
+        lock_table(global_table, directory).get();
         sstables::sstable_directory::process_flags flags {
             .need_mutate_level = true,
             .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
@@ -238,7 +237,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         auto stop = deferred_stop(directory);
 
         std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards(smp::count);
-        lock_table(directory, db, ks, cf).get();
+        lock_table(global_table, directory).get();
         sstables::sstable_directory::process_flags flags {
             .need_mutate_level = true,
             .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
@@ -317,7 +316,7 @@ future<> table_populator::start_subdir(sstables::sstable_state state) {
     // directory must be stopped using table_populator::stop below
     _sstable_directories[state] = dptr;
 
-    co_await distributed_loader::lock_table(directory, _db, _ks, _cf);
+    co_await distributed_loader::lock_table(_global_table, directory);
 
     sstables::sstable_directory::process_flags flags {
         .throw_on_missing_toc = true,
