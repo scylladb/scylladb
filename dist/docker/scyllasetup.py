@@ -2,7 +2,8 @@ import subprocess
 import logging
 import yaml
 import os
-
+import re
+import shlex
 
 class ScyllaSetup:
     def __init__(self, arguments, extra_arguments):
@@ -116,51 +117,55 @@ class ScyllaSetup:
             else:
                 self._seeds = self._listenAddress
 
-        args += ["--listen-address %s" % self._listenAddress,
-                 "--rpc-address %s" % self._rpcAddress,
-                 "--seed-provider-parameters seeds=%s" % self._seeds]
+        config = {}
+
+        config['listen_address'] = self._listenAddress
+        config['rpc_address'] = self._rpcAddress
+        config['seed_provider'] = [ {'parameters': [ {'seeds': self._seeds} ] } ]
 
         if self._broadcastAddress is not None:
-            args += ["--broadcast-address %s" % self._broadcastAddress]
+            config["broadcast_address"] = self._broadcastAddress
         if self._broadcastRpcAddress is not None:
-            args += ["--broadcast-rpc-address %s" % self._broadcastRpcAddress]
+            config["broadcast_rpc_address"] = self._broadcastRpcAddress
 
         if self._apiAddress is not None:
-            args += ["--api-address %s" % self._apiAddress]
+            config["api_address"] = self._apiAddress
 
         if self._alternatorAddress is not None:
-            args += ["--alternator-address %s" % self._alternatorAddress]
+            config["alternator_address"] = self._alternatorAddress
 
         if self._alternatorPort is not None:
-            args += ["--alternator-port %s" % self._alternatorPort]
+            config["alternator_port"] = self._alternatorPort
 
         if self._alternatorHttpsPort is not None:
-            args += ["--alternator-https-port %s" % self._alternatorHttpsPort]
+            config["alternator_https_port"] = self._alternatorHttpsPort
 
         if self._alternatorWriteIsolation is not None:
-            args += ["--alternator-write-isolation %s" % self._alternatorWriteIsolation]
+            config["alternator_write_isolation"] = self._alternatorWriteIsolation
 
         if self._authenticator is not None:
-            args += ["--authenticator %s" % self._authenticator]
+            config["authenticator"] = self._authenticator
 
         if self._authorizer is not None:
-            args += ["--authorizer %s" % self._authorizer]
+            config["authorizer"] = self._authorizer
 
         if self._experimental == "1":
-            args += ["--experimental=on"]
+            config["experimental"] = "on"
 
         if self._clusterName is not None:
-            args += ["--cluster-name %s" % self._clusterName]
+            config["cluster_name"] = self._clusterName
 
         if self._endpointSnitch is not None:
-            args += ["--endpoint-snitch %s" % self._endpointSnitch]
+            config["endpoint_snitch"] = self._endpointSnitch
 
         if self._replaceNodeFirstBoot is not None:
-            args += ["--replace-node-first-boot %s" % self._replaceNodeFirstBoot]
+            config["replace_node_first_boot"] = self._replaceNodeFirstBoot
         elif self._replaceAddressFirstBoot is not None:
-            args += ["--replace-address-first-boot %s" % self._replaceAddressFirstBoot]
+            config["replace_address_first_boot"] = self._replaceAddressFirstBoot
 
         args += ["--blocked-reactor-notify-ms 999999999"]
 
+        args += ["--config", shlex.quote(yaml.dump(config, default_flow_style=True))]
+
         with open("/etc/scylla.d/docker.conf", "w") as cqlshrc:
-            cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % (" ".join(args) + " " + " ".join(self._extra_args)))
+            cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % (shlex.quote(" ".join(args)) + " " + " ".join(self._extra_args)))
