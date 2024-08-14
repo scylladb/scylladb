@@ -55,10 +55,6 @@ class partition_snapshot_flat_reader : public mutation_reader::impl, public Acco
         // for result ordering. This schema is passed from the query and is reversed iff
         // the query was reversed (i.e. `Reversing==true`).
         const schema& _query_schema;
-        // _snapshot_schema is a schema that induces the same clustering key order as the
-        // schema from the underlying snapshot. The schemas mentioned might differ, for
-        // instance, if a query used newer version of the schema.
-        const schema_ptr _snapshot_schema;
         reader_permit _permit;
         partition_snapshot_ptr _snapshot;
         logalloc::region& _region;
@@ -78,7 +74,6 @@ class partition_snapshot_flat_reader : public mutation_reader::impl, public Acco
                                       logalloc::region& region, logalloc::allocating_section& read_section,
                                       bool digest_requested)
             : _query_schema(s)
-            , _snapshot_schema(Reversing ? s.make_reversed() : s.shared_from_this())
             , _permit(permit)
             , _snapshot(std::move(snp))
             , _region(region)
@@ -155,9 +150,6 @@ private:
     query::clustering_row_ranges::const_iterator _current_ck_range;
     query::clustering_row_ranges::const_iterator _ck_range_end;
 
-    // Holds reversed current clustering key range, if Reversing was needed.
-    std::optional<query::clustering_range> opt_reversed_range;
-
     std::optional<position_in_partition> _lower_bound;
 
     // Last emitted range_tombstone_change.
@@ -181,7 +173,7 @@ private:
     // ck_range_snapshot uses the snapshot order, while ck_range_query uses the
     // query order. These two differ if the query was reversed (`Reversing==true`).
     const query::clustering_range& current_ck_range_query() {
-        return opt_reversed_range ? *opt_reversed_range : *_current_ck_range;
+        return *_current_ck_range;
     }
 
     void emit_next_interval() {
@@ -223,13 +215,9 @@ private:
 
     void on_new_range() {
         if (_current_ck_range == _ck_range_end) {
-            opt_reversed_range = std::nullopt;
             _end_of_stream = true;
             push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end()));
         } else {
-            if constexpr (Reversing) {
-                opt_reversed_range = query::reverse(*_current_ck_range);
-            }
             _lower_bound = position_in_partition_view::for_range_start(current_ck_range_query());
             _reader.on_new_range(*_lower_bound);
         }

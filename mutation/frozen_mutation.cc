@@ -149,11 +149,7 @@ stop_iteration streamed_mutation_freezer::consume(static_row&& sr) {
 }
 
 stop_iteration streamed_mutation_freezer::consume(clustering_row&& cr) {
-    if (_reversed) {
-        _crs.emplace_front(std::move(cr));
-    } else {
-        _crs.emplace_back(std::move(cr));
-    }
+    _crs.emplace_back(std::move(cr));
     return stop_iteration::no;
 }
 

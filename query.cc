@@ -61,6 +61,15 @@ std::ostream& operator<<(std::ostream& out, const read_command& r) {
     return out;
 }
 
+lw_shared_ptr<query::read_command> reversed(lw_shared_ptr<query::read_command>&& cmd)
+{
+    auto schema = local_schema_registry().get(cmd->schema_version)->get_reversed();
+    cmd->schema_version = schema->version();
+    cmd->slice = query::legacy_reverse_slice_to_native_reverse_slice(*schema, cmd->slice);
+
+    return std::move(cmd);
+}
+
 std::ostream& operator<<(std::ostream& out, const mapreduce_request::reduction_type& r) {
     out << "reduction_type{";
     switch (r) {
@@ -99,36 +108,25 @@ std::ostream& operator<<(std::ostream& out, const specific_ranges& s) {
     return out;
 }
 
-void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition pos, bool reversed) {
-    auto cmp = [reversed, cmp = position_in_partition::composite_tri_compare(s)] (const auto& a, const auto& b) {
-        return reversed ? cmp(b, a) : cmp(a, b);
-    };
-    auto start_bound = [reversed] (const auto& range) -> position_in_partition_view {
-        return reversed ? position_in_partition_view::for_range_end(range) : position_in_partition_view::for_range_start(range);
-    };
-    auto end_bound = [reversed] (const auto& range) -> position_in_partition_view {
-        return reversed ? position_in_partition_view::for_range_start(range) : position_in_partition_view::for_range_end(range);
-    };
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition pos) {
+    auto cmp = position_in_partition::composite_tri_compare(s);
 
     auto it = ranges.begin();
     while (it != ranges.end()) {
-        if (cmp(end_bound(*it), pos) <= 0) {
+        auto end_bound = position_in_partition_view::for_range_end(*it);
+        if (cmp(end_bound, pos) <= 0) {
             it = ranges.erase(it);
             continue;
-        } else if (cmp(start_bound(*it), pos) <= 0) {
-            SCYLLA_ASSERT(cmp(pos, end_bound(*it)) < 0);
-            auto r = reversed ?
-                clustering_range(it->start(), clustering_range::bound(pos.key(), pos.get_bound_weight() != bound_weight::before_all_prefixed)) :
-                clustering_range(clustering_range::bound(pos.key(), pos.get_bound_weight() != bound_weight::after_all_prefixed), it->end());
-            *it = std::move(r);
+        } else if (auto start_bound = position_in_partition_view::for_range_start(*it); cmp(start_bound, pos) <= 0) {
+            SCYLLA_ASSERT(cmp(pos, end_bound) < 0);
+            *it = clustering_range(clustering_range::bound(pos.key(), pos.get_bound_weight() != bound_weight::after_all_prefixed), it->end());
         }
         ++it;
     }
 }
 
-void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key, bool reversed) {
-    return trim_clustering_row_ranges_to(s, ranges,
-            reversed ? position_in_partition::before_key(key) : position_in_partition::after_key(s, key), reversed);
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key) {
+    return trim_clustering_row_ranges_to(s, ranges, position_in_partition::after_key(s, key));
 }
 
 
@@ -168,19 +166,6 @@ partition_slice reverse_slice(const schema& schema, partition_slice slice) {
             auto& ranges = sranges.ranges();
             std::reverse(ranges.begin(), ranges.end());
             reverse_clustering_ranges_bounds(ranges);
-        })
-        .with_option_toggled<partition_slice::option::reversed>()
-        .build();
-}
-
-partition_slice half_reverse_slice(const schema& schema, partition_slice slice) {
-    return partition_slice_builder(schema, std::move(slice))
-        .mutate_ranges([] (clustering_row_ranges& ranges) {
-            std::reverse(ranges.begin(), ranges.end());
-        })
-        .mutate_specific_ranges([] (specific_ranges& sranges) {
-            auto& ranges = sranges.ranges();
-            std::reverse(ranges.begin(), ranges.end());
         })
         .with_option_toggled<partition_slice::option::reversed>()
         .build();

@@ -1363,7 +1363,6 @@ private:
         gc_clock::time_point now,
         const std::vector<query::clustering_range>& row_ranges,
         bool always_return_static_content,
-        bool reverse,
         uint64_t row_limit,
         can_gc_fn&,
         bool drop_tombstones_unconditionally,
@@ -1372,9 +1371,8 @@ private:
     // Calls func for each row entry inside row_ranges until func returns stop_iteration::yes.
     // Removes all entries for which func didn't return stop_iteration::no or wasn't called at all.
     // Removes all entries that are empty, check rows_entry::empty().
-    // If reversed is true, func will be called on entries in reverse order. In that case row_ranges
-    // must be already in reverse order.
-    template<bool reversed, typename Func>
+    // For row_ranges in reverse order, a reversed schema shall be provided.
+    template<typename Func>
     requires std::is_invocable_r_v<stop_iteration, Func, rows_entry&>
     void trim_rows(const schema& s,
         const std::vector<query::clustering_range>& row_ranges,
@@ -1398,7 +1396,7 @@ public:
     //
     uint64_t compact_for_query(const schema& s, const dht::decorated_key& dk, gc_clock::time_point query_time,
         const std::vector<query::clustering_range>& row_ranges, bool always_return_static_content,
-        bool reversed, uint64_t row_limit);
+        uint64_t row_limit);
 
     // Performs the following:
     //   - expires cells based on compaction_time

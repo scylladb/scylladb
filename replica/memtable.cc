@@ -477,11 +477,7 @@ public:
                     if (key_and_snp) {
                         update_last(key_and_snp->first);
 
-                        const query::clustering_row_ranges& ranges = _slice.row_ranges(*schema(), key_and_snp->first.key());
-                        // TODO: when the slice passed from query finally changes format from half-reversed into native reversed, this line needs to change.
-                        auto cr = query::clustering_key_filter_ranges(ranges);
-
-                        auto snp_schema = key_and_snp->second->schema();
+                        auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), _slice, key_and_snp->first.key());
                         bool digest_requested = _slice.options.contains<query::partition_slice::option::with_digest>();
                         bool is_reversed = _slice.is_reversed();
                         _delegate = make_partition_snapshot_flat_reader_from_snp_schema(is_reversed, _permit, std::move(key_and_snp->first), std::move(cr), std::move(key_and_snp->second), digest_requested, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *mtbl());
@@ -708,7 +704,7 @@ partition_snapshot_ptr memtable_entry::snapshot(memtable& mtbl) {
 }
 
 mutation_reader_opt
-memtable::make_flat_reader_opt(schema_ptr s,
+memtable::make_flat_reader_opt(schema_ptr query_schema,
                       reader_permit permit,
                       const dht::partition_range& range,
                       const query::partition_slice& slice,
@@ -731,17 +727,13 @@ memtable::make_flat_reader_opt(schema_ptr s,
             return {};
         }
         auto dk = pos.as_decorated_key();
-
-        const query::clustering_row_ranges& ranges = slice.row_ranges(*s, dk.key());
-        // TODO: when the slice passed from query finally changes format from half-reversed into native reversed, this line needs to change.
-        auto cr = query::clustering_key_filter_ranges(ranges);
-
+        auto cr = query::clustering_key_filter_ranges::get_ranges(*query_schema, slice, dk.key());
         bool digest_requested = slice.options.contains<query::partition_slice::option::with_digest>();
         auto rd = make_partition_snapshot_flat_reader_from_snp_schema(is_reversed, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested, *this, _table_shared_data.read_section, shared_from_this(), fwd, *this);
-        rd.upgrade_schema(s);
+        rd.upgrade_schema(query_schema);
         return rd;
     } else {
-        auto res = make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit), range, slice, fwd_mr);
+        auto res = make_mutation_reader<scanning_reader>(std::move(query_schema), shared_from_this(), std::move(permit), range, slice, fwd_mr);
         if (fwd == streamed_mutation::forwarding::yes) {
             return make_forwardable(std::move(res));
         } else {

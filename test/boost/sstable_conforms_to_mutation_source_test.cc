@@ -232,11 +232,14 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
         .with_ranges(ranges)
         .build();
 
-    auto rev_slice = native_reverse_slice_to_legacy_reverse_slice(*query_schema, slice);
-    rev_slice.options.set(query::partition_slice::option::reversed);
-
-    auto rev_full_slice = native_reverse_slice_to_legacy_reverse_slice(*query_schema, query_schema->full_slice());
-    rev_full_slice.options.set(query::partition_slice::option::reversed);
+    // Clustering ranges of the slice are already reversed in relation to the reversed
+    // query schema. No need to reverse it. Just toggle the reverse option.
+    auto rev_slice = partition_slice_builder(*query_schema, slice)
+            .with_option<query::partition_slice::option::reversed>()
+            .build();
+    auto rev_full_slice = partition_slice_builder(*query_schema, query_schema->full_slice())
+            .with_option<query::partition_slice::option::reversed>()
+            .build();
 
     sstables::test_env::do_with_async([&, version = writable_sstable_versions[1]] (sstables::test_env& env) {
 

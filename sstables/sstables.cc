@@ -2259,7 +2259,7 @@ future<> delayed_commit_changes::commit() {
 
 mutation_reader
 sstable::make_reader(
-        schema_ptr schema,
+        schema_ptr query_schema,
         reader_permit permit,
         const dht::partition_range& range,
         const query::partition_slice& slice,
@@ -2269,7 +2269,7 @@ sstable::make_reader(
         read_monitor& mon) {
     const auto reversed = slice.is_reversed();
     if (_version >= version_types::mc && (!reversed || range.is_singular())) {
-        return mx::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, mon);
+        return mx::make_reader(shared_from_this(), std::move(query_schema), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, mon);
     }
 
     // Multi-partition reversed queries are not yet supported natively in the mx reader.
@@ -2279,8 +2279,8 @@ sstable::make_reader(
 
     if (_version >= version_types::mc) {
         // The only mx case falling through here is reversed multi-partition reader
-        auto rd = make_reversing_reader(mx::make_reader(shared_from_this(), schema->make_reversed(), std::move(permit),
-                range, half_reverse_slice(*schema, slice), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon),
+        auto rd = make_reversing_reader(mx::make_reader(shared_from_this(), query_schema->make_reversed(), std::move(permit),
+                range, reverse_slice(*query_schema, slice), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon),
             max_result_size);
         if (fwd) {
             rd = make_forwardable(std::move(rd));
@@ -2291,16 +2291,15 @@ sstable::make_reader(
     if (reversed) {
         // The kl reader does not support reversed queries at all.
         // Perform a forward query on it, then reverse the result.
-        // Note: we can pass a half-reversed slice, the kl reader performs an unreversed query nevertheless.
-        auto rd = make_reversing_reader(kl::make_reader(shared_from_this(), schema->make_reversed(), std::move(permit),
-                    range, slice, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon), max_result_size);
+        auto rd = make_reversing_reader(kl::make_reader(shared_from_this(), query_schema->make_reversed(), std::move(permit),
+                    range, reverse_slice(*query_schema, slice), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon), max_result_size);
         if (fwd) {
             rd = make_forwardable(std::move(rd));
         }
         return rd;
     }
 
-    return kl::make_reader(shared_from_this(), schema, std::move(permit),
+    return kl::make_reader(shared_from_this(), query_schema, std::move(permit),
                 range, slice, std::move(trace_state), fwd, fwd_mr, mon);
 }
 

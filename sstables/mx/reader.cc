@@ -16,6 +16,7 @@
 #include "sstables/processing_result_generator.hh"
 #include "utils/assert.hh"
 #include "utils/to_string.hh"
+#include "utils/value_or_reference.hh"
 
 namespace sstables {
 namespace mx {
@@ -1263,22 +1264,6 @@ public:
     }
 };
 
-template <typename T>
-struct value_or_reference {
-    std::optional<T> _opt;
-    const T& _ref;
-
-    value_or_reference(T&& v) : _opt(std::move(v)), _ref(*_opt) {}
-    value_or_reference(const T& v) : _ref(v) {}
-
-    value_or_reference(value_or_reference&& o) : _opt(std::move(o._opt)), _ref(_opt ? *_opt : o._ref) {}
-    value_or_reference(const value_or_reference& o) : _opt(o._opt), _ref(_opt ? *_opt : o._ref) {}
-
-    const T& get() const {
-        return _ref;
-    }
-};
-
 class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     using DataConsumeRowsContext = data_consume_rows_context_m<mp_row_consumer_m>;
     using Consumer = mp_row_consumer_m;
@@ -1719,17 +1704,6 @@ static mutation_reader make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor) {
-    // If we're provided a reversed slice we must fix it since currently callers
-    // provide them in a 'half-reversed' format: the order of ranges in the slice is reversed,
-    // but the ranges themselves are not.
-    // FIXME: drop this workaround when callers are fixed to provide the slice
-    // in 'native-reversed' format (if ever).
-    if (slice.get().is_reversed()) {
-        return make_mutation_reader<mx_sstable_mutation_reader>(
-            std::move(sstable), schema, std::move(permit), range,
-            legacy_reverse_slice_to_native_reverse_slice(*schema, slice.get()), std::move(trace_state), fwd, fwd_mr, monitor);
-    }
-
     return make_mutation_reader<mx_sstable_mutation_reader>(
         std::move(sstable), std::move(schema), std::move(permit), range,
         std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor);

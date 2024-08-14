@@ -1730,7 +1730,9 @@ static mutation_source make_mutation_source(populate_fn_ex populate, schema_ptr 
             tracing::trace_state_ptr tr,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding mr_fwd) mutable {
-        reversed_slices.emplace_back(partition_slice_builder(*table_schema, query::native_reverse_slice_to_legacy_reverse_slice(*table_schema, slice))
+        // Note that the clustering ranges of the provided slice are already reversed in relation to the table_schema
+        // above. Thus toggling its reverse option is all that needs to be done here.
+        reversed_slices.emplace_back(partition_slice_builder(*table_schema, slice)
                 .with_option<query::partition_slice::option::reversed>()
                 .build());
         return ms.make_reader_v2(query_schema, std::move(permit), pr, reversed_slices.back(), tr, fwd, mr_fwd);

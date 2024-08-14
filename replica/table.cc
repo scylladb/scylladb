@@ -211,23 +211,13 @@ mutation_reader
 table::make_reader_v2(schema_ptr s,
                            reader_permit permit,
                            const dht::partition_range& range,
-                           const query::partition_slice& query_slice,
+                           const query::partition_slice& slice,
                            tracing::trace_state_ptr trace_state,
                            streamed_mutation::forwarding fwd,
                            mutation_reader::forwarding fwd_mr) const {
     if (_virtual_reader) [[unlikely]] {
-        return (*_virtual_reader).make_reader_v2(s, std::move(permit), range, query_slice, trace_state, fwd, fwd_mr);
+        return (*_virtual_reader).make_reader_v2(s, std::move(permit), range, slice, trace_state, fwd, fwd_mr);
     }
-
-    bool reversed = query_slice.is_reversed();
-    std::unique_ptr<query::partition_slice> unreversed_slice;
-    if (reversed && !_config.enable_optimized_reversed_reads()) [[unlikely]] {
-        // Make the code below perform a forward query. We'll wrap the result into `make_reversing_reader` at the end.
-        reversed = false;
-        s = s->make_reversed();
-        unreversed_slice = std::make_unique<query::partition_slice>(query::half_reverse_slice(*s, query_slice));
-    }
-    auto& slice = unreversed_slice ? *unreversed_slice : query_slice;
 
     std::vector<mutation_reader> readers;
 
@@ -256,7 +246,7 @@ table::make_reader_v2(schema_ptr s,
     });
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
-    if (cache_enabled() && !bypass_cache && !(reversed && _config.reversed_reads_auto_bypass_cache())) {
+    if (cache_enabled() && !bypass_cache) {
         if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, &_compaction_manager.get_tombstone_gc_state(), std::move(trace_state), fwd, fwd_mr)) {
             readers.emplace_back(std::move(*reader_opt));
         }
@@ -268,10 +258,6 @@ table::make_reader_v2(schema_ptr s,
 
     if (_config.data_listeners && !_config.data_listeners->empty()) {
         rd = _config.data_listeners->on_read(s, range, slice, std::move(rd));
-    }
-
-    if (unreversed_slice) [[unlikely]] {
-        return make_reversing_reader(std::move(rd), permit.max_result_size(), std::move(unreversed_slice));
     }
 
     return rd;
@@ -3124,7 +3110,7 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
 }
 
 future<lw_shared_ptr<query::result>>
-table::query(schema_ptr s,
+table::query(schema_ptr query_schema,
         reader_permit permit,
         const query::read_command& cmd,
         query::result_options opts,
@@ -3151,7 +3137,7 @@ table::query(schema_ptr s,
              ? memory_limiter.new_digest_read(permit.max_result_size(), short_read_allowed)
              : memory_limiter.new_data_read(permit.max_result_size(), short_read_allowed));
 
-    query_state qs(s, cmd, opts, partition_ranges, std::move(accounter));
+    query_state qs(query_schema, cmd, opts, partition_ranges, std::move(accounter));
 
     std::optional<query::querier> querier_opt;
     if (saved_querier) {
@@ -3163,13 +3149,13 @@ table::query(schema_ptr s,
 
         if (!querier_opt) {
             query::querier_base::querier_config conf(_config.tombstone_warn_threshold);
-            querier_opt = query::querier(as_mutation_source(), s, permit, range, qs.cmd.slice, trace_state, conf);
+            querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, conf);
         }
         auto& q = *querier_opt;
 
         std::exception_ptr ex;
       try {
-        co_await q.consume_page(query_result_builder(*s, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state);
+        co_await q.consume_page(query_result_builder(*query_schema, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state);
       } catch (...) {
         ex = std::current_exception();
       }
@@ -3199,7 +3185,7 @@ table::query(schema_ptr s,
 }
 
 future<reconcilable_result>
-table::mutation_query(schema_ptr s,
+table::mutation_query(schema_ptr query_schema,
         reader_permit permit,
         const query::read_command& cmd,
         const dht::partition_range& range,
@@ -3217,16 +3203,13 @@ table::mutation_query(schema_ptr s,
     }
     if (!querier_opt) {
         query::querier_base::querier_config conf(_config.tombstone_warn_threshold);
-        querier_opt = query::querier(as_mutation_source(), s, permit, range, cmd.slice, trace_state, conf);
+        querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, conf);
     }
     auto& q = *querier_opt;
 
     std::exception_ptr ex;
   try {
-    // Un-reverse the schema sent to the coordinator, it expects the
-    // legacy format.
-    auto result_schema = cmd.slice.is_reversed() ? s->make_reversed() : s;
-    auto rrb = reconcilable_result_builder(*result_schema, cmd.slice, std::move(accounter));
+    auto rrb = reconcilable_result_builder(*query_schema, cmd.slice, std::move(accounter));
     auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state);
 
     if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {
@@ -3301,7 +3284,7 @@ table::disable_auto_compaction() {
     // - there are major compactions that additionally uses constant
     //   size backlog of shares,
     // - sstables rewrites tasks that do the same.
-    // 
+    //
     // Setting NullCompactionStrategy is not an option due to the
     // following reasons:
     // - it will 0 backlog if suspending current compactions is not an

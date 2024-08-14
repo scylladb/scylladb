@@ -459,7 +459,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
         auto res_mut_opt = read_mutation_from_mutation_reader(rd).get();
         BOOST_REQUIRE(res_mut_opt);
 
-        res_mut_opt->partition().compact_for_query(*schema, res_mut_opt->decorated_key(), gc_clock::now(), {query::full_clustering_range}, true, false,
+        res_mut_opt->partition().compact_for_query(*schema, res_mut_opt->decorated_key(), gc_clock::now(), {query::full_clustering_range}, true,
                 std::numeric_limits<uint32_t>::max());
 
         const auto stats_after = memory::stats();
@@ -1909,11 +1909,18 @@ SEASTAR_TEST_CASE(test_trim_rows) {
 
         auto compact_and_expect_empty = [&] (mutation m, std::vector<query::clustering_range> ranges) {
             mutation m2 = m;
-            m.partition().compact_for_query(*s, m.decorated_key(), now, ranges, false, false, query::max_rows);
+            m.partition().compact_for_query(*s, m.decorated_key(), now, ranges, false, query::max_rows);
             BOOST_REQUIRE(m.partition().clustered_rows().empty());
 
             std::reverse(ranges.begin(), ranges.end());
-            m2.partition().compact_for_query(*s, m2.decorated_key(), now, ranges, false, true, query::max_rows);
+            for (auto& range : ranges) {
+                if (!range.is_singular()) {
+                    range = query::clustering_range(range.end(), range.start());
+                }
+            }
+            m2 = reverse(m);
+            auto reversed_schema = s->make_reversed();
+            m2.partition().compact_for_query(*reversed_schema, m2.decorated_key(), now, ranges, false, query::max_rows);
             BOOST_REQUIRE(m2.partition().clustered_rows().empty());
         };
 
@@ -3415,7 +3422,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
         auto mut_opt = reader.consume(mutation_rebuilder_v2(s)).get();
         BOOST_REQUIRE(mut_opt);
         ref_mut = std::move(*mut_opt);
-        ref_mut.partition().compact_for_query(*s, pk, query_time, {query::clustering_range::make_open_ended_both_sides()}, true, false, max_rows);
+        ref_mut.partition().compact_for_query(*s, pk, query_time, {query::clustering_range::make_open_ended_both_sides()}, true, max_rows);
     }
 
     struct consumer_v2 {

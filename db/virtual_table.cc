@@ -81,7 +81,7 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
 }
 
 mutation_source streaming_virtual_table::as_mutation_source() {
-    return mutation_source([this] (schema_ptr s,
+    return mutation_source([this] (schema_ptr query_schema,
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& query_slice,
@@ -92,10 +92,10 @@ mutation_source streaming_virtual_table::as_mutation_source() {
         std::unique_ptr<query::partition_slice> unreversed_slice;
         bool reversed = query_slice.is_reversed();
         if (reversed) {
-            s = s->make_reversed();
-            unreversed_slice = std::make_unique<query::partition_slice>(query::half_reverse_slice(*s, query_slice));
+            unreversed_slice = std::make_unique<query::partition_slice>(query::reverse_slice(*query_schema, query_slice));
         }
         const auto& slice = reversed ? *unreversed_slice : query_slice;
+        auto table_schema = reversed ? query_schema->make_reversed() : query_schema;
 
         // We cannot pass the partition_range directly to execute()
         // because it is not guaranteed to be alive until execute() resolves.
@@ -130,8 +130,8 @@ mutation_source streaming_virtual_table::as_mutation_source() {
             }
         };
 
-        auto reader_and_handle = make_queue_reader_v2(s, permit);
-        auto consumer = std::make_unique<my_result_collector>(s, permit, &pr, std::move(reader_and_handle.second));
+        auto reader_and_handle = make_queue_reader_v2(table_schema, permit);
+        auto consumer = std::make_unique<my_result_collector>(table_schema, permit, &pr, std::move(reader_and_handle.second));
         auto f = execute(permit, *consumer, *consumer);
 
         // It is safe to discard this future because:

@@ -1955,11 +1955,6 @@ static range_tombstone_change end_change(const range_tombstone& rt) {
     return range_tombstone_change(rt.end_position(), {});
 }
 
-static query::partition_slice make_legacy_reversed(schema_ptr table_schema, query::partition_slice table_slice) {
-    return query::native_reverse_slice_to_legacy_reverse_slice(*table_schema->make_reversed(),
-                                                               query::reverse_slice(*table_schema, std::move(table_slice)));
-}
-
 SEASTAR_TEST_CASE(test_scan_with_partial_partitions_reversed) {
     return seastar::async([] {
         simple_schema s;
@@ -2021,8 +2016,8 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions_reversed) {
                     .with_range(s.make_ckey_range(1, 4))
                     .build();
 
-            auto rev_slice = make_legacy_reversed(s.schema(), std::move(slice));
 
+            auto rev_slice = query::reverse_slice(*s.schema(), slice);
             assert_that(cache.make_reader(rev_schema, semaphore.make_permit(), query::full_partition_range, rev_slice))
                     .produces_partition_start(m1.decorated_key())
                     .produces_row_with_key(s.make_ckey(4))
@@ -2049,7 +2044,7 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions_reversed) {
                     .with_range(s.make_ckey_range(0, 1))
                     .build();
 
-            auto rev_slice = make_legacy_reversed(s.schema(), std::move(slice));
+            auto rev_slice = query::reverse_slice(*s.schema(), slice);
             auto pr = dht::partition_range::make_singular(m2.decorated_key());
 
             assert_that(cache.make_reader(rev_schema, semaphore.make_permit(), pr, rev_slice))
@@ -2069,7 +2064,7 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions_reversed) {
             cache.evict();
 
             auto slice = s.schema()->full_slice();
-            auto rev_slice = make_legacy_reversed(s.schema(), std::move(slice));
+            auto rev_slice = query::reverse_slice(*s.schema(), slice);
             auto pr = dht::partition_range::make_singular(m2.decorated_key());
 
             assert_that(cache.make_reader(rev_schema, semaphore.make_permit(), pr, rev_slice))
@@ -3396,10 +3391,8 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                         .with_ranges(fwd_ranges)
                         .build();
 
-                    auto native_slice = slice;
                     if (reversed) {
-                        slice = make_legacy_reversed(s, std::move(slice));
-                        native_slice = query::legacy_reverse_slice_to_native_reverse_slice(*s, slice);
+                        slice = query::reverse_slice(*s, std::move(slice));
                     }
 
                     auto rd = make_reader(slice);
@@ -3408,7 +3401,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                     BOOST_REQUIRE(actual_opt);
                     auto actual = *actual_opt;
 
-                    auto&& ranges = native_slice.row_ranges(*rd.schema(), actual.key());
+                    auto&& ranges = slice.row_ranges(*rd.schema(), actual.key());
                     actual.partition().mutable_row_tombstones().trim(*rd.schema(), ranges);
                     actual = std::move(actual).compacted();
 
@@ -4867,7 +4860,7 @@ SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
     // because _latest_it was deferenced during the population.
 
     tombstone_gc_state gc_state(nullptr);
-    auto slice = make_legacy_reversed(s, s->full_slice());
+    auto slice = query::reverse_slice(*s, s->full_slice());
     auto rd = cache.make_reader(
         s->make_reversed(),
         semaphore.make_permit(),

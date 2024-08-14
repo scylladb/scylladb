@@ -416,10 +416,6 @@ public:
         bool enable_node_aggregated_table_metrics = true;
         size_t view_update_concurrency_semaphore_limit;
         db::data_listeners* data_listeners = nullptr;
-        // Not really table-specific (it's a global configuration parameter), but stored here
-        // for easy access from `table` member functions:
-        utils::updateable_value<bool> reversed_reads_auto_bypass_cache{false};
-        utils::updateable_value<bool> enable_optimized_reversed_reads{true};
         uint32_t tombstone_warn_threshold{0};
         unsigned x_log2_compaction_groups{0};
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
@@ -904,7 +900,7 @@ public:
     // completion it contains the to-be saved querier for the next page (if
     // there is one). Pass nullptr when queriers are not saved.
     future<reconcilable_result>
-    mutation_query(schema_ptr s,
+    mutation_query(schema_ptr query_schema,
             reader_permit permit,
             const query::read_command& cmd,
             const dht::partition_range& range,
@@ -1702,10 +1698,10 @@ public:
             db::per_partition_rate_limit::account_and_enforce account_and_enforce_info,
             db::operation_type op_type);
 
-    future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
+    future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> query(schema_ptr query_schema, const query::read_command& cmd, query::result_options opts,
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
                                                                   db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info = std::monostate{});
-    future<std::tuple<reconcilable_result, cache_temperature>> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
+    future<std::tuple<reconcilable_result, cache_temperature>> query_mutations(schema_ptr query_schema, const query::read_command& cmd, const dht::partition_range& range,
                                                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
