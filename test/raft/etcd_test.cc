@@ -284,10 +284,10 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     make_candidate(fsm1);
     communicate(fsm1, fsm2, fsm3, fsm4, fsm5);
 
-    // BOOST_CHECK(compare_log_entries(fsm1.get_log(), fsm3.get_log(), 1, 2));
-    BOOST_CHECK(compare_log_entries(fsm1.get_log(), fsm3.get_log(), 1, 2));
-    BOOST_CHECK(compare_log_entries(fsm1.get_log(), fsm4.get_log(), 1, 2));
-    BOOST_CHECK(compare_log_entries(fsm1.get_log(), fsm5.get_log(), 1, 2));
+    // BOOST_CHECK(compare_log_entries(fsm1.get_log(), fsm3.get_log(), index_t{1}, index_t{2}));
+    BOOST_CHECK(compare_log_entries(fsm1.get_log(), fsm3.get_log(), index_t{1}, index_t{2}));
+    BOOST_CHECK(compare_log_entries(fsm1.get_log(), fsm4.get_log(), index_t{1}, index_t{2}));
+    BOOST_CHECK(compare_log_entries(fsm1.get_log(), fsm5.get_log(), index_t{1}, index_t{2}));
 }
 
 // TestVoteFromAnyState
@@ -563,10 +563,10 @@ BOOST_AUTO_TEST_CASE(test_cannot_commit_without_new_term_entry) {
     raft::command cmd = create_command(5);
     fsm2.add_entry(std::move(cmd));
     communicate(fsm2, fsm1, fsm3, fsm4, fsm5);
-    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm1.get_log(), 1, 5));
-    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm3.get_log(), 1, 5));
-    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm4.get_log(), 1, 5));
-    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm5.get_log(), 1, 5));
+    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm1.get_log(), index_t{1}, index_t{5}));
+    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm3.get_log(), index_t{1}, index_t{5}));
+    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm4.get_log(), index_t{1}, index_t{5}));
+    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm5.get_log(), index_t{1}, index_t{5}));
 }
 
 // TODO TestCommitWithoutNewTermEntry tests the entries could be committed
@@ -722,8 +722,8 @@ BOOST_AUTO_TEST_CASE(test_old_messages) {
             BOOST_REQUIRE_NO_THROW(std::get<raft::command>(res1[i]->data));
         }
     }
-    BOOST_CHECK(compare_log_entries(res1, fsm2.get_log(), 1, 4));
-    BOOST_CHECK(compare_log_entries(res1, fsm3.get_log(), 1, 4));
+    BOOST_CHECK(compare_log_entries(res1, fsm2.get_log(), index_t{1}, index_t{4}));
+    BOOST_CHECK(compare_log_entries(res1, fsm3.get_log(), index_t{1}, index_t{4}));
 }
 
 void handle_proposal(unsigned nodes, std::vector<int> accepting_int) {

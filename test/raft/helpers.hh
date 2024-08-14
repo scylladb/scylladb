@@ -97,7 +97,7 @@ public:
 
 // NOTE: it doesn't compare data contents, just the data type
 bool compare_log_entry(raft::log_entry_ptr le1, raft::log_entry_ptr le2);
-bool compare_log_entries(raft::log& log1, raft::log& log2, size_t from, size_t to);
+bool compare_log_entries(raft::log& log1, raft::log& log2, raft::index_t from, raft::index_t to);
 using raft_routing_map = std::unordered_map<raft::server_id, raft::fsm*>;
 
 bool deliver(raft_routing_map& routes, raft::server_id from,

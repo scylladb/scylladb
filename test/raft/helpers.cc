@@ -55,11 +55,11 @@ bool compare_log_entry(raft::log_entry_ptr le1, raft::log_entry_ptr le2) {
     return true;
 }
 
-bool compare_log_entries(raft::log& log1, raft::log& log2, size_t from, size_t to) {
+bool compare_log_entries(raft::log& log1, raft::log& log2, raft::index_t from, raft::index_t to) {
     SCYLLA_ASSERT(to <= log1.last_idx());
     SCYLLA_ASSERT(to <= log2.last_idx());
-    for (size_t i = from; i <= to; ++i) {
-        if (!compare_log_entry(log1[i], log2[i])) {
+    for (raft::index_t i = from; i <= to; ++i) {
+        if (!compare_log_entry(log1[i.value()], log2[i.value()])) {
             return false;
         }
     }
