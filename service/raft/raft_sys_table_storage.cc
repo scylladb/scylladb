@@ -309,7 +309,7 @@ future<> raft_sys_table_storage::abort() {
 
 future<> raft_sys_table_storage::update_snapshot_and_truncate_log_tail(const raft::snapshot_descriptor &snap, size_t preserve_log_entries) {
     // Update snapshot and truncate logs in `system.raft` atomically
-    raft::index_t log_tail_idx = raft::index_t(static_cast<uint64_t>(snap.idx) - static_cast<uint64_t>(preserve_log_entries));
+    raft::index_t log_tail_idx(snap.idx.value() - preserve_log_entries);
     static const auto store_latest_id_and_truncate_log_tail_cql = format(
         "BEGIN UNLOGGED BATCH"
         "   INSERT INTO system.{} (group_id, snapshot_id) VALUES (?, ?);"   // store latest id
