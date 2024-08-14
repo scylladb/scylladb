@@ -283,7 +283,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
                 break;
             }
             auto component_path = _directory / de->name;
-            auto [ comps, ks, cf ] = sstables::parse_path(component_path);
+            auto comps = sstables::parse_path(component_path, directory._schema->ks_name(), directory._schema->cf_name());
             handle(std::move(comps), component_path);
         }
     } catch (...) {
