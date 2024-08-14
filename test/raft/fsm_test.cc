@@ -251,12 +251,12 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     server_id id1 = id();
     raft::configuration cfg = config_from_ids({id1});
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
-    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), index_t{0});
     add_entry(log, cfg);
-    BOOST_CHECK_EQUAL(log.last_conf_idx(), 1);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), index_t{1});
     add_entry(log, log_entry::dummy{});
     add_entry(log, cfg);
-    BOOST_CHECK_EQUAL(log.last_conf_idx(), 3);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), index_t{3});
     // apply snapshot truncates the log and resets last_conf_idx()
     log.apply_snapshot(log_snapshot(log, log.last_idx()), 0, 0);
     BOOST_CHECK_EQUAL(log.last_conf_idx(), log.get_snapshot().idx);
@@ -835,7 +835,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
     BOOST_CHECK_EQUAL(msg.entries.size(), 1);
     BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
     idx = msg.entries.back().get()->idx;
-    BOOST_CHECK_EQUAL(idx, 102);
+    BOOST_CHECK_EQUAL(idx, index_t{102});
     // Ack AppendEntries for the joint configuration
     // In order to accept a configuration change
     // we need one ACK, since there is a quorum overlap.
@@ -854,7 +854,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
     }
 
     idx = msg.entries.back().get()->idx;
-    BOOST_CHECK_EQUAL(idx, 103);
+    BOOST_CHECK_EQUAL(idx, index_t{103});
 
     BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 2);
     BOOST_CHECK(!fsm.get_configuration().is_joint());
@@ -1109,7 +1109,7 @@ BOOST_AUTO_TEST_CASE(test_empty_configuration) {
     auto output = follower.get_output();
     BOOST_CHECK_EQUAL(output.log_entries.size(), 0);
     BOOST_CHECK_EQUAL(output.messages.size(), 0);
-    BOOST_CHECK_EQUAL(follower.get_current_term(), 0);
+    BOOST_CHECK_EQUAL(follower.get_current_term(), term_t{0});
 
     server_id id2 = id();
     auto log2 = raft::log(raft::snapshot_descriptor{.idx = index_t{0}, .config = config_from_ids({id2})});
@@ -1121,7 +1121,7 @@ BOOST_AUTO_TEST_CASE(test_empty_configuration) {
     leader.add_entry(config_from_ids({id1, id2}));
 
     communicate(leader, follower);
-    BOOST_CHECK_EQUAL(follower.get_current_term(), 1);
+    BOOST_CHECK_EQUAL(follower.get_current_term(), term_t{1});
     BOOST_CHECK_EQUAL(follower.in_memory_log_size(), leader.in_memory_log_size());
     BOOST_CHECK_EQUAL(leader.get_configuration().is_joint(), false);
 }
@@ -1146,11 +1146,11 @@ BOOST_AUTO_TEST_CASE(test_confchange_a_to_b) {
     A.add_entry(config_from_ids({B_id}));
 
     communicate(A, B);
-    BOOST_CHECK_EQUAL(A.get_current_term(), 1);
+    BOOST_CHECK_EQUAL(A.get_current_term(), term_t{1});
     BOOST_CHECK(A.is_follower());
     // A is not part of the current configuration
     BOOST_CHECK(B.is_leader());
-    BOOST_CHECK_EQUAL(B.get_current_term(), 2);
+    BOOST_CHECK_EQUAL(B.get_current_term(), term_t{2});
     BOOST_CHECK_EQUAL(B.get_configuration().is_joint(), false);
     BOOST_CHECK_EQUAL(B.get_configuration().current.size(), 1);
     BOOST_CHECK(B.get_configuration().current.contains(config_member_from_id(B_id)));
@@ -1194,7 +1194,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_ab_to_cd) {
     A.add_entry(config_from_ids({C_id, D_id}));
     communicate(A, B, C, D);
 
-    BOOST_CHECK_EQUAL(A.get_current_term(), 1);
+    BOOST_CHECK_EQUAL(A.get_current_term(), term_t{1});
     // A and B are not part of the current configuration
     BOOST_CHECK(A.is_follower());
     BOOST_CHECK(B.is_follower());
@@ -1202,7 +1202,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_ab_to_cd) {
     election_timeout(C);
     election_threshold(D);
     communicate(A, B, C, D);
-    BOOST_CHECK_EQUAL(C.get_current_term(), 2);
+    BOOST_CHECK_EQUAL(C.get_current_term(), term_t{2});
     BOOST_CHECK(C.is_leader());
     BOOST_CHECK_EQUAL(C.get_configuration().is_joint(), false);
     BOOST_CHECK_EQUAL(C.get_configuration().current.size(), 2);
@@ -1242,13 +1242,13 @@ BOOST_AUTO_TEST_CASE(test_confchange_abc_to_cde) {
     election_threshold(B);
     communicate(B, C, D, E);
     BOOST_CHECK(A.is_leader());
-    BOOST_CHECK_EQUAL(A.get_current_term(), 1);
+    BOOST_CHECK_EQUAL(A.get_current_term(), term_t{1});
     BOOST_CHECK(B.is_follower());
     BOOST_CHECK(C.is_leader());
     BOOST_CHECK(D.is_follower());
     BOOST_CHECK(E.is_follower());
 
-    BOOST_CHECK(C.get_current_term() >= 2);
+    BOOST_CHECK(C.get_current_term() >= term_t{2});
     BOOST_CHECK_EQUAL(C.get_configuration().is_joint(), false);
     BOOST_CHECK_EQUAL(C.get_configuration().current.size(), 3);
 }
@@ -2212,12 +2212,12 @@ BOOST_AUTO_TEST_CASE(test_read_barrier) {
     BOOST_CHECK(output.max_read_id_with_quorum);
 
     // check that read_barrier with lower term does not depose the leader
-    A.step(E_id, read_quorum{term_t{A.get_current_term() - 1}, index_t{10}, rid->first});
+    A.step(E_id, read_quorum{A.get_current_term() - term_t{1}, index_t{10}, rid->first});
     BOOST_CHECK(A.is_leader());
 
     // check that read_barrier with higher term leads to leader
     // step down
-    A.step(E_id, read_quorum{term_t{A.get_current_term() + 1}, index_t{10}, rid->first});
+    A.step(E_id, read_quorum{A.get_current_term() + term_t{1}, index_t{10}, rid->first});
     BOOST_CHECK(!A.is_leader());
 
     // create one node cluster
