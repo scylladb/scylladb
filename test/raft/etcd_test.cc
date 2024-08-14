@@ -62,8 +62,8 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
     for (unsigned i = 1; i < 6; ++i) {
         // NOTE: in etcd leader's own progress seems to be PIPELINE
         BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
-        BOOST_CHECK(fprogress.match_idx == i);
-        BOOST_CHECK(fprogress.next_idx == i + 1);
+        BOOST_CHECK(fprogress.match_idx == index_t{i});
+        BOOST_CHECK(fprogress.next_idx == index_t{i + 1});
 
         raft::command cmd = create_command(i);
         raft::log_entry le = fsm.add_entry(std::move(cmd));
@@ -72,7 +72,7 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
 
         msg = std::get<raft::append_request>(output.messages.back().second);
         idx = msg.entries.back()->idx;
-        BOOST_CHECK_EQUAL(idx, i + 1);
+        BOOST_CHECK_EQUAL(idx, index_t{i + 1});
         fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
     }
 }
@@ -182,7 +182,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     BOOST_CHECK(msg.entries.size() == 1);
     const raft::log_entry_ptr le = msg.entries.back();
     size_t current_entry = 0;
-    BOOST_CHECK(le->idx == ++current_entry);
+    BOOST_CHECK(le->idx == index_t{++current_entry});
     BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(le->data));
 
     // When this append is acked, we change to replicate state and can
@@ -204,7 +204,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
         BOOST_CHECK(msg.entries.size() == 2);
         for (size_t m = 0; m < msg.entries.size(); ++m) {
             const raft::log_entry_ptr le = msg.entries[m];
-            BOOST_CHECK(le->idx == ++current_entry);
+            BOOST_CHECK(le->idx == index_t{++current_entry});
             raft::command cmd;
             BOOST_REQUIRE_NO_THROW(cmd = std::get<raft::command>(le->data));
             BOOST_CHECK(cmd.size() == cmd_blob.size());
@@ -271,7 +271,7 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     fd.mark_dead(id3);
     make_candidate(fsm1);                     // XXX change to make_candidate() to be sure term=2
     BOOST_CHECK(fsm1.is_candidate());
-    BOOST_CHECK(fsm1.get_current_term() == 2);
+    BOOST_CHECK(fsm1.get_current_term() == term_t{2});
     election_threshold(fsm2);
     election_threshold(fsm3);
     election_threshold(fsm4);
@@ -378,8 +378,8 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
     index_t dummy_idx{1};     // Nothing before it
     for (auto& [id, msg] : output.messages) {
         BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
-        BOOST_CHECK(areq.prev_log_idx == 0);
-        BOOST_CHECK(areq.prev_log_term == 0);
+        BOOST_CHECK(areq.prev_log_idx == index_t{0});
+        BOOST_CHECK(areq.prev_log_term == term_t{0});
         BOOST_CHECK(areq.entries.size() == 1);
         lep =  areq.entries.back();
         BOOST_CHECK(lep->idx == dummy_idx);
@@ -400,7 +400,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
     index_t entry_idx{2};     // Nothing before it
     for (auto& [id, msg] : output.messages) {
         BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
-        BOOST_CHECK(areq.prev_log_idx == 1);
+        BOOST_CHECK(areq.prev_log_idx == index_t{1});
         BOOST_CHECK(areq.prev_log_term == current_term);
         BOOST_CHECK(areq.entries.size() == 1);
         lep =  areq.entries.back();
@@ -464,7 +464,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     index_t second_idx{3};
     for (auto& [id, msg] : output.messages) {
         BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
-        BOOST_CHECK(areq.prev_log_idx == 2);
+        BOOST_CHECK(areq.prev_log_idx == index_t{2});
         BOOST_CHECK(areq.prev_log_term == current_term);
         BOOST_CHECK(areq.entries.size() == 1);
         lep =  areq.entries.back();
@@ -607,12 +607,12 @@ BOOST_AUTO_TEST_CASE(test_dueling_candidates) {
     election_timeout(fsm3);
     communicate(fsm3, fsm1, fsm2);
     // NOTE: in our implementation term does not get bumped to 2 and 1 stays leader
-    BOOST_CHECK(fsm1.log_last_idx() == 1);
-    BOOST_CHECK(fsm2.log_last_idx() == 1);
-    BOOST_CHECK(fsm3.log_last_idx() == 0);
-    BOOST_CHECK(fsm1.log_last_term() == 1);
-    BOOST_CHECK(fsm2.log_last_term() == 1);
-    BOOST_CHECK(fsm3.log_last_term() == 0);
+    BOOST_CHECK(fsm1.log_last_idx() == index_t{1});
+    BOOST_CHECK(fsm2.log_last_idx() == index_t{1});
+    BOOST_CHECK(fsm3.log_last_idx() == index_t{0});
+    BOOST_CHECK(fsm1.log_last_term() == term_t{1});
+    BOOST_CHECK(fsm2.log_last_term() == term_t{1});
+    BOOST_CHECK(fsm3.log_last_term() == term_t{0});
 }
 
 // TestDuelingPreCandidates
@@ -647,12 +647,12 @@ BOOST_AUTO_TEST_CASE(test_dueling_pre_candidates) {
     election_timeout(fsm3);
     BOOST_CHECK(fsm3.is_candidate());
     communicate(fsm3, fsm1, fsm2);
-    BOOST_CHECK(fsm1.log_last_idx() == 1); BOOST_CHECK(fsm1.log_last_term() == 1);
-    BOOST_CHECK(fsm2.log_last_idx() == 1); BOOST_CHECK(fsm2.log_last_term() == 1);
-    BOOST_CHECK(fsm3.log_last_idx() == 0); BOOST_CHECK(fsm3.log_last_term() == 0);
-    BOOST_CHECK(fsm1.get_current_term() == 1);
-    BOOST_CHECK(fsm2.get_current_term() == 1);
-    BOOST_CHECK(fsm3.get_current_term() == 1);
+    BOOST_CHECK(fsm1.log_last_idx() == index_t{1}); BOOST_CHECK(fsm1.log_last_term() == term_t{1});
+    BOOST_CHECK(fsm2.log_last_idx() == index_t{1}); BOOST_CHECK(fsm2.log_last_term() == term_t{1});
+    BOOST_CHECK(fsm3.log_last_idx() == index_t{0}); BOOST_CHECK(fsm3.log_last_term() == term_t{0});
+    BOOST_CHECK(fsm1.get_current_term() == term_t{1});
+    BOOST_CHECK(fsm2.get_current_term() == term_t{1});
+    BOOST_CHECK(fsm3.get_current_term() == term_t{1});
 }
 
 // TestCandidateConcede
@@ -701,7 +701,7 @@ BOOST_AUTO_TEST_CASE(test_old_messages) {
     communicate(fsm1, fsm2, fsm3);  // Term 3
     BOOST_CHECK(fsm1.is_leader());
     fd.mark_alive(id2);
-    BOOST_CHECK(fsm1.get_current_term() == 3);
+    BOOST_CHECK(fsm1.get_current_term() == term_t{3});
 
     // pretend [id2's] an old leader trying to make progress; this entry is expected to be ignored.
     fsm1.step(id2, raft::append_request{term_t{2}, index_t{2}, term_t{2}});
@@ -713,12 +713,12 @@ BOOST_AUTO_TEST_CASE(test_old_messages) {
     // Check entries 1, 2, 3 are respective terms; 4 is term 3 and command(4)
     auto res1 = fsm1.get_log();
     for (size_t i = 1; i < 5; ++i) {
-        BOOST_CHECK(res1[i]->idx == i);
+        BOOST_CHECK(res1[i]->idx == index_t{i});
         if (i < 4) {
-            BOOST_CHECK(res1[i]->term == i);
+            BOOST_CHECK(res1[i]->term == term_t{i});
             BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(res1[i]->data));
         } else {
-            BOOST_CHECK(res1[i]->term == 3);
+            BOOST_CHECK(res1[i]->term == term_t{3});
             BOOST_REQUIRE_NO_THROW(std::get<raft::command>(res1[i]->data));
         }
     }
@@ -764,7 +764,7 @@ void handle_proposal(unsigned nodes, std::vector<int> accepting_int) {
     for (auto& [id, msg] : output1.messages) {
         BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
         const raft::log_entry_ptr le = areq.entries.back();
-        BOOST_CHECK(le->idx == 1);   // Dummy is 1st entry in log
+        BOOST_CHECK(le->idx == index_t{1});   // Dummy is 1st entry in log
         BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(le->data));
         if (accepting.contains(id)) { // Only gets votes from specified nodes
             fsm1.step(id, raft::append_reply{areq.current_term, index_t{1},
@@ -787,7 +787,7 @@ void handle_proposal(unsigned nodes, std::vector<int> accepting_int) {
     for (auto& [id, msg] : output1.messages) {
         BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
         const raft::log_entry_ptr le = areq.entries.back();
-        BOOST_CHECK(le->idx == 2);   // Entry is 2nd entry in log (after dummy)
+        BOOST_CHECK(le->idx == index_t{2});   // Entry is 2nd entry in log (after dummy)
         BOOST_REQUIRE_NO_THROW(std::get<raft::command>(le->data));
         // Only followers who accepted dummy should get 2nd append request
         BOOST_CHECK(accepting.contains(id));
