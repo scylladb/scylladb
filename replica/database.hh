@@ -601,10 +601,12 @@ private:
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept;
     // Select a compaction group from a given sstable based on its token range.
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept;
-    // Returns a list of all compaction groups.
-    compaction_group_list& compaction_groups() const noexcept;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
+    void for_each_compaction_group(std::function<void(compaction_group&)> action);
+    void for_each_const_compaction_group(std::function<void(const compaction_group&)> action) const;
+    // Unsafe reference to all storage groups. Don't use it across preemption points.
+    const storage_group_map& storage_groups() const;
 
     // Safely iterate through SSTables, with deletion guard taken to make sure they're not
     // removed during iteration.
@@ -793,9 +795,8 @@ public:
     // FIXME: in case a query is satisfied from a single memtable, avoid a copy
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
-    // Return all active memtables, where there will be one per compaction group
-    // TODO: expose stats, whatever, instead of exposing active memtables themselves.
-    std::vector<memtable*> active_memtables();
+    // Allow an action to be performed on each active memtable, each of which belongs to a different compaction group.
+    void for_each_active_memtable(noncopyable_function<void(memtable&)> action);
     api::timestamp_type min_memtable_timestamp() const;
     const row_cache& get_row_cache() const {
         return _cache;
