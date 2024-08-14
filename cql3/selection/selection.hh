@@ -173,6 +173,7 @@ private:
     std::unique_ptr<result_set> _result_set;
     std::unique_ptr<selectors> _selectors;
     const std::vector<size_t> _group_by_cell_indices; ///< Indices in \c current of cells holding GROUP BY values.
+    const uint64_t _limit; ///< Maximum number of rows to return.
     std::vector<managed_bytes_opt> _last_group; ///< Previous row's group: all of GROUP BY column values.
     bool _group_began; ///< Whether a group began being formed.
 public:
@@ -237,7 +238,8 @@ public:
     };
 
     result_set_builder(const selection& s, gc_clock::time_point now,
-                       std::vector<size_t> group_by_cell_indices = {});
+                       std::vector<size_t> group_by_cell_indices = {},
+                       uint64_t limit = std::numeric_limits<uint64_t>::max());
     void add_empty();
     void add(bytes_opt value);
     void add(const column_definition& def, const query::result_atomic_cell_view& c);
@@ -247,6 +249,7 @@ public:
     std::unique_ptr<result_set> build();
     api::timestamp_type timestamp_of(size_t idx);
     int32_t ttl_of(size_t idx);
+    size_t result_set_size() const;
 
     // Implements ResultVisitor concept from query.hh
     template<typename Filter = nop_filter>

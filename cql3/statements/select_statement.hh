@@ -129,7 +129,7 @@ public:
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message_aggregate_or_paged(query_processor& qp,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
-         const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering) const;
+         const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering, uint64_t limit) const;
 
 
     struct primary_key {
@@ -153,13 +153,10 @@ public:
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
 protected:
-    uint64_t do_get_limit(const query_options& options, const std::optional<expr::expression>& limit, const expr::unset_bind_variable_guard& unset_guard, uint64_t default_limit) const;
-    uint64_t get_limit(const query_options& options) const {
-        return do_get_limit(options, _limit, _limit_unset_guard, query::max_rows);
-    }
-    uint64_t get_per_partition_limit(const query_options& options) const {
-        return do_get_limit(options, _per_partition_limit, _per_partition_limit_unset_guard, query::partition_max_rows);
-    }
+    using get_limit_result = bo::result<uint64_t, exceptions::invalid_request_exception>;
+    get_limit_result get_limit(const query_options& options, const std::optional<expr::expression>& limit) const;
+    static uint64_t get_inner_loop_limit(const select_statement::get_limit_result& limit, bool is_aggregate);
+
     bool needs_post_query_ordering() const;
     virtual void update_stats_rows_read(int64_t rows_read) const {
         _stats.rows_read += rows_read;
