@@ -92,6 +92,11 @@ def rest_api_mock_server(request, server_address):
         server_process.wait()
 
 
+def _path_from_top_srcdir(*p):
+    top_srcdir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    return os.path.join(top_srcdir, *p)
+
+
 @pytest.fixture(scope="session")
 def jmx(request, rest_api_mock_server):
     if request.config.getoption("nodetool") == "scylla":
@@ -100,8 +105,7 @@ def jmx(request, rest_api_mock_server):
 
     jmx_path = request.config.getoption("jmx_path")
     if jmx_path is None:
-        jmx_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools", "jmx", "scripts",
-                                                "scylla-jmx"))
+        jmx_path = _path_from_top_srcdir("tools", "jmx", "scripts", "scylla-jmx")
     else:
         jmx_path = os.path.abspath(jmx_path)
 
@@ -162,7 +166,7 @@ all_modes = {'debug': 'Debug',
 
 
 def _path_to_scylla(mode):
-    build_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build"))
+    build_dir = _path_from_top_srcdir("build")
     if os.path.exists(os.path.join(build_dir, 'build.ninja')):
         return os.path.join(build_dir, all_modes[mode], "scylla")
     return os.path.join(build_dir, mode, "scylla")
@@ -178,7 +182,7 @@ def nodetool_path(request):
     if path is not None:
         return os.path.abspath(path)
 
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools", "java", "bin", "nodetool"))
+    return _path_from_top_srcdir("java", "bin", "nodetool")
 
 
 @pytest.fixture(scope="function")
@@ -207,7 +211,8 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
                 jmx_ip, jmx_port = jmx
                 cmd = [nodetool_path, "-h", jmx_ip, "-p", str(jmx_port), method]
             cmd += list(args)
-            env = {'UBSAN_OPTIONS': f'halt_on_error=1:abort_on_error=1:suppressions={os.getcwd()}/ubsan-suppressions.supp',
+            suppressions_path = _path_from_top_srcdir("ubsan-suppressions.supp")
+            env = {'UBSAN_OPTIONS': f'halt_on_error=1:abort_on_error=1:suppressions={suppressions_path}',
                    'ASAN_OPTIONS': f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'}
             res = subprocess.run(cmd, capture_output=True, text=True, env=env)
             sys.stdout.write(res.stdout)
