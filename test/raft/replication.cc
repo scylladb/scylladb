@@ -41,7 +41,7 @@ size_t test_case::get_first_val() {
         first_val += initial_states[initial_leader].le.size();
     }
     if (initial_leader < initial_snapshots.size()) {
-        first_val = initial_snapshots[initial_leader].snap.idx;
+        first_val = initial_snapshots[initial_leader].snap.idx.value();
     }
     return first_val;
 }
