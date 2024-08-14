@@ -172,8 +172,12 @@ class view_builder final : public service::migration_listener::only_view_notific
     std::unordered_map<std::pair<sstring, sstring>, seastar::shared_promise<>, utils::tuple_hash> _build_notifiers;
     stats _stats;
     metrics::metric_groups _metrics;
-    bool _view_build_status_on_group0 = false;
+
+    enum class view_build_status_location { sys_dist_ks, group0, both };
+
+    view_build_status_location _view_build_status_on = view_build_status_location::sys_dist_ks;
     bool _init_virtual_table_on_upgrade = false;
+    utils::phased_barrier _upgrade_phaser;
 
     struct view_builder_init_state {
         std::vector<future<>> bookkeeping_ops;
@@ -217,9 +221,12 @@ public:
 
     static future<> generate_mutations_on_node_left(replica::database& db, db::system_keyspace& sys_ks, api::timestamp_type timestamp, locator::host_id host_id, std::vector<canonical_mutation>& muts);
 
+    static future<> migrate_to_v1_5(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard);
     static future<> migrate_to_v2(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard);
 
-    void upgrade_to_v2();
+    future<> upgrade_to_v1_5();
+    future<> upgrade_to_v2();
+
     void init_virtual_table();
 
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override;

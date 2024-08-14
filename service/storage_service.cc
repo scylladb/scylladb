@@ -689,10 +689,19 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     // it writes a v2 version mutation as topology_change, then we get here
     // to update the service to start using the v2 table.
     auto view_builder_version = co_await _sys_ks.local().get_view_builder_version();
-    if (view_builder_version == db::system_keyspace::view_builder_version_t::v2) {
-        co_await _view_builder.invoke_on_all([] (db::view::view_builder& vb) {
-            vb.upgrade_to_v2();
-        });
+    switch (view_builder_version) {
+        case db::system_keyspace::view_builder_version_t::v1_5:
+            co_await _view_builder.invoke_on_all([] (db::view::view_builder& vb) -> future<> {
+                co_await vb.upgrade_to_v1_5();
+            });
+            break;
+        case db::system_keyspace::view_builder_version_t::v2:
+            co_await _view_builder.invoke_on_all([] (db::view::view_builder& vb) -> future<> {
+                co_await vb.upgrade_to_v2();
+            });
+            break;
+        default:
+            break;
     }
 
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {

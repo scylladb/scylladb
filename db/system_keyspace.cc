@@ -2851,10 +2851,13 @@ future<system_keyspace::view_builder_version_t> system_keyspace::get_view_builde
         co_return view_builder_version_t::v1;
     }
     auto& str = *str_opt;
-    if (str == "" || str == "1") {
+    if (str == "" || str == "10") {
         co_return view_builder_version_t::v1;
     }
-    if (str == "2") {
+    if (str == "15") {
+        co_return view_builder_version_t::v1_5;
+    }
+    if (str == "20") {
         co_return view_builder_version_t::v2;
     }
     on_internal_error(slogger, fmt::format("unexpected view_builder_version in scylla_local got {}", str));

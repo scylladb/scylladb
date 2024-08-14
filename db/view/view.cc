@@ -2339,39 +2339,62 @@ static future<> announce_with_raft(
 }
 
 future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_name) {
-    if (_view_build_status_on_group0) {
+    auto op = _upgrade_phaser.start();
+
+    // read locally so it doesn't change between async calls
+    auto v = _view_build_status_on;
+
+    co_await utils::get_local_injector().inject("view_builder_pause_add_new_view",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
+
+    if (v == view_build_status_location::group0 || v == view_build_status_location::both) {
         const sstring query_string = format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)",
                 db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
         auto host_id = _db.get_token_metadata().get_my_id();
         co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
                 {std::move(ks_name), std::move(view_name), host_id.uuid(), "STARTED"},
                 "view builder: mark view build STARTED");
-    } else {
+    }
+
+    if (v == view_build_status_location::sys_dist_ks || v == view_build_status_location::both) {
         co_await _sys_dist_ks.start_view_build(std::move(ks_name), std::move(view_name));
     }
 }
 
 future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_name) {
-    if (_view_build_status_on_group0) {
+    auto op = _upgrade_phaser.start();
+    auto v = _view_build_status_on;
+
+    co_await utils::get_local_injector().inject("view_builder_pause_mark_success",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
+
+    if (v == view_build_status_location::group0 || v == view_build_status_location::both) {
         const sstring query_string = format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
                 db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
         auto host_id = _db.get_token_metadata().get_my_id();
         co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
                 {"SUCCESS", std::move(ks_name), std::move(view_name), host_id.uuid()},
                 "view builder: mark view build SUCCESS");
-    } else {
+    }
+
+    if (v == view_build_status_location::sys_dist_ks || v == view_build_status_location::both) {
         co_await _sys_dist_ks.finish_view_build(std::move(ks_name), std::move(view_name));
     }
 }
 
 future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_name) {
-    if (_view_build_status_on_group0) {
+    auto op = _upgrade_phaser.start();
+    auto v = _view_build_status_on;
+
+    if (v == view_build_status_location::group0 || v == view_build_status_location::both) {
         const sstring query_string = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?",
                 db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
         co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
                 {std::move(ks_name), std::move(view_name)},
                 "view builder: delete view build status");
-    } else {
+    }
+
+    if (v == view_build_status_location::sys_dist_ks || v == view_build_status_location::both) {
         co_await _sys_dist_ks.remove_view(std::move(ks_name), std::move(view_name));
     }
 }
@@ -2394,7 +2417,7 @@ view_status_common(cql3::query_processor& qp, sstring ks_name, sstring cf_name, 
 }
 
 future<std::unordered_map<locator::host_id, sstring>> view_builder::view_status(sstring ks_name, sstring view_name) const {
-    if (_view_build_status_on_group0) {
+    if (_view_build_status_on == view_build_status_location::group0) {
         co_return co_await view_status_common(_qp, db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2,
                 std::move(ks_name), std::move(view_name), db::consistency_level::LOCAL_ONE);
     } else {
@@ -2582,6 +2605,20 @@ future<> view_builder::generate_mutations_on_node_left(replica::database& db, db
     }
 }
 
+future<> view_builder::migrate_to_v1_5(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard) {
+    // Update the view builder version to v1_5
+    auto version_mut = co_await sys_ks.make_view_builder_version_mutation(guard.write_timestamp(), db::system_keyspace::view_builder_version_t::v1_5);
+
+    // write the version as topology_change so that we can apply
+    // the change to the view_builder service in topology_state_load
+    service::topology_change change {
+        .mutations{canonical_mutation(std::move(version_mut))},
+    };
+
+    auto group0_cmd = group0_client.prepare_command(std::move(change), guard, "migrate view_build_status to v1_5");
+    co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as);
+}
+
 future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard) {
     inject_failure("view_builder_migrate_to_v2");
 
@@ -2598,11 +2635,14 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
     }
 
     auto rows = co_await qp.execute_internal(
-        format("SELECT * FROM {}.{}", db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS),
+        format("SELECT keyspace_name, view_name, host_id, status, WRITETIME(status) AS ts FROM {}.{}", db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS),
         cl,
         view_builder_query_state(),
         {},
         cql3::query_processor::cache_internal::no);
+
+    co_await utils::get_local_injector().inject("view_builder_pause_in_migrate_v2",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
 
     auto col_names = boost::copy_range<std::vector<sstring>>(schema->all_columns() | boost::adaptors::transformed([] (const auto& col) {return col.name_as_cql_string(); }));
     auto col_names_str = boost::algorithm::join(col_names, ", ");
@@ -2643,6 +2683,9 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
             }
         }
 
+        // keep the row timestamp so it won't overwrite newer writes
+        auto row_ts = row.get_as<api::timestamp_type>("ts");
+
         auto muts = co_await qp.get_mutations_internal(
             format("INSERT INTO {}.{} ({}) VALUES ({})",
                 db::system_keyspace::NAME,
@@ -2650,7 +2693,7 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
                 col_names_str,
                 val_binders_str),
             view_builder_query_state(),
-            guard.write_timestamp(),
+            row_ts,
             std::move(values));
         if (muts.size() != 1) {
             on_internal_error(vlogger, format("expecting single insert mutation, got {}", muts.size()));
@@ -2672,12 +2715,22 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
     co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as);
 }
 
-void view_builder::upgrade_to_v2() {
-    if (_view_build_status_on_group0) {
-        return;
+future<> view_builder::upgrade_to_v1_5() {
+    if (_view_build_status_on == view_build_status_location::sys_dist_ks) {
+        // drain all write operations to the old table and start writing to both tables.
+        // note that we wait here only for operations that access the dist table and not group0, otherwise
+        // we get a deadlock.
+        _view_build_status_on = view_build_status_location::both;
+        co_await _upgrade_phaser.advance_and_await();
+    }
+}
+
+future<> view_builder::upgrade_to_v2() {
+    if (_view_build_status_on == view_build_status_location::group0) {
+        co_return;
     }
 
-    _view_build_status_on_group0 = true;
+    _view_build_status_on = view_build_status_location::group0;
 
     if (_init_virtual_table_on_upgrade) {
         init_virtual_table();
@@ -2685,7 +2738,7 @@ void view_builder::upgrade_to_v2() {
 }
 
 void view_builder::init_virtual_table() {
-    if (!_view_build_status_on_group0) {
+    if (_view_build_status_on != view_build_status_location::group0) {
         // we didn't upgrade to v2 yet. defer the operation
         _init_virtual_table_on_upgrade = true;
         return;

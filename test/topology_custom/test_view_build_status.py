@@ -36,7 +36,7 @@ async def get_view_builder_version(cql, **kwargs):
     if len(result) == 0:
         return 1
     else:
-        return int(result[0].value)
+        return int(result[0].value) // 10
 
 async def view_builder_is_v2(cql, **kwargs):
     v = await get_view_builder_version(cql, **kwargs)
@@ -238,6 +238,113 @@ async def test_view_build_status_migration_to_v2(request, manager: ManagerClient
 
     result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
     assert len(result) == 6
+
+# Migrate the view_build_status table to v2 and write to the table during the migration.
+# The migration process goes through an intermediate stage where it writes to
+# both the old and new table, so the write should not be lost.
+@pytest.mark.asyncio
+async def test_view_build_status_migration_to_v2_with_write_during_migration(request, manager: ManagerClient):
+    # First, force the first node to start in legacy mode
+    cfg = {'force_gossip_topology_changes': True}
+
+    servers = [await manager.server_add(config=cfg)]
+    # Enable raft-based node operations for subsequent nodes - they should fall back to
+    # using gossiper-based node operations
+    del cfg['force_gossip_topology_changes']
+
+    servers += [await manager.server_add(config=cfg) for _ in range(2)]
+
+    logging.info("Waiting until driver connects to every server")
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    logging.info("Checking the upgrade state on all nodes")
+    for host in hosts:
+        status = await manager.api.raft_topology_upgrade_status(host.address)
+        assert status == "not_upgraded"
+
+    await create_keyspace(cql)
+    await create_table(cql)
+
+    inj_insert = "view_builder_pause_add_new_view"
+    await manager.api.enable_injection(servers[1].ip_addr, inj_insert, one_shot=True)
+
+    await create_mv(cql, "vt1")
+
+    # pause the migration between reading the old table and writing to the new table, so we have
+    # a time window where new writes may be lost.
+    # we don't know who the coordinator is so inject in all nodes.
+    inj_upgrade = "view_builder_pause_in_migrate_v2"
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, inj_upgrade, one_shot=True)
+
+    logging.info("Triggering upgrade to raft topology")
+    await manager.api.upgrade_to_raft_topology(hosts[0].address)
+
+    logging.info("Waiting until upgrade finishes")
+    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+
+    logging.info("Checking migrated data in system")
+
+    # Now that the upgrade is paused, write the new view.
+    await manager.api.message_injection(servers[1].ip_addr, inj_insert)
+    await asyncio.sleep(1)
+
+    # continue the migration
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, inj_upgrade)
+
+    await asyncio.gather(*(wait_for(lambda: view_builder_is_v2(cql, host=h), time.time() + 60) for h in hosts))
+
+    await asyncio.gather(*(wait_for_view_v2(cql, 'ks', 'vt1', 3, host=h) for h in hosts))
+
+# Migrate the view_build_status table to v2 while there is an 'old' write operation in progress.
+# The migration should wait for the old operations to complete before continuing, otherwise
+# these writes may be lost.
+@pytest.mark.asyncio
+async def test_view_build_status_migration_to_v2_barrier(request, manager: ManagerClient):
+    # First, force the first node to start in legacy mode
+    cfg = {'force_gossip_topology_changes': True}
+
+    servers = [await manager.server_add(config=cfg)]
+    # Enable raft-based node operations for subsequent nodes - they should fall back to
+    # using gossiper-based node operations
+    del cfg['force_gossip_topology_changes']
+
+    servers += [await manager.server_add(config=cfg) for _ in range(2)]
+
+    logging.info("Waiting until driver connects to every server")
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    logging.info("Checking the upgrade state on all nodes")
+    for host in hosts:
+        status = await manager.api.raft_topology_upgrade_status(host.address)
+        assert status == "not_upgraded"
+
+    await create_keyspace(cql)
+    await create_table(cql)
+
+    # Create MV and delay the write operation to the old table
+    inj_insert = "view_builder_pause_add_new_view"
+    await manager.api.enable_injection(servers[1].ip_addr, inj_insert, one_shot=True)
+    await create_mv(cql, "vt1")
+
+    # The upgrade should perform a barrier and wait for the delayed operation to complete before continuing.
+    logging.info("Triggering upgrade to raft topology")
+    await manager.api.upgrade_to_raft_topology(hosts[0].address)
+
+    logging.info("Waiting until upgrade finishes")
+    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+
+    # the upgrade should now be waiting for the insert to complete.
+    # unpause the insert
+    await asyncio.sleep(1)
+    await manager.api.message_injection(servers[1].ip_addr, inj_insert)
+
+    logging.info("Checking migrated data in system")
+
+    await asyncio.gather(*(wait_for(lambda: view_builder_is_v2(cql, host=h), time.time() + 60) for h in hosts))
+
+    await asyncio.gather(*(wait_for_view_v2(cql, 'ks', 'vt1', 3, host=h) for h in hosts))
 
 # Test that when removing a node from the cluster, we clean its rows from
 # the view build status table.

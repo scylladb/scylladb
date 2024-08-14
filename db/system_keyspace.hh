@@ -620,8 +620,9 @@ public:
     future<auth_version_t> get_auth_version();
 
     enum class view_builder_version_t: int64_t {
-        v1 = 1,
-        v2 = 2,
+        v1 = 10,
+        v1_5 = 15,
+        v2 = 20,
     };
 
     future<std::optional<mutation>> get_view_builder_version_mutation();
