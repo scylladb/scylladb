@@ -1019,7 +1019,7 @@ void raft_cluster<Clock>::set_ticker_callback(size_t id) noexcept {
     });
 }
 
-std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned start_idx);
+std::vector<raft::log_entry> create_log(std::vector<log_entry> list, raft::index_t start_idx);
 
 size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& commands,
         lw_shared_ptr<hasher_int> hasher);
@@ -1407,12 +1407,12 @@ std::vector<initial_state> raft_cluster<Clock>::get_states(test_case test, bool 
 
     // Server initial logs, etc
     for (size_t i = 0; i < states.size(); ++i) {
-        size_t start_idx = 1;
+        raft::index_t start_idx{1};
         if (i < test.initial_snapshots.size()) {
             states[i].snapshot = test.initial_snapshots[i].snap;
             states[i].snp_value.hasher = hasher_int::hash_range(test.initial_snapshots[i].snap.idx);
             states[i].snp_value.idx = test.initial_snapshots[i].snap.idx;
-            start_idx = states[i].snapshot.idx + 1;
+            start_idx = states[i].snapshot.idx + raft::index_t{1};
         }
         if (i < test.initial_states.size()) {
             auto state = test.initial_states[i];
