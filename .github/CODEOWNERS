@@ -7,9 +7,9 @@ row_cache* @tgrabiec
 test/boost/mvcc* @tgrabiec
 
 # CDC
-cdc/* @kbr- @elcallio @piodul
-test/cql/cdc_* @kbr- @elcallio @piodul
-test/boost/cdc_* @kbr- @elcallio @piodul
+cdc/* @kbr-scylla @elcallio @piodul
+test/cql/cdc_* @kbr-scylla @elcallio @piodul
+test/boost/cdc_* @kbr-scylla @elcallio @piodul
 
 # COMMITLOG / BATCHLOG
 db/commitlog/* @elcallio @eliransin
@@ -94,8 +94,8 @@ test/boost/querier_cache_test.cc @denesb
 test/cql-pytest/* @nyh
 
 # RAFT
-raft/* @kbr- @gleb-cloudius @kostja
-test/raft/* @kbr- @gleb-cloudius @kostja
+raft/* @kbr-scylla @gleb-cloudius @kostja
+test/raft/* @kbr-scylla @gleb-cloudius @kostja
 
 # HEAT-WEIGHTED LOAD BALANCING
 db/heat_load_balance.* @nyh @gleb-cloudius
