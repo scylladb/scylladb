@@ -433,7 +433,7 @@ public:
     future<> load_snapshot(raft::snapshot_id snp_id) override {
         hasher = make_lw_shared<hasher_int>((*_snapshots)[_id][snp_id].hasher);
         tlogger.debug("sm[{}] loads snapshot {} idx={}", _id, (*_snapshots)[_id][snp_id].hasher.finalize_uint64(), (*_snapshots)[_id][snp_id].idx);
-        _seen = (*_snapshots)[_id][snp_id].idx;
+        _seen = (*_snapshots)[_id][snp_id].idx.value();
         if (_seen >= _apply_entries) {
             _done.set_value();
         }
@@ -1390,7 +1390,7 @@ void raft_cluster<Clock>::verify() {
         for (auto& s : (*_persisted_snapshots)) {
             auto& [snp, val] = s.second;
             auto digest = val.hasher.finalize_uint64();
-            auto expected = hasher_int::hash_range(val.idx).finalize_uint64();
+            auto expected = hasher_int::hash_range(val.idx.value()).finalize_uint64();
             BOOST_CHECK_MESSAGE(digest == expected,
                                 format("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected));
         }
@@ -1410,7 +1410,7 @@ std::vector<initial_state> raft_cluster<Clock>::get_states(test_case test, bool 
         raft::index_t start_idx{1};
         if (i < test.initial_snapshots.size()) {
             states[i].snapshot = test.initial_snapshots[i].snap;
-            states[i].snp_value.hasher = hasher_int::hash_range(test.initial_snapshots[i].snap.idx);
+            states[i].snp_value.hasher = hasher_int::hash_range(test.initial_snapshots[i].snap.idx.value());
             states[i].snp_value.idx = test.initial_snapshots[i].snap.idx;
             start_idx = states[i].snapshot.idx + raft::index_t{1};
         }
