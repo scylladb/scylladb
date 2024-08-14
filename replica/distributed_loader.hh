@@ -58,6 +58,7 @@ class distributed_loader_for_tests;
 namespace replica {
 
 class table_populator;
+class global_table_ptr;
 
 class distributed_loader {
     friend class ::distributed_loader_for_tests;
@@ -68,7 +69,7 @@ class distributed_loader {
     static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,
             compaction::owned_ranges_ptr owned_ranges_ptr = nullptr);
     static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir, sstables::sstable_directory::process_flags flags);
-    static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name);
+    static future<> lock_table(global_table_ptr&, sharded<sstables::sstable_directory>& dir);
     static future<size_t> make_sstables_available(sstables::sstable_directory& dir,
             sharded<replica::database>& db, sharded<db::view::view_builder>& vb,
             bool needs_view_update, sstring ks, sstring cf);

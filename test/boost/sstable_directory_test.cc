@@ -16,6 +16,7 @@
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_directory.hh"
 #include "replica/distributed_loader.hh"
+#include "replica/global_table_ptr.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/tmpdir.hh"
@@ -35,7 +36,8 @@ public:
         return replica::distributed_loader::process_sstable_dir(dir, flags);
     }
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name) {
-        return replica::distributed_loader::lock_table(dir, db, std::move(ks_name), std::move(cf_name));
+        auto gtable = co_await replica::get_table_on_all_shards(db, ks_name, cf_name);
+        co_await replica::distributed_loader::lock_table(gtable, dir);
     }
     static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr = nullptr) {
         return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator), std::move(owned_ranges_ptr));
