@@ -151,16 +151,18 @@ int scylla_sstable_main(int argc, char** argv) {
                 throw std::invalid_argument("Invalid mode");
             }
         }).then([test, mode] {
-            if (mode == test_modes::index_read) {
+            switch (mode) {
+            using enum test_modes;
+            case index_read:
                 return test_index_read(*test).then([test] {});
-            } else if (mode == test_modes::sequential_read) {
+            case sequential_read:
                 return test_sequential_read(*test).then([test] {});
-            } else if ((mode == test_modes::index_write) || (mode == test_modes::write)) {
+            case index_write:
+                [[fallthrough]];
+            case write:
                 return test_write(*test).then([test] {});
-            } else if (mode == test_modes::compaction) {
+            case compaction:
                 return test_compaction(*test).then([test] {});
-            } else {
-                throw std::invalid_argument("Invalid mode");
             }
         }).then([] {
             return engine().exit(0);
