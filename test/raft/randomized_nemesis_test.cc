@@ -907,7 +907,7 @@ class persistence {
         if (b == _stored_entries.end() || (*b)->idx >= idx) {
             return b;
         }
-        return b + std::min(size_t(idx - (*b)->idx), _stored_entries.size());
+        return b + std::min(size_t((idx - (*b)->idx).value()), _stored_entries.size());
     }
 
 public:
@@ -935,7 +935,7 @@ public:
     void store_snapshot(const raft::snapshot_descriptor& snap, State snap_data, size_t preserve_log_entries) {
         // The snapshot's index cannot be smaller than the index of the first stored entry minus one;
         // that would create a ``gap'' in the log.
-        SCYLLA_ASSERT(_stored_entries.empty() || snap.idx + 1 >= _stored_entries.front()->idx);
+        SCYLLA_ASSERT(_stored_entries.empty() || snap.idx + raft::index_t{1} >= _stored_entries.front()->idx);
 
         _stored_snapshot = {snap, std::move(snap_data)};
 
@@ -966,14 +966,14 @@ public:
         // The raft server is supposed to provide entries in strictly increasing order,
         // hence the following assertions.
         if (_stored_entries.empty()) {
-            SCYLLA_ASSERT(entries.front()->idx == _stored_snapshot.first.idx + 1);
+            SCYLLA_ASSERT(entries.front()->idx == _stored_snapshot.first.idx + raft::index_t{1});
         } else {
-            SCYLLA_ASSERT(entries.front()->idx == _stored_entries.back()->idx + 1);
+            SCYLLA_ASSERT(entries.front()->idx == _stored_entries.back()->idx + raft::index_t{1});
         }
 
         _stored_entries.push_back(entries[0]);
         for (size_t i = 1; i < entries.size(); ++i) {
-            SCYLLA_ASSERT(entries[i]->idx == entries[i-1]->idx + 1);
+            SCYLLA_ASSERT(entries[i]->idx == entries[i-1]->idx + raft::index_t{1});
             _stored_entries.push_back(entries[i]);
         }
     }
