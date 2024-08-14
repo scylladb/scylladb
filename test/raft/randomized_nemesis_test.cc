@@ -945,7 +945,12 @@ public:
             return;
         }
 
-        auto first_to_remain = snap.idx + 1 >= preserve_log_entries ? raft::index_t{snap.idx + 1 - preserve_log_entries} : raft::index_t{0};
+        raft::index_t first_to_remain = snap.idx + raft::index_t{1};
+        if (first_to_remain.value() >= preserve_log_entries) {
+            first_to_remain -= raft::index_t{preserve_log_entries};
+        } else {
+            first_to_remain = raft::index_t{0};
+        }
         _stored_entries.erase(_stored_entries.begin(), find(first_to_remain));
     }
 
