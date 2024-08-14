@@ -2564,10 +2564,15 @@ future<uint32_t> sstable::read_digest() {
     co_return boost::lexical_cast<uint32_t>(digest_str);
 }
 
-future<checksum> sstable::read_checksum() {
-    sstables::checksum checksum;
-
-    co_await do_read_simple(component_type::CRC, [&] (version_types v, file crc_file) -> future<> {
+future<lw_shared_ptr<checksum>> sstable::read_checksum() {
+    if (_components->checksum) {
+        co_return _components->checksum->shared_from_this();
+    }
+    if (!has_component(component_type::CRC)) {
+        co_return nullptr;
+    }
+    auto checksum = make_lw_shared<sstables::checksum>();
+    co_await do_read_simple(component_type::CRC, [checksum, this] (version_types v, file crc_file) -> future<> {
         file_input_stream_options options;
         options.buffer_size = 4096;
 
@@ -2580,12 +2585,12 @@ future<checksum> sstable::read_checksum() {
 
             auto buf = co_await crc_stream.read_exactly(size);
             check_buf_size(buf, size);
-            checksum.chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
+            checksum->chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
 
             buf = co_await crc_stream.read_exactly(size);
             while (!buf.empty()) {
                 check_buf_size(buf, size);
-                checksum.checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
+                checksum->checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
                 buf = co_await crc_stream.read_exactly(size);
             }
         } catch (...) {
@@ -2594,9 +2599,10 @@ future<checksum> sstable::read_checksum() {
 
         co_await crc_stream.close();
         maybe_rethrow_exception(std::move(ex));
+        _components->checksum = checksum->weak_from_this();
     });
 
-    co_return checksum;
+    co_return std::move(checksum);
 }
 
 future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
@@ -2616,10 +2622,12 @@ future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
             }
         } else {
             auto checksum = co_await sst->read_checksum();
-            if (sst->get_version() >= sstable_version_types::mc) {
-                valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, checksum, digest);
+            if (!checksum) {
+                throw std::runtime_error(format("No checksums available for SSTable: {}", sst->get_filename()));
+            } else if (sst->get_version() >= sstable_version_types::mc) {
+                valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, *checksum, digest);
             } else {
-                valid = co_await do_validate_uncompressed<adler32_utils>(data_stream, checksum, digest);
+                valid = co_await do_validate_uncompressed<adler32_utils>(data_stream, *checksum, digest);
             }
         }
     } catch (...) {
