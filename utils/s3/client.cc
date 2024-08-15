@@ -310,9 +310,17 @@ static tag_set parse_tagging(sstring& body) {
     tag_set tags;
     auto tagset_node = first_node_of(doc.get(), {"Tagging", "TagSet"});
     for (auto tag_node = tagset_node->first_node("Tag"); tag_node; tag_node = tag_node->next_sibling()) {
-        auto key = tag_node->first_node("Key")->value();
-        auto value = tag_node->first_node("Value")->value();
-        tags.emplace_back(tag{key, value});
+        // See https://docs.aws.amazon.com/AmazonS3/latest/API/API_Tag.html,
+        // both "Key" and "Value" are required, but we still need to check them.
+        auto key = tag_node->first_node("Key");
+        if (!key) {
+            throw std::runtime_error("'Key' missing in 'Tag'");
+        }
+        auto value = tag_node->first_node("Value");
+        if (!value) {
+            throw std::runtime_error("'Value' missing in 'Tag'");
+        }
+        tags.emplace_back(tag{key->value(), value->value()});
     }
     return tags;
 }
