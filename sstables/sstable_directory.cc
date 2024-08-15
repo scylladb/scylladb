@@ -384,8 +384,8 @@ future<> sstable_directory::sstables_registry_components_lister::commit() {
 }
 
 future<> sstable_directory::sstables_registry_components_lister::garbage_collect(storage& st) {
-    return do_with(std::set<generation_type>(), [this, &st] (auto& gens_to_remove) {
-        return _sstables_registry.sstables_registry_list(_location, [&st, &gens_to_remove] (sstring status, sstable_state state, entry_descriptor desc) {
+        std::set<generation_type> gens_to_remove;
+        co_await _sstables_registry.sstables_registry_list(_location, [&st, &gens_to_remove] (sstring status, sstable_state state, entry_descriptor desc) {
             if (status == "sealed") {
                 return make_ready_future<>();
             }
@@ -393,12 +393,10 @@ future<> sstable_directory::sstables_registry_components_lister::garbage_collect
             dirlog.info("Removing dangling {} {} entry", desc.generation, status);
             gens_to_remove.insert(desc.generation);
             return st.remove_by_registry_entry(std::move(desc));
-        }).then([this, &gens_to_remove] {
-            return parallel_for_each(gens_to_remove, [this] (auto gen) {
+        });
+            co_await coroutine::parallel_for_each(gens_to_remove, [this] (auto gen) {
                 return _sstables_registry.delete_entry(_location, gen);
             });
-        });
-    });
 }
 
 future<>
