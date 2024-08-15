@@ -190,6 +190,7 @@ public:
     using format_types = sstable_format_types;
     using manager_list_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
     using manager_set_link_type = bi::set_member_hook<bi::link_mode<bi::auto_unlink>>;
+    using integrity_check = bool_class<class integrity_check_tag>;
 public:
     sstable(schema_ptr schema,
             sstring table_dir,
@@ -724,9 +725,13 @@ public:
     //
     // When created with `raw_stream::yes`, the sstable data file will be
     // streamed as-is, without decompressing (if compressed).
+    //
+    // When created with `integrity_check::yes`, the integrity mechanisms
+    // of the underlying data streams will be enabled.
     using raw_stream = bool_class<class raw_stream_tag>;
     input_stream<char> data_stream(uint64_t pos, size_t len,
-            reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw = raw_stream::no);
+            reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
+            raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read

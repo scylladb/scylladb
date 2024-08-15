@@ -47,6 +47,7 @@
 #include "metadata_collector.hh"
 #include "progress_monitor.hh"
 #include "compress.hh"
+#include "checksummed_data_source.hh"
 #include "index_reader.hh"
 #include "downsampling.hh"
 #include <boost/algorithm/string.hpp>
@@ -2410,7 +2411,8 @@ component_type sstable::component_from_sstring(version_types v, const sstring &s
 }
 
 input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
-        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw) {
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw,
+        integrity_check integrity) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.read_ahead = 4;
@@ -2422,6 +2424,8 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
     }
 
     if (_components->compression && raw == raw_stream::no) {
+        // Disabling integrity checks is not supported by compressed
+        // file input streams. `integrity` is ignored.
         if (_version >= sstable_version_types::mc) {
              return make_compressed_file_m_format_input_stream(f, &_components->compression,
                 pos, len, std::move(options), permit);
@@ -2430,7 +2434,17 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
                 pos, len, std::move(options), permit);
         }
     }
-
+    if (_components->checksum && integrity == integrity_check::yes) {
+        auto checksum = get_checksum();
+        auto file_len = data_size();
+        if (_version >= sstable_version_types::mc) {
+             return make_checksummed_file_m_format_input_stream(f, file_len,
+                *checksum, pos, len, std::move(options));
+        } else {
+            return make_checksummed_file_k_l_format_input_stream(f, file_len,
+                *checksum, pos, len, std::move(options));
+        }
+    }
     return make_file_input_stream(f, pos, len, std::move(options));
 }
 
