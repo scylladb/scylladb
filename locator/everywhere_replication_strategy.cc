@@ -34,7 +34,7 @@ size_t everywhere_replication_strategy::get_replication_factor(const token_metad
     return tm.sorted_tokens().empty() ? 1 : tm.count_normal_token_owners();
 }
 
-void everywhere_replication_strategy::validate_options(const gms::feature_service&) const {
+void everywhere_replication_strategy::validate_options(const gms::feature_service&, const locator::topology&) const {
     if (_uses_tablets) {
         throw exceptions::configuration_exception("EverywhereStrategy doesn't support tablet replication");
     }

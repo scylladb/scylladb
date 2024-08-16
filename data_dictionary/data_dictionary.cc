@@ -229,7 +229,7 @@ void keyspace_metadata::validate(const gms::feature_service& fs, const locator::
     using namespace locator;
     locator::replication_strategy_params params(strategy_options(), initial_tablets());
     auto strategy = locator::abstract_replication_strategy::create_replication_strategy(strategy_name(), params);
-    strategy->validate_options(fs);
+    strategy->validate_options(fs, topology);
 }
 
 lw_shared_ptr<keyspace_metadata>

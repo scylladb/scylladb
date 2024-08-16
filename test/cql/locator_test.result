@@ -3,7 +3,7 @@
 > -- Fail on wrong DC name
 > --
 > CREATE KEYSPACE t WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'nosuchdc' : 3 } AND DURABLE_WRITES = true;
-<Error from server: code=2300 [Query invalid because of configuration issue] message="Unrecognized strategy option {nosuchdc} passed to org.apache.cassandra.locator.NetworkTopologyStrategy for keyspace t">
+<Error from server: code=2300 [Query invalid because of configuration issue] message="Unrecognized strategy option {nosuchdc} passed to NetworkTopologyStrategy">
 > CREATE KEYSPACE t WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'datacenter1' : 3 } AND DURABLE_WRITES = true;
 OK
 > DROP KEYSPACE t;

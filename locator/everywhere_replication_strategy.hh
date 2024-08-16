@@ -20,7 +20,7 @@ public:
 
     virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
 
-    virtual void validate_options(const gms::feature_service&) const override;
+    virtual void validate_options(const gms::feature_service&, const locator::topology&) const override;
 
     virtual size_t get_replication_factor(const token_metadata& tm) const override;
 

@@ -23,7 +23,7 @@ future<host_id_set> local_strategy::calculate_natural_endpoints(const token& t, 
     return make_ready_future<host_id_set>(host_id_set{tm.get_topology().my_host_id()});
 }
 
-void local_strategy::validate_options(const gms::feature_service&) const {
+void local_strategy::validate_options(const gms::feature_service&, const locator::topology&) const {
     if (_uses_tablets) {
         throw exceptions::configuration_exception("LocalStrategy doesn't support tablet replication");
     }

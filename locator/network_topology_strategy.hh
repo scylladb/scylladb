@@ -56,7 +56,7 @@ protected:
     virtual future<host_id_set> calculate_natural_endpoints(
         const token& search_token, const token_metadata& tm) const override;
 
-    virtual void validate_options(const gms::feature_service&) const override;
+    virtual void validate_options(const gms::feature_service&, const locator::topology& topology) const override;
 
 private:
     future<tablet_replica_set> reallocate_tablets(schema_ptr, token_metadata_ptr, load_sketch&, const tablet_map& cur_tablets, tablet_id tb) const;
