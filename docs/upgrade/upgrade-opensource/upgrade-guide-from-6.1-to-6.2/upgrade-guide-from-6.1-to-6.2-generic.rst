@@ -1,24 +1,24 @@
 .. |SCYLLA_NAME| replace:: ScyllaDB
 
-.. |SRC_VERSION| replace:: 6.0
-.. |NEW_VERSION| replace:: 6.1
+.. |SRC_VERSION| replace:: 6.1
+.. |NEW_VERSION| replace:: 6.2
 
 .. |DEBIAN_SRC_REPO| replace:: Debian
-.. _DEBIAN_SRC_REPO: https://www.scylladb.com/download/?platform=debian-10&version=scylla-6.0
+.. _DEBIAN_SRC_REPO: https://www.scylladb.com/download/?platform=debian-11&version=scylla-6.1
 
 .. |UBUNTU_SRC_REPO| replace:: Ubuntu
-.. _UBUNTU_SRC_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-6.0
+.. _UBUNTU_SRC_REPO: https://www.scylladb.com/download/?platform=ubuntu-22.04&version=scylla-6.1
 
 .. |SCYLLA_DEB_SRC_REPO| replace:: ScyllaDB deb repo (|DEBIAN_SRC_REPO|_, |UBUNTU_SRC_REPO|_)
 
 .. |SCYLLA_RPM_SRC_REPO| replace:: ScyllaDB rpm repo
-.. _SCYLLA_RPM_SRC_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-6.0
+.. _SCYLLA_RPM_SRC_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-6.1
 
 .. |DEBIAN_NEW_REPO| replace:: Debian
-.. _DEBIAN_NEW_REPO: https://www.scylladb.com/download/?platform=debian-10&version=scylla-6.1
+.. _DEBIAN_NEW_REPO: https://www.scylladb.com/download/?platform=debian-11&version=scylla-6.2
 
 .. |UBUNTU_NEW_REPO| replace:: Ubuntu
-.. _UBUNTU_NEW_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-6.1
+.. _UBUNTU_NEW_REPO: https://www.scylladb.com/download/?platform=ubuntu-22.04&version=scylla-6.2
 
 .. |SCYLLA_DEB_NEW_REPO| replace:: ScyllaDB deb repo (|DEBIAN_NEW_REPO|_, |UBUNTU_NEW_REPO|_)
 
@@ -28,8 +28,8 @@
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 6.0 to 6.1
-.. _SCYLLA_METRICS: ../metric-update-6.0-to-6.1
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 6.1 to 6.2
+.. _SCYLLA_METRICS: ../metric-update-6.1-to-6.2
 
 =============================================================================
 Upgrade |SCYLLA_NAME| from |SRC_VERSION| to |NEW_VERSION|
@@ -46,20 +46,6 @@ It also applies when using ScyllaDB official image on EC2, GCP, or Azure.
 
 Before You Upgrade ScyllaDB
 ==============================
-
-**Ensure Consistent Topology Changes Are Enabled**
-
-In ScyllaDB 6.1, the Raft-based *consistent topology changes* feature is mandatory.
-
-* If you enabled the feature after upgrading from 5.4 to 6.0 or created your
-  cluster with version 6.0, no action is required before upgrading to 6.1.
-* If you did not enable the feature after upgrading from 5.4 to 6.0, you must
-  enable the feature before upgrading to 6.1 by following
-  the `Enable Consistent Topology Updates <https://opensource.docs.scylladb.com/branch-6.0/upgrade/upgrade-opensource/upgrade-guide-from-5.4-to-6.0/enable-consistent-topology.html>`_
-  procedure.
-
-To verify if the *consistent topology changes* feature is enabled on your cluster,
-see :ref:`Verifying that Raft is Enabled - Consistent Topology Changes <verifying-consistent-topology-changes-enabled>`.
 
 **Upgrade Your Driver**
 
