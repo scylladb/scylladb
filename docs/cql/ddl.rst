@@ -116,7 +116,7 @@ name                 kind       mandatory   default   description
                                                       details below).
 ``durable_writes``   *simple*   no          true      Whether to use the commit log for updates on this keyspace
                                                       (disable this option at your own risk!).
-``tablets``          *map*      no                    Enables or disables tablets for the keyspace (see :ref:`tablets<tablets>`)
+``tablets``          *map*      no                    Enables or disables tablets for the keyspace (see :ref:`tablets <tablets>`)
 =================== ========== =========== ========= ===================================================================
 
 The ``replication`` property is mandatory and must at least contains the ``'class'`` sub-option, which defines the
@@ -232,9 +232,7 @@ sub-option                             type  description
 ``'initial'``                          int   The number of tablets to start with
 ===================================== ====== =============================================
 
-By default, a keyspace is created with tablets enabled. The ``tablets`` option 
-is used to opt out a keyspace from tablets-based distribution; see :ref:`Enabling Tablets <tablets-enable-tablets>`
-for details.
+.. scylladb_include_flag:: tablets-default.rst
 
 A good rule of thumb to calculate initial tablets is to divide the expected total storage used
 by tables in this keyspace by (``replication_factor`` * 5GB). For example, if you expect a 30TB
