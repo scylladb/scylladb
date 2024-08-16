@@ -149,6 +149,7 @@ have nodetool && have cqlsh &&
             relocatesstables
             removenode
             repair
+            restore
             scrub
             setcachecapacity
             setcachekeystosave
