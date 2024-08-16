@@ -85,6 +85,7 @@ public:
         size_t available_memory = 0;
         utils::updateable_value<float> static_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
+        std::chrono::seconds flush_all_tables_before_major = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(1));
     };
 
 public:
@@ -281,6 +282,10 @@ public:
 
     uint32_t throughput_mbs() const noexcept {
         return _cfg.throughput_mb_per_sec.get();
+    }
+
+    std::chrono::seconds flush_all_tables_before_major() const noexcept {
+        return _cfg.flush_all_tables_before_major;
     }
 
     void register_metrics();
