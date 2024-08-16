@@ -58,9 +58,12 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
         }
 
         if (boost::iequals(key, "replication_factor")) {
-            throw exceptions::configuration_exception(
-                "replication_factor is an option for SimpleStrategy, not "
-                "NetworkTopologyStrategy");
+            if (boost::equals(key, "replication_factor")) {
+                on_internal_error(rslogger, "replication_factor should have been replaced with a DC:RF mapping by now");
+            } else {
+                throw exceptions::configuration_exception(format(
+                "'{}' is not a valid option, did you mean (lowercase) 'replication_factor'?", key));
+            }
         }
 
         auto rf = parse_replication_factor(val);
@@ -274,9 +277,8 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs)
     validate_tablet_options(*this, fs, _config_options);
     for (auto& c : _config_options) {
         if (c.first == sstring("replication_factor")) {
-            throw exceptions::configuration_exception(
-                "replication_factor is an option for simple_strategy, not "
-                "network_topology_strategy");
+            on_internal_error(rslogger, format("'replication_factor' tag should be unrolled into a list of DC:RF by now."
+                                               "_config_options:{}", _config_options));
         }
         parse_replication_factor(c.second);
     }
