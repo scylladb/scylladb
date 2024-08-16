@@ -76,16 +76,6 @@ abstract_replication_strategy::ptr_type abstract_replication_strategy::create_re
     }
 }
 
-void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
-                                                                  const sstring& strategy_name,
-                                                                  replication_strategy_params params,
-                                                                  const gms::feature_service& fs,
-                                                                  const topology& topology)
-{
-    auto strategy = create_replication_strategy(strategy_name, params);
-    strategy->validate_options(fs);
-}
-
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
     replication_strategy_params>;
