@@ -21,9 +21,9 @@ from test.pylib.report_plugin import ReportPlugin
 
 def pytest_addoption(parser):
     parser.addoption('--mode', action='store', default='dev',
-                     help='Scylla build mode to use')
+                     help='Scylla build mode to use (default: %(default)s)')
     parser.addoption('--nodetool', action='store', choices=["scylla", "cassandra"], default="scylla",
-                     help="Which nodetool implementation to run the tests against")
+                     help="Which nodetool implementation to run the tests against (default: %(default)s)")
     parser.addoption('--nodetool-path', action='store', default=None,
                      help="Path to the nodetool binary,"
                      " with --nodetool=scylla, this should be the scylla binary,"
@@ -33,7 +33,7 @@ def pytest_addoption(parser):
     parser.addoption('--run-within-unshare', action='store_true',
                      help="Setup the 'lo' network if launched with unshare(1)")
     parser.addoption('--run_id', action='store', default=1,
-                     help='Run id for the test run')
+                     help='Run id for the test run (default: %(default)d)')
 
 
 class ServerAddress(NamedTuple):
