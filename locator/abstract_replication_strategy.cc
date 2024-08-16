@@ -57,15 +57,6 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
 {
     auto strategy = create_replication_strategy(strategy_name, params);
     strategy->validate_options(fs);
-    auto expected = strategy->recognized_options(topology);
-    if (expected) {
-        for (auto&& item : params.options) {
-            sstring key = item.first;
-            if (!expected->contains(key)) {
-                 throw exceptions::configuration_exception(format("Unrecognized strategy option {{{}}} passed to {} for keyspace {}", key, strategy_name, ks_name));
-            }
-        }
-    }
 }
 
 future<endpoint_set> abstract_replication_strategy::calculate_natural_ips(const token& search_token, const token_metadata& tm) const {

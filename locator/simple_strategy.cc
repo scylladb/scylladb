@@ -72,10 +72,6 @@ void simple_strategy::validate_options(const gms::feature_service&) const {
     parse_replication_factor(it->second);
 }
 
-std::optional<std::unordered_set<sstring>>simple_strategy::recognized_options(const topology&) const {
-    return {{ "replication_factor" }};
-}
-
 using registry = class_registrator<abstract_replication_strategy, simple_strategy, replication_strategy_params>;
 static registry registrator("org.apache.cassandra.locator.SimpleStrategy");
 static registry registrator_short_name("SimpleStrategy");

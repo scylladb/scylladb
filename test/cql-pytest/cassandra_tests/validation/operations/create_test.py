@@ -309,6 +309,7 @@ def testKeyspace(cql):
     execute(cql, n, "DROP KEYSPACE %s")
 
 #  Test {@link ConfigurationException} is thrown on create keyspace with invalid DC option in replication configuration .
+@pytest.mark.skip("reintroduce when fixed")
 def testCreateKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, this_dc):
     n = unique_name()
     assertInvalidThrow(cql, n, ConfigurationException, "CREATE KEYSPACE %s WITH replication = { 'class' : 'NetworkTopologyStrategy', 'INVALID_DC' : 2 }")

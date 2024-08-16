@@ -25,11 +25,6 @@ future<host_id_set> local_strategy::calculate_natural_endpoints(const token& t, 
 void local_strategy::validate_options(const gms::feature_service&) const {
 }
 
-std::optional<std::unordered_set<sstring>> local_strategy::recognized_options(const topology&) const {
-    // LocalStrategy doesn't expect any options.
-    return {};
-}
-
 size_t local_strategy::get_replication_factor(const token_metadata&) const {
     return 1;
 }
