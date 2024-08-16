@@ -1721,11 +1721,9 @@ def boost_to_junit(boost_xml, junit_xml):
 
     # report produced {write_consolidated_boost_junit_xml} have the next structure suite_boost -> [suite1, suite2, ...]
     # so we are excluding the upper suite with name boost
-    boost_suite = boost_root.find('TestSuite')
-    if boost_suite is not None:
-        test_suites = boost_suite.findall('TestSuite')
-
-        for test_suite in test_suites:
+    for test_suite in boost_root.findall('./TestSuite/TestSuite'):
+        # TODO: fix the indent
+        if True:
             suite_time = 0.0
             suite_test_total = 0
             suite_test_fails_number = 0
