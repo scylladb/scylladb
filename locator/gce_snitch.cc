@@ -80,6 +80,31 @@ future<> gce_snitch::start() {
 }
 
 future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
+    return do_with(int(0), [this, addr, cmd] (int& i) {
+        return repeat_until_value([this, addr, cmd, &i]() -> future<std::optional<sstring>> {
+            ++i;
+            return gce_api_call_once(addr, cmd).then([] (auto res) {
+                return make_ready_future<std::optional<sstring>>(std::move(res));
+            }).handle_exception([this, &i] (auto ep) {
+                try {
+                    std::rethrow_exception(ep);
+                } catch (const std::system_error &e) {
+                    if (i >= GCE_API_CALL_RETRIES - 1) {
+                        logger().error("GCE API call failed: {}. Maximum number of retries exceeded", e.what());
+                        throw e;
+                    } else {
+                        logger().error("GCE API call failed: {}. Will retry in {} seconds", e.what(), std::chrono::duration_cast<std::chrono::seconds>(_gce_api_retry.sleep_time()).count());
+                    }
+                }
+                return _gce_api_retry.retry().then([] {
+                    return make_ready_future<std::optional<sstring>>(std::nullopt);
+                });
+            });
+        });
+    });
+}
+
+future<sstring> gce_snitch::gce_api_call_once(sstring addr, sstring cmd) {
     return seastar::async([addr = std::move(addr), cmd = std::move(cmd)] () -> sstring {
         using namespace boost::algorithm;
 
