@@ -72,6 +72,8 @@ to a new node.
 
 .. image:: images/tablets-load-balancing.png
 
+.. scylladb_include_flag:: file-based-streaming.rst
+
 .. _tablets-enable-tablets: 
 
 Enabling Tablets
