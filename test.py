@@ -1719,41 +1719,39 @@ def boost_to_junit(boost_xml, junit_xml):
                                              file_name=tag_output.get('file'), line_number=tag_output.get('line'))
         return text
 
-    # report produced {write_consolidated_boost_junit_xml} have the next structure suite_boost -> [suite1, suite2, ...]
+    # report produced {write_consolidated_boost_junit_xml} have the nested structure suite_boost -> [suite1, suite2, ...]
     # so we are excluding the upper suite with name boost
     for test_suite in boost_root.findall('./TestSuite/TestSuite'):
-        # TODO: fix the indent
-        if True:
-            suite_time = 0.0
-            suite_test_total = 0
-            suite_test_fails_number = 0
+        suite_time = 0.0
+        suite_test_total = 0
+        suite_test_fails_number = 0
 
-            junit_test_suite = ET.SubElement(junit_root, 'testsuite')
-            junit_test_suite.attrib['name'] = test_suite.attrib['name']
+        junit_test_suite = ET.SubElement(junit_root, 'testsuite')
+        junit_test_suite.attrib['name'] = test_suite.attrib['name']
 
-            test_cases = test_suite.findall('TestCase')
-            for test_case in test_cases:
-                # convert the testing time: boost uses microseconds and Junit uses seconds
-                test_case_time = int(test_case.find('TestingTime').text) / 1_000_000
-                suite_time += test_case_time
-                suite_test_total += 1
+        test_cases = test_suite.findall('TestCase')
+        for test_case in test_cases:
+            # convert the testing time: boost uses microseconds and Junit uses seconds
+            test_case_time = int(test_case.find('TestingTime').text) / 1_000_000
+            suite_time += test_case_time
+            suite_test_total += 1
 
-                junit_test_case = ET.SubElement(junit_test_suite, 'testcase')
-                junit_test_case.set('name', test_case.get('name'))
-                junit_test_case.set('time', str(test_case_time))
-                junit_test_case.set('file', test_case.get('file'))
-                junit_test_case.set('line', test_case.get('line'))
+            junit_test_case = ET.SubElement(junit_test_suite, 'testcase')
+            junit_test_case.set('name', test_case.get('name'))
+            junit_test_case.set('time', str(test_case_time))
+            junit_test_case.set('file', test_case.get('file'))
+            junit_test_case.set('line', test_case.get('line'))
 
-                system_out = ET.SubElement(junit_test_case, 'system-out')
-                system_out.text = ''
-                for tag in ['Info', 'Message', 'Exception']:
-                    output = parse_tag_output(test_case, tag)
-                    if output:
-                        system_out.text += output
+            system_out = ET.SubElement(junit_test_case, 'system-out')
+            system_out.text = ''
+            for tag in ['Info', 'Message', 'Exception']:
+                output = parse_tag_output(test_case, tag)
+                if output:
+                    system_out.text += output
 
-            junit_test_suite.set('tests', str(suite_test_total))
-            junit_test_suite.set('time', str(suite_time))
-            junit_test_suite.set('failures', str(suite_test_fails_number))
+        junit_test_suite.set('tests', str(suite_test_total))
+        junit_test_suite.set('time', str(suite_time))
+        junit_test_suite.set('failures', str(suite_test_fails_number))
     ET.ElementTree(junit_root).write(junit_xml, encoding='UTF-8')
 
 
