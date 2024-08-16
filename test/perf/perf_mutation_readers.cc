@@ -309,70 +309,22 @@ PERF_TEST_F(clustering_combined, ranges_specialized)
 
 class memtable {
     static constexpr size_t partition_count = 1000;
-    static constexpr size_t row_count = 50;
-    mutable simple_schema _schema;
     perf::reader_concurrency_semaphore_wrapper _semaphore;
-    reader_permit _permit;
-    std::vector<dht::decorated_key> _dkeys;
-    lw_shared_ptr<replica::memtable> _single_row;
-    lw_shared_ptr<replica::memtable> _multi_row;
-    lw_shared_ptr<replica::memtable> _large_partition;
     std::optional<dht::partition_range> _partition_range;
+protected:
+    static constexpr size_t row_count = 50;
+    reader_permit _permit;
+    mutable simple_schema _schema;
+    std::vector<dht::decorated_key> _dkeys;
 public:
     memtable()
         : _semaphore(__FILE__)
         , _permit(_semaphore.make_permit())
         , _dkeys(_schema.make_pkeys(partition_count))
-        , _single_row(make_lw_shared<replica::memtable>(_schema.schema()))
-        , _multi_row(make_lw_shared<replica::memtable>(_schema.schema()))
-        , _large_partition(make_lw_shared<replica::memtable>(_schema.schema()))
-    {
-        boost::for_each(
-            _dkeys
-            | boost::adaptors::transformed([&] (auto& dkey) {
-                auto m = mutation(_schema.schema(), dkey);
-                m.apply(_schema.make_row(_permit, _schema.make_ckey(0), "value"));
-                return m;
-            }),
-            [&] (mutation m) {
-                _single_row->apply(m);
-            }
-        );
-        boost::for_each(
-            _dkeys
-            | boost::adaptors::transformed([&] (auto& dkey) {
-                auto m = mutation(_schema.schema(), dkey);
-                for (auto i = 0u; i < row_count; i++) {
-                    m.apply(_schema.make_row(_permit, _schema.make_ckey(i), "value"));
-                }
-                return m;
-            }),
-            [&] (mutation m) {
-                _multi_row->apply(m);
-            }
-        );
-        boost::for_each(
-            _dkeys
-            | boost::adaptors::transformed([&] (auto& dkey) {
-                auto m = mutation(_schema.schema(), dkey);
-                // Make sure the partition fills buffers in flat mutation reader multiple times
-                for (auto i = 0u; i < 8 * 1024; i++) {
-                    m.apply(_schema.make_row(_permit, _schema.make_ckey(i), "value"));
-                }
-                return m;
-            }),
-            [&] (mutation m) {
-                _large_partition->apply(m);
-            }
-        );
-    }
+    {}
 protected:
     schema_ptr schema() const { return _schema.schema(); }
     reader_permit permit() const { return _permit; }
-
-    replica::memtable& single_row_mt() { return *_single_row; }
-    replica::memtable& multi_row_mt() { return *_multi_row; }
-    replica::memtable& large_partition_mt() { return *_large_partition; }
 
     const dht::partition_range& single_partition_range() {
         auto& dk = _dkeys[_dkeys.size() / 2];
@@ -399,34 +351,106 @@ protected:
     }
 };
 
-PERF_TEST_F(memtable, one_partition_one_row)
+class memtable_single_row : public memtable {
+    lw_shared_ptr<replica::memtable> _mt;
+public:
+    memtable_single_row()
+        :  _mt(make_lw_shared<replica::memtable>(schema()))
+    {
+        boost::for_each(
+            _dkeys
+            | boost::adaptors::transformed([&] (auto& dkey) {
+                auto m = mutation(schema(), dkey);
+                m.apply(_schema.make_row(_permit, _schema.make_ckey(0), "value"));
+                return m;
+            }),
+            [&] (mutation m) {
+                _mt->apply(m);
+            }
+        );
+    }
+protected:
+    replica::memtable& mt() { return *_mt; }
+};
+
+PERF_TEST_F(memtable_single_row, one_partition)
 {
-    return consume_all(single_row_mt().make_flat_reader(schema(), permit(), single_partition_range()));
+    return consume_all(mt().make_flat_reader(schema(), permit(), single_partition_range()));
 }
 
-PERF_TEST_F(memtable, one_partition_many_rows)
+PERF_TEST_F(memtable_single_row, many_partitions)
 {
-    return consume_all(multi_row_mt().make_flat_reader(schema(), permit(), single_partition_range()));
+    return consume_all(mt().make_flat_reader(schema(), permit(), multi_partition_range(25)));
 }
 
-PERF_TEST_F(memtable, one_large_partition)
+class memtable_multi_row : public memtable {
+    lw_shared_ptr<replica::memtable> _mt;
+public:
+    memtable_multi_row()
+        :  _mt(make_lw_shared<replica::memtable>(_schema.schema()))
+    {
+        boost::for_each(
+            _dkeys
+            | boost::adaptors::transformed([&] (auto& dkey) {
+                auto m = mutation(_schema.schema(), dkey);
+                for (auto i = 0u; i < row_count; i++) {
+                    m.apply(_schema.make_row(_permit, _schema.make_ckey(i), "value"));
+                }
+                return m;
+            }),
+            [&] (mutation m) {
+                _mt->apply(m);
+            }
+        );
+    }
+protected:
+    replica::memtable& mt() { return *_mt; }
+};
+
+
+PERF_TEST_F(memtable_multi_row, one_partition)
 {
-    return consume_all(large_partition_mt().make_flat_reader(schema(), permit(), single_partition_range()));
+    return consume_all(mt().make_flat_reader(schema(), permit(), single_partition_range()));
 }
 
-PERF_TEST_F(memtable, many_partitions_one_row)
+PERF_TEST_F(memtable_multi_row, many_partitions)
 {
-    return consume_all(single_row_mt().make_flat_reader(schema(), permit(), multi_partition_range(25)));
+    return consume_all(mt().make_flat_reader(schema(), permit(), multi_partition_range(25)));
 }
 
-PERF_TEST_F(memtable, many_partitions_many_rows)
+class memtable_large_partition : public memtable {
+    lw_shared_ptr<replica::memtable> _mt;
+public:
+    memtable_large_partition()
+        :  _mt(make_lw_shared<replica::memtable>(_schema.schema()))
+    {
+        boost::for_each(
+            _dkeys
+            | boost::adaptors::transformed([&] (auto& dkey) {
+                auto m = mutation(_schema.schema(), dkey);
+                // Make sure the partition fills buffers in flat mutation reader multiple times
+                for (auto i = 0u; i < 8 * 1024; i++) {
+                    m.apply(_schema.make_row(_permit, _schema.make_ckey(i), "value"));
+                }
+                return m;
+            }),
+            [&] (mutation m) {
+                _mt->apply(m);
+            }
+        );
+    }
+protected:
+    replica::memtable& mt() { return *_mt; }
+};
+
+PERF_TEST_F(memtable_large_partition, one_partition)
 {
-    return consume_all(multi_row_mt().make_flat_reader(schema(), permit(), multi_partition_range(25)));
+    return consume_all(mt().make_flat_reader(schema(), permit(), single_partition_range()));
 }
 
-PERF_TEST_F(memtable, many_large_partitions)
+PERF_TEST_F(memtable_large_partition, many_partitions)
 {
-    return consume_all(large_partition_mt().make_flat_reader(schema(), permit(), multi_partition_range(25)));
+    return consume_all(mt().make_flat_reader(schema(), permit(), multi_partition_range(25)));
 }
 
 }
