@@ -22,9 +22,6 @@ future<host_id_set> local_strategy::calculate_natural_endpoints(const token& t, 
     return make_ready_future<host_id_set>(host_id_set{host_id{}});
 }
 
-void local_strategy::validate_options(const gms::feature_service&) const {
-}
-
 size_t local_strategy::get_replication_factor(const token_metadata&) const {
     return 1;
 }
