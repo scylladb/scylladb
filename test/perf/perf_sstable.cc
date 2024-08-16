@@ -133,8 +133,11 @@ int scylla_sstable_main(int argc, char** argv) {
         cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
         return test->start(std::move(cfg)).then([mode, dir, test] {
             engine().at_exit([test] { return test->stop(); });
-            if ((mode == test_modes::index_read) ||
-               (mode == test_modes::sequential_read)) {
+            switch (mode) {
+            using enum test_modes;
+            case index_read:
+                [[fallthrough]];
+            case sequential_read:
                 return test->invoke_on_all([] (perf_sstable_test_env &t) {
                     return t.load_sstables(iterations);
                 }).then_wrapped([] (future<> f) {
@@ -145,10 +148,12 @@ int scylla_sstable_main(int argc, char** argv) {
                         throw;
                     }
                 });
-            } else if ((mode == test_modes::index_write) || (mode == test_modes::write) || (mode == test_modes::compaction)) {
+            case index_write:
+                [[fallthrough]];
+            case write:
+                [[fallthrough]];
+            case compaction:
                 return test_setup::create_empty_test_dir(dir);
-            } else {
-                throw std::invalid_argument("Invalid mode");
             }
         }).then([test, mode] {
             switch (mode) {
