@@ -22,11 +22,6 @@ public:
 
     virtual void validate_options(const gms::feature_service&) const override;
 
-    std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const override {
-        // We explicitly allow all options
-        return std::nullopt;
-    }
-
     virtual size_t get_replication_factor(const token_metadata& tm) const override;
 
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const override {

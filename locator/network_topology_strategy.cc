@@ -272,11 +272,7 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs)
         throw exceptions::configuration_exception("Configuration for at least one datacenter must be present");
     }
     validate_tablet_options(*this, fs, _config_options);
-    auto tablet_opts = recognized_tablet_options();
     for (auto& c : _config_options) {
-        if (tablet_opts.contains(c.first)) {
-            continue;
-        }
         if (c.first == sstring("replication_factor")) {
             throw exceptions::configuration_exception(
                 "replication_factor is an option for simple_strategy, not "
@@ -284,13 +280,6 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs)
         }
         parse_replication_factor(c.second);
     }
-}
-
-std::optional<std::unordered_set<sstring>> network_topology_strategy::recognized_options(const topology& topology) const {
-    // We only allow datacenter names as options
-    auto opts = topology.get_datacenters();
-    opts.merge(recognized_tablet_options());
-    return opts;
 }
 
 effective_replication_map_ptr network_topology_strategy::make_replication_map(table_id table, token_metadata_ptr tm) const {

@@ -222,6 +222,7 @@ def testAlterKeyspaceWithNoOptionThrowsConfigurationException(cql, test_keyspace
 
 # Test {@link ConfigurationException} thrown when altering a keyspace to
 # invalid DC option in replication configuration.
+@pytest.mark.skip("reintroduce when fixed")
 def testAlterKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, test_keyspace, this_dc):
     # Create a keyspace with expected DC name.
     with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }") as ks:

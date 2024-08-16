@@ -123,7 +123,6 @@ public:
     static sstring to_qualified_class_name(std::string_view strategy_class_name);
 
     virtual void validate_options(const gms::feature_service&) const = 0;
-    virtual std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const = 0;
     virtual size_t get_replication_factor(const token_metadata& tm) const = 0;
     // Decide if the replication strategy allow removing the node being
     // replaced from the natural endpoints when a node is being replaced in the
