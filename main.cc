@@ -1095,6 +1095,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
                     .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
+                    .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
                 };
             });
             cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager)).get();

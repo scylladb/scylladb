@@ -16,7 +16,6 @@
 #include "sstables/sstable_directory.hh"
 #include "utils/error_injection.hh"
 #include "utils/pretty_printers.hh"
-#include "db/config.hh"
 
 using namespace std::chrono_literals;
 
@@ -331,9 +330,9 @@ tasks::is_abortable compaction_task_impl::is_abortable() const noexcept {
 }
 
 static future<bool> maybe_flush_all_tables(sharded<replica::database>& db) {
-    auto interval = db.local().get_config().compaction_flush_all_tables_before_major_seconds();
-    if (interval) {
-        auto when = db_clock::now() - interval * 1s;
+    auto interval = db.local().get_compaction_manager().flush_all_tables_before_major();
+    if (interval > 0s) {
+        auto when = db_clock::now() - interval;
         if (co_await replica::database::get_all_tables_flushed_at(db) <= when) {
             co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
                 co_await db.flush_all_tables();
